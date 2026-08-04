@@ -1,0 +1,1029 @@
+#include "abassembler.idx"
+
+#console
+
+' abassembler - push / call / db の最小アセンブラ
+' 使い方: abassembler <input.asm> [output.obj]
+'
+' 対応構文:
+'   bits 32
+'   section .text / section .data
+'   extern <name> / global <name>
+'   <label>:
+'   db 'str', 0, ...     (.data)
+'   push <imm>           -> 6A xx / 68 xx xx xx xx
+'   push <symbol>        -> 68 00 00 00 00 + DIR32
+'   call <symbol>        -> E8 00 00 00 00 + REL32
+
+Const MAX_CODE = 4096
+Const MAX_DATA = 4096
+Const MAX_SYMS = 64
+Const MAX_RELOCS = 64
+Const MAX_STRTAB = 2048
+Const MAX_LINE = 512
+
+Const SECT_NONE = 0
+Const SECT_TEXT = 1
+Const SECT_DATA = 2
+
+Const IMAGE_SCN_CNT_CODE = &H00000020
+Const IMAGE_SCN_CNT_INITIALIZED_DATA = &H00000040
+Const IMAGE_SCN_ALIGN_16BYTES = &H00500000
+Const IMAGE_SCN_MEM_EXECUTE = &H20000000
+Const IMAGE_SCN_MEM_READ = &H40000000
+Const IMAGE_SCN_MEM_WRITE = &H80000000
+Const TEXT_CHARACTERISTICS = IMAGE_SCN_CNT_CODE Or IMAGE_SCN_ALIGN_16BYTES Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ
+Const DATA_CHARACTERISTICS = IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_ALIGN_16BYTES Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE
+
+' --- シンボル ---
+' kind: 0=未定義(extern), 1=定義済み(label)
+Dim gSymName(63) As String
+Dim gSymValue(63) As DWord
+Dim gSymSection(63) As Word
+Dim gSymKind(63) As Long
+Dim gSymGlobal(63) As Long
+Dim gNSyms As Long
+
+' --- リロケーション (.text 用) ---
+Dim gRelVA(63) As DWord
+Dim gRelSym(63) As DWord
+Dim gRelType(63) As Word
+Dim gNRelocs As Word
+
+' --- セクションバッファ ---
+Dim gCurSect As Word
+Dim gCode(4095) As Byte
+Dim gCodeSize As Long
+Dim gData(4095) As Byte
+Dim gDataSize As Long
+
+' --- 文字列テーブル (先頭4バイトはサイズ) ---
+Dim gStrTab(2047) As Byte
+Dim gStrTabSize As DWord
+
+Sub USAGE()
+    Print "abassembler - minimal assembler (push / call / db)"
+    Print "usage: abassembler <input.asm> [output.obj]"
+    End
+End Sub
+
+Function HexPad$(num As DWord, digits As Long) As String
+    Dim s As String
+    s = Hex$(num)
+    While Len(s) < digits
+        s = "0" + s
+    Wend
+    HexPad$ = s
+End Function
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[MAX_PATH] As Byte
+    Dim n As Long
+    Dim m As Long
+
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    cmd[cmdlen] = &H20
+    buf[0] = 0
+    cidx = 0
+
+    For n = 0 To cmdlen
+        If cmd[n] = &H20 And cmd[n + 1] = &H20 Then
+            memcpy(VarPtr(cmd[n]), VarPtr(cmd[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+
+    For n = 0 To cmdlen
+        m = 0
+        While cmd[n] <> &H20
+            ctmp[m] = cmd[n]
+            m = m + 1
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+    GetCmd = 0
+End Function
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    LoadFile = NULL
+    outSize = 0
+
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+
+    p = malloc(fsiz + 1)
+    If p = NULL Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    CloseHandle(hFile)
+    p[fsiz] = 0
+    outSize = fsiz
+    LoadFile = p
+End Function
+
+Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+
+    WriteAll = 0
+    hFile = CreateFile(path, GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+
+    WriteFile(hFile, p, size, VarPtr(nWritten), ByVal NULL)
+    CloseHandle(hFile)
+    If nWritten = size Then WriteAll = 1
+End Function
+
+Sub ZeroMem(p As *Byte, n As Long)
+    Dim i As Long
+    If n <= 0 Then Exit Sub
+    For i = 0 To n - 1
+        p[i] = 0
+    Next
+End Sub
+
+Function IsSpace(c As Long) As Long
+    If c = Asc(" ") Or c = 9 Or c = 13 Or c = 10 Then
+        IsSpace = 1
+    Else
+        IsSpace = 0
+    End If
+End Function
+
+Function ToLowerChar(c As Long) As Long
+    If c >= Asc("A") And c <= Asc("Z") Then
+        ToLowerChar = c - Asc("A") + Asc("a")
+    Else
+        ToLowerChar = c
+    End If
+End Function
+
+Function Trim$(s As String) As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim j As Long
+    Dim n As Long
+
+    n = Len(s)
+    If n = 0 Then
+        Trim$ = ""
+        Exit Function
+    End If
+
+    p = StrPtr(s)
+    i = 0
+    While i < n And IsSpace(p[i]) <> 0
+        i = i + 1
+    Wend
+    j = n - 1
+    While j >= i And IsSpace(p[j]) <> 0
+        j = j - 1
+    Wend
+    If j < i Then
+        Trim$ = ""
+    Else
+        Trim$ = Mid$(s, i + 1, j - i + 1)
+    End If
+End Function
+
+Function StripComment$(s As String) As String
+    Dim i As Long
+    i = InStr(1, s, ";")
+    If i > 0 Then
+        StripComment$ = Left$(s, i - 1)
+    Else
+        StripComment$ = s
+    End If
+End Function
+
+Function Lower$(s As String) As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim t As String
+    Dim c As Long
+
+    n = Len(s)
+    t = s
+    If n = 0 Then
+        Lower$ = ""
+        Exit Function
+    End If
+    p = StrPtr(t)
+    For i = 0 To n - 1
+        c = ToLowerChar(p[i])
+        memcpy(VarPtr(p[i]), VarPtr(c), 1)
+    Next
+    Lower$ = t
+End Function
+
+Function IsIdentChar(c As Long) As Long
+    If (c >= Asc("A") And c <= Asc("Z")) Or (c >= Asc("a") And c <= Asc("z")) Or (c >= Asc("0") And c <= Asc("9")) Or c = Asc("_") Or c = Asc("@") Or c = Asc(".") Or c = Asc("$") Then
+        IsIdentChar = 1
+    Else
+        IsIdentChar = 0
+    End If
+End Function
+
+' 先頭トークンと残りを分離
+Sub SplitToken(lineStr As String, ByRef op As String, ByRef arg As String)
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim start As Long
+
+    op = ""
+    arg = ""
+    n = Len(lineStr)
+    If n = 0 Then Exit Sub
+    p = StrPtr(lineStr)
+
+    i = 0
+    While i < n And IsSpace(p[i]) <> 0
+        i = i + 1
+    Wend
+    start = i
+    While i < n And IsSpace(p[i]) = 0
+        i = i + 1
+    Wend
+    If i > start Then
+        op = Mid$(lineStr, start + 1, i - start)
+    End If
+    While i < n And IsSpace(p[i]) <> 0
+        i = i + 1
+    Wend
+    If i < n Then
+        arg = Trim$(Mid$(lineStr, i + 1, n - i))
+    End If
+End Sub
+
+Function IsNumericToken(s As String) As Long
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim c As Long
+
+    n = Len(s)
+    If n = 0 Then
+        IsNumericToken = 0
+        Exit Function
+    End If
+    p = StrPtr(s)
+    i = 0
+    If p[0] = Asc("-") Or p[0] = Asc("+") Then
+        i = 1
+        If n = 1 Then
+            IsNumericToken = 0
+            Exit Function
+        End If
+    End If
+    ' 0x / 0X 十六進
+    If i + 1 < n And p[i] = Asc("0") And (p[i + 1] = Asc("x") Or p[i + 1] = Asc("X")) Then
+        i = i + 2
+        If i >= n Then
+            IsNumericToken = 0
+            Exit Function
+        End If
+        While i < n
+            c = p[i]
+            If (c >= Asc("0") And c <= Asc("9")) Or (c >= Asc("a") And c <= Asc("f")) Or (c >= Asc("A") And c <= Asc("F")) Then
+                ' ok
+            Else
+                IsNumericToken = 0
+                Exit Function
+            End If
+            i = i + 1
+        Wend
+        IsNumericToken = 1
+        Exit Function
+    End If
+    While i < n
+        c = p[i]
+        If c < Asc("0") Or c > Asc("9") Then
+            IsNumericToken = 0
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+    IsNumericToken = 1
+End Function
+
+Function ParseImm(s As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim sign As Long
+    Dim i As Long
+    Dim n As Long
+    Dim v As Long
+    Dim c As Long
+
+    t = Trim$(s)
+    n = Len(t)
+    p = StrPtr(t)
+    sign = 1
+    i = 0
+    If p[0] = Asc("-") Then
+        sign = -1
+        i = 1
+    ElseIf p[0] = Asc("+") Then
+        i = 1
+    End If
+
+    If i + 1 < n And p[i] = Asc("0") And (p[i + 1] = Asc("x") Or p[i + 1] = Asc("X")) Then
+        i = i + 2
+        v = 0
+        While i < n
+            c = p[i]
+            v = v * 16
+            If c >= Asc("0") And c <= Asc("9") Then
+                v = v + (c - Asc("0"))
+            ElseIf c >= Asc("a") And c <= Asc("f") Then
+                v = v + (c - Asc("a") + 10)
+            ElseIf c >= Asc("A") And c <= Asc("F") Then
+                v = v + (c - Asc("A") + 10)
+            End If
+            i = i + 1
+        Wend
+        ParseImm = v * sign
+    Else
+        v = 0
+        While i < n
+            c = p[i]
+            v = v * 10 + (c - Asc("0"))
+            i = i + 1
+        Wend
+        ParseImm = v * sign
+    End If
+End Function
+
+Function FindSymbol(name As String) As Long
+    Dim i As Long
+    FindSymbol = -1
+    If gNSyms <= 0 Then Exit Function
+    For i = 0 To gNSyms - 1
+        If gSymName(i) = name Then
+            FindSymbol = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Function AddSymbol(name As String) As Long
+    Dim idx As Long
+    idx = FindSymbol(name)
+    If idx >= 0 Then
+        AddSymbol = idx
+        Exit Function
+    End If
+    If gNSyms >= MAX_SYMS Then
+        Print "too many symbols"
+        End
+    End If
+    idx = gNSyms
+    gSymName(idx) = name
+    gSymValue(idx) = 0
+    gSymSection(idx) = IMAGE_SYM_UNDEFINED
+    gSymKind(idx) = 0
+    gSymGlobal(idx) = 0
+    gNSyms = gNSyms + 1
+    AddSymbol = idx
+End Function
+
+Sub EmitByte(b As Long)
+    If gCurSect = SECT_TEXT Then
+        If gCodeSize >= MAX_CODE Then
+            Print "code too large"
+            End
+        End If
+        memcpy(VarPtr(gCode(gCodeSize)), VarPtr(b), 1)
+        gCodeSize = gCodeSize + 1
+    ElseIf gCurSect = SECT_DATA Then
+        If gDataSize >= MAX_DATA Then
+            Print "data too large"
+            End
+        End If
+        memcpy(VarPtr(gData(gDataSize)), VarPtr(b), 1)
+        gDataSize = gDataSize + 1
+    Else
+        Print "emit outside section"
+        End
+    End If
+End Sub
+
+Sub EmitDword(v As Long)
+    Dim tmp As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "EmitDword only in .text"
+        End
+    End If
+    If gCodeSize + 4 > MAX_CODE Then
+        Print "code too large"
+        End
+    End If
+    tmp = v
+    memcpy(VarPtr(gCode(gCodeSize)), VarPtr(tmp), 4)
+    gCodeSize = gCodeSize + 4
+End Sub
+
+Sub AddReloc(va As DWord, symIndex As DWord, relType As Word)
+    If gNRelocs >= MAX_RELOCS Then
+        Print "too many relocations"
+        End
+    End If
+    gRelVA(gNRelocs) = va
+    gRelSym(gNRelocs) = symIndex
+    gRelType(gNRelocs) = relType
+    gNRelocs = gNRelocs + 1
+End Sub
+
+Sub EmitPushImm(imm As Long)
+    If gCurSect <> SECT_TEXT Then
+        Print "push only in .text"
+        End
+    End If
+    ' -128..127 -> 6A ib / それ以外 -> 68 id
+    If imm >= -128 And imm <= 127 Then
+        EmitByte(&H6A)
+        EmitByte(imm And &HFF)
+    Else
+        EmitByte(&H68)
+        EmitDword(imm)
+    End If
+End Sub
+
+Sub EmitPushSym(symName As String)
+    Dim idx As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "push only in .text"
+        End
+    End If
+    idx = AddSymbol(symName)
+    EmitByte(&H68)
+    AddReloc(gCodeSize, idx, IMAGE_REL_I386_DIR32)
+    EmitDword(0)
+End Sub
+
+Sub EmitCall(symName As String)
+    Dim idx As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "call only in .text"
+        End
+    End If
+    idx = AddSymbol(symName)
+    EmitByte(&HE8)
+    AddReloc(gCodeSize, idx, IMAGE_REL_I386_REL32)
+    EmitDword(0)
+End Sub
+
+' db 'Hello', 0  のようなオペランド列を .data に書き出す
+Sub EmitDb(args As String)
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim start As Long
+    Dim c As Long
+    Dim quote As Long
+    Dim tok As String
+    Dim imm As Long
+
+    If gCurSect <> SECT_DATA Then
+        Print "db only in .data"
+        End
+    End If
+
+    n = Len(args)
+    If n = 0 Then Exit Sub
+    p = StrPtr(args)
+    i = 0
+
+    While i < n
+        While i < n And (IsSpace(p[i]) <> 0 Or p[i] = Asc(","))
+            i = i + 1
+        Wend
+        If i >= n Then Exit While
+
+        c = p[i]
+        If c = Asc("'") Or c = 34 Then
+            quote = c
+            i = i + 1
+            While i < n And p[i] <> quote
+                EmitByte(p[i])
+                i = i + 1
+            Wend
+            If i >= n Then
+                Print "unterminated string in db"
+                End
+            End If
+            i = i + 1
+        Else
+            start = i
+            While i < n And p[i] <> Asc(",") And IsSpace(p[i]) = 0
+                i = i + 1
+            Wend
+            tok = Mid$(args, start + 1, i - start)
+            If IsNumericToken(tok) = 0 Then
+                Print "db: bad operand '" + tok + "'"
+                End
+            End If
+            imm = ParseImm(tok)
+            EmitByte(imm And &HFF)
+        End If
+    Wend
+End Sub
+
+Function EndsWithColon(s As String) As Long
+    Dim n As Long
+    Dim p As *Byte
+    n = Len(s)
+    If n > 0 Then
+        p = StrPtr(s)
+        If p[n - 1] = Asc(":") Then
+            EndsWithColon = 1
+            Exit Function
+        End If
+    End If
+    EndsWithColon = 0
+End Function
+
+Sub DefineLabel(name As String)
+    Dim idx As Long
+    If gCurSect = SECT_NONE Then
+        Print "label outside section: " + name
+        End
+    End If
+    idx = AddSymbol(name)
+    If gSymKind(idx) = 1 Then
+        Print "duplicate label: " + name
+        End
+    End If
+    gSymKind(idx) = 1
+    gSymSection(idx) = gCurSect
+    If gCurSect = SECT_TEXT Then
+        gSymValue(idx) = gCodeSize
+    Else
+        gSymValue(idx) = gDataSize
+    End If
+End Sub
+
+Sub AssembleLine(lineStr As String)
+    Dim s As String
+    Dim op As String
+    Dim arg As String
+    Dim op2 As String
+    Dim arg2 As String
+    Dim lop As String
+    Dim lop2 As String
+    Dim labelName As String
+    Dim imm As Long
+    Dim idx As Long
+    Dim n As Long
+    Dim sectArg As String
+
+    s = Trim$(StripComment$(lineStr))
+    If s = "" Then Exit Sub
+
+    ' ラベル定義 (単独行 "name:")
+    If EndsWithColon(s) <> 0 Then
+        n = Len(s)
+        labelName = Trim$(Left$(s, n - 1))
+        If labelName = "" Then
+            Print "empty label"
+            End
+        End If
+        DefineLabel(labelName)
+        Exit Sub
+    End If
+
+    ' "name: insn ..." 形式
+    n = InStr(1, s, ":")
+    If n > 1 Then
+        labelName = Trim$(Left$(s, n - 1))
+        If Len(labelName) > 0 Then
+            idx = Asc(Left$(labelName, 1))
+            If IsIdentChar(idx) <> 0 And idx <> Asc(".") Then
+                DefineLabel(labelName)
+                s = Trim$(Mid$(s, n + 1, Len(s) - n))
+                If s = "" Then Exit Sub
+            End If
+        End If
+    End If
+
+    SplitToken(s, op, arg)
+    lop = Lower$(op)
+
+    ' "label db ..." 形式 (コロンなし)
+    If lop <> "bits" And lop <> "section" And lop <> "extern" And lop <> "global" And lop <> "push" And lop <> "call" And lop <> "db" Then
+        SplitToken(arg, op2, arg2)
+        lop2 = Lower$(op2)
+        If lop2 = "db" Then
+            DefineLabel(op)
+            EmitDb(arg2)
+            Exit Sub
+        End If
+    End If
+
+    If lop = "bits" Then
+        Exit Sub
+    End If
+
+    If lop = "section" Then
+        sectArg = Lower$(arg)
+        If sectArg = ".text" Then
+            gCurSect = SECT_TEXT
+        ElseIf sectArg = ".data" Then
+            gCurSect = SECT_DATA
+        Else
+            Print "unsupported section: " + arg
+            End
+        End If
+        Exit Sub
+    End If
+
+    If lop = "extern" Then
+        If arg = "" Then
+            Print "extern needs a name"
+            End
+        End If
+        idx = AddSymbol(arg)
+        gSymGlobal(idx) = 1
+        Exit Sub
+    End If
+
+    If lop = "global" Then
+        If arg = "" Then
+            Print "global needs a name"
+            End
+        End If
+        idx = AddSymbol(arg)
+        gSymGlobal(idx) = 1
+        Exit Sub
+    End If
+
+    If lop = "db" Then
+        EmitDb(arg)
+        Exit Sub
+    End If
+
+    If lop = "push" Then
+        If arg = "" Then
+            Print "push needs an operand"
+            End
+        End If
+        If IsNumericToken(arg) <> 0 Then
+            imm = ParseImm(arg)
+            EmitPushImm(imm)
+        Else
+            EmitPushSym(arg)
+        End If
+        Exit Sub
+    End If
+
+    If lop = "call" Then
+        If arg = "" Then
+            Print "call needs a symbol"
+            End
+        End If
+        EmitCall(arg)
+        Exit Sub
+    End If
+
+    Print "unsupported instruction: " + op
+    End
+End Sub
+
+Sub AssembleBuffer(src As *Byte, srcSize As Long)
+    Dim i As Long
+    Dim start As Long
+    Dim lineBuf[MAX_LINE] As Byte
+    Dim lenLine As Long
+    Dim c As Long
+    Dim lineStr As String
+
+    i = 0
+    While i < srcSize
+        start = i
+        While i < srcSize
+            c = src[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        lenLine = i - start
+        If lenLine >= MAX_LINE Then lenLine = MAX_LINE - 1
+        If lenLine > 0 Then
+            memcpy(lineBuf, VarPtr(src[start]), lenLine)
+        End If
+        lineBuf[lenLine] = 0
+        lineStr = MakeStr(lineBuf)
+        AssembleLine(lineStr)
+
+        If i < srcSize And src[i] = 13 Then i = i + 1
+        If i < srcSize And src[i] = 10 Then i = i + 1
+    Wend
+End Sub
+
+' シンボル名を COFF_SYMBOL.Name に書き込む。長い名前は文字列テーブルへ
+Sub SetSymName(sym As *COFF_SYMBOL, name As String)
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim off As DWord
+
+    n = Len(name)
+    p = StrPtr(name)
+    If n <= 8 Then
+        For i = 0 To 7
+            If i < n Then
+                sym->Name(i) = p[i]
+            Else
+                sym->Name(i) = 0
+            End If
+        Next
+    Else
+        ' 文字列テーブルへ追加
+        off = gStrTabSize
+        If off + n + 1 > MAX_STRTAB Then
+            Print "string table overflow"
+            End
+        End If
+        memcpy(VarPtr(gStrTab(off)), p, n)
+        gStrTab(off + n) = 0
+        gStrTabSize = off + n + 1
+
+        sym->Name(0) = 0
+        sym->Name(1) = 0
+        sym->Name(2) = 0
+        sym->Name(3) = 0
+        memcpy(VarPtr(sym->Name(4)), VarPtr(off), 4)
+    End If
+End Sub
+
+Function BuildObj(ByRef outSize As Long) As *Byte
+    Dim hdr As COFF_HEADER
+    Dim sect As SECTION_HEADER
+    Dim reloc As COFF_RELOCATION
+    Dim sym As COFF_SYMBOL
+    Dim p As *Byte
+    Dim nSect As Word
+    Dim sectHdrOff As DWord
+    Dim textRawOff As DWord
+    Dim textRelOff As DWord
+    Dim dataRawOff As DWord
+    Dim symOff As DWord
+    Dim strNeed As DWord
+    Dim i As Long
+    Dim namePtr As *Byte
+    Dim sectName As String
+
+    nSect = 1
+    If gDataSize > 0 Then
+        nSect = 2
+    End If
+
+    ' 文字列テーブル必要サイズを先に見積もる
+    strNeed = 4
+    If gNSyms > 0 Then
+        For i = 0 To gNSyms - 1
+            If Len(gSymName(i)) > 8 Then
+                strNeed = strNeed + Len(gSymName(i)) + 1
+            End If
+        Next
+    End If
+
+    ' レイアウト: header + sectHdrs + .text raw + .text relocs + [.data raw] + symbols + strtab
+    sectHdrOff = SIZEOF_COFF_HEADER
+    textRawOff = sectHdrOff + nSect * SIZEOF_SECTION_HEADER
+    textRelOff = textRawOff + gCodeSize
+    dataRawOff = textRelOff + gNRelocs * SIZEOF_COFF_RELOCATION
+    If gDataSize > 0 Then
+        symOff = dataRawOff + gDataSize
+    Else
+        symOff = dataRawOff
+    End If
+    outSize = symOff + gNSyms * SIZEOF_COFF_SYMBOL + strNeed
+
+    p = calloc(outSize)
+    If p = NULL Then
+        Print "out of memory"
+        End
+    End If
+
+    ' ヘッダ
+    ZeroMem(VarPtr(hdr), SIZEOF_COFF_HEADER)
+    hdr.Machine = IMAGE_FILE_MACHINE_I386
+    hdr.NumberOfSections = nSect
+    hdr.TimeDateStamp = 0
+    hdr.PointerToSymbolTable = symOff
+    hdr.NumberOfSymbols = gNSyms
+    hdr.SizeOfOptionalHeader = 0
+    hdr.Characteristics = 0
+    memcpy(p, VarPtr(hdr), SIZEOF_COFF_HEADER)
+
+    ' --- .text セクションヘッダ (section #1) ---
+    ZeroMem(VarPtr(sect), SIZEOF_SECTION_HEADER)
+    sectName = ".text"
+    namePtr = StrPtr(sectName)
+    For i = 0 To 7
+        If i < 5 Then
+            sect.Name(i) = namePtr[i]
+        Else
+            sect.Name(i) = 0
+        End If
+    Next
+    sect.VirtualSize = 0
+    sect.VirtualAddress = 0
+    sect.SizeOfRawData = gCodeSize
+    sect.PointerToRawData = textRawOff
+    If gNRelocs > 0 Then
+        sect.PointerToRelocations = textRelOff
+    Else
+        sect.PointerToRelocations = 0
+    End If
+    sect.PointerToLinenumbers = 0
+    sect.NumberOfRelocations = gNRelocs
+    sect.NumberOfLinenumbers = 0
+    sect.Characteristics = TEXT_CHARACTERISTICS
+    memcpy(VarPtr(p[sectHdrOff]), VarPtr(sect), SIZEOF_SECTION_HEADER)
+
+    ' --- .data セクションヘッダ (section #2) ---
+    If gDataSize > 0 Then
+        ZeroMem(VarPtr(sect), SIZEOF_SECTION_HEADER)
+        sectName = ".data"
+        namePtr = StrPtr(sectName)
+        For i = 0 To 7
+            If i < 5 Then
+                sect.Name(i) = namePtr[i]
+            Else
+                sect.Name(i) = 0
+            End If
+        Next
+        sect.VirtualSize = 0
+        sect.VirtualAddress = 0
+        sect.SizeOfRawData = gDataSize
+        sect.PointerToRawData = dataRawOff
+        sect.PointerToRelocations = 0
+        sect.PointerToLinenumbers = 0
+        sect.NumberOfRelocations = 0
+        sect.NumberOfLinenumbers = 0
+        sect.Characteristics = DATA_CHARACTERISTICS
+        memcpy(VarPtr(p[sectHdrOff + SIZEOF_SECTION_HEADER]), VarPtr(sect), SIZEOF_SECTION_HEADER)
+    End If
+
+    If gCodeSize > 0 Then
+        memcpy(VarPtr(p[textRawOff]), VarPtr(gCode(0)), gCodeSize)
+    End If
+
+    If gNRelocs > 0 Then
+        For i = 0 To gNRelocs - 1
+            ZeroMem(VarPtr(reloc), SIZEOF_COFF_RELOCATION)
+            reloc.VirtualAddress = gRelVA(i)
+            reloc.SymbolTableIndex = gRelSym(i)
+            reloc.RelType = gRelType(i)
+            memcpy(VarPtr(p[textRelOff + i * SIZEOF_COFF_RELOCATION]), VarPtr(reloc), SIZEOF_COFF_RELOCATION)
+        Next
+    End If
+
+    If gDataSize > 0 Then
+        memcpy(VarPtr(p[dataRawOff]), VarPtr(gData(0)), gDataSize)
+    End If
+
+    ' シンボル + 文字列テーブル
+    gStrTabSize = 4
+    If gNSyms > 0 Then
+        For i = 0 To gNSyms - 1
+            ZeroMem(VarPtr(sym), SIZEOF_COFF_SYMBOL)
+            SetSymName(VarPtr(sym), gSymName(i))
+            sym.Value = gSymValue(i)
+            sym.SectionNumber = gSymSection(i)
+            sym.SymType = 0
+            If gSymKind(i) = 0 Or gSymGlobal(i) <> 0 Then
+                sym.StorageClass = IMAGE_SYM_CLASS_EXTERNAL
+            Else
+                sym.StorageClass = IMAGE_SYM_CLASS_STATIC
+            End If
+            sym.NumberOfAuxSymbols = 0
+            memcpy(VarPtr(p[symOff + i * SIZEOF_COFF_SYMBOL]), VarPtr(sym), SIZEOF_COFF_SYMBOL)
+        Next
+    End If
+    memcpy(VarPtr(gStrTab(0)), VarPtr(gStrTabSize), 4)
+    memcpy(VarPtr(p[symOff + gNSyms * SIZEOF_COFF_SYMBOL]), VarPtr(gStrTab(0)), gStrTabSize)
+
+    BuildObj = p
+End Function
+
+Function DefaultOutName$(inPath As String) As String
+    Dim i As Long
+    Dim n As Long
+    Dim base As String
+    Dim ch As String
+    Dim dotPos As Long
+    Dim slashPos As Long
+
+    n = Len(inPath)
+    base = inPath
+    dotPos = 0
+    slashPos = 0
+    For i = 1 To n
+        ch = Mid$(inPath, i, 1)
+        If ch = "\" Or ch = "/" Then
+            slashPos = i
+            dotPos = 0
+        ElseIf ch = "." Then
+            dotPos = i
+        End If
+    Next
+    If dotPos > slashPos Then
+        base = Left$(inPath, dotPos - 1)
+    End If
+    DefaultOutName$ = base + ".obj"
+End Function
+
+' --- メイン ---
+Dim inPath[MAX_PATH] As Byte
+Dim outPath[MAX_PATH] As Byte
+Dim srcBuf As *Byte
+Dim srcSize As Long
+Dim objBuf As *Byte
+Dim objSize As Long
+Dim i As Long
+Dim outName As String
+Dim hexLine As String
+
+gNSyms = 0
+gNRelocs = 0
+gCodeSize = 0
+gDataSize = 0
+gCurSect = SECT_NONE
+gStrTabSize = 4
+
+If GetCmd(1, inPath) = 0 Then
+    USAGE()
+End If
+If GetCmd(2, outPath) = 0 Then
+    outName = DefaultOutName$(MakeStr(inPath))
+    lstrcpy(outPath, StrPtr(outName))
+End If
+
+srcBuf = LoadFile(inPath, srcSize)
+If srcBuf = NULL Then
+    Print "cannot open: " + MakeStr(inPath)
+    End
+End If
+
+AssembleBuffer(srcBuf, srcSize)
+free(srcBuf)
+
+If gCodeSize = 0 Then
+    Print "no code generated"
+    End
+End If
+
+objBuf = BuildObj(objSize)
+If WriteAll(outPath, objBuf, objSize) = 0 Then
+    Print "cannot write: " + MakeStr(outPath)
+Else
+    Print "OK: " + MakeStr(inPath) + " -> " + MakeStr(outPath)
+    Print "text=" + Str$(gCodeSize) + "  data=" + Str$(gDataSize) + "  relocs=" + Str$(gNRelocs) + "  syms=" + Str$(gNSyms) + "  obj=" + Str$(objSize)
+    hexLine = "text:"
+    If gCodeSize > 0 Then
+        For i = 0 To gCodeSize - 1
+            hexLine = hexLine + " " + HexPad$(gCode(i), 2)
+        Next
+    End If
+    Print hexLine
+    If gDataSize > 0 Then
+        hexLine = "data:"
+        For i = 0 To gDataSize - 1
+            hexLine = hexLine + " " + HexPad$(gData(i), 2)
+        Next
+        Print hexLine
+    End If
+End If
+
+free(objBuf)
+End

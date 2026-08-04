@@ -1,0 +1,344 @@
+#include "ablinkerV0.idx"
+
+#console
+
+' ablinkerV0 - ?w?b?_?[?e???v???[?g?????????????J?[
+' ?g????: ablinkerV0 <input.obj> [output.exe]
+'
+' ?o????C?A?E?g (GoLink?????^??):
+'   [0x0000-0x01FF] header_template.bin
+'   [0x0200-0x03FF] .text (?p?f?B???O???? 0x200)
+'   [0x0400-0x05FF] idata_template.bin (ExitProcess?p IAT + jmp thunk)
+
+Const IMAGE_BASE = &H00400000
+Const TEXT_RVA = &H00001000
+Const TEXT_RAW_SIZE = &H200
+Const HEADER_SIZE = &H200
+Const IDATA_SIZE = &H200
+Const IMPORT_THUNK_RVA = &H2008
+Const IMPORT_THUNK_ADDR = &H00402008
+
+Sub USAGE()
+    Print "ablinkerV0 - Header Template Linker"
+    Print "usage: ablinkerV0 <input.obj> [output.exe]"
+    End
+End Sub
+
+Function HexPad$(num As DWord, digits As Long) As String
+    Dim s As String
+    s = Hex$(num)
+    While Len(s) < digits
+        s = "0" + s
+    Wend
+    HexPad$ = s
+End Function
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[MAX_PATH] As Byte
+    Dim n As Long
+    Dim m As Long
+
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    cmd[cmdlen] = &H20
+    buf[0] = 0
+    cidx = 0
+
+    For n = 0 To cmdlen
+        If cmd[n] = &H20 And cmd[n + 1] = &H20 Then
+            memcpy(VarPtr(cmd[n]), VarPtr(cmd[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+
+    For n = 0 To cmdlen
+        m = 0
+        While cmd[n] <> &H20
+            ctmp[m] = cmd[n]
+            m = m + 1
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+    GetCmd = 0
+End Function
+
+Function IsTextSection(name As *Byte) As Long
+    If name[0] = Asc(".") And name[1] = Asc("t") And name[2] = Asc("e") And name[3] = Asc("x") And name[4] = Asc("t") Then
+        IsTextSection = 1
+    Else
+        IsTextSection = 0
+    End If
+End Function
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    LoadFile = NULL
+    outSize = 0
+
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+
+    p = malloc(fsiz)
+    If p = NULL Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    CloseHandle(hFile)
+    outSize = fsiz
+    LoadFile = p
+End Function
+
+Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+
+    WriteAll = 0
+    hFile = CreateFile(path, GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+
+    WriteFile(hFile, p, size, VarPtr(nWritten), ByVal NULL)
+    CloseHandle(hFile)
+    If nWritten = size Then WriteAll = 1
+End Function
+
+' REL32 / DIR32 ?? (?|?C???^??)
+Sub ApplyRelocPtr(codeBuf As *Byte, reloc As *COFF_RELOCATION, targetAddr As DWord, currentRVA As DWord)
+    Dim patchOffset As DWord
+    Dim relativeOffset As Long
+    Dim absAddr As DWord
+
+    patchOffset = reloc->VirtualAddress
+
+    If reloc->RelType = IMAGE_REL_I386_REL32 Then
+        relativeOffset = targetAddr - (IMAGE_BASE + currentRVA + patchOffset + 4)
+        memcpy(VarPtr(codeBuf[patchOffset]), VarPtr(relativeOffset), 4)
+    ElseIf reloc->RelType = IMAGE_REL_I386_DIR32 Then
+        absAddr = targetAddr
+        memcpy(VarPtr(codeBuf[patchOffset]), VarPtr(absAddr), 4)
+    End If
+End Sub
+
+' --- ???C?? ---
+Dim inPath[MAX_PATH] As Byte
+Dim outPath[MAX_PATH] As Byte
+Dim headerPath[MAX_PATH] As Byte
+Dim idataPath[MAX_PATH] As Byte
+
+Dim objBuf As *Byte
+Dim objSize As Long
+Dim headerBuf As *Byte
+Dim headerSize As Long
+Dim idataBuf As *Byte
+Dim idataSize As Long
+Dim codeBuf As *Byte
+Dim outBuf As *Byte
+
+Dim hdr As COFF_HEADER
+Dim sect As SECTION_HEADER
+Dim reloc As COFF_RELOCATION
+Dim sym As COFF_SYMBOL
+
+Dim i As Long
+Dim j As Long
+Dim nSect As Long
+Dim nRel As Long
+Dim nSym As Long
+Dim sectOff As DWord
+Dim off As DWord
+Dim textSectIdx As Long
+Dim textRawPtr As DWord
+Dim textRawSize As DWord
+Dim textRelPtr As DWord
+Dim textRelCount As Long
+Dim codeSize As Long
+Dim targetAddr As DWord
+Dim outSize As Long
+
+lstrcpy(headerPath, "header_template.bin")
+lstrcpy(idataPath, "idata_template.bin")
+lstrcpy(outPath, "a.exe")
+
+If GetCmd(1, inPath) = 0 Then
+    USAGE()
+End If
+If GetCmd(2, outPath) = 0 Then
+    lstrcpy(outPath, "a.exe")
+End If
+
+' ?e???v???[?g???
+headerBuf = LoadFile(headerPath, headerSize)
+If headerBuf = NULL Or headerSize <> HEADER_SIZE Then
+    Print "cannot load header_template.bin (need 512 bytes)"
+    End
+End If
+
+idataBuf = LoadFile(idataPath, idataSize)
+If idataBuf = NULL Or idataSize <> IDATA_SIZE Then
+    Print "cannot load idata_template.bin (need 512 bytes)"
+    free(headerBuf)
+    End
+End If
+
+' OBJ???
+objBuf = LoadFile(inPath, objSize)
+If objBuf = NULL Then
+    Print "cannot open: " + MakeStr(inPath)
+    free(headerBuf)
+    free(idataBuf)
+    End
+End If
+
+If objSize < SIZEOF_COFF_HEADER Then
+    Print "obj too small"
+    free(objBuf)
+    free(headerBuf)
+    free(idataBuf)
+    End
+End If
+
+memcpy(VarPtr(hdr), objBuf, SIZEOF_COFF_HEADER)
+If hdr.Machine <> IMAGE_FILE_MACHINE_I386 Then
+    Print "not i386 COFF"
+    free(objBuf)
+    free(headerBuf)
+    free(idataBuf)
+    End
+End If
+
+' .text ?Z?N?V??????T??
+sectOff = SIZEOF_COFF_HEADER + hdr.SizeOfOptionalHeader
+nSect = hdr.NumberOfSections
+textSectIdx = -1
+textRawPtr = 0
+textRawSize = 0
+textRelPtr = 0
+textRelCount = 0
+
+If nSect > 0 Then
+    For i = 0 To nSect - 1
+        off = sectOff + i * SIZEOF_SECTION_HEADER
+        memcpy(VarPtr(sect), VarPtr(objBuf[off]), SIZEOF_SECTION_HEADER)
+        If IsTextSection(VarPtr(sect.Name(0))) <> 0 Then
+            textSectIdx = i
+            textRawPtr = sect.PointerToRawData
+            textRawSize = sect.SizeOfRawData
+            textRelPtr = sect.PointerToRelocations
+            textRelCount = sect.NumberOfRelocations
+            Exit For
+        End If
+    Next
+End If
+
+If textSectIdx < 0 Or textRawSize = 0 Then
+    Print ".text section not found"
+    free(objBuf)
+    free(headerBuf)
+    free(idataBuf)
+    End
+End If
+
+If textRawPtr + textRawSize > objSize Then
+    Print ".text out of range"
+    free(objBuf)
+    free(headerBuf)
+    free(idataBuf)
+    End
+End If
+
+' ?R?[?h?o?b?t?@ (?t?@?C???A???C?????[??????)
+codeBuf = calloc(TEXT_RAW_SIZE)
+codeSize = textRawSize
+If codeSize > TEXT_RAW_SIZE Then
+    Print ".text too large for template (max 512)"
+    free(codeBuf)
+    free(objBuf)
+    free(headerBuf)
+    free(idataBuf)
+    End
+End If
+memcpy(codeBuf, VarPtr(objBuf[textRawPtr]), codeSize)
+
+' ?????P?[?V????: ????`EXTERNAL??^???? Import thunk (0x402008) ??
+nRel = textRelCount
+If nRel > 0 Then
+    For j = 0 To nRel - 1
+        off = textRelPtr + j * SIZEOF_COFF_RELOCATION
+        memcpy(VarPtr(reloc), VarPtr(objBuf[off]), SIZEOF_COFF_RELOCATION)
+
+        ' ?V???{????
+        If reloc.SymbolTableIndex >= hdr.NumberOfSymbols Then
+            Print "bad symbol index"
+            free(codeBuf)
+            free(objBuf)
+            free(headerBuf)
+            free(idataBuf)
+            End
+        End If
+
+        off = hdr.PointerToSymbolTable + reloc.SymbolTableIndex * SIZEOF_COFF_SYMBOL
+        memcpy(VarPtr(sym), VarPtr(objBuf[off]), SIZEOF_COFF_SYMBOL)
+
+        If sym.SectionNumber = IMAGE_SYM_UNDEFINED Then
+            ' V0: ?e???v???[?g?? ExitProcess thunk ???g??
+            targetAddr = IMPORT_THUNK_ADDR
+        ElseIf sym.SectionNumber = 1 Then
+            ' .text ???V???{??
+            targetAddr = IMAGE_BASE + TEXT_RVA + sym.Value
+        Else
+            Print "unsupported section for symbol: " + Str$(sym.SectionNumber)
+            free(codeBuf)
+            free(objBuf)
+            free(headerBuf)
+            free(idataBuf)
+            End
+        End If
+
+        ApplyRelocPtr(codeBuf, VarPtr(reloc), targetAddr, TEXT_RVA)
+        Print "reloc[" + Str$(j) + "] VA=0x" + HexPad$(reloc.VirtualAddress, 8) + _
+            " -> 0x" + HexPad$(targetAddr, 8)
+    Next
+End If
+
+' ?o??o?b?t?@ = header + text + idata
+outSize = HEADER_SIZE + TEXT_RAW_SIZE + IDATA_SIZE
+outBuf = malloc(outSize)
+memcpy(VarPtr(outBuf[0]), headerBuf, HEADER_SIZE)
+memcpy(VarPtr(outBuf[HEADER_SIZE]), codeBuf, TEXT_RAW_SIZE)
+memcpy(VarPtr(outBuf[HEADER_SIZE + TEXT_RAW_SIZE]), idataBuf, IDATA_SIZE)
+
+If WriteAll(outPath, outBuf, outSize) = 0 Then
+    Print "cannot write: " + MakeStr(outPath)
+Else
+    Print "OK: " + MakeStr(inPath) + " -> " + MakeStr(outPath)
+    Print "size=" + Str$(outSize) + "  entry=0x" + HexPad$(IMAGE_BASE + TEXT_RVA, 8)
+End If
+
+free(outBuf)
+free(codeBuf)
+free(objBuf)
+free(headerBuf)
+free(idataBuf)
+End

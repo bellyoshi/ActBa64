@@ -1,0 +1,188 @@
+' ===================================================
+'  Types - user Type registry (Word/DWord packing)
+' ===================================================
+
+Const TYMAX_TYPES = 64
+Const TYMAX_FIELDS = 256
+Const TYNAME_LEN = 32
+
+Type TypeTable
+    nTypes As Long
+    nFields As Long
+    typeNames As *Byte
+    typeSizes As *Long
+    typeFirst As *Long
+    fieldNames As *Byte
+    fieldOffs As *Long
+    fieldSizes As *Long
+    fieldCounts As *Long
+    fieldNext As *Long
+End Type
+
+Function TyNameEq(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    Dim ca As Long
+    Dim cb As Long
+    TyNameEq = 0
+    i = 0
+    Do
+        ca = a[i]
+        cb = b[i]
+        If ca >= 65 And ca <= 90 Then ca = ca + 32
+        If cb >= 65 And cb <= 90 Then cb = cb + 32
+        If ca <> cb Then Exit Function
+        If ca = 0 Then
+            TyNameEq = 1
+            Exit Function
+        End If
+        i = i + 1
+    Loop
+End Function
+
+Sub TyFree(t As *TypeTable)
+    If t = NULL Then Exit Sub
+    If t.typeNames <> NULL Then free(t.typeNames)
+    If t.typeSizes <> NULL Then free(t.typeSizes)
+    If t.typeFirst <> NULL Then free(t.typeFirst)
+    If t.fieldNames <> NULL Then free(t.fieldNames)
+    If t.fieldOffs <> NULL Then free(t.fieldOffs)
+    If t.fieldSizes <> NULL Then free(t.fieldSizes)
+    If t.fieldCounts <> NULL Then free(t.fieldCounts)
+    If t.fieldNext <> NULL Then free(t.fieldNext)
+    free(t)
+End Sub
+
+Function TyCreate() As *TypeTable
+    Dim t As *TypeTable
+    TyCreate = NULL
+    t = calloc(SizeOf(TypeTable))
+    If t = NULL Then Exit Function
+    t.typeNames = calloc(TYMAX_TYPES * TYNAME_LEN)
+    t.typeSizes = calloc(SizeOf(Long) * TYMAX_TYPES)
+    t.typeFirst = calloc(SizeOf(Long) * TYMAX_TYPES)
+    t.fieldNames = calloc(TYMAX_FIELDS * TYNAME_LEN)
+    t.fieldOffs = calloc(SizeOf(Long) * TYMAX_FIELDS)
+    t.fieldSizes = calloc(SizeOf(Long) * TYMAX_FIELDS)
+    t.fieldCounts = calloc(SizeOf(Long) * TYMAX_FIELDS)
+    t.fieldNext = calloc(SizeOf(Long) * TYMAX_FIELDS)
+    If t.typeNames = NULL Or t.typeSizes = NULL Or t.typeFirst = NULL Or t.fieldNames = NULL Or t.fieldOffs = NULL Or t.fieldSizes = NULL Or t.fieldCounts = NULL Or t.fieldNext = NULL Then
+        TyFree(t)
+        Exit Function
+    End If
+    t.nTypes = 0
+    t.nFields = 0
+    TyCreate = t
+End Function
+
+Function TyPrimSize(name As *Byte) As Long
+    Dim k(15) As Byte
+    TyPrimSize = 0
+    lstrcpy(VarPtr(k), "byte")
+    If TyNameEq(name, VarPtr(k)) <> 0 Then
+        TyPrimSize = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "word")
+    If TyNameEq(name, VarPtr(k)) <> 0 Then
+        TyPrimSize = 2
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "dword")
+    If TyNameEq(name, VarPtr(k)) <> 0 Then
+        TyPrimSize = 4
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "long")
+    If TyNameEq(name, VarPtr(k)) <> 0 Then
+        TyPrimSize = 4
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "string")
+    If TyNameEq(name, VarPtr(k)) <> 0 Then
+        TyPrimSize = 4
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "handle")
+    If TyNameEq(name, VarPtr(k)) <> 0 Then
+        TyPrimSize = 4
+        Exit Function
+    End If
+End Function
+
+Function TyFind(t As *TypeTable, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    TyFind = -1
+    If t = NULL Then Exit Function
+    names = t.typeNames
+    i = 0
+    While i < t.nTypes
+        off = i * TYNAME_LEN
+        If TyNameEq(VarPtr(names[off]), name) <> 0 Then
+            TyFind = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function TySizeOfName(t As *TypeTable, name As *Byte) As Long
+    Dim sz As Long
+    Dim ti As Long
+    Dim sizes As *Long
+    TySizeOfName = 0
+    sz = TyPrimSize(name)
+    If sz > 0 Then
+        TySizeOfName = sz
+        Exit Function
+    End If
+    ti = TyFind(t, name)
+    If ti < 0 Then Exit Function
+    sizes = t.typeSizes
+    TySizeOfName = sizes[ti]
+End Function
+
+Function TyAdd(t As *TypeTable, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim firsts As *Long
+    Dim sizes As *Long
+    Dim j As Long
+    Dim off As Long
+
+    TyAdd = -1
+    If t = NULL Then Exit Function
+    i = TyFind(t, name)
+    If i >= 0 Then
+        TyAdd = i
+        Exit Function
+    End If
+    If t.nTypes >= TYMAX_TYPES Then Exit Function
+    i = t.nTypes
+    names = t.typeNames
+    firsts = t.typeFirst
+    sizes = t.typeSizes
+    off = i * TYNAME_LEN
+    j = 0
+    While name[j] <> 0 And j < TYNAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    sizes[i] = 0
+    firsts[i] = -1
+    t.nTypes = i + 1
+    TyAdd = i
+End Function
+Function F(off As Long, align As Long) As Long
+    Dim m As Long
+    Dim r As Long
+    m = align - 1
+    r = off And m
+    While r <> 0
+        off = off + 1
+        r = off And m
+    Wend
+    F = off
+End Function

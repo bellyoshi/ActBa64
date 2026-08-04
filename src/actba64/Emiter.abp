@@ -1,0 +1,454 @@
+' ===================================================
+'  CodeBuffer + x64 emitters (RIP-relative)
+' ===================================================
+
+Dim g_IsDebugAsm As Long
+
+Sub WriteAsmLine(s As String)
+End Sub
+
+Type CodeBuffer
+    buf As *Byte
+    capacity As Long
+    size As Long
+End Type
+
+Sub EmitByte(cb As *CodeBuffer, b As Byte)
+    If cb.size >= cb.capacity Then Exit Sub
+    cb.buf[cb.size] = b
+    cb.size = cb.size + 1
+End Sub
+
+Sub EmitDword(cb As *CodeBuffer, dw As DWord)
+    If cb.size + 4 > cb.capacity Then Exit Sub
+    PutDword(VarPtr(cb.buf[cb.size]), 0, dw)
+    cb.size = cb.size + 4
+End Sub
+
+Sub EmitCallRip(cb As *CodeBuffer, targetRva As DWord, textBaseRva As DWord)
+    Dim nextRip As DWord
+    EmitByte(cb, &HFF)
+    EmitByte(cb, &H15)
+    nextRip = textBaseRva + cb.size + 4
+    EmitDword(cb, targetRva - nextRip)
+End Sub
+
+Sub EmitLeaRdxRip(cb As *CodeBuffer, targetRva As DWord, textBaseRva As DWord)
+    Dim nextRip As DWord
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H8D)
+    EmitByte(cb, &H15)
+    nextRip = textBaseRva + cb.size + 4
+    EmitDword(cb, targetRva - nextRip)
+End Sub
+
+Sub EmitLeaR8Rip(cb As *CodeBuffer, targetRva As DWord, textBaseRva As DWord)
+    Dim nextRip As DWord
+    EmitByte(cb, &H4C)
+    EmitByte(cb, &H8D)
+    EmitByte(cb, &H05)
+    nextRip = textBaseRva + cb.size + 4
+    EmitDword(cb, targetRva - nextRip)
+End Sub
+
+' push rbp; mov rbp, rsp; sub rsp, imm32
+Sub EmitEnter(cb As *CodeBuffer, frameSize As DWord)
+    EmitByte(cb, &H55)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HE5)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H81)
+    EmitByte(cb, &HEC)
+    EmitDword(cb, frameSize)
+End Sub
+
+' leave; ret  => mov rsp,rbp; pop rbp; ret
+Sub EmitLeaveRet(cb As *CodeBuffer)
+    EmitByte(cb, &HC9)
+    EmitByte(cb, &HC3)
+End Sub
+
+Sub EmitSubRsp(cb As *CodeBuffer, imm8 As Byte)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H83)
+    EmitByte(cb, &HEC)
+    EmitByte(cb, imm8)
+End Sub
+
+Sub EmitAddRsp(cb As *CodeBuffer, imm8 As Byte)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H83)
+    EmitByte(cb, &HC4)
+    EmitByte(cb, imm8)
+End Sub
+
+Sub EmitXorEcx(cb As *CodeBuffer)
+    EmitByte(cb, &H31)
+    EmitByte(cb, &HC9)
+End Sub
+
+Sub EmitXorR9d(cb As *CodeBuffer)
+    EmitByte(cb, &H45)
+    EmitByte(cb, &H31)
+    EmitByte(cb, &HC9)
+End Sub
+
+Sub EmitRet(cb As *CodeBuffer)
+    EmitByte(cb, &HC3)
+End Sub
+
+Sub EmitMovEcxImm(cb As *CodeBuffer, imm As DWord)
+    EmitByte(cb, &HB9)
+    EmitDword(cb, imm)
+End Sub
+
+Sub EmitMovEaxImm(cb As *CodeBuffer, imm As DWord)
+    EmitByte(cb, &HB8)
+    EmitDword(cb, imm)
+End Sub
+
+' mov rax, [rbp + disp32]
+Sub EmitLoadLocal(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H8B)
+    EmitByte(cb, &H85)
+    EmitDword(cb, disp)
+End Sub
+
+' mov [rbp + disp32], rax
+Sub EmitStoreLocal(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H85)
+    EmitDword(cb, disp)
+End Sub
+
+Sub EmitPushRax(cb As *CodeBuffer)
+    EmitByte(cb, &H50)
+End Sub
+
+Sub EmitPopRcx(cb As *CodeBuffer)
+    EmitByte(cb, &H59)
+End Sub
+
+' add eax, ecx
+Sub EmitAddEaxEcx(cb As *CodeBuffer)
+    EmitByte(cb, &H01)
+    EmitByte(cb, &HC8)
+End Sub
+
+' imul eax, ecx
+Sub EmitImulEaxEcx(cb As *CodeBuffer)
+    EmitByte(cb, &H0F)
+    EmitByte(cb, &HAF)
+    EmitByte(cb, &HC1)
+End Sub
+
+' mov ecx, eax
+Sub EmitMovEcxEax(cb As *CodeBuffer)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HC1)
+End Sub
+
+' cmp ecx, eax
+Sub EmitCmpEcxEax(cb As *CodeBuffer)
+    EmitByte(cb, &H39)
+    EmitByte(cb, &HC1)
+End Sub
+
+' test eax, eax
+Sub EmitTestEax(cb As *CodeBuffer)
+    EmitByte(cb, &H85)
+    EmitByte(cb, &HC0)
+End Sub
+
+' add dword [rbp+disp], 1
+Sub EmitIncLocal(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &HFF)
+    EmitByte(cb, &H85)
+    EmitDword(cb, disp)
+End Sub
+
+Sub EmitStoreLocalEcx(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H8D)
+    EmitDword(cb, disp)
+End Sub
+
+Sub EmitStoreLocalEdx(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H95)
+    EmitDword(cb, disp)
+End Sub
+
+Sub EmitMovEdxImm(cb As *CodeBuffer, imm As DWord)
+    EmitByte(cb, &HBA)
+    EmitDword(cb, imm)
+End Sub
+
+' mov edx, eax
+Sub EmitMovEdxEax(cb As *CodeBuffer)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HC2)
+End Sub
+
+Sub EmitLeaRaxRip(cb As *CodeBuffer, targetRva As DWord, textBaseRva As DWord)
+    Dim nextRip As DWord
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H8D)
+    EmitByte(cb, &H05)
+    nextRip = textBaseRva + cb.size + 4
+    EmitDword(cb, targetRva - nextRip)
+End Sub
+
+Sub EmitMovRcxRax(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HC1)
+End Sub
+
+Sub EmitMovRdxRax(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HC2)
+End Sub
+
+Sub EmitMovR8Rax(cb As *CodeBuffer)
+    EmitByte(cb, &H49)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HC0)
+End Sub
+
+Sub EmitMovzxEaxByteRax(cb As *CodeBuffer)
+    EmitByte(cb, &H0F)
+    EmitByte(cb, &HB6)
+    EmitByte(cb, &H00)
+End Sub
+
+Sub EmitTestRax(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H85)
+    EmitByte(cb, &HC0)
+End Sub
+
+Sub EmitXorEax(cb As *CodeBuffer)
+    EmitByte(cb, &H31)
+    EmitByte(cb, &HC0)
+End Sub
+
+' lea rax, [rbp + disp32]
+Sub EmitLeaLocal(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H8D)
+    EmitByte(cb, &H85)
+    EmitDword(cb, disp)
+End Sub
+
+' add rax, rcx
+Sub EmitAddRaxRcx(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H01)
+    EmitByte(cb, &HC8)
+End Sub
+
+' movzx eax, byte [rax]
+Sub EmitLoadzxByteRax(cb As *CodeBuffer)
+    EmitByte(cb, &H0F)
+    EmitByte(cb, &HB6)
+    EmitByte(cb, &H00)
+End Sub
+
+' mov [rax], cl
+Sub EmitStoreByteRaxCl(cb As *CodeBuffer)
+    EmitByte(cb, &H88)
+    EmitByte(cb, &H08)
+End Sub
+
+' add rax, imm32
+Sub EmitAddRaxImm(cb As *CodeBuffer, imm As Long)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H05)
+    EmitDword(cb, imm)
+End Sub
+
+' movzx eax, word [rax]
+Sub EmitLoadzxWordRax(cb As *CodeBuffer)
+    EmitByte(cb, &H0F)
+    EmitByte(cb, &HB7)
+    EmitByte(cb, &H00)
+End Sub
+
+' mov [rax], cx
+Sub EmitStoreWordRaxCx(cb As *CodeBuffer)
+    EmitByte(cb, &H66)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H08)
+End Sub
+
+' mov eax, [rax]
+Sub EmitLoadDwordRax(cb As *CodeBuffer)
+    EmitByte(cb, &H8B)
+    EmitByte(cb, &H00)
+End Sub
+
+' mov [rax], ecx
+Sub EmitStoreDwordRaxEcx(cb As *CodeBuffer)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H08)
+End Sub
+
+' mov rax, [rax]
+Sub EmitLoadQwordRax(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H8B)
+    EmitByte(cb, &H00)
+End Sub
+
+' mov [rax], rcx
+Sub EmitStoreQwordRaxRcx(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H08)
+End Sub
+
+' and eax, ecx
+Sub EmitAndEaxEcx(cb As *CodeBuffer)
+    EmitByte(cb, &H21)
+    EmitByte(cb, &HC8)
+End Sub
+
+' or eax, ecx
+Sub EmitOrEaxEcx(cb As *CodeBuffer)
+    EmitByte(cb, &H09)
+    EmitByte(cb, &HC8)
+End Sub
+
+' neg eax
+Sub EmitNegEax(cb As *CodeBuffer)
+    EmitByte(cb, &HF7)
+    EmitByte(cb, &HD8)
+End Sub
+
+' sub eax, ecx
+Sub EmitSubEaxEcx(cb As *CodeBuffer)
+    EmitByte(cb, &H29)
+    EmitByte(cb, &HC8)
+End Sub
+
+Sub EmitPopRdx(cb As *CodeBuffer)
+    EmitByte(cb, &H5A)
+End Sub
+
+' xchg rax, rcx
+Sub EmitXchgRaxRcx(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H91)
+End Sub
+
+Function EmitCallRel32(cb As *CodeBuffer) As Long
+    EmitByte(cb, &HE8)
+    EmitCallRel32 = cb.size
+    EmitDword(cb, 0)
+End Function
+
+' lea rax, [rip+disp32] - returns offset of disp32 for patching
+Function EmitLeaRaxLabRel32(cb As *CodeBuffer) As Long
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H8D)
+    EmitByte(cb, &H05)
+    EmitLeaRaxLabRel32 = cb.size
+    EmitDword(cb, 0)
+End Function
+
+' shl ecx, 3
+Sub EmitShlEcx3(cb As *CodeBuffer)
+    EmitByte(cb, &HC1)
+    EmitByte(cb, &HE1)
+    EmitByte(cb, 3)
+End Sub
+
+' pop rax
+Sub EmitPopRax(cb As *CodeBuffer)
+    EmitByte(cb, &H58)
+End Sub
+
+' pop r8
+Sub EmitPopR8(cb As *CodeBuffer)
+    EmitByte(cb, &H41)
+    EmitByte(cb, &H58)
+End Sub
+
+' mov rax, r8
+Sub EmitMovRaxR8(cb As *CodeBuffer)
+    EmitByte(cb, &H4C)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HC0)
+End Sub
+
+' mov [rsp+disp32], rax
+Sub EmitStoreRspRax(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H84)
+    EmitByte(cb, &H24)
+    EmitDword(cb, disp)
+End Sub
+
+' mov r9, rax
+Sub EmitMovR9Rax(cb As *CodeBuffer)
+    EmitByte(cb, &H49)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HC1)
+End Sub
+
+' mov [rbp+disp], r8
+Sub EmitStoreLocalR8(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H4C)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H85)
+    EmitDword(cb, disp)
+End Sub
+
+' mov [rbp+disp], r9
+Sub EmitStoreLocalR9(cb As *CodeBuffer, disp As Long)
+    EmitByte(cb, &H4C)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &H8D)
+    EmitDword(cb, disp)
+End Sub
+
+' mov eax, edx
+Sub EmitMovEaxEdx(cb As *CodeBuffer)
+    EmitByte(cb, &H89)
+    EmitByte(cb, &HD0)
+End Sub
+
+' xor edx, edx
+Sub EmitXorEdx(cb As *CodeBuffer)
+    EmitByte(cb, &H31)
+    EmitByte(cb, &HD2)
+End Sub
+
+' div ecx  (unsigned; rdx:rax / ecx)
+Sub EmitDivEcx(cb As *CodeBuffer)
+    EmitByte(cb, &HF7)
+    EmitByte(cb, &HF1)
+End Sub
+
+' jmp rel32 - returns offset of rel32 field for patching
+Function EmitJmpRel32(cb As *CodeBuffer) As Long
+    EmitByte(cb, &HE9)
+    EmitJmpRel32 = cb.size
+    EmitDword(cb, 0)
+End Function
+
+' jcc rel32
+Function EmitJccRel32(cb As *CodeBuffer, cc As Byte) As Long
+    EmitByte(cb, &H0F)
+    EmitByte(cb, cc)
+    EmitJccRel32 = cb.size
+    EmitDword(cb, 0)
+End Function

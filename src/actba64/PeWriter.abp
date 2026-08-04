@@ -1,0 +1,97 @@
+' ===================================================
+'  PeWriter - pack .text + .idata into PE32+ GUI EXE
+' ===================================================
+
+Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder, subsystem As Long) As Long
+    Dim outBuf As *Byte
+    Dim outSize As Long
+    Dim textRaw As DWord
+    Dim textVirt As DWord
+    Dim idataRaw As DWord
+    Dim idataVirt As DWord
+    Dim sizeImage As DWord
+    Dim optOff As DWord
+    Dim sectOff As DWord
+    Dim idOff As DWord
+
+    WritePe64 = 0
+
+    textVirt = AlignUp(codeSize, SECTION_ALIGN)
+    textRaw = AlignUp(codeSize, FILE_ALIGN)
+    idataVirt = AlignUp(idataSize, SECTION_ALIGN)
+    If idataVirt < SECTION_ALIGN Then idataVirt = SECTION_ALIGN
+    idataRaw = AlignUp(idataSize, FILE_ALIGN)
+    If idataRaw < FILE_ALIGN Then idataRaw = FILE_ALIGN
+
+    sizeImage = TEXT_RVA + textVirt + idataVirt
+    outSize = SIZEOF_HEADERS + textRaw + idataRaw
+
+    outBuf = calloc(outSize)
+    If outBuf = NULL Then Exit Function
+
+    ZeroMem(outBuf, SIZEOF_HEADERS)
+    PutWord(outBuf, 0, IMAGE_DOS_SIGNATURE)
+    PutDword(outBuf, 60, E_LFANEW)
+    WriteDosStub(outBuf)
+
+    PutDword(outBuf, E_LFANEW, IMAGE_NT_SIGNATURE)
+    PutWord(outBuf, E_LFANEW + 4, IMAGE_FILE_MACHINE_AMD64)
+    PutWord(outBuf, E_LFANEW + 6, 2)
+    PutWord(outBuf, E_LFANEW + 20, SIZEOF_OPTIONAL_HEADER64)
+    PutWord(outBuf, E_LFANEW + 22, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_LARGE_ADDRESS_AWARE)
+
+    optOff = E_LFANEW + 24
+    PutWord(outBuf, optOff + 0, IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    PutDword(outBuf, optOff + 4, textRaw)
+    PutDword(outBuf, optOff + 16, TEXT_RVA)
+    PutDword(outBuf, optOff + 20, TEXT_RVA)
+    PutDword(outBuf, optOff + 24, IMAGE_BASE_LOW)
+    PutDword(outBuf, optOff + 28, IMAGE_BASE_HIGH)
+    PutDword(outBuf, optOff + 32, SECTION_ALIGN)
+    PutDword(outBuf, optOff + 36, FILE_ALIGN)
+    PutWord(outBuf, optOff + 40, 5)
+    PutWord(outBuf, optOff + 42, 2)
+    PutWord(outBuf, optOff + 48, 5)
+    PutWord(outBuf, optOff + 50, 2)
+    PutDword(outBuf, optOff + 56, sizeImage)
+    PutDword(outBuf, optOff + 60, SIZEOF_HEADERS)
+    PutWord(outBuf, optOff + 68, subsystem)
+    PutDword(outBuf, optOff + 72, &H800000)
+    PutDword(outBuf, optOff + 80, &H1000)
+    PutDword(outBuf, optOff + 88, &H800000)
+    PutDword(outBuf, optOff + 96, &H1000)
+    PutDword(outBuf, optOff + 108, 16)
+
+    PutDword(outBuf, optOff + 120, builder.idtRva)
+    PutDword(outBuf, optOff + 124, builder.idtSize)
+    PutDword(outBuf, optOff + 208, builder.iatRva)
+    PutDword(outBuf, optOff + 212, builder.iatSize)
+
+    sectOff = optOff + SIZEOF_OPTIONAL_HEADER64
+    lstrcpy(VarPtr(outBuf[sectOff]), ".text")
+    PutDword(outBuf, sectOff + 8, codeSize)
+    PutDword(outBuf, sectOff + 12, TEXT_RVA)
+    PutDword(outBuf, sectOff + 16, textRaw)
+    PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS)
+    PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ)
+
+    sectOff = sectOff + 40
+    lstrcpy(VarPtr(outBuf[sectOff]), ".idata")
+    PutDword(outBuf, sectOff + 8, idataSize)
+    PutDword(outBuf, sectOff + 12, builder.iatRva)
+    PutDword(outBuf, sectOff + 16, idataRaw)
+    PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS + textRaw)
+    PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
+
+    memcpy(VarPtr(outBuf[SIZEOF_HEADERS]), codeBuf, codeSize)
+    idOff = SIZEOF_HEADERS + textRaw
+    memcpy(VarPtr(outBuf[idOff]), idataBuf, idataSize)
+
+    WriteAll(outPath, outBuf, outSize)
+    free(outBuf)
+    WritePe64 = 1
+End Function
+
+Function WritePe64Gui(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder) As Long
+    WritePe64Gui = WritePe64(outPath, codeBuf, codeSize, idataBuf, idataSize, builder, IMAGE_SUBSYSTEM_WINDOWS_GUI)
+End Function

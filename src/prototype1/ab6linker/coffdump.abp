@@ -1,0 +1,284 @@
+#include "coffdump.idx"
+
+#console
+
+' COFF Dump - OBJ?t?@?C????w?b?_ / ?Z?N?V???? / ?????P?[?V???? / ?V???{????\??????
+' ?g????: coffdump <file.obj>
+' (ActiveBasic 4.20 / vcrt?s?v)
+
+Sub USAGE()
+    Print "coffdump - COFF Object Dumper"
+    Print "usage: coffdump <file.obj>"
+    End
+End Sub
+
+' ?[??????16?i??????
+Function HexPad$(num As DWord, digits As Long) As String
+    Dim s As String
+    s = Hex$(num)
+    While Len(s) < digits
+        s = "0" + s
+    Wend
+    HexPad$ = s
+End Function
+
+' ?R?}???h???C????n???????? (0=???s?t?@?C????)
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[MAX_PATH] As Byte
+    Dim n As Long
+    Dim m As Long
+
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    cmd[cmdlen] = &H20
+
+    buf[0] = 0
+    cidx = 0
+
+    ' ?A???X?y?[?X?????k
+    For n = 0 To cmdlen
+        If cmd[n] = &H20 And cmd[n + 1] = &H20 Then
+            memcpy(VarPtr(cmd[n]), VarPtr(cmd[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+
+    For n = 0 To cmdlen
+        m = 0
+        While cmd[n] <> &H20
+            ctmp[m] = cmd[n]
+            m = m + 1
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+
+    GetCmd = 0
+End Function
+
+' 8?o?C?g?????????
+Function ShortName$(name As *Byte) As String
+    Dim i As Long
+    Dim s As String
+    s = ""
+    For i = 0 To 7
+        If name[i] = 0 Then Exit For
+        s = s + Chr$(name[i])
+    Next
+    ShortName$ = s
+End Function
+
+' ?V???{??????????
+Function SymbolName$(sym As *COFF_SYMBOL, strTab As *Byte) As String
+    Dim zeroes As DWord
+    Dim offset As DWord
+
+    memcpy(VarPtr(zeroes), VarPtr(sym->Name(0)), 4)
+    If zeroes = 0 Then
+        memcpy(VarPtr(offset), VarPtr(sym->Name(4)), 4)
+        SymbolName$ = MakeStr(VarPtr(strTab[offset]))
+    Else
+        SymbolName$ = ShortName$(VarPtr(sym->Name(0)))
+    End If
+End Function
+
+Function RelocTypeName$(t As Word) As String
+    Select Case t
+        Case IMAGE_REL_I386_ABSOLUTE
+            RelocTypeName$ = "ABSOLUTE"
+        Case IMAGE_REL_I386_DIR32
+            RelocTypeName$ = "DIR32"
+        Case IMAGE_REL_I386_DIR32NB
+            RelocTypeName$ = "DIR32NB"
+        Case IMAGE_REL_I386_SECTION
+            RelocTypeName$ = "SECTION"
+        Case IMAGE_REL_I386_SECREL
+            RelocTypeName$ = "SECREL"
+        Case IMAGE_REL_I386_REL32
+            RelocTypeName$ = "REL32"
+        Case Else
+            RelocTypeName$ = "?"
+    End Select
+End Function
+
+Function StorageClassName$(c As Byte) As String
+    Select Case c
+        Case IMAGE_SYM_CLASS_EXTERNAL
+            StorageClassName$ = "EXTERNAL"
+        Case IMAGE_SYM_CLASS_STATIC
+            StorageClassName$ = "STATIC"
+        Case IMAGE_SYM_CLASS_LABEL
+            StorageClassName$ = "LABEL"
+        Case IMAGE_SYM_CLASS_FILE
+            StorageClassName$ = "FILE"
+        Case Else
+            StorageClassName$ = "?"
+    End Select
+End Function
+
+' --- ???C?? ---
+Dim fnam[MAX_PATH] As Byte
+Dim hFile As HANDLE
+Dim fsiz As Long
+Dim nRead As DWord
+Dim buf As *Byte
+Dim hdr As COFF_HEADER
+Dim sect As SECTION_HEADER
+Dim reloc As COFF_RELOCATION
+Dim sym As COFF_SYMBOL
+Dim i As Long
+Dim j As Long
+Dim nSect As Long
+Dim nRel As Long
+Dim nSym As Long
+Dim sectOff As DWord
+Dim off As DWord
+Dim strTab As *Byte
+Dim strTabSize As DWord
+Dim auxLeft As Long
+
+If GetCmd(1, fnam) = 0 Then
+    USAGE()
+End If
+
+hFile = CreateFile(fnam, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+If hFile = INVALID_HANDLE_VALUE Then
+    Print "cannot open: " + MakeStr(fnam)
+    End
+End If
+
+fsiz = GetFileSize(hFile, NULL)
+If fsiz < SIZEOF_COFF_HEADER Then
+    Print "file too small"
+    CloseHandle(hFile)
+    End
+End If
+
+buf = malloc(fsiz)
+ReadFile(hFile, buf, fsiz, VarPtr(nRead), ByVal NULL)
+CloseHandle(hFile)
+
+memcpy(VarPtr(hdr), buf, SIZEOF_COFF_HEADER)
+
+Print "File: " + MakeStr(fnam)
+Print "Size: " + Str$(fsiz) + " bytes"
+Print
+
+' --- COFF Header ---
+Print "=== COFF Header ==="
+Print "Machine              : 0x" + HexPad$(hdr.Machine, 4);
+If hdr.Machine = IMAGE_FILE_MACHINE_I386 Then
+    Print " (i386)"
+Else
+    Print
+End If
+Print "NumberOfSections     : " + Str$(hdr.NumberOfSections)
+Print "TimeDateStamp        : 0x" + HexPad$(hdr.TimeDateStamp, 8)
+Print "PointerToSymbolTable : 0x" + HexPad$(hdr.PointerToSymbolTable, 8)
+Print "NumberOfSymbols      : " + Str$(hdr.NumberOfSymbols)
+Print "SizeOfOptionalHeader : " + Str$(hdr.SizeOfOptionalHeader)
+Print "Characteristics      : 0x" + HexPad$(hdr.Characteristics, 4)
+Print
+
+' --- Section Headers ---
+sectOff = SIZEOF_COFF_HEADER + hdr.SizeOfOptionalHeader
+nSect = hdr.NumberOfSections
+Print "=== Sections (" + Str$(nSect) + ") ==="
+
+If nSect > 0 Then
+    For i = 0 To nSect - 1
+        off = sectOff + i * SIZEOF_SECTION_HEADER
+        If off + SIZEOF_SECTION_HEADER > fsiz Then
+            Print "section " + Str$(i + 1) + ": out of range"
+            Exit For
+        End If
+
+        memcpy(VarPtr(sect), VarPtr(buf[off]), SIZEOF_SECTION_HEADER)
+
+        Print "--- Section #" + Str$(i + 1) + " : " + ShortName$(VarPtr(sect.Name(0))) + " ---"
+        Print "  VirtualSize          : 0x" + HexPad$(sect.VirtualSize, 8)
+        Print "  VirtualAddress       : 0x" + HexPad$(sect.VirtualAddress, 8)
+        Print "  SizeOfRawData        : 0x" + HexPad$(sect.SizeOfRawData, 8)
+        Print "  PointerToRawData     : 0x" + HexPad$(sect.PointerToRawData, 8)
+        Print "  PointerToRelocations : 0x" + HexPad$(sect.PointerToRelocations, 8)
+        Print "  NumberOfRelocations  : " + Str$(sect.NumberOfRelocations)
+        Print "  Characteristics      : 0x" + HexPad$(sect.Characteristics, 8)
+
+        nRel = sect.NumberOfRelocations
+        If nRel > 0 Then
+            Print "  Relocations:"
+            For j = 0 To nRel - 1
+                off = sect.PointerToRelocations + j * SIZEOF_COFF_RELOCATION
+                If off + SIZEOF_COFF_RELOCATION > fsiz Then
+                    Print "    reloc " + Str$(j) + ": out of range"
+                    Exit For
+                End If
+                memcpy(VarPtr(reloc), VarPtr(buf[off]), SIZEOF_COFF_RELOCATION)
+                Print "    [" + Str$(j) + "] VA=0x" + HexPad$(reloc.VirtualAddress, 8) + _
+                    "  Sym=" + Str$(reloc.SymbolTableIndex) + _
+                    "  Type=" + Str$(reloc.RelType) + " (" + RelocTypeName$(reloc.RelType) + ")"
+            Next
+        End If
+        Print
+    Next
+End If
+
+' --- Symbol Table ---
+nSym = hdr.NumberOfSymbols
+If nSym > 0 And hdr.PointerToSymbolTable <> 0 Then
+    off = hdr.PointerToSymbolTable + nSym * SIZEOF_COFF_SYMBOL
+    If off + 4 <= fsiz Then
+        memcpy(VarPtr(strTabSize), VarPtr(buf[off]), 4)
+        strTab = VarPtr(buf[off])
+    Else
+        strTabSize = 0
+        strTab = NULL
+    End If
+
+    Print "=== Symbols (" + Str$(nSym) + ") ==="
+    If strTab <> NULL Then
+        Print "StringTable size: " + Str$(strTabSize)
+    End If
+
+    auxLeft = 0
+    For i = 0 To nSym - 1
+        off = hdr.PointerToSymbolTable + i * SIZEOF_COFF_SYMBOL
+        If off + SIZEOF_COFF_SYMBOL > fsiz Then
+            Print "symbol " + Str$(i) + ": out of range"
+            Exit For
+        End If
+
+        memcpy(VarPtr(sym), VarPtr(buf[off]), SIZEOF_COFF_SYMBOL)
+
+        If auxLeft > 0 Then
+            Print "[" + Str$(i) + "] <aux>"
+            auxLeft = auxLeft - 1
+        Else
+            Print "[" + Str$(i) + "] ";
+            If strTab <> NULL Then
+                Print SymbolName$(VarPtr(sym), strTab);
+            Else
+                Print ShortName$(VarPtr(sym.Name(0)));
+            End If
+            Print "  Value=0x" + HexPad$(sym.Value, 8) + _
+                "  Section=" + Str$(sym.SectionNumber) + _
+                "  Type=0x" + HexPad$(sym.SymType, 4) + _
+                "  Class=" + Str$(sym.StorageClass) + " (" + StorageClassName$(sym.StorageClass) + ")" + _
+                "  Aux=" + Str$(sym.NumberOfAuxSymbols)
+            auxLeft = sym.NumberOfAuxSymbols
+        End If
+    Next
+End If
+
+free(buf)
+End

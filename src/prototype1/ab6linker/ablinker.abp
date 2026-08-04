@@ -1,0 +1,876 @@
+#include "ab6linker.idx"
+
+#console
+
+' ablinker - ??????????J?[
+'  PE?w?b?_?[???O?r???h + REL32/DIR32 + IAT(.idata)????????
+' ?g????: ablinker <input.obj> [output.exe]
+
+Const IMAGE_BASE = &H00400000
+Const TEXT_RVA = &H00001000
+Const DATA_RVA = &H00002000
+Const IDATA_RVA = &H00003000
+Const SECTION_ALIGN = &H1000
+Const FILE_ALIGN = &H200
+Const SIZEOF_HEADERS = &H400
+Const E_LFANEW = &H80
+Const MAX_IMPORTS = 32
+Const MAX_DLLS = 8
+Const IMAGE_SUBSYSTEM_WINDOWS_GUI = 2
+Const IMAGE_SCN_CNT_INITIALIZED_DATA = &H00000040
+Const IMAGE_SCN_MEM_WRITE = &H80000000
+
+Sub USAGE()
+    Print "ab6linker - COFF to PE linker (auto IAT)"
+    Print "usage: ab6linker <input.obj> [output.exe]"
+    End
+End Sub
+
+Function HexPad$(num As DWord, digits As Long) As String
+    Dim s As String
+    s = Hex$(num)
+    While Len(s) < digits
+        s = "0" + s
+    Wend
+    HexPad$ = s
+End Function
+
+Function AlignUp(v As DWord, a As DWord) As DWord
+    AlignUp = (v + a - 1) And ((a - 1) Xor &HFFFFFFFF)
+End Function
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[MAX_PATH] As Byte
+    Dim n As Long
+    Dim m As Long
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    cmd[cmdlen] = &H20
+    buf[0] = 0
+    cidx = 0
+    For n = 0 To cmdlen
+        If cmd[n] = &H20 And cmd[n + 1] = &H20 Then
+            memcpy(VarPtr(cmd[n]), VarPtr(cmd[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+    For n = 0 To cmdlen
+        m = 0
+        While cmd[n] <> &H20
+            ctmp[m] = cmd[n]
+            m = m + 1
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+    GetCmd = 0
+End Function
+
+Function IsTextSection(name As *Byte) As Long
+    If name[0] = Asc(".") And name[1] = Asc("t") And name[2] = Asc("e") And name[3] = Asc("x") And name[4] = Asc("t") Then
+        IsTextSection = 1
+    Else
+        IsTextSection = 0
+    End If
+End Function
+
+Function IsDataSection(name As *Byte) As Long
+    If name[0] = Asc(".") And name[1] = Asc("d") And name[2] = Asc("a") And name[3] = Asc("t") And name[4] = Asc("a") Then
+        IsDataSection = 1
+    Else
+        IsDataSection = 0
+    End If
+End Function
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+    LoadFile = NULL
+    outSize = 0
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    p = malloc(fsiz)
+    If p = NULL Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    CloseHandle(hFile)
+    outSize = fsiz
+    LoadFile = p
+End Function
+
+Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+    WriteAll = 0
+    hFile = CreateFile(path, GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    WriteFile(hFile, p, size, VarPtr(nWritten), ByVal NULL)
+    CloseHandle(hFile)
+    If nWritten = size Then WriteAll = 1
+End Function
+
+Sub ZeroMem(p As *Byte, n As Long)
+    Dim i As Long
+    If n <= 0 Then Exit Sub
+    For i = 0 To n - 1
+        p[i] = 0
+    Next
+End Sub
+
+Sub PutDword(p As *Byte, off As DWord, v As DWord)
+    memcpy(VarPtr(p[off]), VarPtr(v), 4)
+End Sub
+
+Sub PutWord(p As *Byte, off As DWord, v As Word)
+    memcpy(VarPtr(p[off]), VarPtr(v), 2)
+End Sub
+
+Sub ApplyRelocPtr(codeBuf As *Byte, reloc As *COFF_RELOCATION, targetAddr As DWord, currentRVA As DWord)
+    Dim patchOffset As DWord
+    Dim relativeOffset As Long
+    Dim absAddr As DWord
+    Dim addend As DWord
+    patchOffset = reloc->VirtualAddress
+    If reloc->RelType = IMAGE_REL_I386_REL32 Then
+        relativeOffset = targetAddr - (IMAGE_BASE + currentRVA + patchOffset + 4)
+        memcpy(VarPtr(codeBuf[patchOffset]), VarPtr(relativeOffset), 4)
+    ElseIf reloc->RelType = IMAGE_REL_I386_DIR32 Then
+        ' COFF DIR32: ??addend + ????VA
+        memcpy(VarPtr(addend), VarPtr(codeBuf[patchOffset]), 4)
+        absAddr = addend + targetAddr
+        memcpy(VarPtr(codeBuf[patchOffset]), VarPtr(absAddr), 4)
+    End If
+End Sub
+
+Sub WriteDosStub(buf As *Byte)
+    buf[&H40] = &H0E
+    buf[&H41] = &H1F
+    buf[&H42] = &HBA
+    buf[&H43] = &H0E
+    buf[&H44] = &H00
+    buf[&H45] = &HB4
+    buf[&H46] = &H09
+    buf[&H47] = &HCD
+    buf[&H48] = &H21
+    buf[&H49] = &HB8
+    buf[&H4A] = &H01
+    buf[&H4B] = &H4C
+    buf[&H4C] = &HCD
+    buf[&H4D] = &H21
+    lstrcpy(VarPtr(buf[&H4E]), "This program cannot be run in DOS mode.")
+    buf[&H75] = &H0D
+    buf[&H76] = &H0A
+    buf[&H77] = &H24
+End Sub
+
+' _ExitProcess@4 -> ExitProcess
+Function Undecorate$(sym As String) As String
+    Dim s As String
+    Dim i As Long
+    Dim p As *Byte
+    s = sym
+    If Len(s) > 0 Then
+        p = StrPtr(s)
+        If p[0] = Asc("_") Then
+            s = MakeStr(p + 1)
+        End If
+    End If
+    i = InStr(1, s, "@")
+    If i > 0 Then
+        s = Left$(s, i - 1)
+    End If
+    Undecorate$ = s
+End Function
+
+Function LookupDll$(funcName As String) As String
+    If funcName = "MessageBoxA" Then
+        LookupDll$ = "user32.dll"
+    ElseIf funcName = "MessageBoxW" Then
+        LookupDll$ = "user32.dll"
+    ElseIf funcName = "wsprintfA" Then
+        LookupDll$ = "user32.dll"
+    Else
+        LookupDll$ = "kernel32.dll"
+    End If
+End Function
+
+Function GetCoffSymName$(objBuf As *Byte, hdr As *COFF_HEADER, symIndex As DWord) As String
+    Dim off As DWord
+    Dim zeroes As DWord
+    Dim strOff As DWord
+    Dim strTab As DWord
+    Dim nameBuf[256] As Byte
+    Dim i As Long
+
+    off = hdr->PointerToSymbolTable + symIndex * SIZEOF_COFF_SYMBOL
+    memcpy(VarPtr(zeroes), VarPtr(objBuf[off]), 4)
+    If zeroes = 0 Then
+        memcpy(VarPtr(strOff), VarPtr(objBuf[off + 4]), 4)
+        strTab = hdr->PointerToSymbolTable + hdr->NumberOfSymbols * SIZEOF_COFF_SYMBOL
+        GetCoffSymName$ = MakeStr(VarPtr(objBuf[strTab + strOff]))
+    Else
+        For i = 0 To 7
+            nameBuf[i] = objBuf[off + i]
+        Next
+        nameBuf[8] = 0
+        GetCoffSymName$ = MakeStr(nameBuf)
+    End If
+End Function
+
+' --- ?C???|?[?g?\ (???W???[?????) ---
+Dim gImpFunc(31) As String
+Dim gImpDll(31) As String
+Dim gImpIatRva(31) As DWord
+Dim gImpThunkRva(31) As DWord
+Dim gNImports As Long
+
+Dim gDllName(7) As String
+Dim gDllFirst(7) As Long
+Dim gDllCount(7) As Long
+Dim gNDlls As Long
+
+Dim gIdtOff As DWord
+Dim gIltOff(7) As DWord
+Dim gIatOff(7) As DWord
+Dim gDllNameOff(7) As DWord
+Dim gHintOff(31) As DWord
+Dim gIdataVirt As DWord
+Dim gIdataRaw As DWord
+Dim gIdtSize As DWord
+Dim gIatStart As DWord
+Dim gIatSize As DWord
+
+Dim gSecRva(16) As DWord
+Dim gEntryRva As DWord
+Dim gTextVirt As DWord
+Dim gTextRaw As DWord
+Dim gDataVirt As DWord
+Dim gDataRaw As DWord
+Dim gHasData As Long
+Dim gSubsystem As Word
+Dim gNPeSections As Word
+
+Function FindImport(funcName As String) As Long
+    Dim i As Long
+    FindImport = -1
+    If gNImports <= 0 Then Exit Function
+    For i = 0 To gNImports - 1
+        If gImpFunc(i) = funcName Then
+            FindImport = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Function FindDll(dllName As String) As Long
+    Dim i As Long
+    FindDll = -1
+    If gNDlls <= 0 Then Exit Function
+    For i = 0 To gNDlls - 1
+        If gDllName(i) = dllName Then
+            FindDll = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Sub AddImport(funcName As String)
+    Dim dll As String
+    If FindImport(funcName) >= 0 Then Exit Sub
+    If gNImports >= MAX_IMPORTS Then
+        Print "too many imports"
+        End
+    End If
+    dll = LookupDll$(funcName)
+    gImpFunc(gNImports) = funcName
+    gImpDll(gNImports) = dll
+    gNImports = gNImports + 1
+End Sub
+
+' .idata ???C?A?E?g?v?Z??o?C?i??????
+Sub RebuildDllGroups()
+    Dim newFunc(31) As String
+    Dim newDll(31) As String
+    Dim n As Long
+    Dim i As Long
+    Dim d As Long
+    Dim dll As String
+
+    ' DLL?????????
+    gNDlls = 0
+    If gNImports > 0 Then
+        For i = 0 To gNImports - 1
+            dll = gImpDll(i)
+            If FindDll(dll) < 0 Then
+                gDllName(gNDlls) = dll
+                gNDlls = gNDlls + 1
+            End If
+        Next
+    End If
+
+    ' DLL?????????????
+    n = 0
+    If gNDlls > 0 Then
+        For d = 0 To gNDlls - 1
+            gDllFirst(d) = n
+            gDllCount(d) = 0
+            For i = 0 To gNImports - 1
+                If gImpDll(i) = gDllName(d) Then
+                    newFunc(n) = gImpFunc(i)
+                    newDll(n) = gImpDll(i)
+                    n = n + 1
+                    gDllCount(d) = gDllCount(d) + 1
+                End If
+            Next
+        Next
+    End If
+
+    If gNImports > 0 Then
+        For i = 0 To gNImports - 1
+            gImpFunc(i) = newFunc(i)
+            gImpDll(i) = newDll(i)
+        Next
+    End If
+End Sub
+Function BuildAutoIdata() As *Byte
+    Dim pos As DWord
+    Dim i As Long
+    Dim d As Long
+    Dim k As Long
+    Dim impIndex As Long
+    Dim p As *Byte
+    Dim iatAbs As DWord
+
+    BuildAutoIdata = NULL
+    If gNImports <= 0 Then
+        ' ?C???|?[?g??????????I?[IDT?????u??
+        gNDlls = 0
+    End If
+
+    pos = 0
+    gIdtOff = 0
+    gIdtSize = (gNDlls + 1) * SIZEOF_IMPORT_DESCRIPTOR
+    pos = gIdtSize
+
+    If gNDlls > 0 Then
+        For d = 0 To gNDlls - 1
+            gIltOff(d) = pos
+            pos = pos + 4 * (gDllCount(d) + 1)
+        Next
+        gIatStart = pos
+        gIatSize = 0
+        For d = 0 To gNDlls - 1
+            gIatOff(d) = pos
+            gIatSize = gIatSize + 4 * (gDllCount(d) + 1)
+            pos = pos + 4 * (gDllCount(d) + 1)
+        Next
+        For d = 0 To gNDlls - 1
+            pos = AlignUp(pos, 2)
+            gDllNameOff(d) = pos
+            pos = pos + Len(gDllName(d)) + 1
+        Next
+        impIndex = 0
+        For d = 0 To gNDlls - 1
+            For k = 0 To gDllCount(d) - 1
+                pos = AlignUp(pos, 2)
+                gHintOff(impIndex) = pos
+                pos = pos + 2 + Len(gImpFunc(impIndex)) + 1
+                impIndex = impIndex + 1
+            Next
+        Next
+        pos = AlignUp(pos, 4)
+        impIndex = 0
+        For d = 0 To gNDlls - 1
+            For k = 0 To gDllCount(d) - 1
+                gImpIatRva(impIndex) = IDATA_RVA + gIatOff(d) + k * 4
+                gImpThunkRva(impIndex) = IDATA_RVA + pos
+                pos = pos + 8
+                impIndex = impIndex + 1
+            Next
+        Next
+    Else
+        gIatStart = 0
+        gIatSize = 0
+    End If
+
+    gIdataVirt = pos
+    gIdataRaw = AlignUp(gIdataVirt, FILE_ALIGN)
+    If gIdataRaw < FILE_ALIGN Then
+        gIdataRaw = FILE_ALIGN
+    End If
+
+    p = calloc(gIdataRaw)
+    If p = NULL Then
+        BuildAutoIdata = NULL
+        Exit Function
+    End If
+
+    ' IDT
+    If gNDlls > 0 Then
+        For d = 0 To gNDlls - 1
+            PutDword(p, gIdtOff + d * SIZEOF_IMPORT_DESCRIPTOR + 0, IDATA_RVA + gIltOff(d))
+            PutDword(p, gIdtOff + d * SIZEOF_IMPORT_DESCRIPTOR + 4, 0)
+            PutDword(p, gIdtOff + d * SIZEOF_IMPORT_DESCRIPTOR + 8, 0)
+            PutDword(p, gIdtOff + d * SIZEOF_IMPORT_DESCRIPTOR + 12, IDATA_RVA + gDllNameOff(d))
+            PutDword(p, gIdtOff + d * SIZEOF_IMPORT_DESCRIPTOR + 16, IDATA_RVA + gIatOff(d))
+        Next
+    End If
+
+    ' ILT / IAT / names / thunks
+    impIndex = 0
+    If gNDlls > 0 Then
+        For d = 0 To gNDlls - 1
+            For k = 0 To gDllCount(d) - 1
+                PutDword(p, gIltOff(d) + k * 4, IDATA_RVA + gHintOff(impIndex))
+                PutDword(p, gIatOff(d) + k * 4, IDATA_RVA + gHintOff(impIndex))
+                impIndex = impIndex + 1
+            Next
+        Next
+        For d = 0 To gNDlls - 1
+            lstrcpy(VarPtr(p[gDllNameOff(d)]), StrPtr(gDllName(d)))
+        Next
+        impIndex = 0
+        For d = 0 To gNDlls - 1
+            For k = 0 To gDllCount(d) - 1
+                PutWord(p, gHintOff(impIndex), 0)
+                lstrcpy(VarPtr(p[gHintOff(impIndex) + 2]), StrPtr(gImpFunc(impIndex)))
+                ' jmp dword ptr [IAT_abs]
+                iatAbs = IMAGE_BASE + gImpIatRva(impIndex)
+                p[gImpThunkRva(impIndex) - IDATA_RVA] = &HFF
+                p[gImpThunkRva(impIndex) - IDATA_RVA + 1] = &H25
+                PutDword(p, gImpThunkRva(impIndex) - IDATA_RVA + 2, iatAbs)
+                impIndex = impIndex + 1
+            Next
+        Next
+    End If
+
+    BuildAutoIdata = p
+End Function
+
+Sub BuildPeHeaders(buf As *Byte)
+    Dim optOff As DWord
+    Dim sectOff As DWord
+    Dim chars As Word
+    Dim textChars As DWord
+    Dim dataChars As DWord
+    Dim sizeImage As DWord
+    Dim fileOff As DWord
+
+    ZeroMem(buf, SIZEOF_HEADERS)
+    PutWord(buf, 0, IMAGE_DOS_SIGNATURE)
+    PutWord(buf, 2, &H90)
+    PutWord(buf, 4, 3)
+    PutWord(buf, 8, 4)
+    PutWord(buf, 12, &HFFFF)
+    PutWord(buf, 16, &HB8)
+    PutWord(buf, 24, &H40)
+    PutDword(buf, 60, E_LFANEW)
+    WriteDosStub(buf)
+
+    PutDword(buf, E_LFANEW, IMAGE_NT_SIGNATURE)
+    PutWord(buf, E_LFANEW + 4, IMAGE_FILE_MACHINE_I386)
+    PutWord(buf, E_LFANEW + 6, gNPeSections)
+    PutDword(buf, E_LFANEW + 8, 0)
+    PutDword(buf, E_LFANEW + 12, 0)
+    PutDword(buf, E_LFANEW + 16, 0)
+    PutWord(buf, E_LFANEW + 20, SIZEOF_OPTIONAL_HEADER32)
+    chars = IMAGE_FILE_RELOCS_STRIPPED Or IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_32BIT_MACHINE
+    PutWord(buf, E_LFANEW + 22, chars)
+
+    optOff = E_LFANEW + 24
+    PutWord(buf, optOff + 0, IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+    buf[optOff + 2] = 1
+    buf[optOff + 3] = 0
+    PutDword(buf, optOff + 4, gTextRaw)
+    PutDword(buf, optOff + 8, gDataRaw + gIdataRaw)
+    PutDword(buf, optOff + 12, 0)
+    PutDword(buf, optOff + 16, gEntryRva)
+    PutDword(buf, optOff + 20, TEXT_RVA)
+    If gHasData <> 0 Then
+        PutDword(buf, optOff + 24, DATA_RVA)
+    Else
+        PutDword(buf, optOff + 24, 0)
+    End If
+    PutDword(buf, optOff + 28, IMAGE_BASE)
+    PutDword(buf, optOff + 32, SECTION_ALIGN)
+    PutDword(buf, optOff + 36, FILE_ALIGN)
+    PutWord(buf, optOff + 40, 4)
+    PutWord(buf, optOff + 42, 0)
+    PutWord(buf, optOff + 44, 0)
+    PutWord(buf, optOff + 46, 0)
+    PutWord(buf, optOff + 48, 4)
+    PutWord(buf, optOff + 50, 0)
+    PutDword(buf, optOff + 52, 0)
+    sizeImage = IDATA_RVA + AlignUp(gIdataVirt, SECTION_ALIGN)
+    PutDword(buf, optOff + 56, sizeImage)
+    PutDword(buf, optOff + 60, SIZEOF_HEADERS)
+    PutDword(buf, optOff + 64, 0)
+    PutWord(buf, optOff + 68, gSubsystem)
+    PutWord(buf, optOff + 70, 0)
+    PutDword(buf, optOff + 72, &H100000)
+    PutDword(buf, optOff + 76, &H1000)
+    PutDword(buf, optOff + 80, &H100000)
+    PutDword(buf, optOff + 84, &H1000)
+    PutDword(buf, optOff + 88, 0)
+    PutDword(buf, optOff + 92, 16)
+
+    PutDword(buf, optOff + 96 + 8, IDATA_RVA + gIdtOff)
+    PutDword(buf, optOff + 96 + 12, gIdtSize)
+    PutDword(buf, optOff + 96 + 96, IDATA_RVA + gIatStart)
+    PutDword(buf, optOff + 96 + 100, gIatSize)
+
+    textChars = IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ
+    dataChars = IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE
+    sectOff = optOff + SIZEOF_OPTIONAL_HEADER32
+    fileOff = SIZEOF_HEADERS
+
+    lstrcpy(VarPtr(buf[sectOff]), ".text")
+    PutDword(buf, sectOff + 8, gTextVirt)
+    PutDword(buf, sectOff + 12, TEXT_RVA)
+    PutDword(buf, sectOff + 16, gTextRaw)
+    PutDword(buf, sectOff + 20, fileOff)
+    PutDword(buf, sectOff + 36, textChars)
+    fileOff = fileOff + gTextRaw
+    sectOff = sectOff + SIZEOF_SECTION_HEADER
+
+    If gHasData <> 0 Then
+        lstrcpy(VarPtr(buf[sectOff]), ".data")
+        PutDword(buf, sectOff + 8, gDataVirt)
+        PutDword(buf, sectOff + 12, DATA_RVA)
+        PutDword(buf, sectOff + 16, gDataRaw)
+        PutDword(buf, sectOff + 20, fileOff)
+        PutDword(buf, sectOff + 36, dataChars)
+        fileOff = fileOff + gDataRaw
+        sectOff = sectOff + SIZEOF_SECTION_HEADER
+    End If
+
+    lstrcpy(VarPtr(buf[sectOff]), ".idata")
+    PutDword(buf, sectOff + 8, gIdataVirt)
+    PutDword(buf, sectOff + 12, IDATA_RVA)
+    PutDword(buf, sectOff + 16, gIdataRaw)
+    PutDword(buf, sectOff + 20, fileOff)
+    PutDword(buf, sectOff + 36, textChars)
+End Sub
+
+' --- ???C?? ---
+Dim inPath[MAX_PATH] As Byte
+Dim outPath[MAX_PATH] As Byte
+Dim objBuf As *Byte
+Dim objSize As Long
+Dim codeBuf As *Byte
+Dim dataBuf As *Byte
+Dim idataBuf As *Byte
+Dim outBuf As *Byte
+Dim hdr As COFF_HEADER
+Dim sect As SECTION_HEADER
+Dim reloc As COFF_RELOCATION
+Dim sym As COFF_SYMBOL
+Dim i As Long
+Dim j As Long
+Dim nSect As Long
+Dim nRel As Long
+Dim sectOff As DWord
+Dim off As DWord
+Dim textSectIdx As Long
+Dim dataSectIdx As Long
+Dim textRawPtr As DWord
+Dim textRawSize As DWord
+Dim textRelPtr As DWord
+Dim textRelCount As Long
+Dim dataRawPtr As DWord
+Dim dataRawSize As DWord
+Dim codeSize As Long
+Dim targetAddr As DWord
+Dim outSize As Long
+Dim outOff As DWord
+Dim symName As String
+Dim funcName As String
+Dim impIdx As Long
+Dim mainName As String
+Dim secRva As DWord
+
+gNImports = 0
+gNDlls = 0
+gHasData = 0
+gDataVirt = 0
+gDataRaw = 0
+gEntryRva = TEXT_RVA
+gSubsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI
+dataBuf = NULL
+lstrcpy(outPath, "a.exe")
+
+If GetCmd(1, inPath) = 0 Then
+    USAGE()
+End If
+If GetCmd(2, outPath) = 0 Then
+    lstrcpy(outPath, "a.exe")
+End If
+
+objBuf = LoadFile(inPath, objSize)
+If objBuf = NULL Then
+    Print "cannot open: " + MakeStr(inPath)
+    End
+End If
+If objSize < SIZEOF_COFF_HEADER Then
+    Print "obj too small"
+    free(objBuf)
+    End
+End If
+
+memcpy(VarPtr(hdr), objBuf, SIZEOF_COFF_HEADER)
+If hdr.Machine <> IMAGE_FILE_MACHINE_I386 Then
+    Print "not i386 COFF"
+    free(objBuf)
+    End
+End If
+
+sectOff = SIZEOF_COFF_HEADER + hdr.SizeOfOptionalHeader
+nSect = hdr.NumberOfSections
+textSectIdx = -1
+dataSectIdx = -1
+textRawPtr = 0
+textRawSize = 0
+textRelPtr = 0
+textRelCount = 0
+dataRawPtr = 0
+dataRawSize = 0
+
+If nSect > 0 Then
+    For i = 0 To nSect - 1
+        off = sectOff + i * SIZEOF_SECTION_HEADER
+        memcpy(VarPtr(sect), VarPtr(objBuf[off]), SIZEOF_SECTION_HEADER)
+        If IsTextSection(VarPtr(sect.Name(0))) <> 0 Then
+            textSectIdx = i
+            textRawPtr = sect.PointerToRawData
+            textRawSize = sect.SizeOfRawData
+            textRelPtr = sect.PointerToRelocations
+            textRelCount = sect.NumberOfRelocations
+        End If
+        If IsDataSection(VarPtr(sect.Name(0))) <> 0 Then
+            dataSectIdx = i
+            dataRawPtr = sect.PointerToRawData
+            dataRawSize = sect.SizeOfRawData
+        End If
+    Next
+End If
+
+If textSectIdx < 0 Or textRawSize = 0 Then
+    Print ".text not found"
+    free(objBuf)
+    End
+End If
+If textRawPtr + textRawSize > objSize Then
+    Print ".text out of range"
+    free(objBuf)
+    End
+End If
+
+' COFF section number (1-based) -> PE RVA
+For i = 0 To 16
+    gSecRva(i) = 0
+Next
+gSecRva(textSectIdx + 1) = TEXT_RVA
+If dataSectIdx >= 0 Then
+    gSecRva(dataSectIdx + 1) = DATA_RVA
+    gHasData = 1
+End If
+
+gTextRaw = AlignUp(textRawSize, FILE_ALIGN)
+If gTextRaw < FILE_ALIGN Then
+    gTextRaw = FILE_ALIGN
+End If
+codeBuf = calloc(gTextRaw)
+codeSize = textRawSize
+memcpy(codeBuf, VarPtr(objBuf[textRawPtr]), codeSize)
+gTextVirt = codeSize
+If gTextVirt < &H10 Then
+    gTextVirt = &H10
+End If
+
+If gHasData <> 0 Then
+    If dataRawPtr + dataRawSize > objSize Then
+        Print ".data out of range"
+        free(codeBuf)
+        free(objBuf)
+        End
+    End If
+    gDataRaw = AlignUp(dataRawSize, FILE_ALIGN)
+    If gDataRaw < FILE_ALIGN Then
+        gDataRaw = FILE_ALIGN
+    End If
+    dataBuf = calloc(gDataRaw)
+    memcpy(dataBuf, VarPtr(objBuf[dataRawPtr]), dataRawSize)
+    gDataVirt = dataRawSize
+    If gDataVirt < 4 Then
+        gDataVirt = 4
+    End If
+End If
+
+' ?????P?[?V??????????`EXTERNAL?????W -> ?C???|?[?g????
+nRel = textRelCount
+If nRel > 0 Then
+    For j = 0 To nRel - 1
+        off = textRelPtr + j * SIZEOF_COFF_RELOCATION
+        memcpy(VarPtr(reloc), VarPtr(objBuf[off]), SIZEOF_COFF_RELOCATION)
+        If reloc.SymbolTableIndex >= hdr.NumberOfSymbols Then
+            Print "bad symbol index"
+            free(codeBuf)
+            free(objBuf)
+            End
+        End If
+        off = hdr.PointerToSymbolTable + reloc.SymbolTableIndex * SIZEOF_COFF_SYMBOL
+        memcpy(VarPtr(sym), VarPtr(objBuf[off]), SIZEOF_COFF_SYMBOL)
+        If sym.SectionNumber = IMAGE_SYM_UNDEFINED Then
+            symName = GetCoffSymName$(objBuf, VarPtr(hdr), reloc.SymbolTableIndex)
+            funcName = Undecorate$(symName)
+            AddImport(funcName)
+        End If
+    Next
+End If
+
+RebuildDllGroups()
+Print "imports: " + Str$(gNImports) + "  dlls: " + Str$(gNDlls)
+If gNImports > 0 Then
+    For i = 0 To gNImports - 1
+        Print "  " + gImpDll(i) + "!" + gImpFunc(i)
+        If gImpDll(i) = "user32.dll" Then
+            gSubsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI
+        End If
+    Next
+End If
+
+gEntryRva = TEXT_RVA
+i = 0
+While i < hdr.NumberOfSymbols
+    off = hdr.PointerToSymbolTable + i * SIZEOF_COFF_SYMBOL
+    memcpy(VarPtr(sym), VarPtr(objBuf[off]), SIZEOF_COFF_SYMBOL)
+    mainName = GetCoffSymName$(objBuf, VarPtr(hdr), i)
+    If sym.SectionNumber = textSectIdx + 1 Then
+        If mainName = "_main" Or mainName = "main" Then
+            gEntryRva = TEXT_RVA + sym.Value
+            Print "entry: " + mainName + " RVA=0x" + HexPad$(gEntryRva, 8)
+        End If
+    End If
+    i = i + 1 + sym.NumberOfAuxSymbols
+Wend
+
+If gHasData <> 0 Then
+    gNPeSections = 3
+Else
+    gNPeSections = 2
+End If
+
+idataBuf = BuildAutoIdata()
+If idataBuf = NULL Then
+    Print "idata build failed"
+    If dataBuf <> NULL Then
+        free(dataBuf)
+    End If
+    free(codeBuf)
+    free(objBuf)
+    End
+End If
+
+' ?????P?[?V?????K?p
+If nRel > 0 Then
+    For j = 0 To nRel - 1
+        off = textRelPtr + j * SIZEOF_COFF_RELOCATION
+        memcpy(VarPtr(reloc), VarPtr(objBuf[off]), SIZEOF_COFF_RELOCATION)
+        off = hdr.PointerToSymbolTable + reloc.SymbolTableIndex * SIZEOF_COFF_SYMBOL
+        memcpy(VarPtr(sym), VarPtr(objBuf[off]), SIZEOF_COFF_SYMBOL)
+
+        If sym.SectionNumber = IMAGE_SYM_UNDEFINED Then
+            symName = GetCoffSymName$(objBuf, VarPtr(hdr), reloc.SymbolTableIndex)
+            funcName = Undecorate$(symName)
+            impIdx = FindImport(funcName)
+            If impIdx < 0 Then
+                Print "unresolved: " + funcName
+                free(idataBuf)
+                If dataBuf <> NULL Then
+                    free(dataBuf)
+                End If
+                free(codeBuf)
+                free(objBuf)
+                End
+            End If
+            ' REL32 -> jmp [IAT] thunk / DIR32 -> IAT slot
+            If reloc.RelType = IMAGE_REL_I386_DIR32 Then
+                targetAddr = IMAGE_BASE + gImpIatRva(impIdx)
+            Else
+                targetAddr = IMAGE_BASE + gImpThunkRva(impIdx)
+            End If
+        ElseIf sym.SectionNumber >= 1 And sym.SectionNumber <= nSect Then
+            secRva = gSecRva(sym.SectionNumber)
+            If secRva = 0 Then
+                Print "unmapped section " + Str$(sym.SectionNumber)
+                free(idataBuf)
+                If dataBuf <> NULL Then
+                    free(dataBuf)
+                End If
+                free(codeBuf)
+                free(objBuf)
+                End
+            End If
+            targetAddr = IMAGE_BASE + secRva + sym.Value
+        Else
+            Print "bad section " + Str$(sym.SectionNumber)
+            free(idataBuf)
+            If dataBuf <> NULL Then
+                free(dataBuf)
+            End If
+            free(codeBuf)
+            free(objBuf)
+            End
+        End If
+
+        ApplyRelocPtr(codeBuf, VarPtr(reloc), targetAddr, TEXT_RVA)
+        Print "reloc[" + Str$(j) + "] -> 0x" + HexPad$(targetAddr, 8)
+    Next
+End If
+
+outSize = SIZEOF_HEADERS + gTextRaw + gDataRaw + gIdataRaw
+outBuf = calloc(outSize)
+BuildPeHeaders(outBuf)
+outOff = SIZEOF_HEADERS
+memcpy(VarPtr(outBuf[outOff]), codeBuf, gTextRaw)
+outOff = outOff + gTextRaw
+If gHasData <> 0 Then
+    memcpy(VarPtr(outBuf[outOff]), dataBuf, gDataRaw)
+    outOff = outOff + gDataRaw
+End If
+memcpy(VarPtr(outBuf[outOff]), idataBuf, gIdataRaw)
+
+If WriteAll(outPath, outBuf, outSize) = 0 Then
+    Print "cannot write: " + MakeStr(outPath)
+Else
+    Print "OK: " + MakeStr(inPath) + " -> " + MakeStr(outPath)
+    Print "size=" + Str$(outSize) + " sections=" + Str$(gNPeSections)
+End If
+
+free(outBuf)
+free(idataBuf)
+If dataBuf <> NULL Then
+    free(dataBuf)
+End If
+free(codeBuf)
+free(objBuf)
+End

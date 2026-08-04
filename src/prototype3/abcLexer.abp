@@ -1,0 +1,329 @@
+' abcLexer.abp - 字句解析（式文字列 → トークン列）
+' トークン・AST 用の共有プールもここに置く
+
+Const TK_EOF = 0
+Const TK_NUM = 1
+Const TK_IDENT = 2
+Const TK_STR = 3
+Const TK_PLUS = 4
+Const TK_MINUS = 5
+Const TK_STAR = 6
+Const TK_SLASH = 7
+Const TK_BSLASH = 8
+Const TK_EQ = 9
+Const TK_NE = 10
+Const TK_LT = 11
+Const TK_GT = 12
+Const TK_LE = 13
+Const TK_GE = 14
+Const TK_LPAREN = 15
+Const TK_RPAREN = 16
+Const TK_LBRACK = 17
+Const TK_RBRACK = 18
+Const TK_COMMA = 19
+Const TK_DOT = 20
+Const TK_ARROW = 21
+Const TK_AND = 22
+Const TK_OR = 23
+Const TK_XOR = 24
+Const TK_MOD = 25
+
+Const MAX_TOKS = 1024
+Const MAX_AST = 1024
+Const MAX_POOL = 512
+Const AST_NIL = -1
+
+' トークン（並列配列）
+Dim gTokKind(1023) As Long
+Dim gTokSIdx(1023) As Long
+Dim gTokIVal(1023) As Long
+Dim gNTok As Long
+Dim gTokPos As Long
+
+' 文字列プール（識別子・リテラル本文）
+Dim gPool(511) As String
+Dim gNPool As Long
+
+' AST（並列配列）
+Dim gAstKind(1023) As Long
+Dim gAstOp(1023) As Long
+Dim gAstA(1023) As Long
+Dim gAstB(1023) As Long
+Dim gAstC(1023) As Long
+Dim gAstD(1023) As Long
+Dim gAstIVal(1023) As Long
+Dim gAstSIdx(1023) As Long
+Dim gAstFlags(1023) As Long
+Dim gNAst As Long
+Dim gParseCondMode As Long
+
+Function LexIsIdentStart(c As Long) As Long
+    If c >= Asc("A") And c <= Asc("Z") Then
+        LexIsIdentStart = 1
+    ElseIf c >= Asc("a") And c <= Asc("z") Then
+        LexIsIdentStart = 1
+    ElseIf c = Asc("_") Then
+        LexIsIdentStart = 1
+    Else
+        LexIsIdentStart = 0
+    End If
+End Function
+
+Function LexIsIdentChar(c As Long) As Long
+    If LexIsIdentStart(c) <> 0 Then
+        LexIsIdentChar = 1
+    ElseIf c >= Asc("0") And c <= Asc("9") Then
+        LexIsIdentChar = 1
+    ElseIf c = Asc("$") Then
+        LexIsIdentChar = 1
+    Else
+        LexIsIdentChar = 0
+    End If
+End Function
+
+Function PoolAdd(s As String) As Long
+    If gNPool >= MAX_POOL Then
+        Print "string pool overflow"
+        PoolAdd = -1
+        Exit Function
+    End If
+    gPool(gNPool) = s
+    PoolAdd = gNPool
+    gNPool = gNPool + 1
+End Function
+
+Function TokPush(kind As Long, sIdx As Long, iVal As Long) As Long
+    If gNTok >= MAX_TOKS Then
+        Print "token overflow"
+        TokPush = 0
+        Exit Function
+    End If
+    gTokKind(gNTok) = kind
+    gTokSIdx(gNTok) = sIdx
+    gTokIVal(gNTok) = iVal
+    gNTok = gNTok + 1
+    TokPush = 1
+End Function
+
+Function LexKeywordKind(name As String) As Long
+    Dim n As String
+    n = Lower$(name)
+    LexKeywordKind = TK_IDENT
+    If n = "and" Then LexKeywordKind = TK_AND
+    If n = "or" Then LexKeywordKind = TK_OR
+    If n = "xor" Then LexKeywordKind = TK_XOR
+    If n = "mod" Then LexKeywordKind = TK_MOD
+    If n = "byval" Then LexKeywordKind = TK_IDENT
+    If n = "byref" Then LexKeywordKind = TK_IDENT
+End Function
+
+Function LexParseNum(p As *Byte, n As Long, ByRef pos As Long, ByRef outVal As Long) As Long
+    Dim i As Long
+    Dim sign As Long
+    Dim v As Long
+    Dim c As Long
+    Dim start As Long
+
+    LexParseNum = 0
+    i = pos
+    sign = 1
+    If i < n And p[i] = Asc("-") Then
+        ' 単項はパーサ側。ここでは数値本体のみ
+    End If
+    start = i
+    If i + 1 < n And p[i] = Asc("&") And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+        i = i + 2
+        v = 0
+        If i >= n Then Exit Function
+        While i < n
+            c = p[i]
+            If c >= Asc("0") And c <= Asc("9") Then
+                v = v * 16 + (c - Asc("0"))
+            ElseIf c >= Asc("A") And c <= Asc("F") Then
+                v = v * 16 + (c - Asc("A") + 10)
+            ElseIf c >= Asc("a") And c <= Asc("f") Then
+                v = v * 16 + (c - Asc("a") + 10)
+            Else
+                Exit While
+            End If
+            i = i + 1
+        Wend
+        If i = start + 2 Then Exit Function
+        outVal = v
+        pos = i
+        LexParseNum = 1
+        Exit Function
+    End If
+
+    If i >= n Then Exit Function
+    If p[i] < Asc("0") Or p[i] > Asc("9") Then Exit Function
+    v = 0
+    While i < n
+        c = p[i]
+        If c < Asc("0") Or c > Asc("9") Then Exit While
+        v = v * 10 + (c - Asc("0"))
+        i = i + 1
+    Wend
+    outVal = v
+    pos = i
+    LexParseNum = 1
+End Function
+
+' 式文字列をトークン化。成功で 1
+Function LexExpr(expr As String) As Long
+    Dim e As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim c As Long
+    Dim start As Long
+    Dim name As String
+    Dim lit As String
+    Dim sIdx As Long
+    Dim kw As Long
+    Dim numVal As Long
+    Dim closed As Long
+
+    LexExpr = 0
+    e = Trim$(expr)
+    gNTok = 0
+    gTokPos = 0
+    gNPool = 0
+    gNAst = 0
+
+    n = Len(e)
+    If n = 0 Then
+        Print "empty expression"
+        Exit Function
+    End If
+    p = StrPtr(e)
+    i = 0
+
+    While i < n
+        c = p[i]
+        If c = Asc(" ") Or c = 9 Then
+            i = i + 1
+        ElseIf c = Asc("+") Then
+            If TokPush(TK_PLUS, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("-") And i + 1 < n And p[i + 1] = Asc(">") Then
+            If TokPush(TK_ARROW, -1, 0) = 0 Then Exit Function
+            i = i + 2
+        ElseIf c = Asc("-") Then
+            If TokPush(TK_MINUS, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("*") Then
+            If TokPush(TK_STAR, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("/") Then
+            If TokPush(TK_SLASH, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("\") Then
+            If TokPush(TK_BSLASH, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("=") Then
+            If TokPush(TK_EQ, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("<") Then
+            If i + 1 < n And p[i + 1] = Asc(">") Then
+                If TokPush(TK_NE, -1, 0) = 0 Then Exit Function
+                i = i + 2
+            ElseIf i + 1 < n And p[i + 1] = Asc("=") Then
+                If TokPush(TK_LE, -1, 0) = 0 Then Exit Function
+                i = i + 2
+            Else
+                If TokPush(TK_LT, -1, 0) = 0 Then Exit Function
+                i = i + 1
+            End If
+        ElseIf c = Asc(">") Then
+            If i + 1 < n And p[i + 1] = Asc("=") Then
+                If TokPush(TK_GE, -1, 0) = 0 Then Exit Function
+                i = i + 2
+            Else
+                If TokPush(TK_GT, -1, 0) = 0 Then Exit Function
+                i = i + 1
+            End If
+        ElseIf c = Asc("(") Then
+            If TokPush(TK_LPAREN, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc(")") Then
+            If TokPush(TK_RPAREN, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = &H5B Then
+            If TokPush(TK_LBRACK, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = &H5D Then
+            If TokPush(TK_RBRACK, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc(",") Then
+            If TokPush(TK_COMMA, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc(".") Then
+            If TokPush(TK_DOT, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("&") And i + 1 < n And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+            If LexParseNum(p, n, i, numVal) = 0 Then
+                Print "bad hex number"
+                Exit Function
+            End If
+            If TokPush(TK_NUM, -1, numVal) = 0 Then Exit Function
+        ElseIf c >= Asc("0") And c <= Asc("9") Then
+            If LexParseNum(p, n, i, numVal) = 0 Then
+                Print "bad number"
+                Exit Function
+            End If
+            If TokPush(TK_NUM, -1, numVal) = 0 Then Exit Function
+        ElseIf c = 34 Then
+            ' VB 風: "..." 内の "" は文字 "
+            i = i + 1
+            lit = ""
+            closed = 0
+            While i < n
+                If p[i] = 34 Then
+                    If i + 1 < n And p[i + 1] = 34 Then
+                        lit = lit + Chr$(34)
+                        i = i + 2
+                    Else
+                        i = i + 1
+                        closed = 1
+                        Exit While
+                    End If
+                Else
+                    lit = lit + Chr$(p[i])
+                    i = i + 1
+                End If
+            Wend
+            If closed = 0 Then
+                Print "unterminated string"
+                Exit Function
+            End If
+            sIdx = PoolAdd(lit)
+            If sIdx < 0 Then Exit Function
+            If TokPush(TK_STR, sIdx, 0) = 0 Then Exit Function
+        ElseIf LexIsIdentStart(c) <> 0 Then
+            start = i
+            i = i + 1
+            While i < n
+                If LexIsIdentChar(p[i]) = 0 Then Exit While
+                i = i + 1
+            Wend
+            name = Mid$(e, start + 1, i - start)
+            ' byval/byref は読み飛ばし（GenArith 互換）
+            If Lower$(name) = "byval" Or Lower$(name) = "byref" Then
+                ' skip
+            Else
+                kw = LexKeywordKind(name)
+                sIdx = PoolAdd(name)
+                If sIdx < 0 Then Exit Function
+                If TokPush(kw, sIdx, 0) = 0 Then Exit Function
+            End If
+        Else
+            Print "bad token near: " + Mid$(e, i + 1, 8)
+            Exit Function
+        End If
+    Wend
+
+    If TokPush(TK_EOF, -1, 0) = 0 Then Exit Function
+    gTokPos = 0
+    LexExpr = 1
+End Function

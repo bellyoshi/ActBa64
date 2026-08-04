@@ -1,0 +1,160 @@
+' ===================================================
+'  Minimal 64bit PE - Hello World via ImportBuilder
+' ===================================================
+
+Sub BuildHelloWorldCode(cb As *CodeBuffer, builder As *ImportBuilder)
+    Dim iatMsgBox As DWord
+    Dim iatExit As DWord
+    Dim strText As DWord
+    Dim strTitle As DWord
+
+    iatMsgBox = IbGetIatRva(builder, "user32.dll", "MessageBoxA")
+    iatExit = IbGetIatRva(builder, "kernel32.dll", "ExitProcess")
+    strText = IbGetStringRva(builder, 0)
+    strTitle = IbGetStringRva(builder, 1)
+
+    ' sub rsp, 40
+    EmitSubRsp(cb, &H28)
+    ' xor ecx, ecx          ; hWnd
+    EmitXorEcx(cb)
+    ' lea rdx, [rip+text]
+    EmitLeaRdxRip(cb, strText, TEXT_RVA)
+    ' lea r8, [rip+title]
+    EmitLeaR8Rip(cb, strTitle, TEXT_RVA)
+    ' xor r9d, r9d          ; MB_OK
+    EmitXorR9d(cb)
+    ' call [rip+MessageBoxA]
+    EmitCallRip(cb, iatMsgBox, TEXT_RVA)
+    ' xor ecx, ecx          ; exit code 0
+    EmitXorEcx(cb)
+    ' call [rip+ExitProcess]
+    EmitCallRip(cb, iatExit, TEXT_RVA)
+    ' add rsp, 40 / ret
+    EmitAddRsp(cb, &H28)
+    EmitRet(cb)
+End Sub
+
+Function GenerateHello64Exe(outPath As *Byte) As Long
+    Dim builder As *ImportBuilder
+    Dim idataBuf As *Byte
+    Dim idataSize As DWord
+    Dim outBuf As *Byte
+    Dim outSize As Long
+    Dim textRaw As DWord
+    Dim textVirt As DWord
+    Dim idataRaw As DWord
+    Dim idataVirt As DWord
+    Dim sizeImage As DWord
+    Dim optOff As DWord
+    Dim sectOff As DWord
+    Dim codeMem(127) As Byte
+    Dim cb As CodeBuffer
+    Dim idOff As DWord
+    Dim strHello(31) As Byte
+    Dim strNotice(31) As Byte
+
+    GenerateHello64Exe = 0
+
+    builder = calloc(SizeOf(ImportBuilder))
+    If builder = NULL Then Exit Function
+    IbInit(builder)
+    IbAddImport(builder, "user32.dll", "MessageBoxA")
+    IbAddImport(builder, "kernel32.dll", "ExitProcess")
+    lstrcpy(VarPtr(strHello), "Hello, World!")
+    lstrcpy(VarPtr(strNotice), "Notice")
+    IbAddString(builder, VarPtr(strHello))
+    IbAddString(builder, VarPtr(strNotice))
+
+    idataBuf = calloc(4096)
+    If idataBuf = NULL Then
+        free(builder)
+        Exit Function
+    End If
+    IbFinalize(builder, IDATA_RVA, idataBuf, idataSize)
+
+    cb.buf = VarPtr(codeMem)
+    cb.capacity = 128
+    cb.size = 0
+    BuildHelloWorldCode(VarPtr(cb), builder)
+
+    textVirt = AlignUp(cb.size, SECTION_ALIGN)
+    textRaw = AlignUp(cb.size, FILE_ALIGN)
+    idataVirt = AlignUp(idataSize, SECTION_ALIGN)
+    If idataVirt < SECTION_ALIGN Then idataVirt = SECTION_ALIGN
+    idataRaw = AlignUp(idataSize, FILE_ALIGN)
+    If idataRaw < FILE_ALIGN Then idataRaw = FILE_ALIGN
+
+    sizeImage = TEXT_RVA + textVirt + idataVirt
+    outSize = SIZEOF_HEADERS + textRaw + idataRaw
+
+    outBuf = calloc(outSize)
+    If outBuf = NULL Then
+        free(idataBuf)
+        free(builder)
+        Exit Function
+    End If
+
+    ZeroMem(outBuf, SIZEOF_HEADERS)
+    PutWord(outBuf, 0, IMAGE_DOS_SIGNATURE)
+    PutDword(outBuf, 60, E_LFANEW)
+    WriteDosStub(outBuf)
+
+    PutDword(outBuf, E_LFANEW, IMAGE_NT_SIGNATURE)
+    PutWord(outBuf, E_LFANEW + 4, IMAGE_FILE_MACHINE_AMD64)
+    PutWord(outBuf, E_LFANEW + 6, 2)
+    PutWord(outBuf, E_LFANEW + 20, SIZEOF_OPTIONAL_HEADER64)
+    PutWord(outBuf, E_LFANEW + 22, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_LARGE_ADDRESS_AWARE)
+
+    optOff = E_LFANEW + 24
+    PutWord(outBuf, optOff + 0, IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    PutDword(outBuf, optOff + 4, textRaw)
+    PutDword(outBuf, optOff + 16, TEXT_RVA)
+    PutDword(outBuf, optOff + 20, TEXT_RVA)
+    PutDword(outBuf, optOff + 24, IMAGE_BASE_LOW)
+    PutDword(outBuf, optOff + 28, IMAGE_BASE_HIGH)
+    PutDword(outBuf, optOff + 32, SECTION_ALIGN)
+    PutDword(outBuf, optOff + 36, FILE_ALIGN)
+    PutWord(outBuf, optOff + 40, 5)
+    PutWord(outBuf, optOff + 42, 2)
+    PutWord(outBuf, optOff + 48, 5)
+    PutWord(outBuf, optOff + 50, 2)
+    PutDword(outBuf, optOff + 56, sizeImage)
+    PutDword(outBuf, optOff + 60, SIZEOF_HEADERS)
+    PutWord(outBuf, optOff + 68, IMAGE_SUBSYSTEM_WINDOWS_GUI)
+    PutDword(outBuf, optOff + 72, &H100000)
+    PutDword(outBuf, optOff + 80, &H1000)
+    PutDword(outBuf, optOff + 88, &H100000)
+    PutDword(outBuf, optOff + 96, &H1000)
+    PutDword(outBuf, optOff + 108, 16)
+
+    PutDword(outBuf, optOff + 120, builder.idtRva)
+    PutDword(outBuf, optOff + 124, builder.idtSize)
+    PutDword(outBuf, optOff + 208, builder.iatRva)
+    PutDword(outBuf, optOff + 212, builder.iatSize)
+
+    sectOff = optOff + SIZEOF_OPTIONAL_HEADER64
+    lstrcpy(VarPtr(outBuf[sectOff]), ".text")
+    PutDword(outBuf, sectOff + 8, cb.size)
+    PutDword(outBuf, sectOff + 12, TEXT_RVA)
+    PutDword(outBuf, sectOff + 16, textRaw)
+    PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS)
+    PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ)
+
+    sectOff = sectOff + 40
+    lstrcpy(VarPtr(outBuf[sectOff]), ".idata")
+    PutDword(outBuf, sectOff + 8, idataSize)
+    PutDword(outBuf, sectOff + 12, IDATA_RVA)
+    PutDword(outBuf, sectOff + 16, idataRaw)
+    PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS + textRaw)
+    PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
+
+    memcpy(VarPtr(outBuf[SIZEOF_HEADERS]), VarPtr(codeMem), cb.size)
+    idOff = SIZEOF_HEADERS + textRaw
+    memcpy(VarPtr(outBuf[idOff]), idataBuf, idataSize)
+
+    WriteAll(outPath, outBuf, outSize)
+    free(outBuf)
+    free(idataBuf)
+    free(builder)
+    GenerateHello64Exe = 1
+End Function

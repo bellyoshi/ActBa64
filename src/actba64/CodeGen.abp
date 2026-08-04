@@ -1,0 +1,293 @@
+' ===================================================
+'  CodeGen - IR -> machine code
+' ===================================================
+
+Type IrFixup
+    at As Long
+    lab As Long
+End Type
+
+Function IrDllNameOf(dllKind As DWord, dst As *Byte) As Long
+    IrDllNameOf = 0
+    If dllKind = IR_DLL_USER32 Then
+        lstrcpy(dst, "user32.dll")
+        IrDllNameOf = 1
+    ElseIf dllKind = IR_DLL_KERNEL32 Then
+        lstrcpy(dst, "kernel32.dll")
+        IrDllNameOf = 1
+    End If
+End Function
+
+Sub IrCollect(list As *IrList, builder As *ImportBuilder)
+    Dim i As Long
+    Dim n As Long
+    Dim opv As Long
+    Dim ops As *IrOp
+    Dim tmp(63) As Byte
+    Dim dll(31) As Byte
+    Dim sid As Long
+
+    ops = list.ops
+    n = list.count
+    For i = 0 To n - 1
+        opv = ops[i].op
+        If opv = OP_CALL_API Then
+            If IrDllNameOf(ops[i].arg1, VarPtr(dll)) <> 0 Then
+                IrCopyStrAt(list, i, VarPtr(tmp))
+                IbAddImport(builder, VarPtr(dll), VarPtr(tmp))
+            End If
+        ElseIf opv = OP_LEA_RDX_STR Or opv = OP_LEA_R8_STR Or opv = OP_LEA_RAX_STR Then
+            IrCopyStrAt(list, i, VarPtr(tmp))
+            sid = IbAddString(builder, VarPtr(tmp))
+            ops[i].strId = sid
+        End If
+    Next
+End Sub
+
+Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder)
+    Dim i As Long
+    Dim n As Long
+    Dim opv As Long
+    Dim ops As *IrOp
+    Dim tmp(63) As Byte
+    Dim dll(31) As Byte
+    Dim iatRva As DWord
+    Dim strRva As DWord
+    Dim labOff As *Long
+    Dim fixups As *IrFixup
+    Dim nFix As Long
+    Dim li As Long
+    Dim at As Long
+    Dim rel As Long
+    Dim nextRip As Long
+
+    labOff = calloc(SizeOf(Long) * IR_MAX_LABELS)
+    fixups = calloc(SizeOf(IrFixup) * IR_MAX_FIXUPS)
+    If labOff = NULL Or fixups = NULL Then
+        If labOff <> NULL Then free(labOff)
+        If fixups <> NULL Then free(fixups)
+        Exit Sub
+    End If
+
+    ops = list.ops
+    n = list.count
+    nFix = 0
+    For i = 0 To IR_MAX_LABELS - 1
+        labOff[i] = -1
+    Next
+
+    For i = 0 To n - 1
+        opv = ops[i].op
+        If opv = OP_ENTER Then
+            EmitEnter(cb, ops[i].arg1)
+        ElseIf opv = OP_LEAVE Then
+            EmitLeaveRet(cb)
+        ElseIf opv = OP_XOR_ECX Then
+            EmitXorEcx(cb)
+        ElseIf opv = OP_XOR_R9D Then
+            EmitXorR9d(cb)
+        ElseIf opv = OP_LEA_RDX_STR Then
+            strRva = IbGetStringRva(builder, ops[i].strId)
+            EmitLeaRdxRip(cb, strRva, TEXT_RVA)
+        ElseIf opv = OP_LEA_R8_STR Then
+            strRva = IbGetStringRva(builder, ops[i].strId)
+            EmitLeaR8Rip(cb, strRva, TEXT_RVA)
+        ElseIf opv = OP_LEA_RAX_STR Then
+            strRva = IbGetStringRva(builder, ops[i].strId)
+            EmitLeaRaxRip(cb, strRva, TEXT_RVA)
+        ElseIf opv = OP_MOV_RCX_RAX Then
+            EmitMovRcxRax(cb)
+        ElseIf opv = OP_MOV_RDX_RAX Then
+            EmitMovRdxRax(cb)
+        ElseIf opv = OP_MOV_R8_RAX Then
+            EmitMovR8Rax(cb)
+        ElseIf opv = OP_MOVZX_EAX_BYTE Then
+            EmitMovzxEaxByteRax(cb)
+        ElseIf opv = OP_TEST_RAX Then
+            EmitTestRax(cb)
+        ElseIf opv = OP_XOR_EAX Then
+            EmitXorEax(cb)
+        ElseIf opv = OP_LEA_LOCAL Then
+            EmitLeaLocal(cb, ops[i].arg1)
+        ElseIf opv = OP_ADD_RAX_RCX Then
+            EmitAddRaxRcx(cb)
+        ElseIf opv = OP_LOADZX_BYTE_RAX Then
+            EmitLoadzxByteRax(cb)
+        ElseIf opv = OP_STORE_BYTE_RAX_CL Then
+            EmitStoreByteRaxCl(cb)
+        ElseIf opv = OP_ADD_RAX_IMM Then
+            EmitAddRaxImm(cb, ops[i].arg1)
+        ElseIf opv = OP_LOADZX_WORD_RAX Then
+            EmitLoadzxWordRax(cb)
+        ElseIf opv = OP_STORE_WORD_RAX_CX Then
+            EmitStoreWordRaxCx(cb)
+        ElseIf opv = OP_LOAD_DWORD_RAX Then
+            EmitLoadDwordRax(cb)
+        ElseIf opv = OP_STORE_DWORD_RAX_ECX Then
+            EmitStoreDwordRaxEcx(cb)
+        ElseIf opv = OP_LOAD_QWORD_RAX Then
+            EmitLoadQwordRax(cb)
+        ElseIf opv = OP_STORE_QWORD_RAX_RCX Then
+            EmitStoreQwordRaxRcx(cb)
+        ElseIf opv = OP_AND_EAX_ECX Then
+            EmitAndEaxEcx(cb)
+        ElseIf opv = OP_OR_EAX_ECX Then
+            EmitOrEaxEcx(cb)
+        ElseIf opv = OP_NEG_EAX Then
+            EmitNegEax(cb)
+        ElseIf opv = OP_SUB_EAX_ECX Then
+            EmitSubEaxEcx(cb)
+        ElseIf opv = OP_POP_RDX Then
+            EmitPopRdx(cb)
+        ElseIf opv = OP_XCHG_RAX_RCX Then
+            EmitXchgRaxRcx(cb)
+        ElseIf opv = OP_MOV_ECX Then
+            EmitMovEcxImm(cb, ops[i].arg1)
+        ElseIf opv = OP_MOV_EAX_IMM Then
+            EmitMovEaxImm(cb, ops[i].arg1)
+        ElseIf opv = OP_LOAD_LOCAL Then
+            EmitLoadLocal(cb, ops[i].arg1)
+        ElseIf opv = OP_STORE_LOCAL Then
+            EmitStoreLocal(cb, ops[i].arg1)
+        ElseIf opv = OP_PUSH_RAX Then
+            EmitPushRax(cb)
+        ElseIf opv = OP_POP_RCX Then
+            EmitPopRcx(cb)
+        ElseIf opv = OP_ADD_EAX_ECX Then
+            EmitAddEaxEcx(cb)
+        ElseIf opv = OP_IMUL_EAX_ECX Then
+            EmitImulEaxEcx(cb)
+        ElseIf opv = OP_MOV_ECX_EAX Then
+            EmitMovEcxEax(cb)
+        ElseIf opv = OP_CMP_ECX_EAX Then
+            EmitCmpEcxEax(cb)
+        ElseIf opv = OP_TEST_EAX Then
+            EmitTestEax(cb)
+        ElseIf opv = OP_INC_LOCAL Then
+            EmitIncLocal(cb, ops[i].arg1)
+        ElseIf opv = OP_STORE_LOCAL_ECX Then
+            EmitStoreLocalEcx(cb, ops[i].arg1)
+        ElseIf opv = OP_STORE_LOCAL_EDX Then
+            EmitStoreLocalEdx(cb, ops[i].arg1)
+        ElseIf opv = OP_MOV_EDX_IMM Then
+            EmitMovEdxImm(cb, ops[i].arg1)
+        ElseIf opv = OP_MOV_EDX_EAX Then
+            EmitMovEdxEax(cb)
+        ElseIf opv = OP_CALL_LAB Then
+            at = EmitCallRel32(cb)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_LEA_RAX_LAB Then
+            at = EmitLeaRaxLabRel32(cb)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_SHL_ECX_3 Then
+            EmitShlEcx3(cb)
+        ElseIf opv = OP_POP_RAX Then
+            EmitPopRax(cb)
+        ElseIf opv = OP_POP_R8 Then
+            EmitPopR8(cb)
+        ElseIf opv = OP_MOV_RAX_R8 Then
+            EmitMovRaxR8(cb)
+        ElseIf opv = OP_SUB_RSP Then
+            EmitSubRsp(cb, ops[i].arg1)
+        ElseIf opv = OP_ADD_RSP Then
+            EmitAddRsp(cb, ops[i].arg1)
+        ElseIf opv = OP_STORE_RSP_RAX Then
+            EmitStoreRspRax(cb, ops[i].arg1)
+        ElseIf opv = OP_MOV_R9_RAX Then
+            EmitMovR9Rax(cb)
+        ElseIf opv = OP_STORE_LOCAL_R8 Then
+            EmitStoreLocalR8(cb, ops[i].arg1)
+        ElseIf opv = OP_STORE_LOCAL_R9 Then
+            EmitStoreLocalR9(cb, ops[i].arg1)
+        ElseIf opv = OP_XOR_EDX Then
+            EmitXorEdx(cb)
+        ElseIf opv = OP_DIV_ECX Then
+            EmitDivEcx(cb)
+        ElseIf opv = OP_MOV_EAX_EDX Then
+            EmitMovEaxEdx(cb)
+        ElseIf opv = OP_LABEL Then
+            li = ops[i].arg1
+            If li >= 0 And li < IR_MAX_LABELS Then
+                labOff[li] = cb.size
+            End If
+        ElseIf opv = OP_JMP Then
+            at = EmitJmpRel32(cb)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_JZ Or opv = OP_JE Then
+            at = EmitJccRel32(cb, &H84)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_JNZ Or opv = OP_JNE Then
+            at = EmitJccRel32(cb, &H85)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_JL Then
+            at = EmitJccRel32(cb, &H8C)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_JLE Then
+            at = EmitJccRel32(cb, &H8E)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_JG Then
+            at = EmitJccRel32(cb, &H8F)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_JGE Then
+            at = EmitJccRel32(cb, &H8D)
+            If nFix < IR_MAX_FIXUPS Then
+                fixups[nFix].at = at
+                fixups[nFix].lab = ops[i].arg1
+                nFix = nFix + 1
+            End If
+        ElseIf opv = OP_CALL_API Then
+            IrDllNameOf(ops[i].arg1, VarPtr(dll))
+            IrCopyStrAt(list, i, VarPtr(tmp))
+            iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(tmp))
+            EmitCallRip(cb, iatRva, TEXT_RVA)
+        ElseIf opv = OP_RET Then
+            EmitRet(cb)
+        End If
+    Next
+
+    For i = 0 To nFix - 1
+        li = fixups[i].lab
+        at = fixups[i].at
+        If li >= 0 And li < IR_MAX_LABELS Then
+            If labOff[li] >= 0 Then
+                nextRip = at + 4
+                rel = labOff[li] - nextRip
+                PutDword(VarPtr(cb.buf[at]), 0, rel)
+            End If
+        End If
+    Next
+    free(labOff)
+    free(fixups)
+End Sub

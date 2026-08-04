@@ -1,0 +1,2340 @@
+#include "abassembler.idx"
+
+#console
+
+' abassembler - Phase1 最小アセンブラ
+' 使い方: abassembler <input.asm> [output.obj]
+'
+' 対応構文:
+'   bits 32
+'   section .text / section .data
+'   extern <name> / global <name>
+'   <label>:
+'   db 'str', 0, ...     (.data)
+'   times N db 0         (.data) ― 連続ゼロ
+'   push/pop/call/ret/jmp/jcc
+'   mov / movzx / add/sub/cmp/and/or/xor / imul / neg / div / shr/shl
+
+Const MAX_CODE = 8388608
+Const MAX_DATA = 8388608
+Const MAX_SYMS = 4096
+Const MAX_RELOCS = 32768
+Const MAX_FIXUPS = 8192
+Const MAX_STRTAB = 131072
+Const MAX_LINE = 512
+' オープンアドレス法（線形探査）。空き=0、格納値はシンボル index+1
+Const SYM_HASH_SIZE = 8192
+Const SYM_HASH_MASK = 8191
+
+Const SECT_NONE = 0
+Const SECT_TEXT = 1
+Const SECT_DATA = 2
+
+Const IMAGE_SCN_CNT_CODE = &H00000020
+Const IMAGE_SCN_CNT_INITIALIZED_DATA = &H00000040
+Const IMAGE_SCN_ALIGN_16BYTES = &H00500000
+Const IMAGE_SCN_MEM_EXECUTE = &H20000000
+Const IMAGE_SCN_MEM_READ = &H40000000
+Const IMAGE_SCN_MEM_WRITE = &H80000000
+' IMAGE_SCN_CNT_CODE Or ALIGN_16 Or MEM_EXECUTE Or MEM_READ
+Const TEXT_CHARACTERISTICS = &H60500020
+' INITIALIZED_DATA Or ALIGN_16 Or MEM_READ Or MEM_WRITE
+Const DATA_CHARACTERISTICS = &HC0500040
+
+' --- 行レキサ定数 ---
+' db 1,2,3,... 形式の長い文字列リテラルでトークンが増える（旧 64 では不足）
+Const MAX_LX = 512
+Const LX_EOF = 0
+Const LX_IDENT = 1
+Const LX_NUM = 2
+Const LX_COMMA = 3
+Const LX_COLON = 4
+Const LX_LBRACK = 5
+Const LX_RBRACK = 6
+Const LX_PLUS = 7
+Const LX_MINUS = 8
+Const LX_OP = 10
+Const LX_REG = 11
+Const LX_REG8 = 12
+Const LX_REG16 = 13
+
+Const OP_BITS = 1
+Const OP_SECTION = 2
+Const OP_EXTERN = 3
+Const OP_GLOBAL = 4
+Const OP_DB = 5
+Const OP_TIMES = 6
+Const OP_PUSH = 7
+Const OP_POP = 8
+Const OP_CALL = 9
+Const OP_RET = 10
+Const OP_MOV = 11
+Const OP_MOVZX = 12
+Const OP_JMP = 13
+Const OP_ADD = 14
+Const OP_SUB = 15
+Const OP_CMP = 16
+Const OP_AND = 17
+Const OP_OR = 18
+Const OP_XOR = 19
+Const OP_IMUL = 20
+Const OP_NEG = 21
+Const OP_DIV = 22
+Const OP_SHR = 23
+Const OP_SHL = 24
+Const OP_JE = 25
+Const OP_JNE = 26
+Const OP_JL = 27
+Const OP_JLE = 28
+Const OP_JG = 29
+Const OP_JGE = 30
+Const OP_JZ = 31
+Const OP_JNZ = 32
+Const OP_WORD = 33
+
+' 固定長トークン用ハッシュ
+Const H_EAX = 6644088
+Const H_ECX = 6644600
+Const H_EDX = 6644856
+Const H_EBX = 6644344
+Const H_ESP = 6648688
+Const H_EBP = 6644336
+Const H_ESI = 6648681
+Const H_EDI = 6644841
+Const H_AL = 24940
+Const H_CL = 25452
+Const H_DL = 25708
+Const H_BL = 25196
+Const H_AX = 24952
+Const H_MOV = 7171958
+Const H_POP = 7368560
+Const H_RET = 7497076
+Const H_ADD = 6382692
+Const H_SUB = 7566690
+Const H_CMP = 6516080
+Const H_AND = 6385252
+Const H_XOR = 7892850
+Const H_NEG = 7234919
+Const H_DIV = 6580598
+Const H_SHR = 7563378
+Const H_SHL = 7563372
+Const H_JMP = 6974832
+Const H_JLE = 6974565
+Const H_JGE = 6973285
+Const H_JNE = 6975077
+Const H_JNZ = 6975098
+Const H_DB = 25698
+Const H_JE = 27237
+Const H_JZ = 27258
+Const H_JL = 27244
+Const H_JG = 27239
+Const H_OR = 28530
+Const H_BITS = 1651078259
+Const H_CALL = 1667329132
+Const H_PUSH = 1886745448
+Const H_IMUL = 1768781164
+Const H_WORD = 2003792484
+Const H_TIME = 1953066341
+Const H_MOVZ = 1836021370
+Const H_EXTE = 1702392933
+Const H_GLOB = 1735159650
+Const H_SECT = 1936024436
+Const H_RN = 29294
+Const H_ION = 6909806
+
+' --- シンボル ---
+' kind: 0=未定義(extern), 1=定義済み(label)
+Dim gSymName(4095) As String
+Dim gSymValue(4095) As DWord
+Dim gSymSection(4095) As Word
+Dim gSymKind(4095) As Long
+Dim gSymGlobal(4095) As Long
+Dim gNSyms As Long
+Dim gSymHash(8191) As Long
+
+' --- リロケーション (.text 用) ---
+Dim gRelVA(32767) As DWord
+Dim gRelSym(32767) As DWord
+Dim gRelType(32767) As Word
+Dim gNRelocs As Word
+
+' --- ローカル相対ジャンプの後埋め ---
+Dim gFixOff(8191) As Long
+Dim gFixSym(8191) As Long
+Dim gNFixups As Long
+
+' --- セクションバッファ（StringBuffer で可変長） ---
+Dim gCurSect As Word
+Dim gSbCode As StringBuffer
+Dim gSbData As StringBuffer
+Dim gCodeSize As Long
+Dim gDataSize As Long
+
+' --- 文字列テーブル (先頭4バイトはサイズ) ---
+Dim gStrTab(131071) As Byte
+Dim gStrTabSize As DWord
+
+' --- 行レキサ状態 ---
+Dim gLxKind(511) As Long
+Dim gLxVal(511) As Long
+Dim gLxOff(511) As Long
+Dim gLxLen(511) As Long
+Dim gNLx As Long
+Dim gLxP As *Byte
+Dim gLxN As Long
+Dim gLxPos As Long
+
+Sub USAGE()
+    Print "abassembler - Phase2 assembler"
+    Print "usage: abassembler <input.asm> [output.obj]"
+    End
+End Sub
+
+Function ToLowerChar(c As Long) As Long
+    If c >= Asc("A") And c <= Asc("Z") Then
+        ToLowerChar = c - Asc("A") + Asc("a")
+    Else
+        ToLowerChar = c
+    End If
+End Function
+
+Function StripComment$(s As String) As String
+    Dim i As Long
+    i = InStr(1, s, ";")
+    If i > 0 Then
+        StripComment$ = Left$(s, i - 1)
+    Else
+        StripComment$ = s
+    End If
+End Function
+
+Function IsIdentChar(c As Long) As Long
+    If (c >= Asc("A") And c <= Asc("Z")) Or (c >= Asc("a") And c <= Asc("z")) Or (c >= Asc("0") And c <= Asc("9")) Or c = Asc("_") Or c = Asc("@") Or c = Asc(".") Or c = Asc("$") Then
+        IsIdentChar = 1
+    Else
+        IsIdentChar = 0
+    End If
+End Function
+
+' 先頭トークンと残りを分離
+Sub SplitToken(lineStr As String, ByRef op As String, ByRef arg As String)
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim start As Long
+
+    op = ""
+    arg = ""
+    n = Len(lineStr)
+    If n = 0 Then Exit Sub
+    p = StrPtr(lineStr)
+
+    i = 0
+    While i < n And IsSpace(p[i]) <> 0
+        i = i + 1
+    Wend
+    start = i
+    While i < n And IsSpace(p[i]) = 0
+        i = i + 1
+    Wend
+    If i > start Then
+        op = Mid$(lineStr, start + 1, i - start)
+    End If
+    While i < n And IsSpace(p[i]) <> 0
+        i = i + 1
+    Wend
+    If i < n Then
+        arg = Trim$(Mid$(lineStr, i + 1, n - i))
+    End If
+End Sub
+
+Function IsNumericToken(s As String) As Long
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim c As Long
+
+    n = Len(s)
+    If n = 0 Then
+        IsNumericToken = 0
+        Exit Function
+    End If
+    p = StrPtr(s)
+    i = 0
+    If p[0] = Asc("-") Or p[0] = Asc("+") Then
+        i = 1
+        If n = 1 Then
+            IsNumericToken = 0
+            Exit Function
+        End If
+    End If
+    ' 0x / 0X / &H 十六進
+    If i + 1 < n And p[i] = Asc("0") And (p[i + 1] = Asc("x") Or p[i + 1] = Asc("X")) Then
+        i = i + 2
+        If i >= n Then
+            IsNumericToken = 0
+            Exit Function
+        End If
+        While i < n
+            c = p[i]
+            If (c >= Asc("0") And c <= Asc("9")) Or (c >= Asc("a") And c <= Asc("f")) Or (c >= Asc("A") And c <= Asc("F")) Then
+                ' ok
+            Else
+                IsNumericToken = 0
+                Exit Function
+            End If
+            i = i + 1
+        Wend
+        IsNumericToken = 1
+        Exit Function
+    End If
+    If i + 1 < n And p[i] = Asc("&") And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+        i = i + 2
+        If i >= n Then
+            IsNumericToken = 0
+            Exit Function
+        End If
+        While i < n
+            c = p[i]
+            If (c >= Asc("0") And c <= Asc("9")) Or (c >= Asc("a") And c <= Asc("f")) Or (c >= Asc("A") And c <= Asc("F")) Then
+                ' ok
+            Else
+                IsNumericToken = 0
+                Exit Function
+            End If
+            i = i + 1
+        Wend
+        IsNumericToken = 1
+        Exit Function
+    End If
+    While i < n
+        c = p[i]
+        If c < Asc("0") Or c > Asc("9") Then
+            IsNumericToken = 0
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+    IsNumericToken = 1
+End Function
+
+Function ParseImm(s As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim sign As Long
+    Dim i As Long
+    Dim n As Long
+    Dim v As Long
+    Dim c As Long
+    Dim hexMode As Long
+
+    t = Trim$(s)
+    n = Len(t)
+    p = StrPtr(t)
+    sign = 1
+    i = 0
+    hexMode = 0
+    If p[0] = Asc("-") Then
+        sign = -1
+        i = 1
+    ElseIf p[0] = Asc("+") Then
+        i = 1
+    End If
+
+    If i + 1 < n And p[i] = Asc("0") And (p[i + 1] = Asc("x") Or p[i + 1] = Asc("X")) Then
+        i = i + 2
+        hexMode = 1
+    ElseIf i + 1 < n And p[i] = Asc("&") And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+        i = i + 2
+        hexMode = 1
+    End If
+
+    If hexMode <> 0 Then
+        v = 0
+        While i < n
+            c = p[i]
+            v = v * 16
+            If c >= Asc("0") And c <= Asc("9") Then
+                v = v + (c - Asc("0"))
+            ElseIf c >= Asc("a") And c <= Asc("f") Then
+                v = v + (c - Asc("a") + 10)
+            ElseIf c >= Asc("A") And c <= Asc("F") Then
+                v = v + (c - Asc("A") + 10)
+            End If
+            i = i + 1
+        Wend
+        ParseImm = v * sign
+    Else
+        v = 0
+        While i < n
+            c = p[i]
+            v = v * 10 + (c - Asc("0"))
+            i = i + 1
+        Wend
+        ParseImm = v * sign
+    End If
+End Function
+
+' eax=0 .. edi=7。非レジスタなら -1（Lower$ なし・3文字固定長ハッシュ）
+Function RegCode(name As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim h As Long
+    t = Trim$(name)
+    n = Len(t)
+    RegCode = -1
+    If n <> 3 Then Exit Function
+    p = StrPtr(t)
+    h = ToLowerChar(p[0]) * 65536 + ToLowerChar(p[1]) * 256 + ToLowerChar(p[2])
+    If h = Asc("e") * 65536 + Asc("a") * 256 + Asc("x") Then
+        RegCode = 0
+    ElseIf h = Asc("e") * 65536 + Asc("c") * 256 + Asc("x") Then
+        RegCode = 1
+    ElseIf h = Asc("e") * 65536 + Asc("d") * 256 + Asc("x") Then
+        RegCode = 2
+    ElseIf h = Asc("e") * 65536 + Asc("b") * 256 + Asc("x") Then
+        RegCode = 3
+    ElseIf h = Asc("e") * 65536 + Asc("s") * 256 + Asc("p") Then
+        RegCode = 4
+    ElseIf h = Asc("e") * 65536 + Asc("b") * 256 + Asc("p") Then
+        RegCode = 5
+    ElseIf h = Asc("e") * 65536 + Asc("s") * 256 + Asc("i") Then
+        RegCode = 6
+    ElseIf h = Asc("e") * 65536 + Asc("d") * 256 + Asc("i") Then
+        RegCode = 7
+    End If
+End Function
+
+' al=0..bl=3 / ax=16。非該当なら -1（Lower$ なし・2文字固定長ハッシュ）
+Function RegNarrowCode(name As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim h As Long
+    t = Trim$(name)
+    n = Len(t)
+    RegNarrowCode = -1
+    If n <> 2 Then Exit Function
+    p = StrPtr(t)
+    h = ToLowerChar(p[0]) * 256 + ToLowerChar(p[1])
+    If h = Asc("a") * 256 + Asc("l") Then
+        RegNarrowCode = 0
+    ElseIf h = Asc("c") * 256 + Asc("l") Then
+        RegNarrowCode = 1
+    ElseIf h = Asc("d") * 256 + Asc("l") Then
+        RegNarrowCode = 2
+    ElseIf h = Asc("b") * 256 + Asc("l") Then
+        RegNarrowCode = 3
+    ElseIf h = Asc("a") * 256 + Asc("x") Then
+        RegNarrowCode = 16
+    End If
+End Function
+
+' "eax, 1" -> left="eax", right="1"。カンマが無ければ 0
+Function SplitComma(s As String, ByRef left As String, ByRef right As String) As Long
+    Dim n As Long
+    Dim i As Long
+    Dim p As *Byte
+    n = Len(s)
+    left = ""
+    right = ""
+    If n = 0 Then
+        SplitComma = 0
+        Exit Function
+    End If
+    p = StrPtr(s)
+    i = 0
+    While i < n
+        If p[i] = Asc(",") Then
+            left = Trim$(Left$(s, i))
+            right = Trim$(Mid$(s, i + 2, n - i - 1))
+            SplitComma = 1
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+    left = Trim$(s)
+    SplitComma = 0
+End Function
+
+Sub PatchDword(off As Long, v As Long)
+    Dim tmp As Long
+    Dim p As *Byte
+    If off < 0 Or off + 4 > gCodeSize Then
+        Print "patch out of range"
+        End
+    End If
+    tmp = v
+    p = gSbCode.p
+    memcpy(VarPtr(p[off]), VarPtr(tmp), 4)
+End Sub
+
+Sub AddFixup(off As Long, symIndex As Long)
+    If gNFixups >= MAX_FIXUPS Then
+        Print "too many fixups"
+        End
+    End If
+    gFixOff(gNFixups) = off
+    gFixSym(gNFixups) = symIndex
+    gNFixups = gNFixups + 1
+End Sub
+
+Sub ResolveFixups()
+    Dim i As Long
+    Dim idx As Long
+    Dim rel As Long
+    If gNFixups <= 0 Then Exit Sub
+    For i = 0 To gNFixups - 1
+        idx = gFixSym(i)
+        If gSymKind(idx) <> 1 Or gSymSection(idx) <> SECT_TEXT Then
+            Print "undefined jump label: " + gSymName(idx)
+            End
+        End If
+        rel = gSymValue(idx) - (gFixOff(i) + 4)
+        PatchDword(gFixOff(i), rel)
+    Next
+End Sub
+
+Function HashSym(name As String) As Long
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim h As Long
+    Dim c As Long
+    h = 5381
+    n = Len(name)
+    If n <= 0 Then
+        HashSym = 0
+        Exit Function
+    End If
+    p = StrPtr(name)
+    For i = 0 To n - 1
+        c = p[i]
+        h = h And &H1FFFFFF
+        h = h * 33 + c
+    Next
+    HashSym = h And &H7FFFFFFF
+End Function
+
+Function StrEq(a As String, b As String) As Long
+    Dim i As Long
+    Dim n As Long
+    Dim pa As *Byte
+    Dim pb As *Byte
+    StrEq = 0
+    n = Len(a)
+    If n <> Len(b) Then Exit Function
+    If n = 0 Then
+        StrEq = 1
+        Exit Function
+    End If
+    pa = StrPtr(a)
+    pb = StrPtr(b)
+    For i = 0 To n - 1
+        If pa[i] <> pb[i] Then Exit Function
+    Next
+    StrEq = 1
+End Function
+
+Function FindSymbol(name As String) As Long
+    Dim h As Long
+    Dim i As Long
+    Dim slot As Long
+    Dim idx As Long
+    FindSymbol = -1
+    If gNSyms <= 0 Then Exit Function
+    h = HashSym(name) And SYM_HASH_MASK
+    For i = 0 To SYM_HASH_MASK
+        slot = gSymHash(h)
+        If slot = 0 Then Exit Function
+        idx = slot - 1
+        If StrEq(gSymName(idx), name) <> 0 Then
+            FindSymbol = idx
+            Exit Function
+        End If
+        h = (h + 1) And SYM_HASH_MASK
+    Next
+End Function
+
+Function AddSymbol(name As String) As Long
+    Dim idx As Long
+    Dim h As Long
+    Dim i As Long
+    Dim slot As Long
+    idx = FindSymbol(name)
+    If idx >= 0 Then
+        AddSymbol = idx
+        Exit Function
+    End If
+    If gNSyms >= MAX_SYMS Then
+        Print "too many symbols"
+        End
+    End If
+    idx = gNSyms
+    ' 名前は複製して保持（呼び出し元バッファ／一時 String とのエイリアスを避ける）
+    gSymName(idx) = Mid$(name, 1, Len(name))
+    gSymValue(idx) = 0
+    gSymSection(idx) = IMAGE_SYM_UNDEFINED
+    gSymKind(idx) = 0
+    gSymGlobal(idx) = 0
+    gNSyms = gNSyms + 1
+
+    h = HashSym(name) And SYM_HASH_MASK
+    For i = 0 To SYM_HASH_MASK
+        slot = gSymHash(h)
+        If slot = 0 Then
+            gSymHash(h) = idx + 1
+            AddSymbol = idx
+            Exit Function
+        End If
+        h = (h + 1) And SYM_HASH_MASK
+    Next
+    Print "symbol hash full"
+    End
+End Function
+
+' .text へ 1 バイト（SbAppendByte 呼び出しを避ける）
+' Long→Byte 直接代入は警告になるため、低位バイトを *Byte 経由で書く
+Sub EmitByte(b As Long)
+    Dim p As *Byte
+    Dim off As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+    tmp = b And &HFF
+    bp = VarPtr(tmp)
+    If gCurSect = SECT_TEXT Then
+        If gCodeSize + 1 > MAX_CODE Then
+            Print "code too large"
+            End
+        End If
+        If SbEnsure(VarPtr(gSbCode), gCodeSize + 2) = 0 Then
+            ExitProcess(1)
+        End If
+        p = gSbCode.p
+        off = gSbCode.len
+        p[off] = bp[0]
+        off = off + 1
+        gSbCode.len = off
+        p[off] = 0
+        gCodeSize = off
+    ElseIf gCurSect = SECT_DATA Then
+        If gDataSize + 1 > MAX_DATA Then
+            Print "data too large"
+            End
+        End If
+        If SbEnsure(VarPtr(gSbData), gDataSize + 2) = 0 Then
+            ExitProcess(1)
+        End If
+        p = gSbData.p
+        off = gSbData.len
+        p[off] = bp[0]
+        off = off + 1
+        gSbData.len = off
+        p[off] = 0
+        gDataSize = off
+    Else
+        Print "emit outside section"
+        End
+    End If
+End Sub
+
+' .text 専用・2バイト一括
+Sub Emit2(b0 As Long, b1 As Long)
+    Dim p As *Byte
+    Dim off As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+    If gCurSect <> SECT_TEXT Then
+        Print "emit only in .text"
+        End
+    End If
+    If gCodeSize + 2 > MAX_CODE Then
+        Print "code too large"
+        End
+    End If
+    If SbEnsure(VarPtr(gSbCode), gCodeSize + 3) = 0 Then
+        ExitProcess(1)
+    End If
+    p = gSbCode.p
+    off = gSbCode.len
+    tmp = b0 And &HFF
+    bp = VarPtr(tmp)
+    p[off] = bp[0]
+    tmp = b1 And &HFF
+    p[off + 1] = bp[0]
+    off = off + 2
+    gSbCode.len = off
+    p[off] = 0
+    gCodeSize = off
+End Sub
+
+' .text 専用・3バイト一括
+Sub Emit3(b0 As Long, b1 As Long, b2 As Long)
+    Dim p As *Byte
+    Dim off As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+    If gCurSect <> SECT_TEXT Then
+        Print "emit only in .text"
+        End
+    End If
+    If gCodeSize + 3 > MAX_CODE Then
+        Print "code too large"
+        End
+    End If
+    If SbEnsure(VarPtr(gSbCode), gCodeSize + 4) = 0 Then
+        ExitProcess(1)
+    End If
+    p = gSbCode.p
+    off = gSbCode.len
+    tmp = b0 And &HFF
+    bp = VarPtr(tmp)
+    p[off] = bp[0]
+    tmp = b1 And &HFF
+    p[off + 1] = bp[0]
+    tmp = b2 And &HFF
+    p[off + 2] = bp[0]
+    off = off + 3
+    gSbCode.len = off
+    p[off] = 0
+    gCodeSize = off
+End Sub
+
+' .text 専用・5バイト（opcode + imm32）
+Sub EmitOpImm32(op As Long, imm As Long)
+    Dim p As *Byte
+    Dim off As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+    If gCurSect <> SECT_TEXT Then
+        Print "emit only in .text"
+        End
+    End If
+    If gCodeSize + 5 > MAX_CODE Then
+        Print "code too large"
+        End
+    End If
+    If SbEnsure(VarPtr(gSbCode), gCodeSize + 6) = 0 Then
+        ExitProcess(1)
+    End If
+    p = gSbCode.p
+    off = gSbCode.len
+    tmp = op And &HFF
+    bp = VarPtr(tmp)
+    p[off] = bp[0]
+    tmp = imm
+    memcpy(VarPtr(p[off + 1]), VarPtr(tmp), 4)
+    off = off + 5
+    gSbCode.len = off
+    p[off] = 0
+    gCodeSize = off
+End Sub
+
+Sub EmitZeros(n As Long)
+    If n <= 0 Then Exit Sub
+    If gCurSect <> SECT_DATA Then
+        Print "times/db zeros only in .data"
+        End
+    End If
+    If gDataSize + n > MAX_DATA Then
+        Print "data too large"
+        End
+    End If
+    SbAppendZeros(VarPtr(gSbData), n)
+    gDataSize = gSbData.len
+End Sub
+
+Sub EmitDword(v As Long)
+    Dim tmp As Long
+    Dim p As *Byte
+    Dim off As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "EmitDword only in .text"
+        End
+    End If
+    If gCodeSize + 4 > MAX_CODE Then
+        Print "code too large"
+        End
+    End If
+    If SbEnsure(VarPtr(gSbCode), gCodeSize + 5) = 0 Then
+        ExitProcess(1)
+    End If
+    tmp = v
+    p = gSbCode.p
+    off = gSbCode.len
+    memcpy(VarPtr(p[off]), VarPtr(tmp), 4)
+    off = off + 4
+    gSbCode.len = off
+    p[off] = 0
+    gCodeSize = off
+End Sub
+
+Sub EmitTimesDb(args As String)
+    Dim countTok As String
+    Dim rest As String
+    Dim op2 As String
+    Dim arg2 As String
+    Dim cnt As Long
+    Dim i As Long
+    Dim imm As Long
+
+    SplitToken(args, countTok, rest)
+    rest = Trim$(rest)
+    If rest = "" Then
+        Print "times needs db operand"
+        End
+    End If
+    SplitToken(rest, op2, arg2)
+    If Lower$(op2) <> "db" Then
+        Print "times: only db supported"
+        End
+    End If
+    If IsNumericToken(countTok) = 0 Then
+        Print "times: bad count '" + countTok + "'"
+        End
+    End If
+    cnt = ParseImm(countTok)
+    If cnt < 0 Then
+        Print "times: negative count"
+        End
+    End If
+    arg2 = Trim$(arg2)
+    If arg2 = "0" Or (IsNumericToken(arg2) <> 0 And ParseImm(arg2) = 0) Then
+        EmitZeros(cnt)
+        Exit Sub
+    End If
+    If IsNumericToken(arg2) = 0 Then
+        Print "times: only numeric db supported"
+        End
+    End If
+    imm = ParseImm(arg2) And &HFF
+    i = 0
+    While i < cnt
+        EmitByte(imm)
+        i = i + 1
+    Wend
+End Sub
+
+Sub AddReloc(va As DWord, symIndex As DWord, relType As Word)
+    If gNRelocs >= MAX_RELOCS Then
+        Print "too many relocations"
+        End
+    End If
+    gRelVA(gNRelocs) = va
+    gRelSym(gNRelocs) = symIndex
+    gRelType(gNRelocs) = relType
+    gNRelocs = gNRelocs + 1
+End Sub
+
+Sub EmitPushImm(imm As Long)
+    If gCurSect <> SECT_TEXT Then
+        Print "push only in .text"
+        End
+    End If
+    ' -128..127 -> 6A ib / それ以外 -> 68 id
+    If imm >= -128 And imm <= 127 Then
+        Emit2(&H6A, imm And &HFF)
+    Else
+        EmitOpImm32(&H68, imm)
+    End If
+End Sub
+
+Sub EmitPushReg(reg As Long)
+    If gCurSect <> SECT_TEXT Then
+        Print "push only in .text"
+        End
+    End If
+    If reg < 0 Or reg > 7 Then
+        Print "bad register for push"
+        End
+    End If
+    EmitByte(&H50 + reg)
+End Sub
+
+Sub EmitPushSym(symName As String)
+    Dim idx As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "push only in .text"
+        End
+    End If
+    idx = AddSymbol(symName)
+    EmitByte(&H68)
+    AddReloc(gCodeSize, idx, IMAGE_REL_I386_DIR32)
+    EmitDword(0)
+End Sub
+
+Sub EmitCall(symName As String)
+    Dim idx As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "call only in .text"
+        End
+    End If
+    idx = AddSymbol(symName)
+    EmitByte(&HE8)
+    AddReloc(gCodeSize, idx, IMAGE_REL_I386_REL32)
+    EmitDword(0)
+End Sub
+
+Sub EmitRet(imm As Long, hasImm As Long)
+    If gCurSect <> SECT_TEXT Then
+        Print "ret only in .text"
+        End
+    End If
+    If hasImm = 0 Then
+        EmitByte(&HC3)
+    Else
+        Emit3(&HC2, imm And &HFF, (imm \ 256) And &HFF)
+    End If
+End Sub
+
+Sub EmitJmpLabel(symName As String)
+    Dim idx As Long
+    Dim rel As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "jmp only in .text"
+        End
+    End If
+    idx = AddSymbol(symName)
+    EmitByte(&HE9)
+    If gSymKind(idx) = 1 And gSymSection(idx) = SECT_TEXT Then
+        rel = gSymValue(idx) - (gCodeSize + 4)
+        EmitDword(rel)
+    Else
+        AddFixup(gCodeSize, idx)
+        EmitDword(0)
+    End If
+End Sub
+
+Sub EmitPopReg(reg As Long)
+    If gCurSect <> SECT_TEXT Then
+        Print "pop only in .text"
+        End
+    End If
+    EmitByte(&H58 + reg)
+End Sub
+
+' mod=11 の ModRM
+Sub EmitModRM_RR(regField As Long, rmField As Long)
+    EmitByte(&HC0 + (regField * 8) + rmField)
+End Sub
+
+' [ebp+disp] の ModRM（regField は /r の reg）
+Sub EmitModRM_Ebp(regField As Long, disp As Long)
+    If disp >= -128 And disp <= 127 Then
+        Emit2(&H40 + (regField * 8) + 5, disp And &HFF)
+    Else
+        EmitByte(&H80 + (regField * 8) + 5)
+        EmitDword(disp)
+    End If
+End Sub
+
+Sub EmitMovRegReg(dst As Long, src As Long)
+    Emit2(&H8B, &HC0 + (dst * 8) + src)
+End Sub
+
+Sub EmitMovRegImm(reg As Long, imm As Long)
+    If gCurSect <> SECT_TEXT Then
+        Print "mov only in .text"
+        End
+    End If
+    EmitOpImm32(&HB8 + reg, imm)
+End Sub
+
+Sub EmitMovRegSym(reg As Long, symName As String)
+    Dim idx As Long
+    If gCurSect <> SECT_TEXT Then
+        Print "mov only in .text"
+        End
+    End If
+    idx = AddSymbol(symName)
+    EmitByte(&HB8 + reg)
+    AddReloc(gCodeSize, idx, IMAGE_REL_I386_DIR32)
+    EmitDword(0)
+End Sub
+
+Sub EmitMovRegMemEbp(dst As Long, disp As Long)
+    EmitByte(&H8B)
+    EmitModRM_Ebp(dst, disp)
+End Sub
+
+Sub EmitMovMemEbpReg(disp As Long, src As Long)
+    EmitByte(&H89)
+    EmitModRM_Ebp(src, disp)
+End Sub
+
+Sub EmitMovMemEbpImm(disp As Long, imm As Long)
+    EmitByte(&HC7)
+    EmitModRM_Ebp(0, disp)
+    EmitDword(imm)
+End Sub
+
+' mov reg, [reg] / mov [reg], reg （ディスプレースメントなし）
+Sub EmitMovRegMemReg(dst As Long, base As Long)
+    ' mod=00, ただし base=ebp(5) は不可（特殊）
+    If base = 5 Or base = 4 Then
+        Print "mov [ebp]/[esp] needs displacement form"
+        End
+    End If
+    Emit2(&H8B, (dst * 8) + base)
+End Sub
+
+Sub EmitMovMemRegReg(base As Long, src As Long)
+    If base = 5 Or base = 4 Then
+        Print "mov [ebp]/[esp] needs displacement form"
+        End
+    End If
+    Emit2(&H89, (src * 8) + base)
+End Sub
+
+' movzx r32, byte [reg]  -> 0F B6 /r
+Sub EmitMovzxRegMemReg(dst As Long, base As Long)
+    If base = 5 Or base = 4 Then
+        Print "movzx [ebp]/[esp] not supported"
+        End
+    End If
+    Emit3(&HF, &HB6, (dst * 8) + base)
+End Sub
+
+' movzx r32, word [reg]  -> 0F B7 /r
+Sub EmitMovzxWordRegMemReg(dst As Long, base As Long)
+    If base = 5 Or base = 4 Then
+        Print "movzx word [ebp]/[esp] not supported"
+        End
+    End If
+    Emit3(&HF, &HB7, (dst * 8) + base)
+End Sub
+
+' mov [reg], r8  -> 88 /r
+Sub EmitMovMemReg8(base As Long, r8 As Long)
+    If base = 5 Or base = 4 Then
+        Print "mov r8 to [ebp]/[esp] not supported"
+        End
+    End If
+    Emit2(&H88, (r8 * 8) + base)
+End Sub
+
+' mov [reg], ax -> 66 89 /0
+Sub EmitMovMemRegAx(base As Long)
+    If base = 5 Or base = 4 Then
+        Print "mov ax to [ebp]/[esp] not supported"
+        End
+    End If
+    Emit3(&H66, &H89, base)
+End Sub
+
+' "[ebx]" -> reg。失敗なら -1
+' 注意: ActiveBasic では "[" を文字列リテラルに書けない場合があるため &H5B/&H5D を使う
+Function ParseMemReg(s As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim inner As String
+    Dim i As Long
+    Dim buf[15] As Byte
+
+    ParseMemReg = -1
+    t = Trim$(s)
+    n = Len(t)
+    If n < 3 Then Exit Function
+    If n > 16 Then Exit Function
+    p = StrPtr(t)
+    If p[0] <> &H5B Then Exit Function
+    If p[n - 1] <> &H5D Then Exit Function
+
+    ' inner = t[1 .. n-2]
+    For i = 1 To n - 2
+        buf[i - 1] = p[i]
+    Next
+    buf[n - 2] = 0
+    inner = MakeStr(buf)
+    ParseMemReg = RegCode(Trim$(inner))
+End Function
+
+Sub EmitArithRegImm(op As Long, reg As Long, imm As Long)
+    ' op: 0=add 1=or 2=adc 3=sbb 4=and 5=sub 6=xor 7=cmp
+    If reg = 0 And (imm < -128 Or imm > 127) Then
+        ' eax 専用: 05/2D/3D...
+        If op = 0 Then
+            EmitByte(&H5)
+        ElseIf op = 5 Then
+            EmitByte(&H2D)
+        ElseIf op = 7 Then
+            EmitByte(&H3D)
+        Else
+            EmitByte(&H81)
+            EmitModRM_RR(op, reg)
+            EmitDword(imm)
+            Exit Sub
+        End If
+        EmitDword(imm)
+    ElseIf imm >= -128 And imm <= 127 Then
+        Emit3(&H83, &HC0 + (op * 8) + reg, imm And &HFF)
+    Else
+        Emit2(&H81, &HC0 + (op * 8) + reg)
+        EmitDword(imm)
+    End If
+End Sub
+
+Sub EmitArithRegReg(op As Long, dst As Long, src As Long)
+    ' 01/09/.../39 /r : r/m += r  →  dst が r/m, src が reg
+    Emit2(op * 8 + 1, &HC0 + (src * 8) + dst)
+End Sub
+
+Sub EmitImulRegReg(dst As Long, src As Long)
+    Emit3(&HF, &HAF, &HC0 + (dst * 8) + src)
+End Sub
+
+Sub EmitJccLabel(cc As Long, symName As String)
+    ' cc: 2nd opcode byte (84=je, 85=jne, 8C=jl, 8D=jge, 8E=jle, 8F=jg)
+    Dim idx As Long
+    Dim rel As Long
+    idx = AddSymbol(symName)
+    Emit2(&HF, cc)
+    If gSymKind(idx) = 1 And gSymSection(idx) = SECT_TEXT Then
+        rel = gSymValue(idx) - (gCodeSize + 4)
+        EmitDword(rel)
+    Else
+        AddFixup(gCodeSize, idx)
+        EmitDword(0)
+    End If
+End Sub
+
+' "[ebp-4]" / "[ebp+8]" -> disp。失敗なら 0
+Function ParseMemEbp(s As String, ByRef disp As Long) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim sign As Long
+    Dim v As Long
+    Dim c As Long
+
+    ParseMemEbp = 0
+    disp = 0
+    t = Trim$(s)
+    n = Len(t)
+    If n < 7 Then Exit Function
+    p = StrPtr(t)
+
+    ' [ebp   ([ = &H5B, ] = &H5D)
+    If p[0] <> &H5B Then Exit Function
+    c = ToLowerChar(p[1])
+    If c <> Asc("e") Then Exit Function
+    c = ToLowerChar(p[2])
+    If c <> Asc("b") Then Exit Function
+    c = ToLowerChar(p[3])
+    If c <> Asc("p") Then Exit Function
+
+    ' +/-
+    If p[4] = Asc("+") Then
+        sign = 1
+    ElseIf p[4] = Asc("-") Then
+        sign = -1
+    Else
+        Exit Function
+    End If
+
+    ' digits ... ]
+    i = 5
+    If i >= n - 1 Then Exit Function
+    v = 0
+    While i < n - 1
+        c = p[i]
+        If c < Asc("0") Or c > Asc("9") Then Exit Function
+        v = v * 10 + (c - Asc("0"))
+        i = i + 1
+    Wend
+    If p[n - 1] <> &H5D Then Exit Function
+
+    disp = v * sign
+    ParseMemEbp = 1
+End Function
+
+' op は呼び出し側で Lower$ 済み（再 lower しない）
+Function JccCode(op As String) As Long
+    If op = "je" Or op = "jz" Then
+        JccCode = &H84
+    ElseIf op = "jne" Or op = "jnz" Then
+        JccCode = &H85
+    ElseIf op = "jl" Or op = "jnge" Then
+        JccCode = &H8C
+    ElseIf op = "jle" Or op = "jng" Then
+        JccCode = &H8E
+    ElseIf op = "jg" Or op = "jnle" Then
+        JccCode = &H8F
+    ElseIf op = "jge" Or op = "jnl" Then
+        JccCode = &H8D
+    Else
+        JccCode = -1
+    End If
+End Function
+
+' db 'Hello', 0  のようなオペランド列を .data に書き出す
+Sub EmitDb(args As String)
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim start As Long
+    Dim c As Long
+    Dim quote As Long
+    Dim tok As String
+    Dim imm As Long
+
+    If gCurSect <> SECT_DATA Then
+        Print "db only in .data"
+        End
+    End If
+
+    n = Len(args)
+    If n = 0 Then Exit Sub
+    p = StrPtr(args)
+    i = 0
+
+    While i < n
+        While i < n And (IsSpace(p[i]) <> 0 Or p[i] = Asc(","))
+            i = i + 1
+        Wend
+        If i >= n Then Exit While
+
+        c = p[i]
+        If c = Asc("'") Or c = 34 Then
+            quote = c
+            i = i + 1
+            While i < n And p[i] <> quote
+                EmitByte(p[i])
+                i = i + 1
+            Wend
+            If i >= n Then
+                Print "unterminated string in db"
+                End
+            End If
+            i = i + 1
+        Else
+            start = i
+            While i < n And p[i] <> Asc(",") And IsSpace(p[i]) = 0
+                i = i + 1
+            Wend
+            tok = Mid$(args, start + 1, i - start)
+            If IsNumericToken(tok) = 0 Then
+                Print "db: bad operand '" + tok + "'"
+                End
+            End If
+            imm = ParseImm(tok)
+            EmitByte(imm And &HFF)
+        End If
+    Wend
+End Sub
+
+Function EndsWithColon(s As String) As Long
+    Dim n As Long
+    Dim p As *Byte
+    n = Len(s)
+    If n > 0 Then
+        p = StrPtr(s)
+        If p[n - 1] = Asc(":") Then
+            EndsWithColon = 1
+            Exit Function
+        End If
+    End If
+    EndsWithColon = 0
+End Function
+
+Sub DefineLabel(name As String)
+    Dim idx As Long
+    If gCurSect = SECT_NONE Then
+        Print "label outside section: " + name
+        End
+    End If
+    idx = AddSymbol(name)
+    If gSymKind(idx) = 1 Then
+        Print "duplicate label: " + name
+        End
+    End If
+    gSymKind(idx) = 1
+    gSymSection(idx) = gCurSect
+    If gCurSect = SECT_TEXT Then
+        gSymValue(idx) = gCodeSize
+    Else
+        gSymValue(idx) = gDataSize
+    End If
+End Sub
+
+' --- 行レキサ（バイト列 → トークン。ホットパスは関数呼び出しなし）---
+Function LexText$(idx As Long) As String
+    Dim buf[MAX_LINE] As Byte
+    Dim n As Long
+    Dim off As Long
+    n = gLxLen(idx)
+    off = gLxOff(idx)
+    If n <= 0 Then
+        LexText$ = ""
+        Exit Function
+    End If
+    If n >= MAX_LINE Then n = MAX_LINE - 1
+    memcpy(buf, VarPtr(gLxP[off]), n)
+    buf[n] = 0
+    LexText$ = MakeStr(buf)
+End Function
+
+Function LexTail$(off As Long) As String
+    Dim buf[MAX_LINE] As Byte
+    Dim n As Long
+    n = gLxN - off
+    If n <= 0 Then
+        LexTail$ = ""
+        Exit Function
+    End If
+    If n >= MAX_LINE Then n = MAX_LINE - 1
+    memcpy(buf, VarPtr(gLxP[off]), n)
+    buf[n] = 0
+    LexTail$ = MakeStr(buf)
+End Function
+
+Sub LexLine(p As *Byte, n As Long)
+    Dim i As Long
+    Dim start As Long
+    Dim c As Long
+    Dim c0 As Long
+    Dim c1 As Long
+    Dim c2 As Long
+    Dim c3 As Long
+    Dim v As Long
+    Dim sign As Long
+    Dim hexMode As Long
+    Dim op As Long
+    Dim reg As Long
+    Dim h As Long
+    Dim h2 As Long
+    Dim ln As Long
+    Dim kind As Long
+
+    gLxP = p
+    gLxN = n
+    gNLx = 0
+    gLxPos = 0
+    i = 0
+    While i < n
+        If gNLx >= MAX_LX - 1 Then
+            Print "too many tokens on line"
+            End
+        End If
+        While i < n
+            c = p[i]
+            If c <> 32 And c <> 9 And c <> 13 And c <> 10 Then Exit While
+            i = i + 1
+        Wend
+        If i >= n Then Exit While
+        c = p[i]
+        If c = 59 Then Exit While
+
+        If c = 44 Or c = 58 Or c = &H5B Or c = &H5D Or c = 43 Or (c = 45 And (i + 1 >= n Or p[i + 1] < 48 Or p[i + 1] > 57)) Then
+            If c = 44 Then
+                kind = LX_COMMA
+            ElseIf c = 58 Then
+                kind = LX_COLON
+            ElseIf c = &H5B Then
+                kind = LX_LBRACK
+            ElseIf c = &H5D Then
+                kind = LX_RBRACK
+            ElseIf c = 43 Then
+                kind = LX_PLUS
+            Else
+                kind = LX_MINUS
+            End If
+            gLxKind(gNLx) = kind
+            gLxVal(gNLx) = 0
+            gLxOff(gNLx) = i
+            gLxLen(gNLx) = 1
+            gNLx = gNLx + 1
+            i = i + 1
+        ElseIf c = 39 Or c = 34 Then
+            Exit While
+        ElseIf (c >= 48 And c <= 57) Or c = 45 Or c = 43 Or c = 38 Then
+            start = i
+            sign = 1
+            v = 0
+            hexMode = 0
+            If c = 45 Then
+                sign = -1
+                i = i + 1
+            ElseIf c = 43 Then
+                i = i + 1
+            End If
+            If i + 1 < n And p[i] = 48 And (p[i + 1] = 120 Or p[i + 1] = 88) Then
+                i = i + 2
+                hexMode = 1
+            ElseIf i + 1 < n And p[i] = 38 And (p[i + 1] = 72 Or p[i + 1] = 104) Then
+                i = i + 2
+                hexMode = 1
+            End If
+            If hexMode <> 0 Then
+                If i >= n Then
+                    Print "bad hex immediate"
+                    End
+                End If
+                While i < n
+                    c = p[i]
+                    If c >= 48 And c <= 57 Then
+                        v = v * 16 + (c - 48)
+                    ElseIf c >= 97 And c <= 102 Then
+                        v = v * 16 + (c - 87)
+                    ElseIf c >= 65 And c <= 70 Then
+                        v = v * 16 + (c - 55)
+                    Else
+                        Exit While
+                    End If
+                    i = i + 1
+                Wend
+            Else
+                If i >= n Or p[i] < 48 Or p[i] > 57 Then
+                    Print "bad immediate"
+                    End
+                End If
+                While i < n And p[i] >= 48 And p[i] <= 57
+                    v = v * 10 + (p[i] - 48)
+                    i = i + 1
+                Wend
+            End If
+            gLxKind(gNLx) = LX_NUM
+            gLxVal(gNLx) = v * sign
+            gLxOff(gNLx) = start
+            gLxLen(gNLx) = i - start
+            gNLx = gNLx + 1
+        ElseIf (c >= 65 And c <= 90) Or (c >= 97 And c <= 122) Or c = 95 Or c = 46 Or c = 64 Or c = 36 Then
+            start = i
+            i = i + 1
+            While i < n
+                c = p[i]
+                If (c >= 65 And c <= 90) Or (c >= 97 And c <= 122) Or (c >= 48 And c <= 57) Or c = 95 Or c = 46 Or c = 64 Or c = 36 Then
+                    i = i + 1
+                Else
+                    Exit While
+                End If
+            Wend
+            ln = i - start
+            op = 0
+            reg = -1
+            kind = LX_IDENT
+            If ln = 3 Then
+                c0 = p[start]
+                c1 = p[start + 1]
+                c2 = p[start + 2]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                If c2 >= 65 And c2 <= 90 Then c2 = c2 + 32
+                h = c0 * 65536 + c1 * 256 + c2
+                If h = H_EAX Then
+                    reg = 0
+                ElseIf h = H_ECX Then
+                    reg = 1
+                ElseIf h = H_EDX Then
+                    reg = 2
+                ElseIf h = H_EBX Then
+                    reg = 3
+                ElseIf h = H_ESP Then
+                    reg = 4
+                ElseIf h = H_EBP Then
+                    reg = 5
+                ElseIf h = H_ESI Then
+                    reg = 6
+                ElseIf h = H_EDI Then
+                    reg = 7
+                ElseIf h = H_MOV Then
+                    op = OP_MOV
+                ElseIf h = H_POP Then
+                    op = OP_POP
+                ElseIf h = H_RET Then
+                    op = OP_RET
+                ElseIf h = H_ADD Then
+                    op = OP_ADD
+                ElseIf h = H_SUB Then
+                    op = OP_SUB
+                ElseIf h = H_CMP Then
+                    op = OP_CMP
+                ElseIf h = H_AND Then
+                    op = OP_AND
+                ElseIf h = H_XOR Then
+                    op = OP_XOR
+                ElseIf h = H_NEG Then
+                    op = OP_NEG
+                ElseIf h = H_DIV Then
+                    op = OP_DIV
+                ElseIf h = H_SHR Then
+                    op = OP_SHR
+                ElseIf h = H_SHL Then
+                    op = OP_SHL
+                ElseIf h = H_JMP Then
+                    op = OP_JMP
+                ElseIf h = H_JLE Then
+                    op = OP_JLE
+                ElseIf h = H_JGE Then
+                    op = OP_JGE
+                ElseIf h = H_JNE Then
+                    op = OP_JNE
+                ElseIf h = H_JNZ Then
+                    op = OP_JNZ
+                End If
+            ElseIf ln = 2 Then
+                c0 = p[start]
+                c1 = p[start + 1]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                h = c0 * 256 + c1
+                If h = H_AL Then
+                    kind = LX_REG8
+                    reg = 0
+                ElseIf h = H_CL Then
+                    kind = LX_REG8
+                    reg = 1
+                ElseIf h = H_DL Then
+                    kind = LX_REG8
+                    reg = 2
+                ElseIf h = H_BL Then
+                    kind = LX_REG8
+                    reg = 3
+                ElseIf h = H_AX Then
+                    kind = LX_REG16
+                    reg = 16
+                ElseIf h = H_DB Then
+                    op = OP_DB
+                ElseIf h = H_JE Then
+                    op = OP_JE
+                ElseIf h = H_JZ Then
+                    op = OP_JZ
+                ElseIf h = H_JL Then
+                    op = OP_JL
+                ElseIf h = H_JG Then
+                    op = OP_JG
+                ElseIf h = H_OR Then
+                    op = OP_OR
+                End If
+            ElseIf ln = 4 Then
+                c0 = p[start]
+                c1 = p[start + 1]
+                c2 = p[start + 2]
+                c3 = p[start + 3]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                If c2 >= 65 And c2 <= 90 Then c2 = c2 + 32
+                If c3 >= 65 And c3 <= 90 Then c3 = c3 + 32
+                h = c0 * 16777216 + c1 * 65536 + c2 * 256 + c3
+                If h = H_BITS Then
+                    op = OP_BITS
+                ElseIf h = H_CALL Then
+                    op = OP_CALL
+                ElseIf h = H_PUSH Then
+                    op = OP_PUSH
+                ElseIf h = H_IMUL Then
+                    op = OP_IMUL
+                ElseIf h = H_WORD Then
+                    op = OP_WORD
+                End If
+            ElseIf ln = 5 Then
+                c0 = p[start]
+                c1 = p[start + 1]
+                c2 = p[start + 2]
+                c3 = p[start + 3]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                If c2 >= 65 And c2 <= 90 Then c2 = c2 + 32
+                If c3 >= 65 And c3 <= 90 Then c3 = c3 + 32
+                h = c0 * 16777216 + c1 * 65536 + c2 * 256 + c3
+                c0 = p[start + 4]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If h = H_TIME And c0 = 115 Then
+                    op = OP_TIMES
+                ElseIf h = H_MOVZ And c0 = 120 Then
+                    op = OP_MOVZX
+                End If
+            ElseIf ln = 6 Then
+                c0 = p[start]
+                c1 = p[start + 1]
+                c2 = p[start + 2]
+                c3 = p[start + 3]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                If c2 >= 65 And c2 <= 90 Then c2 = c2 + 32
+                If c3 >= 65 And c3 <= 90 Then c3 = c3 + 32
+                h = c0 * 16777216 + c1 * 65536 + c2 * 256 + c3
+                c0 = p[start + 4]
+                c1 = p[start + 5]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                h2 = c0 * 256 + c1
+                If h = H_EXTE And h2 = H_RN Then
+                    op = OP_EXTERN
+                ElseIf h = H_GLOB And h2 = H_AL Then
+                    op = OP_GLOBAL
+                End If
+            ElseIf ln = 7 Then
+                c0 = p[start]
+                c1 = p[start + 1]
+                c2 = p[start + 2]
+                c3 = p[start + 3]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                If c2 >= 65 And c2 <= 90 Then c2 = c2 + 32
+                If c3 >= 65 And c3 <= 90 Then c3 = c3 + 32
+                h = c0 * 16777216 + c1 * 65536 + c2 * 256 + c3
+                c0 = p[start + 4]
+                c1 = p[start + 5]
+                c2 = p[start + 6]
+                If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+                If c1 >= 65 And c1 <= 90 Then c1 = c1 + 32
+                If c2 >= 65 And c2 <= 90 Then c2 = c2 + 32
+                h2 = c0 * 65536 + c1 * 256 + c2
+                If h = H_SECT And h2 = H_ION Then
+                    op = OP_SECTION
+                End If
+            End If
+
+            If kind = LX_REG8 Or kind = LX_REG16 Then
+                gLxKind(gNLx) = kind
+                gLxVal(gNLx) = reg
+            ElseIf reg >= 0 Then
+                gLxKind(gNLx) = LX_REG
+                gLxVal(gNLx) = reg
+            ElseIf op <> 0 Then
+                gLxKind(gNLx) = LX_OP
+                gLxVal(gNLx) = op
+            Else
+                gLxKind(gNLx) = LX_IDENT
+                gLxVal(gNLx) = 0
+            End If
+            gLxOff(gNLx) = start
+            gLxLen(gNLx) = ln
+            gNLx = gNLx + 1
+        Else
+            Print "unexpected char in asm"
+            End
+        End If
+    Wend
+    gLxKind(gNLx) = LX_EOF
+    gLxVal(gNLx) = 0
+    gLxOff(gNLx) = i
+    gLxLen(gNLx) = 0
+    gNLx = gNLx + 1
+End Sub
+
+Function LexMem(ByRef reg As Long, ByRef disp As Long, ByRef hasDisp As Long) As Long
+    Dim sign As Long
+    LexMem = 0
+    hasDisp = 0
+    disp = 0
+    reg = -1
+    If gLxKind(gLxPos) <> LX_LBRACK Then Exit Function
+    gLxPos = gLxPos + 1
+    If gLxKind(gLxPos) <> LX_REG Then Exit Function
+    reg = gLxVal(gLxPos)
+    gLxPos = gLxPos + 1
+    If gLxKind(gLxPos) = LX_PLUS Or gLxKind(gLxPos) = LX_MINUS Then
+        If gLxKind(gLxPos) = LX_PLUS Then
+            sign = 1
+        Else
+            sign = -1
+        End If
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) <> LX_NUM Then Exit Function
+        disp = gLxVal(gLxPos) * sign
+        hasDisp = 1
+        gLxPos = gLxPos + 1
+    ElseIf gLxKind(gLxPos) = LX_NUM Then
+        ' [ebp-4] は '-' が即値に吸収される
+        disp = gLxVal(gLxPos)
+        hasDisp = 1
+        gLxPos = gLxPos + 1
+    End If
+    If gLxKind(gLxPos) <> LX_RBRACK Then Exit Function
+    gLxPos = gLxPos + 1
+    LexMem = 1
+End Function
+
+Function JccFromOp(op As Long) As Long
+    If op = OP_JE Or op = OP_JZ Then
+        JccFromOp = &H84
+    ElseIf op = OP_JNE Or op = OP_JNZ Then
+        JccFromOp = &H85
+    ElseIf op = OP_JL Then
+        JccFromOp = &H8C
+    ElseIf op = OP_JLE Then
+        JccFromOp = &H8E
+    ElseIf op = OP_JG Then
+        JccFromOp = &H8F
+    ElseIf op = OP_JGE Then
+        JccFromOp = &H8D
+    Else
+        JccFromOp = -1
+    End If
+End Function
+
+Sub AssembleLineBuf(p As *Byte, n As Long)
+    Dim op As Long
+    Dim idx As Long
+    Dim reg As Long
+    Dim reg2 As Long
+    Dim disp As Long
+    Dim hasDisp As Long
+    Dim imm As Long
+    Dim arithOp As Long
+    Dim isWord As Long
+    Dim cc As Long
+    Dim name As String
+    Dim savedPos As Long
+
+    If n <= 0 Then Exit Sub
+    LexLine(p, n)
+    If gLxKind(gLxPos) = LX_EOF Then Exit Sub
+
+    ' label: / label: insn
+    If gLxKind(gLxPos) = LX_IDENT And gLxKind(gLxPos + 1) = LX_COLON Then
+        name = LexText$(gLxPos)
+        If name = "" Then
+            Print "empty label"
+            End
+        End If
+        DefineLabel(name)
+        gLxPos = gLxPos + 1
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) = LX_EOF Then Exit Sub
+    End If
+
+    ' label db ... / label times ...（コロンなし）
+    If gLxKind(gLxPos) = LX_IDENT And gLxKind(gLxPos + 1) = LX_OP Then
+        op = gLxVal(gLxPos + 1)
+        If op = OP_DB Or op = OP_TIMES Then
+            name = LexText$(gLxPos)
+            DefineLabel(name)
+            gLxPos = gLxPos + 1
+        End If
+    End If
+
+    If gLxKind(gLxPos) <> LX_OP Then
+        Print "unsupported instruction: " + LexText$(gLxPos)
+        End
+    End If
+    op = gLxVal(gLxPos)
+    gLxPos = gLxPos + 1
+
+    If op = OP_BITS Then
+        Exit Sub
+    End If
+
+    If op = OP_SECTION Then
+        If gLxKind(gLxPos) <> LX_IDENT Then
+            Print "unsupported section"
+            End
+        End If
+        name = Lower$(LexText$(gLxPos))
+        If name = ".text" Then
+            gCurSect = SECT_TEXT
+        ElseIf name = ".data" Then
+            gCurSect = SECT_DATA
+        Else
+            Print "unsupported section: " + name
+            End
+        End If
+        Exit Sub
+    End If
+
+    If op = OP_EXTERN Or op = OP_GLOBAL Then
+        If gLxKind(gLxPos) <> LX_IDENT Then
+            Print "extern/global needs a name"
+            End
+        End If
+        name = LexText$(gLxPos)
+        idx = AddSymbol(name)
+        gSymGlobal(idx) = 1
+        Exit Sub
+    End If
+
+    If op = OP_DB Then
+        EmitDb(Trim$(LexTail$(gLxOff(gLxPos))))
+        Exit Sub
+    End If
+
+    If op = OP_TIMES Then
+        EmitTimesDb(Trim$(LexTail$(gLxOff(gLxPos))))
+        Exit Sub
+    End If
+
+    If op = OP_PUSH Then
+        If gLxKind(gLxPos) = LX_NUM Then
+            EmitPushImm(gLxVal(gLxPos))
+        ElseIf gLxKind(gLxPos) = LX_REG Then
+            EmitPushReg(gLxVal(gLxPos))
+        ElseIf gLxKind(gLxPos) = LX_IDENT Then
+            EmitPushSym(LexText$(gLxPos))
+        Else
+            Print "push needs an operand"
+            End
+        End If
+        Exit Sub
+    End If
+
+    If op = OP_POP Then
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "pop: register required"
+            End
+        End If
+        EmitPopReg(gLxVal(gLxPos))
+        Exit Sub
+    End If
+
+    If op = OP_CALL Then
+        If gLxKind(gLxPos) <> LX_IDENT Then
+            Print "call needs a symbol"
+            End
+        End If
+        EmitCall(LexText$(gLxPos))
+        Exit Sub
+    End If
+
+    If op = OP_RET Then
+        If gLxKind(gLxPos) = LX_EOF Then
+            EmitRet(0, 0)
+        ElseIf gLxKind(gLxPos) = LX_NUM Then
+            EmitRet(gLxVal(gLxPos), 1)
+        Else
+            Print "ret: bad operand"
+            End
+        End If
+        Exit Sub
+    End If
+
+    If op = OP_MOVZX Then
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "movzx: bad dest"
+            End
+        End If
+        reg = gLxVal(gLxPos)
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) <> LX_COMMA Then
+            Print "movzx needs two operands"
+            End
+        End If
+        gLxPos = gLxPos + 1
+        isWord = 0
+        If gLxKind(gLxPos) = LX_OP And gLxVal(gLxPos) = OP_WORD Then
+            isWord = 1
+            gLxPos = gLxPos + 1
+        End If
+        If LexMem(reg2, disp, hasDisp) = 0 Or hasDisp <> 0 Then
+            Print "movzx: need mem [reg]"
+            End
+        End If
+        If isWord <> 0 Then
+            EmitMovzxWordRegMemReg(reg, reg2)
+        Else
+            EmitMovzxRegMemReg(reg, reg2)
+        End If
+        Exit Sub
+    End If
+
+    If op = OP_MOV Then
+        savedPos = gLxPos
+        If gLxKind(gLxPos) = LX_REG Then
+            reg = gLxVal(gLxPos)
+            gLxPos = gLxPos + 1
+            If gLxKind(gLxPos) <> LX_COMMA Then
+                Print "mov needs two operands"
+                End
+            End If
+            gLxPos = gLxPos + 1
+            If gLxKind(gLxPos) = LX_NUM Then
+                EmitMovRegImm(reg, gLxVal(gLxPos))
+            ElseIf gLxKind(gLxPos) = LX_REG Then
+                EmitMovRegReg(reg, gLxVal(gLxPos))
+            ElseIf LexMem(reg2, disp, hasDisp) <> 0 Then
+                If hasDisp <> 0 Then
+                    If reg2 <> 5 Then
+                        Print "mov: disp only for [ebp]"
+                        End
+                    End If
+                    EmitMovRegMemEbp(reg, disp)
+                Else
+                    EmitMovRegMemReg(reg, reg2)
+                End If
+            ElseIf gLxKind(gLxPos) = LX_IDENT Then
+                EmitMovRegSym(reg, LexText$(gLxPos))
+            Else
+                Print "mov: bad src"
+                End
+            End If
+            Exit Sub
+        End If
+
+        If LexMem(reg2, disp, hasDisp) <> 0 Then
+            If gLxKind(gLxPos) <> LX_COMMA Then
+                Print "mov needs two operands"
+                End
+            End If
+            gLxPos = gLxPos + 1
+            If hasDisp <> 0 Then
+                If reg2 <> 5 Then
+                    Print "mov: disp only for [ebp]"
+                    End
+                End If
+                If gLxKind(gLxPos) = LX_REG Then
+                    EmitMovMemEbpReg(disp, gLxVal(gLxPos))
+                ElseIf gLxKind(gLxPos) = LX_NUM Then
+                    EmitMovMemEbpImm(disp, gLxVal(gLxPos))
+                Else
+                    Print "mov: bad src for mem"
+                    End
+                End If
+            Else
+                If gLxKind(gLxPos) = LX_REG8 Then
+                    EmitMovMemReg8(reg2, gLxVal(gLxPos))
+                ElseIf gLxKind(gLxPos) = LX_REG16 Then
+                    EmitMovMemRegAx(reg2)
+                ElseIf gLxKind(gLxPos) = LX_REG Then
+                    EmitMovMemRegReg(reg2, gLxVal(gLxPos))
+                Else
+                    Print "mov: bad src for [reg]"
+                    End
+                End If
+            End If
+            Exit Sub
+        End If
+
+        Print "mov: unsupported dest '" + LexText$(savedPos) + "'"
+        End
+    End If
+
+    If op = OP_ADD Or op = OP_SUB Or op = OP_CMP Or op = OP_AND Or op = OP_OR Or op = OP_XOR Then
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "arith: dest must be register"
+            End
+        End If
+        reg = gLxVal(gLxPos)
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) <> LX_COMMA Then
+            Print "arith needs two operands"
+            End
+        End If
+        gLxPos = gLxPos + 1
+        If op = OP_ADD Then
+            arithOp = 0
+        ElseIf op = OP_OR Then
+            arithOp = 1
+        ElseIf op = OP_AND Then
+            arithOp = 4
+        ElseIf op = OP_SUB Then
+            arithOp = 5
+        ElseIf op = OP_XOR Then
+            arithOp = 6
+        Else
+            arithOp = 7
+        End If
+        If gLxKind(gLxPos) = LX_NUM Then
+            EmitArithRegImm(arithOp, reg, gLxVal(gLxPos))
+        ElseIf gLxKind(gLxPos) = LX_REG Then
+            EmitArithRegReg(arithOp, reg, gLxVal(gLxPos))
+        Else
+            Print "arith: bad src"
+            End
+        End If
+        Exit Sub
+    End If
+
+    If op = OP_NEG Then
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "neg: register required"
+            End
+        End If
+        EmitByte(&HF7)
+        EmitModRM_RR(3, gLxVal(gLxPos))
+        Exit Sub
+    End If
+
+    If op = OP_DIV Then
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "div: register required"
+            End
+        End If
+        EmitByte(&HF7)
+        EmitModRM_RR(6, gLxVal(gLxPos))
+        Exit Sub
+    End If
+
+    If op = OP_SHR Or op = OP_SHL Then
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "shift: dest must be register"
+            End
+        End If
+        reg = gLxVal(gLxPos)
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) <> LX_COMMA Then
+            Print "shift needs two operands"
+            End
+        End If
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) <> LX_NUM Then
+            Print "shift: imm count required"
+            End
+        End If
+        EmitByte(&HC1)
+        If op = OP_SHR Then
+            EmitModRM_RR(5, reg)
+        Else
+            EmitModRM_RR(4, reg)
+        End If
+        EmitByte(gLxVal(gLxPos) And &HFF)
+        Exit Sub
+    End If
+
+    If op = OP_IMUL Then
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "imul: registers required"
+            End
+        End If
+        reg = gLxVal(gLxPos)
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) <> LX_COMMA Then
+            Print "imul needs two operands"
+            End
+        End If
+        gLxPos = gLxPos + 1
+        If gLxKind(gLxPos) <> LX_REG Then
+            Print "imul: registers required"
+            End
+        End If
+        EmitImulRegReg(reg, gLxVal(gLxPos))
+        Exit Sub
+    End If
+
+    If op = OP_JMP Then
+        If gLxKind(gLxPos) <> LX_IDENT Then
+            Print "jmp needs a label"
+            End
+        End If
+        EmitJmpLabel(LexText$(gLxPos))
+        Exit Sub
+    End If
+
+    cc = JccFromOp(op)
+    If cc >= 0 Then
+        If gLxKind(gLxPos) <> LX_IDENT Then
+            Print "jcc needs a label"
+            End
+        End If
+        EmitJccLabel(cc, LexText$(gLxPos))
+        Exit Sub
+    End If
+
+    Print "unsupported instruction"
+    End
+End Sub
+
+Sub AssembleBuffer(src As *Byte, srcSize As Long)
+    Dim i As Long
+    Dim start As Long
+    Dim lineBuf[MAX_LINE] As Byte
+    Dim lenLine As Long
+    Dim c As Long
+
+    i = 0
+    While i < srcSize
+        start = i
+        While i < srcSize
+            c = src[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        lenLine = i - start
+        If lenLine >= MAX_LINE Then lenLine = MAX_LINE - 1
+        If lenLine > 0 Then
+            memcpy(lineBuf, VarPtr(src[start]), lenLine)
+        End If
+        lineBuf[lenLine] = 0
+        AssembleLineBuf(lineBuf, lenLine)
+
+        If i < srcSize And src[i] = 13 Then i = i + 1
+        If i < srcSize And src[i] = 10 Then i = i + 1
+    Wend
+
+    ResolveFixups()
+End Sub
+
+' シンボル名を COFF_SYMBOL.Name に書き込む。長い名前は文字列テーブルへ
+' 先頭8バイトを *Byte として扱う（Name(i) 未サポート / 型変換警告回避）
+Sub SetSymName(symBytes As *Byte, name As String)
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim off As DWord
+
+    n = Len(name)
+    p = StrPtr(name)
+    If n <= 8 Then
+        For i = 0 To 7
+            If i < n Then
+                symBytes[i] = p[i]
+            Else
+                symBytes[i] = 0
+            End If
+        Next
+    Else
+        ' 文字列テーブルへ追加
+        off = gStrTabSize
+        If off + n + 1 > MAX_STRTAB Then
+            Print "string table overflow"
+            End
+        End If
+        memcpy(VarPtr(gStrTab(off)), p, n)
+        gStrTab(off + n) = 0
+        gStrTabSize = off + n + 1
+
+        symBytes[0] = 0
+        symBytes[1] = 0
+        symBytes[2] = 0
+        symBytes[3] = 0
+        memcpy(VarPtr(symBytes[4]), VarPtr(off), 4)
+    End If
+End Sub
+
+Function BuildObj(ByRef outSize As Long) As *Byte
+    Dim hdr As COFF_HEADER
+    Dim sect As SECTION_HEADER
+    Dim reloc As COFF_RELOCATION
+    Dim sym As COFF_SYMBOL
+    Dim p As *Byte
+    Dim nSect As Word
+    Dim sectHdrOff As DWord
+    Dim textRawOff As DWord
+    Dim textRelOff As DWord
+    Dim dataRawOff As DWord
+    Dim symOff As DWord
+    Dim strNeed As DWord
+    Dim i As Long
+    Dim namePtr As *Byte
+    Dim nb As *Byte
+    Dim sectName As String
+
+    nSect = 1
+    If gDataSize > 0 Then
+        nSect = 2
+    End If
+
+    ' 文字列テーブル必要サイズを先に見積もる
+    strNeed = 4
+    If gNSyms > 0 Then
+        For i = 0 To gNSyms - 1
+            If Len(gSymName(i)) > 8 Then
+                strNeed = strNeed + Len(gSymName(i)) + 1
+            End If
+        Next
+    End If
+
+    ' レイアウト: header + sectHdrs + .text raw + .text relocs + [.data raw] + symbols + strtab
+    sectHdrOff = SIZEOF_COFF_HEADER
+    textRawOff = sectHdrOff + nSect * SIZEOF_SECTION_HEADER
+    textRelOff = textRawOff + gCodeSize
+    dataRawOff = textRelOff + gNRelocs * SIZEOF_COFF_RELOCATION
+    If gDataSize > 0 Then
+        symOff = dataRawOff + gDataSize
+    Else
+        symOff = dataRawOff
+    End If
+    outSize = symOff + gNSyms * SIZEOF_COFF_SYMBOL + strNeed
+
+    p = malloc(outSize)
+    If p = NULL Then
+        Print "out of memory"
+        End
+    End If
+    ZeroMem(p, outSize)
+
+    ' ヘッダ
+    ZeroMem(VarPtr(hdr), SIZEOF_COFF_HEADER)
+    hdr.Machine = IMAGE_FILE_MACHINE_I386
+    hdr.NumberOfSections = nSect
+    hdr.TimeDateStamp = 0
+    hdr.PointerToSymbolTable = symOff
+    hdr.NumberOfSymbols = gNSyms
+    hdr.SizeOfOptionalHeader = 0
+    hdr.Characteristics = 0
+    memcpy(p, VarPtr(hdr), SIZEOF_COFF_HEADER)
+
+    ' --- .text セクションヘッダ (section #1) ---
+    ZeroMem(VarPtr(sect), SIZEOF_SECTION_HEADER)
+    sectName = ".text"
+    namePtr = StrPtr(sectName)
+    nb = VarPtr(sect)
+    For i = 0 To 7
+        If i < 5 Then
+            nb[i] = namePtr[i]
+        Else
+            nb[i] = 0
+        End If
+    Next
+    sect.VirtualSize = 0
+    sect.VirtualAddress = 0
+    sect.SizeOfRawData = gCodeSize
+    sect.PointerToRawData = textRawOff
+    If gNRelocs > 0 Then
+        sect.PointerToRelocations = textRelOff
+    Else
+        sect.PointerToRelocations = 0
+    End If
+    sect.PointerToLinenumbers = 0
+    sect.NumberOfRelocations = gNRelocs
+    sect.NumberOfLinenumbers = 0
+    sect.Characteristics = TEXT_CHARACTERISTICS
+    memcpy(VarPtr(p[sectHdrOff]), VarPtr(sect), SIZEOF_SECTION_HEADER)
+
+    ' --- .data セクションヘッダ (section #2) ---
+    If gDataSize > 0 Then
+        ZeroMem(VarPtr(sect), SIZEOF_SECTION_HEADER)
+        sectName = ".data"
+        namePtr = StrPtr(sectName)
+        nb = VarPtr(sect)
+        For i = 0 To 7
+            If i < 5 Then
+                nb[i] = namePtr[i]
+            Else
+                nb[i] = 0
+            End If
+        Next
+        sect.VirtualSize = 0
+        sect.VirtualAddress = 0
+        sect.SizeOfRawData = gDataSize
+        sect.PointerToRawData = dataRawOff
+        sect.PointerToRelocations = 0
+        sect.PointerToLinenumbers = 0
+        sect.NumberOfRelocations = 0
+        sect.NumberOfLinenumbers = 0
+        sect.Characteristics = DATA_CHARACTERISTICS
+        memcpy(VarPtr(p[sectHdrOff + SIZEOF_SECTION_HEADER]), VarPtr(sect), SIZEOF_SECTION_HEADER)
+    End If
+
+    If gCodeSize > 0 Then
+        memcpy(VarPtr(p[textRawOff]), gSbCode.p, gCodeSize)
+    End If
+
+    If gNRelocs > 0 Then
+        For i = 0 To gNRelocs - 1
+            ZeroMem(VarPtr(reloc), SIZEOF_COFF_RELOCATION)
+            reloc.VirtualAddress = gRelVA(i)
+            reloc.SymbolTableIndex = gRelSym(i)
+            reloc.RelType = gRelType(i)
+            memcpy(VarPtr(p[textRelOff + i * SIZEOF_COFF_RELOCATION]), VarPtr(reloc), SIZEOF_COFF_RELOCATION)
+        Next
+    End If
+
+    If gDataSize > 0 Then
+        memcpy(VarPtr(p[dataRawOff]), gSbData.p, gDataSize)
+    End If
+
+    ' シンボル + 文字列テーブル
+    gStrTabSize = 4
+    If gNSyms > 0 Then
+        For i = 0 To gNSyms - 1
+            ZeroMem(VarPtr(sym), SIZEOF_COFF_SYMBOL)
+            SetSymName(VarPtr(sym), gSymName(i))
+            sym.Value = gSymValue(i)
+            sym.SectionNumber = gSymSection(i)
+            sym.SymType = 0
+            If gSymKind(i) = 0 Or gSymGlobal(i) <> 0 Then
+                sym.StorageClass = IMAGE_SYM_CLASS_EXTERNAL
+            Else
+                sym.StorageClass = IMAGE_SYM_CLASS_STATIC
+            End If
+            sym.NumberOfAuxSymbols = 0
+            memcpy(VarPtr(p[symOff + i * SIZEOF_COFF_SYMBOL]), VarPtr(sym), SIZEOF_COFF_SYMBOL)
+        Next
+    End If
+    memcpy(VarPtr(gStrTab(0)), VarPtr(gStrTabSize), 4)
+    memcpy(VarPtr(p[symOff + gNSyms * SIZEOF_COFF_SYMBOL]), VarPtr(gStrTab(0)), gStrTabSize)
+
+    BuildObj = p
+End Function
+
+' --- メイン ---
+Dim inPath[MAX_PATH] As Byte
+Dim outPath[MAX_PATH] As Byte
+Dim srcBuf As *Byte
+Dim srcSize As Long
+Dim objBuf As *Byte
+Dim objSize As Long
+Dim i As Long
+Dim outName As String
+Dim hexLine As String
+
+gNSyms = 0
+gNRelocs = 0
+gNFixups = 0
+For i = 0 To SYM_HASH_MASK
+    gSymHash(i) = 0
+Next
+SbInit(VarPtr(gSbCode))
+SbInit(VarPtr(gSbData))
+gCodeSize = 0
+gDataSize = 0
+gCurSect = SECT_NONE
+gStrTabSize = 4
+
+If GetCmd(1, inPath) = 0 Then
+    USAGE()
+End If
+If GetCmd(2, outPath) = 0 Then
+    outName = ChangeExtension$(MakeStr(inPath), ".obj")
+    lstrcpy(outPath, StrPtr(outName))
+End If
+
+srcBuf = LoadFile(inPath, srcSize)
+srcSize = gLastLoadSize
+If srcBuf = NULL Then
+    Print "cannot open: " + MakeStr(inPath)
+    End
+End If
+
+AssembleBuffer(srcBuf, srcSize)
+free(srcBuf)
+
+If gCodeSize = 0 Then
+    Print "no code generated"
+    End
+End If
+
+objBuf = BuildObj(objSize)
+If WriteAll(outPath, objBuf, objSize) = 0 Then
+    Print "cannot write: " + MakeStr(outPath)
+Else
+    Print "OK: " + MakeStr(inPath) + " -> " + MakeStr(outPath)
+    Print "text=" + Str$(gCodeSize) + "  data=" + Str$(gDataSize) + "  relocs=" + Str$(gNRelocs) + "  syms=" + Str$(gNSyms) + "  obj=" + Str$(objSize)
+    ' 巨大オブジェクトでは全ダンプしない（先頭のみ）
+    Dim bp As *Byte
+    hexLine = "text:"
+    bp = gSbCode.p
+    If gCodeSize > 0 And bp <> 0 Then
+        For i = 0 To gCodeSize - 1
+            If i >= 64 Then
+                hexLine = hexLine + " ..."
+                Exit For
+            End If
+            hexLine = hexLine + " " + HexPad$(bp[i], 2)
+        Next
+    End If
+    Print hexLine
+    If gDataSize > 0 Then
+        hexLine = "data:"
+        bp = gSbData.p
+        If bp <> 0 Then
+            For i = 0 To gDataSize - 1
+                If i >= 64 Then
+                    hexLine = hexLine + " ..."
+                    Exit For
+                End If
+                hexLine = hexLine + " " + HexPad$(bp[i], 2)
+            Next
+        End If
+        Print hexLine
+    End If
+End If
+
+free(objBuf)
+SbFree(VarPtr(gSbCode))
+SbFree(VarPtr(gSbData))
+End

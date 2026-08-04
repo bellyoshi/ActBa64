@@ -1,0 +1,81 @@
+#console
+#include "..\PE32PLUS.abp"
+' Win32 / CRT constants for self-host (host abc also provides these)
+Const NULL = 0
+Const MAX_PATH = 260
+Const GENERIC_READ = &H80000000
+Const GENERIC_WRITE = &H40000000
+Const FILE_SHARE_READ = 1
+Const OPEN_EXISTING = 3
+Const CREATE_ALWAYS = 2
+Const FILE_ATTRIBUTE_NORMAL = 128
+Const INVALID_HANDLE_VALUE = &HFFFFFFFF
+
+Function AlignUp(v As DWord, a As DWord) As DWord
+    ' power-of-2 align: (v+a-1) & -a
+    AlignUp = (v + a - 1) And (0 - a)
+End Function
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[260] As Byte
+    Dim n As Long
+    Dim m As Long
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    cmd[cmdlen] = &H20
+    buf[0] = 0
+    cidx = 0
+    For n = 0 To cmdlen
+        If cmd[n] = &H20 And cmd[n + 1] = &H20 Then
+            memcpy(VarPtr(cmd[n]), VarPtr(cmd[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+    For n = 0 To cmdlen
+        m = 0
+        While cmd[n] <> &H20
+            ctmp[m] = cmd[n]
+            m = m + 1
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+    GetCmd = 0
+End Function
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    Dim hFile As Long
+    Dim fsiz As Long
+    Dim nRead As Long
+    Dim p As *Byte
+    LoadFile = 0
+    outSize = 0
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    fsiz = GetFileSize(hFile, 0)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    p = malloc(fsiz)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), 0)
+    CloseHandle(hFile)
+    outSize = fsiz
+    LoadFile = p
+End Function
+ExitProcess(0)
+

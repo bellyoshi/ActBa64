@@ -1,0 +1,422 @@
+' ===================================================
+'  Preproc - #include expansion (source-relative)
+' ===================================================
+
+Const PP_MAX_DEPTH = 16
+Const PP_LINE_MAX = 512
+
+Function PpToLower(c As Long) As Long
+    If c >= 65 And c <= 90 Then
+        PpToLower = c + 32
+    Else
+        PpToLower = c
+    End If
+End Function
+
+Sub PpDirOf(path As *Byte, dst As *Byte)
+    Dim i As Long
+    Dim last As Long
+    Dim c As Long
+    last = -1
+    i = 0
+    While path[i] <> 0
+        c = path[i]
+        If c = 92 Or c = 47 Then last = i
+        i = i + 1
+    Wend
+    If last < 0 Then
+        dst[0] = 0
+        Exit Sub
+    End If
+    i = 0
+    While i <= last
+        dst[i] = path[i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Function PpIsIncludeLine(line As *Byte, n As Long) As Long
+    Dim i As Long
+    Dim k As Long
+    Dim c As Long
+    Dim word(15) As Byte
+    PpIsIncludeLine = 0
+    i = 0
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i >= n Then Exit Function
+    If line[i] <> 35 Then Exit Function
+    i = i + 1
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    lstrcpy(VarPtr(word), "include")
+    k = 0
+    While word[k] <> 0
+        If i + k >= n Then Exit Function
+        If PpToLower(line[i + k]) <> word[k] Then Exit Function
+        k = k + 1
+    Wend
+    PpIsIncludeLine = 1
+End Function
+
+Function PpExtractInclude(line As *Byte, n As Long, dst As *Byte) As Long
+    Dim i As Long
+    Dim q1 As Long
+    Dim q2 As Long
+    Dim j As Long
+    PpExtractInclude = 0
+    dst[0] = 0
+    q1 = -1
+    q2 = -1
+    i = 0
+    While i < n
+        If line[i] = 34 Then
+            If q1 < 0 Then
+                q1 = i
+            Else
+                q2 = i
+                Exit While
+            End If
+        End If
+        i = i + 1
+    Wend
+    If q1 < 0 Or q2 <= q1 Then Exit Function
+    j = 0
+    i = q1 + 1
+    While i < q2 And j < 250
+        dst[j] = line[i]
+        j = j + 1
+        i = i + 1
+    Wend
+    dst[j] = 0
+    PpExtractInclude = 1
+End Function
+
+Function PpAppend(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, n As Long) As Long
+    Dim i As Long
+    PpAppend = 0
+    If dstLen + n + 1 > dstCap Then Exit Function
+    i = 0
+    While i < n
+        dst[dstLen + i] = src[i]
+        i = i + 1
+    Wend
+    dstLen = dstLen + n
+    dst[dstLen] = 0
+    PpAppend = 1
+End Function
+
+Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long) As Long
+    Dim i As Long
+    Dim start As Long
+    Dim n As Long
+    Dim c As Long
+    Dim line(511) As Byte
+    Dim inc(255) As Byte
+    Dim full(511) As Byte
+    Dim dir(511) As Byte
+    Dim child As *Byte
+    Dim childSize As Long
+    Dim j As Long
+
+    PpExpandInto = 0
+    If depth >= PP_MAX_DEPTH Then Exit Function
+    i = 0
+    While i < srcSize
+        start = i
+        While i < srcSize
+            c = src[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        n = i - start
+        If n >= PP_LINE_MAX Then n = PP_LINE_MAX - 1
+        j = 0
+        While j < n
+            line[j] = src[start + j]
+            j = j + 1
+        Wend
+        line[n] = 0
+        If PpIsIncludeLine(VarPtr(line), n) <> 0 Then
+            If PpExtractInclude(VarPtr(line), n, VarPtr(inc)) = 0 Then Exit Function
+            full[0] = 0
+            If inc[0] = 0 Then Exit Function
+            If (inc[1] = 58) Or (inc[0] = 92) Or (inc[0] = 47) Then
+                lstrcpy(VarPtr(full), VarPtr(inc))
+            Else
+                PpDirOf(curFile, VarPtr(dir))
+                lstrcpy(VarPtr(full), VarPtr(dir))
+                lstrcat(VarPtr(full), VarPtr(inc))
+            End If
+            child = LoadFile(VarPtr(full), childSize)
+            If child = NULL Then Exit Function
+            If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) = 0 Then
+                free(child)
+                Exit Function
+            End If
+            free(child)
+        Else
+            If n > 0 Then
+                If PpAppend(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
+            End If
+            line[0] = 13
+            line[1] = 10
+            If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
+        End If
+        If i < srcSize And src[i] = 13 Then i = i + 1
+        If i < srcSize And src[i] = 10 Then i = i + 1
+    Wend
+    PpExpandInto = 1
+End Function
+
+Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte) As *Byte
+    Dim dst As *Byte
+    Dim dstLen As Long
+    Dim dstCap As Long
+
+    ExpandIncludes = NULL
+    dstCap = srcSize * 8 + 65536
+    If dstCap < 65536 Then dstCap = 65536
+    dst = calloc(dstCap)
+    If dst = NULL Then Exit Function
+    dstLen = 0
+    dst[0] = 0
+    If PpExpandInto(dst, dstLen, dstCap, src, srcSize, srcPath, 0) = 0 Then
+        free(dst)
+        Exit Function
+    End If
+    ExpandIncludes = dst
+End Function
+
+Const PJ_MAX_SOURCES = 16
+Const PJ_PATH_LEN = 260
+
+Function PpPathEndsWithPj(path As *Byte) As Long
+    Dim n As Long
+    Dim c0 As Long
+    Dim c1 As Long
+    Dim c2 As Long
+    PpPathEndsWithPj = 0
+    n = lstrlen(path)
+    If n < 3 Then Exit Function
+    c0 = path[n - 3]
+    c1 = PpToLower(path[n - 2])
+    c2 = PpToLower(path[n - 1])
+    If c0 = 46 And c1 = 112 And c2 = 106 Then
+        PpPathEndsWithPj = 1
+    End If
+End Function
+
+Function PpLineIsSourceHeader(line As *Byte, n As Long) As Long
+    Dim i As Long
+    Dim word(15) As Byte
+    Dim k As Long
+    Dim c As Long
+    PpLineIsSourceHeader = 0
+    i = 0
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i >= n Then Exit Function
+    If line[i] <> 35 Then Exit Function
+    i = i + 1
+    lstrcpy(VarPtr(word), "source")
+    k = 0
+    While word[k] <> 0
+        If i + k >= n Then Exit Function
+        If PpToLower(line[i + k]) <> word[k] Then Exit Function
+        k = k + 1
+    Wend
+    If i + k < n Then
+        c = line[i + k]
+        If c <> 32 And c <> 9 And c <> 0 Then Exit Function
+    End If
+    PpLineIsSourceHeader = 1
+End Function
+
+Function PpTrimCopy(line As *Byte, n As Long, dst As *Byte, dstMax As Long) As Long
+    Dim i As Long
+    Dim j As Long
+    Dim c As Long
+    PpTrimCopy = 0
+    dst[0] = 0
+    i = 0
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i < n And line[i] = 39 Then Exit Function
+    j = 0
+    While i < n And j < dstMax - 1
+        c = line[i]
+        If c = 39 Then Exit While
+        dst[j] = c
+        j = j + 1
+        i = i + 1
+    Wend
+    While j > 0
+        c = dst[j - 1]
+        If c <> 32 And c <> 9 Then Exit While
+        j = j - 1
+    Wend
+    dst[j] = 0
+    PpTrimCopy = j
+End Function
+
+Function CombinePjSources(pjPath As *Byte) As *Byte
+    Dim pj As *Byte
+    Dim pjSize As Long
+    Dim i As Long
+    Dim start As Long
+    Dim n As Long
+    Dim c As Long
+    Dim line(511) As Byte
+    Dim name(259) As Byte
+    Dim full(511) As Byte
+    Dim dir(511) As Byte
+    Dim inSource As Long
+    Dim dst As *Byte
+    Dim dstLen As Long
+    Dim dstCap As Long
+    Dim src As *Byte
+    Dim srcSize As Long
+    Dim expanded As *Byte
+    Dim expLen As Long
+    Dim nSrc As Long
+    Dim hdr(63) As Byte
+    Dim j As Long
+
+    CombinePjSources = NULL
+    pj = LoadFile(pjPath, pjSize)
+    If pj = NULL Then Exit Function
+    PpDirOf(pjPath, VarPtr(dir))
+
+    ' Full actba64.pj sources exceed 256KiB once headers are included.
+    dstCap = 2097152
+    dst = calloc(dstCap)
+    If dst = NULL Then
+        free(pj)
+        Exit Function
+    End If
+    dstLen = 0
+    dst[0] = 0
+    inSource = 0
+    nSrc = 0
+    i = 0
+    While i < pjSize
+        start = i
+        While i < pjSize
+            c = pj[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        n = i - start
+        If n >= PP_LINE_MAX Then n = PP_LINE_MAX - 1
+        j = 0
+        While j < n
+            line[j] = pj[start + j]
+            j = j + 1
+        Wend
+        line[n] = 0
+
+        If PpLineIsSourceHeader(VarPtr(line), n) <> 0 Then
+            inSource = 1
+        ElseIf inSource <> 0 Then
+            j = 0
+            While j < n
+                c = line[j]
+                If c <> 32 And c <> 9 Then Exit While
+                j = j + 1
+            Wend
+            If j < n And line[j] = 35 Then
+                inSource = 0
+            Else
+                If PpTrimCopy(VarPtr(line), n, VarPtr(name), PJ_PATH_LEN) > 0 Then
+                    If nSrc >= PJ_MAX_SOURCES Then
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    full[0] = 0
+                    If (name[1] = 58) Or (name[0] = 92) Or (name[0] = 47) Then
+                        lstrcpy(VarPtr(full), VarPtr(name))
+                    Else
+                        lstrcpy(VarPtr(full), VarPtr(dir))
+                        lstrcat(VarPtr(full), VarPtr(name))
+                    End If
+                    src = LoadFile(VarPtr(full), srcSize)
+                    If src = NULL Then
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    expanded = ExpandIncludes(src, srcSize, VarPtr(full))
+                    free(src)
+                    If expanded = NULL Then
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    lstrcpy(VarPtr(hdr), "' ---- ")
+                    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then
+                        free(expanded)
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    If PpAppend(dst, dstLen, dstCap, VarPtr(name), lstrlen(VarPtr(name))) = 0 Then
+                        free(expanded)
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    lstrcpy(VarPtr(hdr), " ----")
+                    hdr[5] = 13
+                    hdr[6] = 10
+                    hdr[7] = 0
+                    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then
+                        free(expanded)
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    expLen = lstrlen(expanded)
+                    If PpAppend(dst, dstLen, dstCap, expanded, expLen) = 0 Then
+                        free(expanded)
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    line[0] = 13
+                    line[1] = 10
+                    If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then
+                        free(expanded)
+                        free(pj)
+                        free(dst)
+                        Exit Function
+                    End If
+                    free(expanded)
+                    nSrc = nSrc + 1
+                End If
+            End If
+        End If
+        If i < pjSize And pj[i] = 13 Then i = i + 1
+        If i < pjSize And pj[i] = 10 Then i = i + 1
+    Wend
+    free(pj)
+    If nSrc <= 0 Then
+        free(dst)
+        Exit Function
+    End If
+    CombinePjSources = dst
+End Function

@@ -1,0 +1,191 @@
+' ===================================================
+'  AST - abstract syntax tree
+' ===================================================
+
+Const AST_NONE = 0
+Const AST_PROGRAM = 1
+Const AST_PRINT = 2
+Const AST_STRING = 3
+Const AST_EXIT = 4
+Const AST_END = 5
+Const AST_DIM = 6
+Const AST_ASSIGN = 7
+Const AST_VAR = 8
+Const AST_NUM = 9
+Const AST_BINOP = 10
+Const AST_IF = 11
+Const AST_WHILE = 12
+Const AST_FOR = 13
+Const AST_FUNC = 14
+Const AST_CALL = 15
+Const AST_BUILTIN = 16
+Const AST_CONST = 17
+Const AST_INDEX = 18
+Const AST_TYPE = 19
+Const AST_MEMBER = 20
+Const AST_DO = 21
+Const AST_EXITDO = 22
+Const AST_EXITFUNC = 23
+Const AST_UNARY = 24
+Const AST_ARG = 25
+Const AST_EXITWHILE = 26
+
+' Binop / compare ops (stored in AstNode.num for AST_BINOP)
+Const BOP_ADD = 1
+Const BOP_MUL = 2
+Const BOP_EQ = 3
+Const BOP_NE = 4
+Const BOP_LT = 5
+Const BOP_LE = 6
+Const BOP_GT = 7
+Const BOP_GE = 8
+Const BOP_CAT = 9
+Const BOP_AND = 10
+Const BOP_OR = 11
+Const BOP_SUB = 12
+
+' Unary ops (AstNode.num for AST_UNARY)
+Const UOP_NEG = 1
+
+' Builtin kind (AstNode.num for AST_BUILTIN)
+Const BI_LEN = 1
+Const BI_ASC = 2
+Const BI_LEFT = 3
+Const BI_MID = 4
+Const BI_VARPTR = 5
+Const BI_SIZEOF = 6
+Const BI_ADDRESSOF = 7
+Const BI_MALLOC = 8
+Const BI_FREE = 9
+Const BI_STRPTR = 10
+Const BI_STR = 11
+Const BI_MEMCPY = 12
+Const BI_MAKESTR = 13
+Const BI_MAKEINTRESOURCE = 14
+Const BI_FILLMEMORY = 15
+
+' Dim type (AstNode.num for AST_DIM)
+Const TY_LONG = 0
+Const TY_STRING = 1
+Const TY_BYTE = 2
+Const TY_BYTE_ARR = 3
+Const TY_PTR_BYTE = 4
+Const TY_UDT = 5
+Const TY_LONG_ARR = 6
+Const TY_PTR_UDT = 7
+Const TY_STRING_ARR = 8
+Const TY_PTR_LONG = 9
+
+Const AST_MAX_NODES = 131072
+Const AST_STR_LEN = 64
+
+Type AstNode
+    kind As Long
+    left As Long
+    right As Long
+    extra As Long
+    nxt As Long
+    strId As Long
+    num As Long
+End Type
+
+Type Ast
+    nodes As *AstNode
+    strs As *Byte
+    count As Long
+    capacity As Long
+    root As Long
+    err As Long
+    types As *TypeTable
+End Type
+
+Function AstCreate(capacity As Long) As *Ast
+    Dim a As *Ast
+    AstCreate = NULL
+    a = calloc(SizeOf(Ast))
+    If a = NULL Then Exit Function
+    a.nodes = calloc(SizeOf(AstNode) * capacity)
+    a.strs = calloc(AST_STR_LEN * capacity)
+    If a.nodes = NULL Or a.strs = NULL Then
+        If a.nodes <> NULL Then free(a.nodes)
+        If a.strs <> NULL Then free(a.strs)
+        free(a)
+        Exit Function
+    End If
+    a.capacity = capacity
+    a.count = 0
+    a.root = -1
+    a.err = 0
+    a.types = TyCreate()
+    If a.types = NULL Then
+        free(a.nodes)
+        free(a.strs)
+        free(a)
+        Exit Function
+    End If
+    AstCreate = a
+End Function
+
+Sub AstFree(a As *Ast)
+    If a = NULL Then Exit Sub
+    If a.types <> NULL Then TyFree(a.types)
+    If a.nodes <> NULL Then free(a.nodes)
+    If a.strs <> NULL Then free(a.strs)
+    free(a)
+End Sub
+
+Function AstAddNode(a As *Ast, kind As Long) As Long
+    Dim nodes As *AstNode
+    Dim i As Long
+    AstAddNode = -1
+    If a.count >= a.capacity Then
+        a.err = 1
+        Exit Function
+    End If
+    nodes = a.nodes
+    i = a.count
+    nodes[i].kind = kind
+    nodes[i].left = -1
+    nodes[i].right = -1
+    nodes[i].extra = -1
+    nodes[i].nxt = -1
+    nodes[i].strId = -1
+    nodes[i].num = 0
+    AstAddNode = i
+    a.count = i + 1
+End Function
+
+Sub AstSetStr(a As *Ast, nodeIdx As Long, s As *Byte)
+    Dim nodes As *AstNode
+    Dim strs As *Byte
+    Dim off As Long
+    Dim i As Long
+    nodes = a.nodes
+    strs = a.strs
+    off = nodeIdx * AST_STR_LEN
+    i = 0
+    While s[i] <> 0 And i < AST_STR_LEN - 1
+        strs[off + i] = s[i]
+        i = i + 1
+    Wend
+    strs[off + i] = 0
+    nodes[nodeIdx].strId = nodeIdx
+End Sub
+
+Sub AstCopyStr(a As *Ast, nodeIdx As Long, dst As *Byte)
+    Dim strs As *Byte
+    Dim off As Long
+    Dim i As Long
+    strs = a.strs
+    off = nodeIdx * AST_STR_LEN
+    i = 0
+    Do
+        dst[i] = strs[off + i]
+        If strs[off + i] = 0 Then Exit Sub
+        i = i + 1
+        If i >= AST_STR_LEN Then
+            dst[AST_STR_LEN - 1] = 0
+            Exit Sub
+        End If
+    Loop
+End Sub
