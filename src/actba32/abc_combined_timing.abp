@@ -1,0 +1,6508 @@
+' ---- Include/default ----
+' Include/default 閾ｪ蜍戊ｪｭ縺ｿ霎ｼ縺ｿ荳隕ｧ・医た繝ｼ繧ｹ縺ｫ #include 荳崎ｦ・ｼ・
+#include "Windows.sbp"
+#include "WinConsts.sbp"
+#include "WinTypes.sbp"
+' ---- abc.abp ----
+#include "abc.idx"
+
+#console
+
+' abc - ABP Phase5 繧ｳ繝ｳ繝代う繝ｩ (.abp -> .asm)
+' 菴ｿ縺・婿: abc <input.abp> [output.asm]
+'
+' Phase5:
+'   Dim s As String / 譁・ｭ怜・繝ｪ繝・Λ繝ｫ / + 騾｣邨・
+'   Len / Left$ / Mid$ / Chr$ / Asc / StrPtr
+'   譁・ｭ怜・ = <> 縲∵擅莉ｶ Or / And
+' Const/Dim 縺ｯ abcGlobals.abp
+
+Sub USAGE()
+    Print "abc - Phase5 ABP compiler (.abp -> .asm)"
+    Print "usage: abc <input.abp> [output.asm]"
+    End
+End Sub
+
+Sub EmitAsm(line As String)
+    SbAppendStr(VarPtr(gSbText), "    ")
+    SbAppendStr(VarPtr(gSbText), line)
+    SbAppendCRLF(VarPtr(gSbText))
+End Sub
+
+Sub EmitLabel(lab As String)
+    SbAppendStr(VarPtr(gSbText), lab)
+    SbAppendStr(VarPtr(gSbText), ":")
+    SbAppendCRLF(VarPtr(gSbText))
+End Sub
+
+Function NewLabel$() As String
+    gLabelId = gLabelId + 1
+    NewLabel$ = "L" + Trim$(Str$(gLabelId))
+End Function
+
+Function IsIdentStart(c As Long) As Long
+    If (c >= Asc("A") And c <= Asc("Z")) Or (c >= Asc("a") And c <= Asc("z")) Or c = Asc("_") Then
+        IsIdentStart = 1
+    Else
+        IsIdentStart = 0
+    End If
+End Function
+
+Function IsIdentChar2(c As Long) As Long
+    If IsIdentStart(c) <> 0 Or (c >= Asc("0") And c <= Asc("9")) Or c = Asc("$") Then
+        IsIdentChar2 = 1
+    Else
+        IsIdentChar2 = 0
+    End If
+End Function
+
+Function IsIdentName(s As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    t = Trim$(s)
+    n = Len(t)
+    IsIdentName = 0
+    If n = 0 Then Exit Function
+    p = StrPtr(t)
+    If IsIdentStart(p[0]) = 0 Then Exit Function
+    i = 1
+    While i < n
+        If IsIdentChar2(p[i]) = 0 Then Exit Function
+        i = i + 1
+    Wend
+    IsIdentName = 1
+End Function
+
+' openPos(0-based) 縺ｮ ( 縺ｾ縺溘・ [ 縺ｫ蟇ｾ蠢懊☆繧矩哩縺倅ｽ咲ｽｮ縲ょ､ｱ謨励・ -1
+Function MatchClose(p As *Byte, n As Long, openPos As Long) As Long
+    Dim depth As Long
+    Dim i As Long
+    Dim openCh As Long
+    Dim closeCh As Long
+    Dim inQ As Long
+    Dim c As Long
+    MatchClose = -1
+    If openPos < 0 Or openPos >= n Then Exit Function
+    openCh = p[openPos]
+    If openCh = 40 Then
+        closeCh = 41
+    ElseIf openCh = &H5B Then
+        closeCh = &H5D
+    Else
+        Exit Function
+    End If
+    depth = 1
+    inQ = 0
+    i = openPos + 1
+    While i < n
+        c = p[i]
+        If inQ <> 0 Then
+            If c = 34 Then inQ = 0
+        ElseIf c = 34 Then
+            inQ = 1
+        ElseIf c = openCh Then
+            depth = depth + 1
+        ElseIf c = closeCh Then
+            depth = depth - 1
+            If depth = 0 Then
+                MatchClose = i
+                Exit Function
+            End If
+        End If
+        i = i + 1
+    Wend
+End Function
+
+' openParen / closeParen 縺ｯ縺ｩ縺｡繧峨ｂ 1-based・・(' 縺ｨ ')' 縺ｮ菴咲ｽｮ・・
+Function ArgsBetween$(expr As String, openParen As Long, closeParen As Long) As String
+    Dim n As Long
+    n = closeParen - openParen - 1
+    If n <= 0 Then
+        ArgsBetween$ = ""
+    Else
+        ArgsBetween$ = Trim$(Mid$(expr, openParen + 1, n))
+    End If
+End Function
+
+Function IsNumStr(s As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    t = Trim$(s)
+    n = Len(t)
+    If n = 0 Then
+        IsNumStr = 0
+        Exit Function
+    End If
+    p = StrPtr(t)
+    i = 0
+    If p[0] = Asc("-") Or p[0] = Asc("+") Then
+        i = 1
+        If n = 1 Then
+            IsNumStr = 0
+            Exit Function
+        End If
+    End If
+    If i + 1 < n And p[i] = Asc("&") And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+        IsNumStr = 1
+        Exit Function
+    End If
+    While i < n
+        If p[i] < Asc("0") Or p[i] > Asc("9") Then
+            IsNumStr = 0
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+    IsNumStr = 1
+End Function
+
+Function ParseNum(s As String) As Long
+    Dim t As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim sign As Long
+    Dim v As Long
+    Dim c As Long
+    t = Trim$(s)
+    n = Len(t)
+    p = StrPtr(t)
+    sign = 1
+    i = 0
+    If p[0] = Asc("-") Then
+        sign = -1
+        i = 1
+    ElseIf p[0] = Asc("+") Then
+        i = 1
+    End If
+    If i + 1 < n And p[i] = Asc("&") And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+        i = i + 2
+        v = 0
+        While i < n
+            c = p[i]
+            v = v * 16
+            If c >= Asc("0") And c <= Asc("9") Then
+                v = v + (c - Asc("0"))
+            ElseIf c >= Asc("a") And c <= Asc("f") Then
+                v = v + (c - Asc("a") + 10)
+            ElseIf c >= Asc("A") And c <= Asc("F") Then
+                v = v + (c - Asc("A") + 10)
+            End If
+            i = i + 1
+        Wend
+        ParseNum = v * sign
+        Exit Function
+    End If
+    v = 0
+    While i < n
+        v = v * 10 + (p[i] - Asc("0"))
+        i = i + 1
+    Wend
+    ParseNum = v * sign
+End Function
+
+Function FindVar(name As String) As Long
+    Dim i As Long
+    Dim n As String
+    n = Lower$(name)
+    FindVar = -1
+    If gNVars <= 0 Then Exit Function
+    For i = 0 To gNVars - 1
+        If gVarName(i) = n Then
+            FindVar = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Function FindConst(name As String) As Long
+    Dim i As Long
+    Dim n As String
+    n = Lower$(name)
+    FindConst = -1
+    If gNConsts <= 0 Then Exit Function
+    For i = 0 To gNConsts - 1
+        If gConstName(i) = n Then
+            FindConst = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Function TypeSizeOf(typeName As String) As Long
+    Dim t As String
+    Dim i As Long
+    t = Lower$(Trim$(typeName))
+    If t = "byte" Then
+        TypeSizeOf = 1
+    ElseIf t = "word" Then
+        TypeSizeOf = 2
+    ElseIf t = "long" Or t = "dword" Or t = "handle" Or t = "string" Or t = "integer" Or t = "voidptr" Or t = "long_ptr" Or t = "ulong_ptr" Then
+        TypeSizeOf = 4
+    Else
+        TypeSizeOf = 0
+        For i = 0 To gNTypes - 1
+            If gTypeName(i) = t Then
+                TypeSizeOf = gTypeSize(i)
+                Exit Function
+            End If
+        Next
+    End If
+End Function
+
+Function FindType(typeName As String) As Long
+    Dim i As Long
+    Dim t As String
+    t = Lower$(Trim$(typeName))
+    FindType = -1
+    For i = 0 To gNTypes - 1
+        If gTypeName(i) = t Then
+            FindType = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Function FindTypeDef(name As String) As Long
+    Dim i As Long
+    Dim t As String
+    t = Lower$(Trim$(name))
+    FindTypeDef = -1
+    For i = 0 To gNTypeDefs - 1
+        If gTypeDefName(i) = t Then
+            FindTypeDef = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' TypeDef / *T 繧貞ｱ暮幕縲よ怙邨ゅ・蝓ｺ蠎募梛蜷阪→ isPtr 繧定ｿ斐☆
+Sub ExpandTypeName(ByRef typeName As String, ByRef isPtr As Long)
+    Dim guard As Long
+    Dim td As Long
+    isPtr = 0
+    typeName = Trim$(typeName)
+    guard = 0
+    While guard < 16
+        While Left$(typeName, 1) = "*"
+            isPtr = 1
+            typeName = Trim$(Mid$(typeName, 2, Len(typeName) - 1))
+        Wend
+        td = FindTypeDef(typeName)
+        If td < 0 Then Exit While
+        typeName = Trim$(gTypeDefTarget(td))
+        guard = guard + 1
+    Wend
+    While Left$(typeName, 1) = "*"
+        isPtr = 1
+        typeName = Trim$(Mid$(typeName, 2, Len(typeName) - 1))
+    Wend
+End Sub
+
+' TypeDef Name = Target
+Function CompileTypeDef(lineStr As String) As Long
+    Dim rest As String
+    Dim name As String
+    Dim target As String
+    Dim eq As Long
+    Dim td As Long
+    CompileTypeDef = 0
+    rest = Trim$(Mid$(lineStr, 8, Len(lineStr) - 7))
+    eq = InStr(1, rest, "=")
+    If eq = 0 Then
+        Print "bad TypeDef: " + lineStr
+        Exit Function
+    End If
+    name = Trim$(Left$(rest, eq - 1))
+    target = Trim$(Mid$(rest, eq + 1, Len(rest) - eq))
+    If IsIdentName(name) = 0 Or target = "" Then
+        Print "bad TypeDef: " + lineStr
+        Exit Function
+    End If
+    td = FindTypeDef(name)
+    If td >= 0 Then
+        ' 蜀榊ｮ夂ｾｩ縺ｯ蜷御ｸ繧ｿ繝ｼ繧ｲ繝・ヨ縺ｪ繧芽ｨｱ蜿ｯ
+        If Lower$(gTypeDefTarget(td)) = Lower$(target) Then
+            CompileTypeDef = 1
+            Exit Function
+        End If
+        Print "duplicate TypeDef: " + name
+        Exit Function
+    End If
+    If gNTypeDefs >= MAX_TYPEDEFS Then
+        Print "too many TypeDef"
+        Exit Function
+    End If
+    td = gNTypeDefs
+    gTypeDefName(td) = Lower$(name)
+    gTypeDefTarget(td) = target
+    gNTypeDefs = gNTypeDefs + 1
+    CompileTypeDef = 1
+End Function
+
+Function FindField(typeIdx As Long, fieldName As String) As Long
+    Dim i As Long
+    Dim n As String
+    n = Lower$(Trim$(fieldName))
+    FindField = -1
+    If typeIdx < 0 Or typeIdx >= gNTypes Then Exit Function
+    i = gTypeFirstField(typeIdx)
+    While i >= 0
+        If gFieldName(i) = n Then
+            FindField = i
+            Exit Function
+        End If
+        i = gFieldNext(i)
+    Wend
+End Function
+
+Sub EmitLoadSized(size As Long)
+    If size = 1 Then
+        EmitAsm("movzx eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    ElseIf size = 2 Then
+        EmitAsm("movzx eax, word " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    Else
+        EmitAsm("mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    End If
+End Sub
+
+Sub EmitStoreSized(size As Long)
+    If size = 1 Then
+        EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+    ElseIf size = 2 Then
+        EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", ax")
+    Else
+        EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", eax")
+    End If
+End Sub
+
+' base.field / base->field 縺ｮ繧｢繝峨Ξ繧ｹ繧・ebx 縺ｫ險ｭ螳壹☆繧・
+Function EmitMemberAddr(access As String, ByRef fieldSize As Long) As Long
+    Dim p As Long
+    Dim baseName As String
+    Dim fieldName As String
+    Dim vi As Long
+    Dim fi As Long
+    EmitMemberAddr = 0
+    p = InStr(1, access, "->")
+    If p > 0 Then
+        baseName = Trim$(Left$(access, p - 1))
+        fieldName = Trim$(Mid$(access, p + 2, Len(access) - p - 1))
+    Else
+        p = InStr(1, access, ".")
+        If p = 0 Then
+            Print "error: member access needs . or -> : " + access
+            Exit Function
+        End If
+        baseName = Trim$(Left$(access, p - 1))
+        fieldName = Trim$(Mid$(access, p + 1, Len(access) - p))
+    End If
+    vi = FindVar(baseName)
+    If vi < 0 Then
+        Print "error: undeclared variable in member access: " + baseName + " (from " + access + ")"
+        Exit Function
+    End If
+    If gVarTypeIdx(vi) < 0 Then
+        Print "error: not a Type variable (need Dim x As SomeType): " + baseName + " (from " + access + ")"
+        Exit Function
+    End If
+    fi = FindField(gVarTypeIdx(vi), fieldName)
+    If fi < 0 Then
+        Print "error: unknown field '" + fieldName + "' in " + access + " (type " + gTypeName(gVarTypeIdx(vi)) + ")"
+        Exit Function
+    End If
+    If gVarIsPtr(vi) <> 0 Then
+        EmitLoadVar(vi)
+        EmitAsm("mov ebx, eax")
+    Else
+        EmitAddrOfVar(vi)
+    End If
+    If gFieldOff(fi) <> 0 Then EmitAsm("add ebx, " + Trim$(Str$(gFieldOff(fi))))
+    fieldSize = gFieldSize(fi)
+    EmitMemberAddr = 1
+End Function
+
+Function ApiBytes(name As String) As Long
+    Dim n As String
+    n = Lower$(name)
+    ApiBytes = -1
+    If n = "exitprocess" Then ApiBytes = 4
+    If n = "getcommandlinea" Or n = "getcommandline" Then ApiBytes = 0
+    If n = "lstrlena" Or n = "lstrlen" Then ApiBytes = 4
+    If n = "messageboxa" Or n = "messagebox" Then ApiBytes = 16
+    If n = "getprocessheap" Then ApiBytes = 0
+    If n = "heapalloc" Then ApiBytes = 12
+    If n = "heapfree" Then ApiBytes = 12
+    If n = "lstrcpya" Or n = "lstrcpy" Or n = "lstrcata" Or n = "lstrcat" Or n = "lstrcmpa" Or n = "lstrcmp" Then ApiBytes = 8
+    If n = "createfilea" Or n = "createfile" Then ApiBytes = 28
+    If n = "readfile" Or n = "writefile" Then ApiBytes = 20
+    If n = "closehandle" Then ApiBytes = 4
+    If n = "getfilesize" Then ApiBytes = 8
+    If n = "getmodulefilenamea" Or n = "getmodulefilename" Then ApiBytes = 12
+    If n = "getfileattributesa" Or n = "getfileattributes" Or n = "deletefilea" Or n = "deletefile" Then ApiBytes = 4
+    If n = "createprocessa" Or n = "createprocess" Then ApiBytes = 40
+    If n = "waitforsingleobject" Then ApiBytes = 8
+    If n = "getstdhandle" Then ApiBytes = 4
+    ' user32 / gdi32・・rojectEditor 遲会ｼ・
+    If n = "getmodulehandlea" Or n = "getmodulehandle" Then ApiBytes = 4
+    If n = "createwindowexa" Or n = "createwindowex" Then ApiBytes = 48
+    If n = "defwindowproca" Or n = "defwindowproc" Then ApiBytes = 16
+    If n = "sendmessagea" Or n = "sendmessage" Then ApiBytes = 16
+    If n = "getdlgitem" Then ApiBytes = 8
+    If n = "destroywindow" Then ApiBytes = 4
+    If n = "loadicona" Or n = "loadicon" Then ApiBytes = 8
+    If n = "loadcursora" Or n = "loadcursor" Then ApiBytes = 8
+    If n = "registerclassexa" Or n = "registerclassex" Then ApiBytes = 4
+    If n = "enablewindow" Then ApiBytes = 8
+    If n = "getwindow" Then ApiBytes = 8
+    If n = "postmessagea" Or n = "postmessage" Then ApiBytes = 16
+    If n = "postquitmessage" Then ApiBytes = 4
+    If n = "getmessagea" Or n = "getmessage" Then ApiBytes = 16
+    If n = "translatemessage" Then ApiBytes = 4
+    If n = "dispatchmessagea" Or n = "dispatchmessage" Then ApiBytes = 4
+    If n = "createfonta" Or n = "createfont" Then ApiBytes = 56
+    If n = "createsolidbrush" Then ApiBytes = 4
+    If n = "getsyscolor" Then ApiBytes = 4
+    If n = "deleteobject" Then ApiBytes = 4
+End Function
+
+Sub EmitCallName(name As String)
+    Dim b As Long
+    Dim sym As String
+    Dim n As String
+    Dim apiName As String
+    n = Lower$(name)
+
+    ' ActiveBasic 邨・∩霎ｼ縺ｿ 竊・閾ｪ蜑・RT・・ernel32 縺ｫ辟｡縺・ｼ・
+    If n = "makestr" Or n = "instr" Or n = "memcpy" Or n = "malloc" Or n = "free" Or n = "fillmemory" Then
+        EnsureHostRt()
+        If n = "makestr" Then
+            EmitAsm("call _rt_MakeStr")
+        ElseIf n = "instr" Then
+            EmitAsm("call _rt_InStr")
+        ElseIf n = "memcpy" Then
+            EmitAsm("call _rt_Memcpy")
+        ElseIf n = "fillmemory" Then
+            EmitAsm("call _rt_FillMemory")
+        ElseIf n = "malloc" Then
+            EmitAsm("call _rt_Malloc")
+        Else
+            EmitAsm("call _rt_Free")
+        End If
+        Exit Sub
+    End If
+
+    ' ANSI API 蜷阪∈豁｣隕丞喧
+    apiName = name
+    If n = "getcommandline" Then apiName = "GetCommandLineA"
+    If n = "lstrlen" Then apiName = "lstrlenA"
+    If n = "lstrcpy" Then apiName = "lstrcpyA"
+    If n = "lstrcat" Then apiName = "lstrcatA"
+    If n = "lstrcmp" Then apiName = "lstrcmpA"
+    If n = "createfile" Then apiName = "CreateFileA"
+    If n = "getfileattributes" Then apiName = "GetFileAttributesA"
+    If n = "messagebox" Then apiName = "MessageBoxA"
+    If n = "getmodulefilename" Then apiName = "GetModuleFileNameA"
+    If n = "deletefile" Then apiName = "DeleteFileA"
+    If n = "createprocess" Then apiName = "CreateProcessA"
+    If n = "getmodulehandle" Then apiName = "GetModuleHandleA"
+    If n = "createwindowex" Then apiName = "CreateWindowExA"
+    If n = "defwindowproc" Then apiName = "DefWindowProcA"
+    If n = "sendmessage" Then apiName = "SendMessageA"
+    If n = "loadicon" Then apiName = "LoadIconA"
+    If n = "loadcursor" Then apiName = "LoadCursorA"
+    If n = "registerclassex" Then apiName = "RegisterClassExA"
+    If n = "postmessage" Then apiName = "PostMessageA"
+    If n = "getmessage" Then apiName = "GetMessageA"
+    If n = "dispatchmessage" Then apiName = "DispatchMessageA"
+    If n = "createfont" Then apiName = "CreateFontA"
+
+    b = ApiBytes(apiName)
+    If b >= 0 Then
+        sym = "_" + apiName + "@" + Trim$(Str$(b))
+        If InStr(1, gApiExternLines, "extern " + sym + Chr$(13)) = 0 Then
+            gApiExternLines = gApiExternLines + "extern " + sym + Chr$(13) + Chr$(10)
+        End If
+        EmitAsm("call " + sym)
+    Else
+        EmitAsm("call _" + name)
+    End If
+End Sub
+
+Function AddVarEx(name As String, elemSize As Long, count As Long, isPtr As Long, isStr As Long) As Long
+    Dim idx As Long
+    Dim bytes As Long
+    Dim isGlob As Long
+    idx = FindVar(name)
+    If idx >= 0 Then
+        Print "duplicate Dim: " + name
+        AddVarEx = -1
+        Exit Function
+    End If
+    If gNVars >= MAX_VARS Then
+        Print "too many variables"
+        AddVarEx = -1
+        Exit Function
+    End If
+    If isPtr <> 0 Then
+        bytes = 4
+    ElseIf isStr <> 0 Then
+        bytes = 4 * count
+    Else
+        bytes = elemSize * count
+    End If
+    If bytes <= 0 Then
+        Print "bad variable size"
+        AddVarEx = -1
+        Exit Function
+    End If
+    idx = gNVars
+    gVarName(idx) = Lower$(name)
+    If gInProc = 0 Then
+        isGlob = 1
+    Else
+        isGlob = 0
+    End If
+    gVarIsGlobal(idx) = isGlob
+    If isGlob <> 0 Then
+        ' 繝｢繧ｸ繝･繝ｼ繝ｫ螟画焚縺ｯ .data・域焔邯壹″縺九ｉ ebp 逶ｸ蟇ｾ縺ｧ隗ｦ繧後↑縺・ｼ・
+        gVarOff(idx) = 0
+        SbAppendStr(VarPtr(gSbData), "    v_" + gVarName(idx) + ":")
+        SbAppendCRLF(VarPtr(gSbData))
+        SbAppendStr(VarPtr(gSbData), "    times " + Trim$(Str$(bytes)) + " db 0")
+        SbAppendCRLF(VarPtr(gSbData))
+    Else
+        gFrameSize = gFrameSize + bytes
+        gVarOff(idx) = -gFrameSize
+    End If
+    gVarSize(idx) = elemSize
+    If isStr <> 0 Then gVarSize(idx) = 4
+    If isPtr <> 0 Then gVarSize(idx) = elemSize
+    gVarCount(idx) = count
+    gVarIsPtr(idx) = isPtr
+    gVarIsStr(idx) = isStr
+    gVarIsByRef(idx) = 0
+    gVarTypeIdx(idx) = -1
+    gNVars = gNVars + 1
+    AddVarEx = idx
+End Function
+
+Function AddVar(name As String) As Long
+    AddVar = AddVarEx(name, 4, 1, 0, 0)
+End Function
+
+' ebx = 螟画焚繧ｹ繝ｭ繝・ヨ縺ｮ繧｢繝峨Ξ繧ｹ・・yRef 蠑墓焚縺ｪ繧峨せ繧ｿ繝・け荳翫・繝昴う繝ｳ繧ｿ閾ｪ菴薙・蝣ｴ謇・・
+Sub EmitAddrVar(idx As Long)
+    If gVarIsGlobal(idx) <> 0 Then
+        EmitAsm("mov ebx, v_" + gVarName(idx))
+    Else
+        EmitAsm("mov ebx, ebp")
+        EmitAsm("add ebx, " + Trim$(Str$(gVarOff(idx))))
+    End If
+End Sub
+
+' ebx = 螳滉ｽ薙・繧｢繝峨Ξ繧ｹ・・yRef 縺ｪ繧峨せ繝ｭ繝・ヨ縺九ｉ繝昴う繝ｳ繧ｿ繧定ｪｭ繧・・
+Sub EmitAddrOfVar(idx As Long)
+    EmitAddrVar(idx)
+    If gVarIsByRef(idx) <> 0 Then
+        EmitAsm("mov ebx, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    End If
+End Sub
+
+' 螟画焚繧・eax 縺ｸ繝ｭ繝ｼ繝・
+Sub EmitLoadVar(idx As Long)
+    EmitAddrOfVar(idx)
+    If gVarIsPtr(idx) <> 0 Or gVarIsStr(idx) <> 0 Or gVarSize(idx) = 4 Then
+        EmitAsm("mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    ElseIf gVarSize(idx) = 1 Then
+        EmitAsm("movzx eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    ElseIf gVarSize(idx) = 2 Then
+        EmitAsm("movzx eax, word " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    Else
+        Print "unsupported load size"
+        End
+    End If
+End Sub
+
+Sub EmitStoreVar(idx As Long)
+    EmitAddrOfVar(idx)
+    If gVarIsPtr(idx) <> 0 Or gVarIsStr(idx) <> 0 Or gVarSize(idx) = 4 Then
+        EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", eax")
+    ElseIf gVarSize(idx) = 1 Then
+        EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+    ElseIf gVarSize(idx) = 2 Then
+        EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", ax")
+    Else
+        Print "unsupported store size"
+        End
+    End If
+End Sub
+
+' eax = 豺ｻ蟄励Ｆbx = 隕∫ｴ繧｢繝峨Ξ繧ｹ縺ｫ縺吶ｋ・・enArith 繧貞他縺ｰ縺ｪ縺・ｼ・
+Sub EmitScaleAddBase(idx As Long)
+    If gVarIsPtr(idx) <> 0 Then
+        EmitAsm("push eax")
+        EmitLoadVar(idx)
+        EmitAsm("mov ebx, eax")
+        EmitAsm("pop eax")
+        If gVarSize(idx) > 1 Then
+            EmitAsm("mov ecx, " + Trim$(Str$(gVarSize(idx))))
+            EmitAsm("imul eax, ecx")
+        End If
+        EmitAsm("add ebx, eax")
+    Else
+        If gVarCount(idx) <= 1 Then
+            Print "not an array: " + gVarName(idx)
+            End
+        End If
+        EmitAsm("push eax")
+        EmitAddrVar(idx)
+        EmitAsm("pop eax")
+        If gVarSize(idx) > 1 Then
+            EmitAsm("mov ecx, " + Trim$(Str$(gVarSize(idx))))
+            EmitAsm("imul eax, ecx")
+        End If
+        EmitAsm("add ebx, eax")
+    End If
+End Sub
+
+' 豺ｱ縺・縺ｮ2譁・ｭ玲ｼ皮ｮ怜ｭ撰ｼ亥承遶ｯ蜆ｪ蜈茨ｼ峨よ綾繧雁､縺ｯ 1-based 髢句ｧ倶ｽ咲ｽｮ
+Function FindOp2(expr As String, op As String) As Long
+    Dim n As Long
+    Dim i As Long
+    Dim depth As Long
+    Dim inQ As Long
+    Dim c As Long
+    n = Len(expr)
+    depth = 0
+    inQ = 0
+    FindOp2 = 0
+    i = n
+    While i >= 1
+        c = Asc(Mid$(expr, i, 1))
+        If inQ <> 0 Then
+            If c = 34 Then inQ = 0
+        ElseIf c = 34 Then
+            inQ = 1
+        ElseIf c = Asc(")") Then
+            depth = depth + 1
+        ElseIf c = Asc("(") Then
+            depth = depth - 1
+        ElseIf c = &H5D Then
+            depth = depth + 1
+        ElseIf c = &H5B Then
+            depth = depth - 1
+        ElseIf depth = 0 Then
+            If i < n Then
+                If Mid$(expr, i, 2) = op Then
+                    FindOp2 = i
+                    Exit Function
+                End If
+            End If
+        End If
+        i = i - 1
+    Wend
+End Function
+
+' 豺ｱ縺・縺ｮ1譁・ｭ玲ｼ皮ｮ怜ｭ撰ｼ亥承遶ｯ蜆ｪ蜈茨ｼ峨ＱartOf2 縺碁團縺ｫ縺ゅｌ縺ｰ辟｡隕・
+Function FindOp1(expr As String, ch As String) As Long
+    Dim n As Long
+    Dim i As Long
+    Dim depth As Long
+    Dim inQ As Long
+    Dim c As Long
+    Dim p As *Byte
+    Dim oc As Long
+    n = Len(expr)
+    p = StrPtr(expr)
+    oc = Asc(ch)
+    depth = 0
+    inQ = 0
+    FindOp1 = 0
+    i = n - 1
+    While i >= 0
+        c = p[i]
+        If inQ <> 0 Then
+            If c = 34 Then inQ = 0
+        ElseIf c = 34 Then
+            inQ = 1
+        ElseIf c = Asc(")") Then
+            depth = depth + 1
+        ElseIf c = Asc("(") Then
+            depth = depth - 1
+        ElseIf c = &H5D Then
+            depth = depth + 1
+        ElseIf c = &H5B Then
+            depth = depth - 1
+        ElseIf depth = 0 And c = oc Then
+            ' <> <= >= 縺ｮ荳驛ｨ繧帝勁螟・
+            If ch = "=" Then
+                If i > 0 And (p[i - 1] = Asc("<") Or p[i - 1] = Asc(">") Or p[i - 1] = Asc("=")) Then
+                    ' skip
+                Else
+                    FindOp1 = i + 1
+                    Exit Function
+                End If
+            ElseIf ch = "<" Then
+                If i + 1 < n And (p[i + 1] = Asc("=") Or p[i + 1] = Asc(">")) Then
+                    ' skip
+                Else
+                    FindOp1 = i + 1
+                    Exit Function
+                End If
+            ElseIf ch = ">" Then
+                If i + 1 < n And p[i + 1] = Asc("=") Then
+                    ' skip
+                Else
+                    FindOp1 = i + 1
+                    Exit Function
+                End If
+            Else
+                FindOp1 = i + 1
+                Exit Function
+            End If
+        End If
+        i = i - 1
+    Wend
+End Function
+
+' 譁・ｭ怜・繝ｪ繝・Λ繝ｫ・・..." 縺ｾ縺溘・ '...'・峨る比ｸｭ縺ｫ蜷後§蠑慕畑隨ｦ縺後≠繧後・髱槭Μ繝・Λ繝ｫ
+Function IsStringLit(s As String) As Long
+    Dim t As String
+    Dim n As Long
+    Dim p As *Byte
+    Dim i As Long
+    Dim q As Long
+    t = Trim$(s)
+    n = Len(t)
+    IsStringLit = 0
+    If n < 2 Then Exit Function
+    p = StrPtr(t)
+    If p[0] = 34 Or p[0] = Asc("'") Then
+        q = p[0]
+    Else
+        Exit Function
+    End If
+    If p[n - 1] <> q Then Exit Function
+    i = 1
+    While i < n - 1
+        If p[i] = q Then Exit Function
+        i = i + 1
+    Wend
+    IsStringLit = 1
+End Function
+
+Function AddStringLit$(s As String) As String
+    Dim t As String
+    Dim label As String
+    Dim lit As String
+    Dim n As Long
+    Dim i As Long
+    Dim p As *Byte
+    Dim outLine As String
+    t = Trim$(s)
+    label = "str_" + Trim$(Str$(gStrCount))
+    n = Len(t) - 2
+    If n <= 0 Then
+        lit = ""
+    Else
+        lit = Mid$(t, 2, n)
+    End If
+    ' " 繧・\ 繧貞性繧縺ｨ db "..." 縺悟｣翫ｌ繧九・縺ｧ蟶ｸ縺ｫ謨ｰ蛟､繝舌う繝亥・縺ｧ蜃ｺ縺・
+    outLine = "    " + label + " db "
+    If Len(lit) = 0 Then
+        outLine = outLine + "0"
+    Else
+        p = StrPtr(lit)
+        i = 0
+        While i < Len(lit)
+            If i > 0 Then outLine = outLine + ", "
+            outLine = outLine + Trim$(Str$(p[i]))
+            i = i + 1
+        Wend
+        outLine = outLine + ", 0"
+    End If
+    SbAppendStr(VarPtr(gSbData), outLine)
+    SbAppendCRLF(VarPtr(gSbData))
+    gStrCount = gStrCount + 1
+    AddStringLit$ = label
+End Function
+
+' 豺ｱ縺・縺ｮ蜊倩ｪ樊ｼ皮ｮ怜ｭ撰ｼ亥承遶ｯ蜆ｪ蜈茨ｼ・
+Function FindOpWord(expr As String, word As String) As Long
+    Dim e As String
+    Dim w As String
+    Dim n As Long
+    Dim m As Long
+    Dim i As Long
+    Dim depth As Long
+    Dim inQ As Long
+    Dim c As Long
+    Dim beforeOk As Long
+    Dim afterOk As Long
+    e = Lower$(expr)
+    w = Lower$(word)
+    n = Len(e)
+    m = Len(w)
+    FindOpWord = 0
+    depth = 0
+    inQ = 0
+    i = n
+    While i >= 1
+        c = Asc(Mid$(e, i, 1))
+        If inQ <> 0 Then
+            If c = 34 Then inQ = 0
+        ElseIf c = 34 Then
+            inQ = 1
+        ElseIf c = Asc(")") Or c = &H5D Then
+            depth = depth + 1
+        ElseIf c = Asc("(") Or c = &H5B Then
+            depth = depth - 1
+        ElseIf depth = 0 Then
+            If i + m - 1 <= n Then
+                If Mid$(e, i, m) = w Then
+                    beforeOk = 1
+                    afterOk = 1
+                    If i > 1 Then
+                        c = Asc(Mid$(e, i - 1, 1))
+                        If IsIdentChar2(c) <> 0 Then beforeOk = 0
+                    End If
+                    If i + m <= n Then
+                        c = Asc(Mid$(e, i + m, 1))
+                        If IsIdentChar2(c) <> 0 Then afterOk = 0
+                    End If
+                    If beforeOk <> 0 And afterOk <> 0 Then
+                        FindOpWord = i
+                        Exit Function
+                    End If
+                End If
+            End If
+        End If
+        i = i - 1
+    Wend
+End Function
+
+Function IsStringExpr(expr As String) As Long
+    Dim e As String
+    Dim n As Long
+    Dim p As *Byte
+    Dim pos As Long
+    Dim idx As Long
+    Dim i As Long
+    e = Trim$(expr)
+    IsStringExpr = 0
+    If IsStringLit(e) <> 0 Then
+        IsStringExpr = 1
+        Exit Function
+    End If
+    n = Len(e)
+    If n >= 2 Then
+        p = StrPtr(e)
+        If p[0] = 40 And p[n - 1] = 41 Then
+            IsStringExpr = IsStringExpr(Mid$(e, 2, n - 2))
+            Exit Function
+        End If
+    End If
+    pos = FindOp1(e, "+")
+    If pos > 0 Then
+        If IsStringExpr(Left$(e, pos - 1)) <> 0 Or IsStringExpr(Mid$(e, pos + 1, Len(e) - pos)) <> 0 Then
+            IsStringExpr = 1
+            Exit Function
+        End If
+    End If
+    If Lower$(Left$(e, 5)) = "chr$(" Or Lower$(Left$(e, 6)) = "left$(" Or Lower$(Left$(e, 5)) = "mid$(" Or Lower$(Left$(e, 5)) = "str$(" Or Lower$(Left$(e, 5)) = "hex$(" Then
+        IsStringExpr = 1
+        Exit Function
+    End If
+    idx = FindVar(e)
+    If idx >= 0 Then
+        IsStringExpr = gVarIsStr(idx)
+        Exit Function
+    End If
+    ' gArgs(i) 縺ｪ縺ｩ String 驟榊・隕∫ｴ
+    p = StrPtr(e)
+    i = 0
+    While i < n
+        If p[i] = 40 Or p[i] = &H5B Then
+            idx = FindVar(Trim$(Left$(e, i)))
+            If idx >= 0 Then
+                IsStringExpr = gVarIsStr(idx)
+            End If
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Sub RtLine(line As String)
+    SbAppendStr(VarPtr(gSbRt), line)
+    SbAppendCRLF(VarPtr(gSbRt))
+End Sub
+
+Sub EnsureStringRt()
+    If gUseStringRt <> 0 Then Exit Sub
+    gUseStringRt = 1
+    SbAppendStr(VarPtr(gSbData), "    str_empty db 0")
+    SbAppendCRLF(VarPtr(gSbData))
+
+    RtLine("_rt_Len:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_len_zero")
+    RtLine("    push eax")
+    RtLine("    call _lstrlenA@4")
+    RtLine("    jmp rt_len_done")
+    RtLine("rt_len_zero:")
+    RtLine("    mov eax, 0")
+    RtLine("rt_len_done:")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    RtLine("_rt_Asc:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_asc_zero")
+    RtLine("    mov ebx, eax")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    jmp rt_asc_done")
+    RtLine("rt_asc_zero:")
+    RtLine("    mov eax, 0")
+    RtLine("rt_asc_done:")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    RtLine("_rt_Chr:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push 2")
+    RtLine("    push 0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov edi, eax")
+    RtLine("    mov ebx, eax")
+    RtLine("    mov eax, esi")
+    RtLine("    mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+    RtLine("    add ebx, 1")
+    RtLine("    mov eax, 0")
+    RtLine("    mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+    RtLine("    mov eax, edi")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    RtLine("_rt_Cat:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov edi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp edi, 0")
+    RtLine("    jne rt_cat_a_ok")
+    RtLine("    push str_empty")
+    RtLine("    pop edi")
+    RtLine("rt_cat_a_ok:")
+    RtLine("    add ebx, 4")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp esi, 0")
+    RtLine("    jne rt_cat_b_ok")
+    RtLine("    push str_empty")
+    RtLine("    pop esi")
+    RtLine("rt_cat_b_ok:")
+    RtLine("    push edi")
+    RtLine("    call _lstrlenA@4")
+    RtLine("    mov ebx, eax")
+    RtLine("    push esi")
+    RtLine("    call _lstrlenA@4")
+    RtLine("    add eax, ebx")
+    RtLine("    add eax, 1")
+    RtLine("    mov ebx, eax")
+    RtLine("    push eax")
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push ebx")
+    RtLine("    push 0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov ebx, eax")
+    RtLine("    push edi")
+    RtLine("    push ebx")
+    RtLine("    call _lstrcpyA@8")
+    RtLine("    push esi")
+    RtLine("    push ebx")
+    RtLine("    call _lstrcatA@8")
+    RtLine("    mov eax, ebx")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 8")
+
+    RtLine("_rt_Left:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov edi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp edi, 0")
+    RtLine("    jne rt_left_s_ok")
+    RtLine("    push str_empty")
+    RtLine("    pop edi")
+    RtLine("rt_left_s_ok:")
+    RtLine("    add ebx, 4")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp esi, 0")
+    RtLine("    jge rt_left_n_ok")
+    RtLine("    mov esi, 0")
+    RtLine("rt_left_n_ok:")
+    RtLine("    push edi")
+    RtLine("    call _lstrlenA@4")
+    RtLine("    cmp esi, eax")
+    RtLine("    jle rt_left_count_ok")
+    RtLine("    mov esi, eax")
+    RtLine("rt_left_count_ok:")
+    RtLine("    mov eax, esi")
+    RtLine("    add eax, 1")
+    RtLine("    push eax")
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    pop ecx")
+    RtLine("    push ecx")
+    RtLine("    push 0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov ebx, eax")
+    RtLine("    mov edx, eax")
+    RtLine("rt_left_loop:")
+    RtLine("    cmp esi, 0")
+    RtLine("    je rt_left_end")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "edi" + Chr$(&H5D))
+    RtLine("    mov " + Chr$(&H5B) + "edx" + Chr$(&H5D) + ", al")
+    RtLine("    add edi, 1")
+    RtLine("    add edx, 1")
+    RtLine("    sub esi, 1")
+    RtLine("    jmp rt_left_loop")
+    RtLine("rt_left_end:")
+    RtLine("    mov eax, 0")
+    RtLine("    mov " + Chr$(&H5B) + "edx" + Chr$(&H5D) + ", al")
+    RtLine("    mov eax, ebx")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 8")
+
+    RtLine("_rt_Mid:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov edi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp edi, 0")
+    RtLine("    jne rt_mid_s_ok")
+    RtLine("    push str_empty")
+    RtLine("    pop edi")
+    RtLine("rt_mid_s_ok:")
+    RtLine("    add ebx, 4")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    sub esi, 1")
+    RtLine("    cmp esi, 0")
+    RtLine("    jge rt_mid_start_ok")
+    RtLine("    mov esi, 0")
+    RtLine("rt_mid_start_ok:")
+    RtLine("    add ebx, 4")
+    RtLine("    mov edx, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    ' lstrlenA 縺ｯ edx 繧貞｣翫☆縺ｮ縺ｧ髟ｷ縺輔ｒ菫晏ｭ倥☆繧・
+    RtLine("    push edx")
+    RtLine("    push edi")
+    RtLine("    call _lstrlenA@4")
+    RtLine("    pop edx")
+    RtLine("    sub eax, esi")
+    RtLine("    cmp eax, 0")
+    RtLine("    jge rt_mid_rem_ok")
+    RtLine("    mov eax, 0")
+    RtLine("rt_mid_rem_ok:")
+    RtLine("    cmp edx, 0")
+    RtLine("    jl rt_mid_count_ok")
+    RtLine("    cmp edx, eax")
+    RtLine("    jle rt_mid_use_len")
+    RtLine("rt_mid_count_ok:")
+    RtLine("    mov edx, eax")
+    RtLine("rt_mid_use_len:")
+    RtLine("    add edi, esi")
+    RtLine("    mov esi, edx")
+    RtLine("    mov eax, esi")
+    RtLine("    add eax, 1")
+    RtLine("    push eax")
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    pop ecx")
+    RtLine("    push ecx")
+    RtLine("    push 0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov ebx, eax")
+    RtLine("    mov edx, eax")
+    RtLine("rt_mid_loop:")
+    RtLine("    cmp esi, 0")
+    RtLine("    je rt_mid_end")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "edi" + Chr$(&H5D))
+    RtLine("    mov " + Chr$(&H5B) + "edx" + Chr$(&H5D) + ", al")
+    RtLine("    add edi, 1")
+    RtLine("    add edx, 1")
+    RtLine("    sub esi, 1")
+    RtLine("    jmp rt_mid_loop")
+    RtLine("rt_mid_end:")
+    RtLine("    mov eax, 0")
+    RtLine("    mov " + Chr$(&H5B) + "edx" + Chr$(&H5D) + ", al")
+    RtLine("    mov eax, ebx")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 12")
+
+    SbAppendStr(VarPtr(gSbData), "    rt_crlf db 13, 10")
+    SbAppendCRLF(VarPtr(gSbData))
+
+    ' Str$(n) 窶・隨ｦ蜿ｷ莉倥″蜊・ｲ
+    RtLine("_rt_Str:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push 16")
+    RtLine("    push 0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov edi, eax")
+    RtLine("    mov ebx, eax")
+    RtLine("    add ebx, 15")
+    RtLine("    mov eax, 0")
+    RtLine("    mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+    RtLine("    sub ebx, 1")
+    RtLine("    mov eax, esi")
+    RtLine("    cmp eax, 0")
+    RtLine("    jge rt_str_pos")
+    RtLine("    xor edx, edx")
+    RtLine("    sub edx, eax")
+    RtLine("    mov eax, edx")
+    RtLine("    push 1")
+    RtLine("    jmp rt_str_go")
+    RtLine("rt_str_pos:")
+    RtLine("    push 0")
+    RtLine("rt_str_go:")
+    RtLine("rt_str_dig:")
+    RtLine("    mov ecx, 10")
+    RtLine("    xor edx, edx")
+    RtLine("    div ecx")
+    RtLine("    add edx, 48")
+    RtLine("    mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", dl")
+    RtLine("    sub ebx, 1")
+    RtLine("    cmp eax, 0")
+    RtLine("    jne rt_str_dig")
+    RtLine("    pop ecx")
+    RtLine("    cmp ecx, 0")
+    RtLine("    je rt_str_nosign")
+    RtLine("    mov eax, 45")
+    RtLine("    mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+    RtLine("    sub ebx, 1")
+    RtLine("rt_str_nosign:")
+    RtLine("    add ebx, 1")
+    RtLine("    mov eax, ebx")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    ' Hex$(n) 窶・8譯∝崋螳壹↑縺励∝ｿ・ｦ∵｡√・螟ｧ譁・ｭ・hex
+    RtLine("_rt_Hex:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push 12")
+    RtLine("    push 0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov edi, eax")
+    RtLine("    mov ebx, eax")
+    RtLine("    add ebx, 11")
+    RtLine("    mov eax, 0")
+    RtLine("    mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+    RtLine("    sub ebx, 1")
+    RtLine("    mov eax, esi")
+    RtLine("rt_hex_dig:")
+    RtLine("    mov edx, eax")
+    RtLine("    and edx, 15")
+    RtLine("    cmp edx, 10")
+    RtLine("    jl rt_hex_dec")
+    RtLine("    add edx, 55")
+    RtLine("    jmp rt_hex_store")
+    RtLine("rt_hex_dec:")
+    RtLine("    add edx, 48")
+    RtLine("rt_hex_store:")
+    RtLine("    mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", dl")
+    RtLine("    sub ebx, 1")
+    RtLine("    shr eax, 4")
+    RtLine("    cmp eax, 0")
+    RtLine("    jne rt_hex_dig")
+    RtLine("    add ebx, 1")
+    RtLine("    mov eax, ebx")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    ' Print s 窶・stdout + CRLF
+    RtLine("_rt_Print:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    sub esp, 8")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push -11")
+    RtLine("    call _GetStdHandle@4")
+    RtLine("    mov ebx, eax")
+    RtLine("    mov esi, ebp")
+    RtLine("    add esi, 8")
+    RtLine("    mov eax, " + Chr$(&H5B) + "esi" + Chr$(&H5D))
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_print_nl")
+    RtLine("    mov esi, eax")
+    RtLine("    push esi")
+    RtLine("    call _lstrlenA@4")
+    RtLine("    mov edx, ebp")
+    RtLine("    sub edx, 4")
+    RtLine("    push 0")
+    RtLine("    push edx")
+    RtLine("    push eax")
+    RtLine("    push esi")
+    RtLine("    push ebx")
+    RtLine("    call _WriteFile@20")
+    RtLine("rt_print_nl:")
+    RtLine("    mov edx, ebp")
+    RtLine("    sub edx, 4")
+    RtLine("    push 0")
+    RtLine("    push edx")
+    RtLine("    push 2")
+    RtLine("    push rt_crlf")
+    RtLine("    push ebx")
+    RtLine("    call _WriteFile@20")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    ' Val(s) 窶・蜈磯ｭ縺ｮ隨ｦ蜿ｷ莉倥″蜊・ｲ繧・Long 縺ｫ
+    RtLine("_rt_Val:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    xor eax, eax")
+    RtLine("    mov edx, 0")
+    RtLine("    cmp esi, 0")
+    RtLine("    je rt_val_done")
+    RtLine("rt_val_sp:")
+    RtLine("    movzx ecx, " + Chr$(&H5B) + "esi" + Chr$(&H5D))
+    RtLine("    cmp ecx, 32")
+    RtLine("    jne rt_val_sign")
+    RtLine("    add esi, 1")
+    RtLine("    jmp rt_val_sp")
+    RtLine("rt_val_sign:")
+    RtLine("    cmp ecx, 45")
+    RtLine("    jne rt_val_plus")
+    RtLine("    mov edx, 1")
+    RtLine("    add esi, 1")
+    RtLine("    jmp rt_val_dig")
+    RtLine("rt_val_plus:")
+    RtLine("    cmp ecx, 43")
+    RtLine("    jne rt_val_dig")
+    RtLine("    add esi, 1")
+    RtLine("rt_val_dig:")
+    RtLine("    movzx ecx, " + Chr$(&H5B) + "esi" + Chr$(&H5D))
+    RtLine("    cmp ecx, 48")
+    RtLine("    jl rt_val_end")
+    RtLine("    cmp ecx, 57")
+    RtLine("    jg rt_val_end")
+    RtLine("    sub ecx, 48")
+    RtLine("    mov ebx, 10")
+    RtLine("    imul eax, ebx")
+    RtLine("    add eax, ecx")
+    RtLine("    add esi, 1")
+    RtLine("    jmp rt_val_dig")
+    RtLine("rt_val_end:")
+    RtLine("    cmp edx, 0")
+    RtLine("    je rt_val_done")
+    RtLine("    neg eax")
+    RtLine("rt_val_done:")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    ' Input$ 窶・stdin 縺九ｉ1陦瑚ｪｭ縺ｿ縲√ヲ繝ｼ繝嶺ｸ翫・譁・ｭ怜・繧定ｿ斐☆・・R/LF 髯､蜴ｻ・・
+    ' 繝代う繝励〒繧り､・焚陦後ｒ荳蠎ｦ縺ｫ鬟溘ｏ縺ｪ縺・ｈ縺・・繝舌う繝医★縺､隱ｭ繧
+    RtLine("_rt_Input:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    sub esp, 8")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push 256")
+    RtLine("    push 0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov edi, eax")
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_input_fail")
+    RtLine("    push -10")
+    RtLine("    call _GetStdHandle@4")
+    RtLine("    mov ebx, eax")
+    RtLine("    mov esi, 0")
+    RtLine("rt_input_loop:")
+    RtLine("    cmp esi, 255")
+    RtLine("    jge rt_input_done")
+    RtLine("    mov edx, ebp")
+    RtLine("    sub edx, 4")
+    RtLine("    mov ecx, ebp")
+    RtLine("    sub ecx, 8")
+    RtLine("    push 0")
+    RtLine("    push edx")
+    RtLine("    push 1")
+    RtLine("    push ecx")
+    RtLine("    push ebx")
+    RtLine("    call _ReadFile@20")
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_input_done")
+    RtLine("    mov edx, ebp")
+    RtLine("    sub edx, 4")
+    RtLine("    mov eax, " + Chr$(&H5B) + "edx" + Chr$(&H5D))
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_input_done")
+    RtLine("    mov edx, ebp")
+    RtLine("    sub edx, 8")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "edx" + Chr$(&H5D))
+    RtLine("    cmp eax, 13")
+    RtLine("    je rt_input_loop")
+    RtLine("    cmp eax, 10")
+    RtLine("    je rt_input_done")
+    RtLine("    mov ecx, edi")
+    RtLine("    add ecx, esi")
+    RtLine("    mov " + Chr$(&H5B) + "ecx" + Chr$(&H5D) + ", al")
+    RtLine("    add esi, 1")
+    RtLine("    jmp rt_input_loop")
+    RtLine("rt_input_done:")
+    RtLine("    mov ecx, edi")
+    RtLine("    add ecx, esi")
+    RtLine("    mov eax, 0")
+    RtLine("    mov " + Chr$(&H5B) + "ecx" + Chr$(&H5D) + ", al")
+    RtLine("    mov eax, edi")
+    RtLine("    jmp rt_input_ret")
+    RtLine("rt_input_fail:")
+    RtLine("    mov eax, 0")
+    RtLine("rt_input_ret:")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret")
+End Sub
+
+' MakeStr / InStr / memcpy / malloc / free・医・繧ｹ繝育ｵ・∩霎ｼ縺ｿ莠呈鋤・・
+Sub EnsureHostRt()
+    If gUseHostRt <> 0 Then Exit Sub
+    gUseHostRt = 1
+    EnsureStringRt()
+    If InStr(1, gApiExternLines, "extern _GetProcessHeap@0" + Chr$(13)) = 0 Then
+        gApiExternLines = gApiExternLines + "extern _GetProcessHeap@0" + Chr$(13) + Chr$(10)
+    End If
+    If InStr(1, gApiExternLines, "extern _HeapAlloc@12" + Chr$(13)) = 0 Then
+        gApiExternLines = gApiExternLines + "extern _HeapAlloc@12" + Chr$(13) + Chr$(10)
+    End If
+    If InStr(1, gApiExternLines, "extern _HeapFree@12" + Chr$(13)) = 0 Then
+        gApiExternLines = gApiExternLines + "extern _HeapFree@12" + Chr$(13) + Chr$(10)
+    End If
+    If InStr(1, gApiExternLines, "extern _lstrlenA@4" + Chr$(13)) = 0 Then
+        gApiExternLines = gApiExternLines + "extern _lstrlenA@4" + Chr$(13) + Chr$(10)
+    End If
+    If InStr(1, gApiExternLines, "extern _lstrcpyA@8" + Chr$(13)) = 0 Then
+        gApiExternLines = gApiExternLines + "extern _lstrcpyA@8" + Chr$(13) + Chr$(10)
+    End If
+
+    ' malloc(n) -> eax
+    RtLine("_rt_Malloc:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    push eax")
+    RtLine("    push 0")
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    ' free(p)
+    RtLine("_rt_Free:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_free_done")
+    RtLine("    push eax")
+    RtLine("    push 0")
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push eax")
+    RtLine("    call _HeapFree@12")
+    RtLine("rt_free_done:")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    ' memcpy(dst, src, n) 窶・stdcall 蜿ｳ縺九ｉ push 貂医∩
+    RtLine("_rt_Memcpy:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov edi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    add ebx, 4")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    add ebx, 4")
+    RtLine("    mov ecx, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("rt_memcpy_loop:")
+    RtLine("    cmp ecx, 0")
+    RtLine("    je rt_memcpy_done")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "esi" + Chr$(&H5D))
+    RtLine("    mov " + Chr$(&H5B) + "edi" + Chr$(&H5D) + ", al")
+    RtLine("    add esi, 1")
+    RtLine("    add edi, 1")
+    RtLine("    sub ecx, 1")
+    RtLine("    jmp rt_memcpy_loop")
+    RtLine("rt_memcpy_done:")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 12")
+
+    ' FillMemory(dst, n, fill) 窶・stdcall
+    RtLine("_rt_FillMemory:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov edi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    add ebx, 4")
+    RtLine("    mov ecx, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    add ebx, 4")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("rt_fill_loop:")
+    RtLine("    cmp ecx, 0")
+    RtLine("    je rt_fill_done")
+    RtLine("    mov " + Chr$(&H5B) + "edi" + Chr$(&H5D) + ", al")
+    RtLine("    add edi, 1")
+    RtLine("    sub ecx, 1")
+    RtLine("    jmp rt_fill_loop")
+    RtLine("rt_fill_done:")
+    RtLine("    pop edi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 12")
+
+    ' MakeStr(p) 窶・C 譁・ｭ怜・繧偵ヲ繝ｼ繝励∈隍・｣ｽ縺励※霑斐☆
+    RtLine("_rt_MakeStr:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp esi, 0")
+    RtLine("    jne rt_makestr_ok")
+    RtLine("    push str_empty")
+    RtLine("    pop eax")
+    RtLine("    jmp rt_makestr_done")
+    RtLine("rt_makestr_ok:")
+    RtLine("    push esi")
+    RtLine("    call _lstrlenA@4")
+    RtLine("    add eax, 1")
+    RtLine("    mov ebx, eax")
+    RtLine("    push eax")
+    RtLine("    push 0")
+    RtLine("    call _GetProcessHeap@0")
+    RtLine("    push eax")
+    RtLine("    call _HeapAlloc@12")
+    RtLine("    mov edi, eax")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    call _lstrcpyA@8")
+    RtLine("    mov eax, edi")
+    RtLine("rt_makestr_done:")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 4")
+
+    ' InStr(start, hay, needle) 窶・1-based縲∫┌縺代ｌ縺ｰ 0
+    RtLine("_rt_InStr:")
+    RtLine("    push ebp")
+    RtLine("    mov ebp, esp")
+    RtLine("    push ebx")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov ebx, ebp")
+    RtLine("    add ebx, 8")
+    RtLine("    mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    add ebx, 4")
+    RtLine("    mov esi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    add ebx, 4")
+    RtLine("    mov edi, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    RtLine("    cmp esi, 0")
+    RtLine("    je rt_instr_zero")
+    RtLine("    cmp edi, 0")
+    RtLine("    je rt_instr_zero")
+    RtLine("    cmp eax, 1")
+    RtLine("    jge rt_instr_start_ok")
+    RtLine("    mov eax, 1")
+    RtLine("rt_instr_start_ok:")
+    RtLine("    sub eax, 1")
+    RtLine("    add esi, eax")
+    RtLine("    mov ebx, eax")
+    RtLine("rt_instr_outer:")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "esi" + Chr$(&H5D))
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_instr_zero")
+    RtLine("    push esi")
+    RtLine("    push edi")
+    RtLine("    mov edx, edi")
+    RtLine("rt_instr_inner:")
+    RtLine("    movzx eax, " + Chr$(&H5B) + "edx" + Chr$(&H5D))
+    RtLine("    cmp eax, 0")
+    RtLine("    je rt_instr_found")
+    RtLine("    movzx ecx, " + Chr$(&H5B) + "esi" + Chr$(&H5D))
+    RtLine("    cmp ecx, 0")
+    RtLine("    je rt_instr_next")
+    RtLine("    cmp eax, ecx")
+    RtLine("    jne rt_instr_next")
+    RtLine("    add esi, 1")
+    RtLine("    add edx, 1")
+    RtLine("    jmp rt_instr_inner")
+    RtLine("rt_instr_next:")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    add esi, 1")
+    RtLine("    add ebx, 1")
+    RtLine("    jmp rt_instr_outer")
+    RtLine("rt_instr_found:")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    mov eax, ebx")
+    RtLine("    add eax, 1")
+    RtLine("    jmp rt_instr_done")
+    RtLine("rt_instr_zero:")
+    RtLine("    mov eax, 0")
+    RtLine("rt_instr_done:")
+    RtLine("    pop edi")
+    RtLine("    pop esi")
+    RtLine("    pop ebx")
+    RtLine("    mov esp, ebp")
+    RtLine("    pop ebp")
+    RtLine("    ret 12")
+End Sub
+
+' --- 蟄怜唱繝ｻ讒区枚繝ｻEmit・・mitAsm 遲峨・蠕後↓蜿悶ｊ霎ｼ繧・・--
+#include "abcLexer.abp"
+#include "abcParser.abp"
+#include "abcEmit.abp"
+
+' 譛ｫ蟆ｾ縺ｮ " As Type" / " As *Type" 繧帝勁蜴ｻ・亥､縺ｯ螟峨ｏ繧峨↑縺・く繝｣繧ｹ繝茨ｼ・
+Function StripTypeCast$(expr As String) As String
+    Dim t As String
+    Dim low As String
+    Dim n As Long
+    Dim i As Long
+    Dim depth As Long
+    Dim inQ As Long
+    Dim c As Long
+    Dim p As *Byte
+    Dim pos As Long
+    Dim rest As String
+    Dim r As String
+    t = Trim$(expr)
+    n = Len(t)
+    StripTypeCast$ = t
+    If n < 4 Then Exit Function
+    low = Lower$(t)
+    p = StrPtr(t)
+    depth = 0
+    inQ = 0
+    pos = 0
+    i = 0
+    While i < n
+        c = p[i]
+        If inQ <> 0 Then
+            If c = 34 Then inQ = 0
+        ElseIf c = 34 Then
+            inQ = 1
+        ElseIf c = 40 Or c = &H5B Then
+            depth = depth + 1
+        ElseIf c = 41 Or c = &H5D Then
+            depth = depth - 1
+        ElseIf depth = 0 Then
+            If i + 3 < n Then
+                If Mid$(low, i + 1, 4) = " as " Then
+                    rest = Trim$(Mid$(t, i + 5, n - i - 4))
+                    r = rest
+                    If Left$(r, 1) = "*" Then
+                        r = Trim$(Mid$(r, 2, Len(r) - 1))
+                    End If
+                    If IsIdentName(r) <> 0 Then
+                        pos = i + 1
+                    End If
+                End If
+            End If
+        End If
+        i = i + 1
+    Wend
+    If pos > 0 Then
+        StripTypeCast$ = Trim$(Left$(t, pos - 1))
+    End If
+End Function
+
+' 邂苓｡灘ｼ・竊・eax
+Function GenArith(expr As String) As Long
+    Dim ni As Long
+    Dim e As String
+    GenArith = 0
+    gParseCondMode = 0
+    e = StripTypeCast$(expr)
+    If LexExpr(e) = 0 Then Exit Function
+    ni = ParseExpr()
+    If ni < 0 Then Exit Function
+    If TokPeek() <> TK_EOF Then
+        Print "junk after expression: " + expr
+        Exit Function
+    End If
+    GenArith = EmitExpr(ni)
+End Function
+
+' 蟾ｦ霎ｺ蛟､縺ｮ繧｢繝峨Ξ繧ｹ 竊・eax・・yRef 螳溷ｼ墓焚逕ｨ・・
+Function GenArithAddr(expr As String) As Long
+    Dim ni As Long
+    Dim e As String
+    GenArithAddr = 0
+    gParseCondMode = 0
+    e = StripTypeCast$(expr)
+    If LexExpr(e) = 0 Then Exit Function
+    ni = ParseExpr()
+    If ni < 0 Then Exit Function
+    If TokPeek() <> TK_EOF Then
+        Print "junk after expression: " + expr
+        Exit Function
+    End If
+    GenArithAddr = EmitLValueAddr(ni)
+End Function
+
+Function GenCond(expr As String, falseLab As String) As Long
+    Dim e As String
+    Dim n As Long
+    Dim p As *Byte
+    Dim closePos As Long
+    Dim ni As Long
+
+    GenCond = 0
+    e = Trim$(expr)
+
+    ' 螟門・縺ｮ (...) 繧貞翁縺後☆・・nd/Or 縺梧峡蠑ｧ蜀・□縺ｨ隕矩・☆縺溘ａ・・
+    n = Len(e)
+    While n >= 2
+        p = StrPtr(e)
+        If p[0] <> 40 Then Exit While
+        closePos = MatchClose(p, n, 0)
+        If closePos <> n - 1 Then Exit While
+        e = Trim$(Mid$(e, 2, n - 2))
+        n = Len(e)
+    Wend
+
+    gParseCondMode = 1
+    If LexExpr(e) = 0 Then Exit Function
+    ni = ParseCondExpr()
+    If ni < 0 Then Exit Function
+    If TokPeek() <> TK_EOF Then
+        Print "junk after condition: " + e
+        Exit Function
+    End If
+    GenCond = EmitCond(ni, falseLab)
+End Function
+
+
+Function StripComment$(s As String) As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim inQ As Long
+    Dim c As Long
+
+    n = Len(s)
+    If n = 0 Then
+        StripComment$ = ""
+        Exit Function
+    End If
+    p = StrPtr(s)
+    i = 0
+    inQ = 0
+    While i < n
+        c = p[i]
+        If inQ <> 0 Then
+            If c = 34 Then
+                inQ = 0
+            End If
+        Else
+            If c = 34 Then
+                inQ = 1
+            ElseIf c = Asc("'") Then
+                StripComment$ = Left$(s, i)
+                Exit Function
+            End If
+        End If
+        i = i + 1
+    Wend
+    StripComment$ = s
+End Function
+
+' 繧ｫ繝ｳ繝槫玄蛻・ｊ蠑墓焚繧貞・蜑ｲ・域枚蟄怜・繝ｻ諡ｬ蠑ｧ繝阪せ繝亥・縺ｮ繧ｫ繝ｳ繝槭・辟｡隕厄ｼ・
+Function SplitArgs(argsText As String) As Long
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim start As Long
+    Dim inQ As Long
+    Dim quote As Long
+    Dim depth As Long
+    Dim c As Long
+
+    SplitArgs = 0
+    gNArgs = 0
+    n = Len(argsText)
+    If n = 0 Then
+        SplitArgs = 1
+        Exit Function
+    End If
+
+    p = StrPtr(argsText)
+    i = 0
+    start = 0
+    inQ = 0
+    quote = 0
+    depth = 0
+
+    While i < n
+        c = p[i]
+        If inQ <> 0 Then
+            If c = quote Then
+                inQ = 0
+            End If
+        Else
+            If c = 34 Or c = Asc("'") Then
+                inQ = 1
+                quote = c
+            ElseIf c = 40 Or c = &H5B Then
+                depth = depth + 1
+            ElseIf c = 41 Or c = &H5D Then
+                depth = depth - 1
+            ElseIf c = Asc(",") And depth = 0 Then
+                If gNArgs >= MAX_ARGS Then
+                    Print "error: too many arguments (max " + Trim$(Str$(MAX_ARGS)) + ")"
+                    Exit Function
+                End If
+                gArgs(gNArgs) = Trim$(Mid$(argsText, start + 1, i - start))
+                gNArgs = gNArgs + 1
+                start = i + 1
+            End If
+        End If
+        i = i + 1
+    Wend
+
+    If inQ <> 0 Then
+        Print "error: unterminated string in arguments"
+        Exit Function
+    End If
+
+    If gNArgs >= MAX_ARGS Then
+        Print "error: too many arguments (max " + Trim$(Str$(MAX_ARGS)) + ")"
+        Exit Function
+    End If
+    gArgs(gNArgs) = Trim$(Mid$(argsText, start + 1, n - start))
+    gNArgs = gNArgs + 1
+    SplitArgs = 1
+End Function
+
+' NULL / MB_OK -> 0縲∵枚蟄怜・ -> str_N縲√◎繧御ｻ･螟悶・縺昴・縺ｾ縺ｾ
+Function ArgToAsm$(arg As String) As String
+    Dim t As String
+    Dim label As String
+    Dim lit As String
+    Dim dq As String
+
+    t = Trim$(arg)
+    If IsStringLit(t) <> 0 Then
+        label = AddStringLit$(t)
+        ArgToAsm$ = label
+    ElseIf t = "NULL" Or t = "MB_OK" Then
+        ArgToAsm$ = "0"
+    Else
+        ArgToAsm$ = t
+    End If
+End Function
+
+Function CompileMessageBox(lineStr As String) As Long
+    Dim argsText As String
+    Dim a As Long
+    Dim lp As Long
+    Dim rp As Long
+
+    CompileMessageBox = 0
+    lp = InStr(1, lineStr, "(")
+    rp = 0
+    a = Len(lineStr)
+    While a >= 1
+        If Mid$(lineStr, a, 1) = ")" Then
+            rp = a
+            Exit While
+        End If
+        a = a - 1
+    Wend
+    If lp = 0 Or rp = 0 Or rp <= lp Then
+        Print "bad MessageBox syntax: " + lineStr
+        Exit Function
+    End If
+
+    argsText = ArgsBetween$(lineStr, lp, rp)
+    If SplitArgs(argsText) = 0 Then Exit Function
+    If gNArgs <> 4 Then
+        Print "MessageBox needs 4 arguments, got " + Str$(gNArgs)
+        Exit Function
+    End If
+
+    For a = 0 To gNArgs - 1
+        gAsmArgs(a) = ArgToAsm$(gArgs(a))
+    Next
+
+    ' stdcall: 蜿ｳ縺九ｉ蟾ｦ縺ｸ push
+    a = gNArgs - 1
+    While a >= 0
+        EmitAsm("push    " + gAsmArgs(a))
+        a = a - 1
+    Wend
+    EmitAsm("call    _MessageBoxA@16")
+    SbAppendCRLF(VarPtr(gSbText))
+    gUseMsgBox = 1
+    CompileMessageBox = 1
+End Function
+
+Function CompilePrint(lineStr As String) As Long
+    Dim e As String
+    CompilePrint = 0
+    e = Trim$(Mid$(lineStr, 6, Len(lineStr) - 5))
+    If e = "" Then
+        Print "Print needs expression"
+        Exit Function
+    End If
+    EnsureStringRt()
+    If IsStringExpr(e) <> 0 Then
+        If GenArith(e) = 0 Then Exit Function
+    Else
+        If GenArith(e) = 0 Then Exit Function
+        EmitAsm("push eax")
+        EmitAsm("call _rt_Str")
+    End If
+    EmitAsm("push eax")
+    EmitAsm("call _rt_Print")
+    CompilePrint = 1
+End Function
+
+' Input var 窶・1陦瑚ｪｭ縺ｿ蜿悶ｊ縲４tring 縺ｪ繧峨◎縺ｮ縺ｾ縺ｾ縲√◎繧御ｻ･螟悶・ Val 縺励※莉｣蜈･
+Function CompileInput(lineStr As String) As Long
+    Dim name As String
+    Dim idx As Long
+    CompileInput = 0
+    name = Trim$(Mid$(lineStr, 6, Len(lineStr) - 5))
+    If name = "" Then
+        Print "Input needs variable"
+        Exit Function
+    End If
+    idx = FindVar(name)
+    If idx < 0 Then
+        Print "undeclared variable: " + name
+        Exit Function
+    End If
+    EnsureStringRt()
+    gUseInput = 1
+    EmitAsm("call _rt_Input")
+    If gVarIsStr(idx) <> 0 Then
+        EmitStoreVar(idx)
+    Else
+        EmitAsm("push eax")
+        EmitAsm("call _rt_Val")
+        EmitStoreVar(idx)
+    End If
+    CompileInput = 1
+End Function
+
+Function CompileExitProcess(lineStr As String) As Long
+    Dim argsText As String
+    Dim lp As Long
+    Dim rp As Long
+    Dim a As Long
+
+    CompileExitProcess = 0
+    lp = InStr(1, lineStr, "(")
+    rp = 0
+    a = Len(lineStr)
+    While a >= 1
+        If Mid$(lineStr, a, 1) = ")" Then
+            rp = a
+            Exit While
+        End If
+        a = a - 1
+    Wend
+    If lp = 0 Or rp = 0 Or rp <= lp Then
+        Print "bad ExitProcess syntax: " + lineStr
+        Exit Function
+    End If
+
+    argsText = ArgsBetween$(lineStr, lp, rp)
+    If argsText = "" Then
+        Print "ExitProcess needs 1 argument"
+        Exit Function
+    End If
+    If GenArith(argsText) = 0 Then Exit Function
+    EmitAsm("push eax")
+    EmitCallName("ExitProcess")
+    gEmittedExit = 1
+    CompileExitProcess = 1
+End Function
+
+Function CompileConst(lineStr As String) As Long
+    Dim rest As String
+    Dim name As String
+    Dim expr As String
+    Dim pos As Long
+    Dim ci As Long
+    Dim v As Long
+    CompileConst = 0
+    rest = Trim$(Mid$(lineStr, 6, Len(lineStr) - 5))
+    pos = FindOp1(rest, "=")
+    If pos = 0 Then
+        Print "Const needs =: " + lineStr
+        Exit Function
+    End If
+    name = Trim$(Left$(rest, pos - 1))
+    expr = Trim$(Mid$(rest, pos + 1, Len(rest) - pos))
+    If IsNumStr(expr) <> 0 Then
+        v = ParseNum(expr)
+    ElseIf FindConst(expr) >= 0 Then
+        v = gConstVal(FindConst(expr))
+    ElseIf InStr(1, expr, "+") > 0 Or InStr(1, expr, "-") > 1 Or InStr(1, expr, "*") > 0 Or InStr(1, expr, "(") > 0 Then
+        ' Const 蠑擾ｼ・AX - 1 繧・(A+B)・峨ょ・鬆ｭ縺ｮ荳蜈・'-' 縺ｯ IsNumStr 蛛ｴ
+        v = ParseCountExpr(expr)
+    Else
+        Print "Const needs number or Const: " + lineStr
+        Exit Function
+    End If
+    ci = FindConst(name)
+    If ci >= 0 Then
+        If gConstVal(ci) = v Then
+            CompileConst = 1
+            Exit Function
+        End If
+        Print "error: duplicate Const: " + name
+        Print "  hint: already defined (often from Include/default); remove the duplicate"
+        Exit Function
+    End If
+    If gNConsts >= MAX_CONSTS Then
+        Print "error: too many Const (max " + Trim$(Str$(MAX_CONSTS)) + ")"
+        Exit Function
+    End If
+    ci = gNConsts
+    gConstName(ci) = Lower$(name)
+    gConstVal(ci) = v
+    gNConsts = gNConsts + 1
+    CompileConst = 1
+End Function
+
+' 驟榊・豺ｻ蟄励・螳壽焚蠑・ 謨ｰ蛟､ / Const / + - * 縺ｨ諡ｬ蠑ｧ
+Function ParseCountAtom(s As String) As Long
+    Dim t As String
+    Dim ci As Long
+    Dim n As Long
+    Dim inner As String
+    t = Trim$(s)
+    n = Len(t)
+    ParseCountAtom = 0
+    If n = 0 Then
+        Print "bad array size: (empty)"
+        Exit Function
+    End If
+    ' (expr)
+    If Left$(t, 1) = "(" And Right$(t, 1) = ")" Then
+        If MatchClose(StrPtr(t), n, 0) = n - 1 Then
+            inner = Mid$(t, 2, n - 2)
+            ParseCountAtom = ParseCountExpr(inner)
+            Exit Function
+        End If
+    End If
+    If IsNumStr(t) <> 0 Then
+        ParseCountAtom = ParseNum(t)
+        Exit Function
+    End If
+    ci = FindConst(t)
+    If ci >= 0 Then
+        ParseCountAtom = gConstVal(ci)
+        Exit Function
+    End If
+    Print "bad array size: " + s
+    ParseCountAtom = 0
+End Function
+
+Function ParseCountExpr(s As String) As Long
+    Dim t As String
+    Dim n As Long
+    Dim i As Long
+    Dim depth As Long
+    Dim c As Long
+    Dim p As *Byte
+    Dim opPos As Long
+    Dim op As String
+    Dim leftV As Long
+    Dim rightV As Long
+    t = Trim$(s)
+    n = Len(t)
+    ParseCountExpr = 0
+    If n = 0 Then
+        Print "bad array size: (empty)"
+        Exit Function
+    End If
+
+    ' 螟門・縺ｮ (...) 繧貞翁縺後☆
+    While n >= 2
+        p = StrPtr(t)
+        If p[0] <> 40 Then Exit While
+        If MatchClose(p, n, 0) <> n - 1 Then Exit While
+        t = Trim$(Mid$(t, 2, n - 2))
+        n = Len(t)
+    Wend
+
+    ' 豺ｱ縺・縺ｮ + / -・亥承遶ｯ蜆ｪ蜈医ょ・鬆ｭ縺ｮ隨ｦ蜿ｷ縺ｯ辟｡隕厄ｼ・
+    opPos = 0
+    op = ""
+    depth = 0
+    p = StrPtr(t)
+    i = n - 1
+    While i >= 1
+        c = p[i]
+        If c = 41 Then
+            depth = depth + 1
+        ElseIf c = 40 Then
+            depth = depth - 1
+        ElseIf depth = 0 Then
+            If c = Asc("+") Or c = Asc("-") Then
+                opPos = i + 1
+                op = Mid$(t, i + 1, 1)
+                Exit While
+            End If
+        End If
+        i = i - 1
+    Wend
+    If opPos > 0 Then
+        leftV = ParseCountExpr(Left$(t, opPos - 1))
+        rightV = ParseCountExpr(Mid$(t, opPos + 1, n - opPos))
+        If op = "+" Then
+            ParseCountExpr = leftV + rightV
+        Else
+            ParseCountExpr = leftV - rightV
+        End If
+        Exit Function
+    End If
+
+    ' 豺ｱ縺・縺ｮ *
+    opPos = 0
+    depth = 0
+    i = n - 1
+    While i >= 1
+        c = p[i]
+        If c = 41 Then
+            depth = depth + 1
+        ElseIf c = 40 Then
+            depth = depth - 1
+        ElseIf depth = 0 Then
+            If c = Asc("*") Then
+                opPos = i + 1
+                Exit While
+            End If
+        End If
+        i = i - 1
+    Wend
+    If opPos > 0 Then
+        leftV = ParseCountExpr(Left$(t, opPos - 1))
+        rightV = ParseCountExpr(Mid$(t, opPos + 1, n - opPos))
+        ParseCountExpr = leftV * rightV
+        Exit Function
+    End If
+
+    ParseCountExpr = ParseCountAtom(t)
+End Function
+
+' 繝帙せ繝・WinAPI 繝倥ャ繝逶ｸ蠖難ｼ郁・蟾ｱ繝帙せ繝域凾・峨ゅた繝ｼ繧ｹ蛛ｴ縺ｧ縺ｯ螳夂ｾｩ縺励↑縺・
+' 蜷榊燕縺ｯ蟆乗枚蟄励〒菫晄戟・・indConst 縺・Lower$ 荳蝗槭□縺題｡後≧縺溘ａ・・
+Sub InitBuiltinConsts()
+    Dim ci As Long
+    gNConsts = 0
+    ci = 0
+    gConstName(ci) = "max_path"
+    gConstVal(ci) = 260
+    ci = ci + 1
+    gConstName(ci) = "null"
+    gConstVal(ci) = 0
+    ci = ci + 1
+    gConstName(ci) = "invalid_handle_value"
+    gConstVal(ci) = -1
+    ci = ci + 1
+    gConstName(ci) = "generic_read"
+    gConstVal(ci) = &H80000000
+    ci = ci + 1
+    gConstName(ci) = "generic_write"
+    gConstVal(ci) = &H40000000
+    ci = ci + 1
+    gConstName(ci) = "file_share_read"
+    gConstVal(ci) = 1
+    ci = ci + 1
+    gConstName(ci) = "open_existing"
+    gConstVal(ci) = 3
+    ci = ci + 1
+    gConstName(ci) = "create_always"
+    gConstVal(ci) = 2
+    ci = ci + 1
+    gConstName(ci) = "file_attribute_normal"
+    gConstVal(ci) = 128
+    ci = ci + 1
+    gConstName(ci) = "infinite"
+    gConstVal(ci) = -1
+    ci = ci + 1
+    gConstName(ci) = "mb_ok"
+    gConstVal(ci) = 0
+    ci = ci + 1
+    gNConsts = ci
+End Sub
+
+Function CompileTypeStart(lineStr As String) As Long
+    Dim name As String
+    CompileTypeStart = 0
+    name = Trim$(Mid$(lineStr, 6, Len(lineStr) - 5))
+    If IsIdentName(name) = 0 Then
+        Print "bad Type: " + lineStr
+        Exit Function
+    End If
+    ' Include/default 縺ｨ譏守､ｺ螳夂ｾｩ縺ｮ莠碁㍾繧定ｨｱ螳ｹ・・蝗樒岼縺ｯ繧ｹ繧ｭ繝・・・・
+    If FindType(name) >= 0 Then
+        gCurType = -2
+        gInType = 1
+        CompileTypeStart = 1
+        Exit Function
+    End If
+    If gNTypes >= MAX_TYPES Then
+        Print "too many Type: " + lineStr
+        Exit Function
+    End If
+    gCurType = gNTypes
+    gTypeName(gCurType) = Lower$(name)
+    gTypeSize(gCurType) = 0
+    gTypeFirstField(gCurType) = -1
+    gTypeLastField(gCurType) = -1
+    gNTypes = gNTypes + 1
+    gInType = 1
+    CompileTypeStart = 1
+End Function
+
+Function CompileTypeField(lineStr As String) As Long
+    Dim pos As Long
+    Dim namePart As String
+    Dim typeName As String
+    Dim name As String
+    Dim count As Long
+    Dim n As Long
+    Dim p As *Byte
+    Dim lb As Long
+    Dim i As Long
+    Dim sz As Long
+    Dim off As Long
+    Dim align As Long
+    Dim fi As Long
+    Dim isPtr As Long
+    CompileTypeField = 0
+    If gCurType = -2 Then
+        CompileTypeField = 1
+        Exit Function
+    End If
+    pos = InStr(1, Lower$(lineStr), " as ")
+    If pos = 0 Then
+        Print "Type field needs As: " + lineStr
+        Exit Function
+    End If
+    namePart = Trim$(Left$(lineStr, pos - 1))
+    typeName = Trim$(Mid$(lineStr, pos + 4, Len(lineStr) - pos - 3))
+    count = 1
+    name = namePart
+    n = Len(namePart)
+    p = StrPtr(namePart)
+    lb = 0
+    For i = 0 To n - 1
+        If p[i] = 40 Or p[i] = &H5B Then
+            lb = i + 1
+            Exit For
+        End If
+    Next
+    If lb > 1 Then
+        If (p[lb - 1] = 40 And p[n - 1] <> 41) Or (p[lb - 1] = &H5B And p[n - 1] <> &H5D) Then
+            Print "bad Type field array: " + lineStr
+            Exit Function
+        End If
+        name = Trim$(Left$(namePart, lb - 1))
+        count = ParseCountExpr(Mid$(namePart, lb + 1, n - lb - 1)) + 1
+    End If
+    isPtr = 0
+    ExpandTypeName(typeName, isPtr)
+    sz = TypeSizeOf(typeName)
+    If isPtr <> 0 Then sz = 4
+    If sz = 0 Or count <= 0 Or gNFields >= MAX_FIELDS Then
+        Print "bad Type field: " + lineStr
+        Exit Function
+    End If
+    align = sz
+    If align > 4 Then align = 4
+    off = gTypeSize(gCurType)
+    While (off Mod align) <> 0
+        off = off + 1
+    Wend
+    fi = gNFields
+    gFieldName(fi) = Lower$(name)
+    gFieldType(fi) = FindType(typeName)
+    gFieldOff(fi) = off
+    gFieldSize(fi) = sz
+    gFieldCount(fi) = count
+    gFieldNext(fi) = -1
+    If gTypeFirstField(gCurType) < 0 Then
+        gTypeFirstField(gCurType) = fi
+    Else
+        gFieldNext(gTypeLastField(gCurType)) = fi
+    End If
+    gTypeLastField(gCurType) = fi
+    gNFields = gNFields + 1
+    gTypeSize(gCurType) = off + sz * count
+    CompileTypeField = 1
+End Function
+
+Function CompileTypeEnd() As Long
+    CompileTypeEnd = 0
+    If gInType = 0 Then
+        Print "End Type without Type"
+        Exit Function
+    End If
+    gInType = 0
+    gCurType = -1
+    CompileTypeEnd = 1
+End Function
+
+' 蜈磯ｭ縺ｮ繝医ャ繝励Ξ繝吶Ν繧ｫ繝ｳ繝樔ｽ咲ｽｮ・・蟋九∪繧奇ｼ峨よ峡蠑ｧ繝ｻ蠑慕畑隨ｦ蜀・・辟｡隕・
+Function FindCommaTop(expr As String) As Long
+    Dim n As Long
+    Dim i As Long
+    Dim depth As Long
+    Dim inQ As Long
+    Dim c As Long
+    Dim p As *Byte
+    n = Len(expr)
+    p = StrPtr(expr)
+    depth = 0
+    inQ = 0
+    FindCommaTop = 0
+    For i = 0 To n - 1
+        c = p[i]
+        If inQ <> 0 Then
+            If c = 34 Then inQ = 0
+        ElseIf c = 34 Then
+            inQ = 1
+        ElseIf c = Asc("(") Or c = &H5B Then
+            depth = depth + 1
+        ElseIf c = Asc(")") Or c = &H5D Then
+            depth = depth - 1
+        ElseIf depth = 0 And c = Asc(",") Then
+            FindCommaTop = i + 1
+            Exit Function
+        End If
+    Next
+End Function
+
+' 1 螟画焚蛻・ "name As T" / "name=expr As T" / "name As T = expr"
+Function CompileOneDim(decl As String) As Long
+    Dim name As String
+    Dim typeName As String
+    Dim pos As Long
+    Dim i As Long
+    Dim count As Long
+    Dim elemSize As Long
+    Dim isPtr As Long
+    Dim isStr As Long
+    Dim namePart As String
+    Dim idxPart As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim lb As Long
+    Dim typeIdx As Long
+    Dim varIdx As Long
+    Dim lab As String
+    Dim lab2 As String
+    Dim initExpr As String
+    Dim eqPos As Long
+
+    CompileOneDim = 0
+    pos = InStr(1, Lower$(decl), " as ")
+    If pos = 0 Then
+        Print "Dim needs As: " + decl
+        Exit Function
+    End If
+    namePart = Trim$(Left$(decl, pos - 1))
+    typeName = Trim$(Mid$(decl, pos + 4, Len(decl) - pos - 3))
+    initExpr = ""
+
+    ' Dim name=expr As T  /  Dim name As T = expr
+    eqPos = InStr(1, typeName, "=")
+    If eqPos > 0 Then
+        initExpr = Trim$(Mid$(typeName, eqPos + 1, Len(typeName) - eqPos))
+        typeName = Trim$(Left$(typeName, eqPos - 1))
+    Else
+        eqPos = FindOp1(namePart, "=")
+        If eqPos > 0 Then
+            initExpr = Trim$(Mid$(namePart, eqPos + 1, Len(namePart) - eqPos))
+            namePart = Trim$(Left$(namePart, eqPos - 1))
+        End If
+    End If
+
+    isPtr = 0
+    ExpandTypeName(typeName, isPtr)
+    elemSize = TypeSizeOf(typeName)
+    If elemSize = 0 Then
+        Print "unknown type: " + typeName
+        Exit Function
+    End If
+
+    count = 1
+    name = namePart
+    n = Len(namePart)
+    p = StrPtr(namePart)
+    lb = 0
+    i = 0
+    While i < n
+        If p[i] = 40 Or p[i] = &H5B Then
+            lb = i + 1
+            Exit While
+        End If
+        i = i + 1
+    Wend
+    If lb > 1 Then
+        If (p[lb - 1] = 40 And p[n - 1] = 41) Or (p[lb - 1] = &H5B And p[n - 1] = &H5D) Then
+            name = Trim$(Left$(namePart, lb - 1))
+            idxPart = Mid$(namePart, lb + 1, n - lb - 1)
+            ' Dim a(N) 竊・豺ｻ蟄・0..N・郁ｦ∫ｴ謨ｰ N+1・峨７B/AB 莠呈鋤
+            count = ParseCountExpr(idxPart) + 1
+            If count <= 0 Then Exit Function
+            If isPtr <> 0 Then
+                Print "pointer array not supported: " + decl
+                Exit Function
+            End If
+            If initExpr <> "" Then
+                Print "array Dim cannot have initializer: " + decl
+                Exit Function
+            End If
+        Else
+            Print "bad Dim name: " + decl
+            Exit Function
+        End If
+    End If
+
+    If FindVar(name) >= 0 Then
+        Print "duplicate Dim: " + name
+        Exit Function
+    End If
+    isStr = 0
+    If Lower$(typeName) = "string" Then
+        isStr = 1
+    End If
+    typeIdx = FindType(typeName)
+    varIdx = AddVarEx(name, elemSize, count, isPtr, isStr)
+    If varIdx < 0 Then Exit Function
+    gVarTypeIdx(varIdx) = typeIdx
+    If initExpr <> "" Then
+        If GenArith(initExpr) = 0 Then Exit Function
+        EmitStoreVar(FindVar(name))
+    ElseIf isStr <> 0 Then
+        EnsureStringRt()
+        If count = 1 Then
+            EmitAsm("push str_empty")
+            EmitAsm("pop eax")
+            EmitStoreVar(FindVar(name))
+        ElseIf gVarIsGlobal(varIdx) = 0 Then
+            EmitAddrVar(FindVar(name))
+            EmitAsm("mov ecx, " + Trim$(Str$(count * 4)))
+            EmitAsm("xor eax, eax")
+            lab = NewLabel$()
+            lab2 = NewLabel$()
+            EmitLabel(lab)
+            EmitAsm("cmp ecx, 0")
+            EmitAsm("je " + lab2)
+            EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", eax")
+            EmitAsm("add ebx, 4")
+            EmitAsm("sub ecx, 4")
+            EmitAsm("jmp " + lab)
+            EmitLabel(lab2)
+        End If
+    End If
+    CompileOneDim = 1
+End Function
+
+Function CompileDim(lineStr As String) As Long
+    Dim rest As String
+    Dim piece As String
+    Dim comPos As Long
+
+    CompileDim = 0
+    rest = Trim$(Mid$(lineStr, 4, Len(lineStr) - 3))
+    If rest = "" Then
+        Print "Dim needs As: " + lineStr
+        Exit Function
+    End If
+    ' Dim a As T, b As U  窶ｦ 隍・焚螳｣險
+    While rest <> ""
+        comPos = FindCommaTop(rest)
+        If comPos = 0 Then
+            piece = Trim$(rest)
+            rest = ""
+        Else
+            piece = Trim$(Left$(rest, comPos - 1))
+            rest = Trim$(Mid$(rest, comPos + 1, Len(rest) - comPos))
+        End If
+        If piece = "" Then
+            Print "bad Dim: " + lineStr
+            Exit Function
+        End If
+        If CompileOneDim(piece) = 0 Then Exit Function
+    Wend
+    CompileDim = 1
+End Function
+
+Function CompileAssign(lineStr As String) As Long
+    Dim pos As Long
+    Dim name As String
+    Dim expr As String
+    Dim idx As Long
+    Dim lhs As String
+    Dim idxExpr As String
+    Dim i As Long
+    Dim n As Long
+    Dim lb As Long
+    Dim p As *Byte
+    Dim fieldSize As Long
+
+    CompileAssign = 0
+    pos = FindOp1(lineStr, "=")
+    If pos = 0 Then
+        Print "bad assignment: " + lineStr
+        Exit Function
+    End If
+    lhs = Trim$(Left$(lineStr, pos - 1))
+    expr = Trim$(Mid$(lineStr, pos + 1, Len(lineStr) - pos))
+
+    ' Function 蜷阪∈縺ｮ莉｣蜈･ = 謌ｻ繧雁､
+    ' Lower$(a)=Lower$(b) 縺ｯ String 謌ｻ繧翫ｒ隱､縺｣縺ｦ繝昴う繝ｳ繧ｿ豈碑ｼ・☆繧九％縺ｨ縺後≠繧九◆繧・StrEqCI 繧剃ｽｿ縺・
+    If gInProc <> 0 And gProcIsFunc <> 0 Then
+        If StrEqCI(lhs, gProcName) <> 0 Then
+            If GenArith(expr) = 0 Then Exit Function
+            EmitAsm("mov ebx, ebp")
+            EmitAsm("add ebx, " + Trim$(Str$(gRetOff)))
+            EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", eax")
+            CompileAssign = 1
+            Exit Function
+        End If
+    End If
+
+    ' 讒矩菴薙Γ繝ｳ繝蝉ｻ｣蜈･
+    If InStr(1, lhs, ".") > 0 Or InStr(1, lhs, "->") > 0 Then
+        If GenArith(expr) = 0 Then Exit Function
+        EmitAsm("push eax")
+        If EmitMemberAddr(lhs, fieldSize) = 0 Then
+            Print "error: cannot assign to member: " + lhs
+            Print "  hint: base must be Dim'd As a Type; for pointers use p->field"
+            Exit Function
+        End If
+        EmitAsm("pop eax")
+        EmitStoreSized(fieldSize)
+        CompileAssign = 1
+        Exit Function
+    End If
+
+    ' 豺ｻ蟄嶺ｻ｣蜈･ a(i)= / a[i]= / p[i]=
+    n = Len(lhs)
+    p = StrPtr(lhs)
+    lb = 0
+    i = 0
+    While i < n
+        If p[i] = 40 Or p[i] = &H5B Then
+            lb = i + 1
+            Exit While
+        End If
+        i = i + 1
+    Wend
+    If lb > 1 Then
+        i = MatchClose(p, n, lb - 1)
+        If i = n - 1 Then
+            name = Trim$(Left$(lhs, lb - 1))
+            idxExpr = Mid$(lhs, lb + 1, i - lb)
+            idx = FindVar(name)
+            If idx < 0 Then
+                Print "undeclared variable: " + name
+                Exit Function
+            End If
+            If GenArith(expr) = 0 Then Exit Function
+            EmitAsm("push eax")
+            If GenArith(idxExpr) = 0 Then Exit Function
+            EmitScaleAddBase(idx)
+            EmitAsm("pop eax")
+            If gVarSize(idx) = 1 Then
+                EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", al")
+            ElseIf gVarSize(idx) = 2 Then
+                EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", ax")
+            Else
+                EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", eax")
+            End If
+            CompileAssign = 1
+            Exit Function
+        End If
+    End If
+
+    idx = FindVar(lhs)
+    If idx < 0 Then
+        Print "undeclared variable: " + lhs
+        Exit Function
+    End If
+    If GenArith(expr) = 0 Then Exit Function
+    EmitStoreVar(idx)
+    CompileAssign = 1
+End Function
+
+Function CompileIfThen(lineStr As String) As Long
+    Dim e As String
+    Dim rest As String
+    Dim labElse As String
+    Dim labEnd As String
+    Dim pos As Long
+    Dim lowRest As String
+    CompileIfThen = 0
+    ' If <cond> Then [stmt]
+    e = Trim$(Mid$(lineStr, 3, Len(lineStr) - 2))
+    pos = InStr(1, Lower$(e), " then")
+    If pos = 0 Then
+        Print "If needs Then: " + lineStr
+        Exit Function
+    End If
+    rest = Trim$(Mid$(e, pos + 5, Len(e) - pos - 4))
+    e = Trim$(Left$(e, pos - 1))
+    If gIfSp >= MAX_IF Then
+        Print "If nesting too deep"
+        Exit Function
+    End If
+    labElse = NewLabel$()
+    labEnd = NewLabel$()
+    gIfElse(gIfSp) = labElse
+    gIfEnd(gIfSp) = labEnd
+    gIfSp = gIfSp + 1
+    If GenCond(e, labElse) = 0 Then Exit Function
+    If rest <> "" Then
+        lowRest = Lower$(rest)
+        If lowRest = "exit function" Or lowRest = "exit sub" Then
+            If CompileExitProc() = 0 Then Exit Function
+        ElseIf lowRest = "exit while" Then
+            If CompileExitWhile() = 0 Then Exit Function
+        ElseIf lowRest = "exit do" Then
+            If CompileExitDo() = 0 Then Exit Function
+        ElseIf lowRest = "exit for" Then
+            If CompileExitFor() = 0 Then Exit Function
+        ElseIf StartsWith(rest, "ExitProcess(") <> 0 Then
+            If CompileExitProcess(rest) = 0 Then Exit Function
+        ElseIf StartsWith(rest, "MessageBox(") <> 0 Then
+            If CompileMessageBox(rest) = 0 Then Exit Function
+        ElseIf FindOp1(rest, "=") > 0 Then
+            If CompileAssign(rest) = 0 Then Exit Function
+        ElseIf InStr(1, rest, "(") > 1 Then
+            If CompileCallStmt(rest) = 0 Then Exit Function
+        Else
+            Print "unsupported Then body: " + rest
+            Exit Function
+        End If
+        If CompileEndIf() = 0 Then Exit Function
+    End If
+    CompileIfThen = 1
+End Function
+
+Function CompileElse() As Long
+    Dim labElse As String
+    Dim labEnd As String
+    CompileElse = 0
+    If gIfSp <= 0 Then
+        Print "Else without If"
+        Exit Function
+    End If
+    labElse = gIfElse(gIfSp - 1)
+    labEnd = gIfEnd(gIfSp - 1)
+    EmitAsm("jmp " + labEnd)
+    EmitLabel(labElse)
+    gIfElse(gIfSp - 1) = ""
+    CompileElse = 1
+End Function
+
+Function CompileElseIfThen(lineStr As String) As Long
+    Dim e As String
+    Dim rest As String
+    Dim labElse As String
+    Dim labEnd As String
+    Dim pos As Long
+    Dim lowRest As String
+    CompileElseIfThen = 0
+    If gIfSp <= 0 Then
+        Print "ElseIf without If"
+        Exit Function
+    End If
+    ' ElseIf <cond> Then [stmt]
+    e = Trim$(Mid$(lineStr, 7, Len(lineStr) - 6))
+    pos = InStr(1, Lower$(e), " then")
+    If pos = 0 Then
+        Print "ElseIf needs Then: " + lineStr
+        Exit Function
+    End If
+    rest = Trim$(Mid$(e, pos + 5, Len(e) - pos - 4))
+    e = Trim$(Left$(e, pos - 1))
+    labElse = gIfElse(gIfSp - 1)
+    labEnd = gIfEnd(gIfSp - 1)
+    EmitAsm("jmp " + labEnd)
+    EmitLabel(labElse)
+    labElse = NewLabel$()
+    gIfElse(gIfSp - 1) = labElse
+    If GenCond(e, labElse) = 0 Then Exit Function
+    If rest <> "" Then
+        lowRest = Lower$(rest)
+        If lowRest = "exit function" Or lowRest = "exit sub" Then
+            If CompileExitProc() = 0 Then Exit Function
+        ElseIf lowRest = "exit while" Then
+            If CompileExitWhile() = 0 Then Exit Function
+        ElseIf lowRest = "exit do" Then
+            If CompileExitDo() = 0 Then Exit Function
+        ElseIf lowRest = "exit for" Then
+            If CompileExitFor() = 0 Then Exit Function
+        ElseIf StartsWith(rest, "ExitProcess(") <> 0 Then
+            If CompileExitProcess(rest) = 0 Then Exit Function
+        ElseIf FindOp1(rest, "=") > 0 Then
+            If CompileAssign(rest) = 0 Then Exit Function
+        ElseIf InStr(1, rest, "(") > 1 Then
+            If CompileCallStmt(rest) = 0 Then Exit Function
+        Else
+            Print "unsupported ElseIf Then body: " + rest
+            Exit Function
+        End If
+        If CompileEndIf() = 0 Then Exit Function
+    End If
+    CompileElseIfThen = 1
+End Function
+
+Function CompileEndIf() As Long
+    Dim labElse As String
+    Dim labEnd As String
+    CompileEndIf = 0
+    If gIfSp <= 0 Then
+        Print "End If without If"
+        Exit Function
+    End If
+    gIfSp = gIfSp - 1
+    labElse = gIfElse(gIfSp)
+    labEnd = gIfEnd(gIfSp)
+    If labElse <> "" Then
+        EmitLabel(labElse)
+    End If
+    EmitLabel(labEnd)
+    CompileEndIf = 1
+End Function
+
+Sub EnsureSelectSlot(depth As Long)
+    Dim lab As String
+    If depth < 0 Or depth >= MAX_SELECT Then Exit Sub
+    If gSelSlotReady(depth) <> 0 Then Exit Sub
+    gSelSlotReady(depth) = 1
+    lab = "v__sel" + Trim$(Str$(depth))
+    SbAppendStr(VarPtr(gSbData), "    " + lab + ":")
+    SbAppendCRLF(VarPtr(gSbData))
+    SbAppendStr(VarPtr(gSbData), "    dd 0")
+    SbAppendCRLF(VarPtr(gSbData))
+End Sub
+
+Function SelectSlotName$(depth As Long) As String
+    SelectSlotName$ = "v__sel" + Trim$(Str$(depth))
+End Function
+
+Function CompileSelectCase(lineStr As String) As Long
+    Dim e As String
+    Dim labEnd As String
+    Dim labNext As String
+    Dim slot As String
+    CompileSelectCase = 0
+    e = Trim$(Mid$(lineStr, 12, Len(lineStr) - 11))
+    If e = "" Then
+        Print "Select Case needs expression"
+        Exit Function
+    End If
+    If gSelSp >= MAX_SELECT Then
+        Print "Select Case nesting too deep"
+        Exit Function
+    End If
+    If GenArith(e) = 0 Then Exit Function
+    EnsureSelectSlot(gSelSp)
+    slot = SelectSlotName$(gSelSp)
+    EmitAsm("mov ebx, " + slot)
+    EmitAsm("mov " + Chr$(&H5B) + "ebx" + Chr$(&H5D) + ", eax")
+    labEnd = NewLabel$()
+    labNext = NewLabel$()
+    gSelEnd(gSelSp) = labEnd
+    gSelNext(gSelSp) = labNext
+    gSelStarted(gSelSp) = 0
+    gSelSp = gSelSp + 1
+    EmitAsm("jmp " + labNext)
+    CompileSelectCase = 1
+End Function
+
+Function CompileCase(lineStr As String) As Long
+    Dim rest As String
+    Dim lowRest As String
+    Dim sp As Long
+    Dim labNext As String
+    Dim slot As String
+    CompileCase = 0
+    If gSelSp <= 0 Then
+        Print "Case without Select Case"
+        Exit Function
+    End If
+    sp = gSelSp - 1
+    rest = Trim$(Mid$(lineStr, 5, Len(lineStr) - 4))
+    lowRest = Lower$(rest)
+    If gSelStarted(sp) <> 0 Then
+        EmitAsm("jmp " + gSelEnd(sp))
+    End If
+    EmitLabel(gSelNext(sp))
+    labNext = NewLabel$()
+    gSelNext(sp) = labNext
+    gSelStarted(sp) = 1
+    If lowRest = "else" Then
+        CompileCase = 1
+        Exit Function
+    End If
+    If GenArith(rest) = 0 Then Exit Function
+    EmitAsm("mov ecx, eax")
+    slot = SelectSlotName$(sp)
+    EmitAsm("mov ebx, " + slot)
+    EmitAsm("mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    EmitAsm("cmp eax, ecx")
+    EmitAsm("jne " + labNext)
+    CompileCase = 1
+End Function
+
+Function CompileEndSelect() As Long
+    Dim sp As Long
+    CompileEndSelect = 0
+    If gSelSp <= 0 Then
+        Print "End Select without Select Case"
+        Exit Function
+    End If
+    sp = gSelSp - 1
+    EmitAsm("jmp " + gSelEnd(sp))
+    EmitLabel(gSelNext(sp))
+    EmitLabel(gSelEnd(sp))
+    gSelSp = sp
+    CompileEndSelect = 1
+End Function
+
+Function CompileWhile(lineStr As String) As Long
+    Dim e As String
+    Dim labTop As String
+    Dim labEnd As String
+    CompileWhile = 0
+    e = Trim$(Mid$(lineStr, 6, Len(lineStr) - 5))
+    If e = "" Then
+        Print "While needs condition"
+        Exit Function
+    End If
+    If gLoopSp >= MAX_LOOP Then
+        Print "loop nesting too deep"
+        Exit Function
+    End If
+    labTop = NewLabel$()
+    labEnd = NewLabel$()
+    gLoopTop(gLoopSp) = labTop
+    gLoopCont(gLoopSp) = labTop
+    gLoopEnd(gLoopSp) = labEnd
+    gLoopKind(gLoopSp) = 1
+    gLoopSp = gLoopSp + 1
+    EmitLabel(labTop)
+    If GenCond(e, labEnd) = 0 Then Exit Function
+    CompileWhile = 1
+End Function
+
+Function CompileWend() As Long
+    CompileWend = 0
+    If gLoopSp <= 0 Then
+        Print "Wend without While"
+        Exit Function
+    End If
+    If gLoopKind(gLoopSp - 1) <> 1 Then
+        Print "Wend without While"
+        Exit Function
+    End If
+    gLoopSp = gLoopSp - 1
+    EmitAsm("jmp " + gLoopTop(gLoopSp))
+    EmitLabel(gLoopEnd(gLoopSp))
+    CompileWend = 1
+End Function
+
+Function CompileExitWhile() As Long
+    CompileExitWhile = 0
+    If gLoopSp <= 0 Then
+        Print "Exit While without While"
+        Exit Function
+    End If
+    If gLoopKind(gLoopSp - 1) <> 1 Then
+        Print "Exit While without While"
+        Exit Function
+    End If
+    EmitAsm("jmp " + gLoopEnd(gLoopSp - 1))
+    CompileExitWhile = 1
+End Function
+
+' Do / Do While cond / Do Until cond
+Function CompileDo(lineStr As String) As Long
+    Dim rest As String
+    Dim low As String
+    Dim e As String
+    Dim labTop As String
+    Dim labBody As String
+    Dim labEnd As String
+    CompileDo = 0
+    rest = Trim$(Mid$(lineStr, 3, Len(lineStr) - 2))
+    low = Lower$(rest)
+    If gLoopSp >= MAX_LOOP Then
+        Print "loop nesting too deep"
+        Exit Function
+    End If
+    labTop = NewLabel$()
+    labEnd = NewLabel$()
+    gLoopTop(gLoopSp) = labTop
+    gLoopCont(gLoopSp) = labTop
+    gLoopEnd(gLoopSp) = labEnd
+    gLoopKind(gLoopSp) = 2
+    gLoopSp = gLoopSp + 1
+    EmitLabel(labTop)
+    If rest = "" Then
+        CompileDo = 1
+        Exit Function
+    End If
+    If StartsWith(low, "while ") <> 0 Then
+        e = Trim$(Mid$(rest, 7, Len(rest) - 6))
+        If e = "" Then
+            Print "Do While needs condition"
+            Exit Function
+        End If
+        If GenCond(e, labEnd) = 0 Then Exit Function
+        CompileDo = 1
+        Exit Function
+    End If
+    If StartsWith(low, "until ") <> 0 Then
+        e = Trim$(Mid$(rest, 7, Len(rest) - 6))
+        If e = "" Then
+            Print "Do Until needs condition"
+            Exit Function
+        End If
+        ' 蛛ｽ縺ｪ繧画悽菴薙∫悄縺ｪ繧臥ｵゆｺ・
+        labBody = NewLabel$()
+        If GenCond(e, labBody) = 0 Then Exit Function
+        EmitAsm("jmp " + labEnd)
+        EmitLabel(labBody)
+        CompileDo = 1
+        Exit Function
+    End If
+    Print "bad Do: " + lineStr
+End Function
+
+Function CompileLoop(lineStr As String) As Long
+    Dim rest As String
+    Dim low As String
+    Dim e As String
+    Dim sp As Long
+    Dim labTop As String
+    Dim labEnd As String
+    CompileLoop = 0
+    If gLoopSp <= 0 Then
+        Print "Loop without Do"
+        Exit Function
+    End If
+    If gLoopKind(gLoopSp - 1) <> 2 Then
+        Print "Loop without Do"
+        Exit Function
+    End If
+    sp = gLoopSp - 1
+    labTop = gLoopTop(sp)
+    labEnd = gLoopEnd(sp)
+    rest = Trim$(Mid$(lineStr, 5, Len(lineStr) - 4))
+    low = Lower$(rest)
+    If rest = "" Then
+        EmitAsm("jmp " + labTop)
+        EmitLabel(labEnd)
+        gLoopSp = sp
+        CompileLoop = 1
+        Exit Function
+    End If
+    If StartsWith(low, "while ") <> 0 Then
+        e = Trim$(Mid$(rest, 7, Len(rest) - 6))
+        If e = "" Then
+            Print "Loop While needs condition"
+            Exit Function
+        End If
+        If GenCond(e, labEnd) = 0 Then Exit Function
+        EmitAsm("jmp " + labTop)
+        EmitLabel(labEnd)
+        gLoopSp = sp
+        CompileLoop = 1
+        Exit Function
+    End If
+    If StartsWith(low, "until ") <> 0 Then
+        e = Trim$(Mid$(rest, 7, Len(rest) - 6))
+        If e = "" Then
+            Print "Loop Until needs condition"
+            Exit Function
+        End If
+        ' 逵溘↑繧臥ｵゆｺ・∝⊃縺ｪ繧牙・鬆ｭ縺ｸ
+        If GenCond(e, labTop) = 0 Then Exit Function
+        EmitLabel(labEnd)
+        gLoopSp = sp
+        CompileLoop = 1
+        Exit Function
+    End If
+    Print "bad Loop: " + lineStr
+End Function
+
+Function CompileExitDo() As Long
+    CompileExitDo = 0
+    If gLoopSp <= 0 Then
+        Print "Exit Do without Do"
+        Exit Function
+    End If
+    If gLoopKind(gLoopSp - 1) <> 2 Then
+        Print "Exit Do without Do"
+        Exit Function
+    End If
+    EmitAsm("jmp " + gLoopEnd(gLoopSp - 1))
+    CompileExitDo = 1
+End Function
+
+Function CompileFor(lineStr As String) As Long
+    Dim rest As String
+    Dim pos As Long
+    Dim posTo As Long
+    Dim posStep As Long
+    Dim varName As String
+    Dim exprFrom As String
+    Dim exprTo As String
+    Dim exprStep As String
+    Dim idx As Long
+    Dim labTop As String
+    Dim labCont As String
+    Dim labEnd As String
+
+    CompileFor = 0
+    rest = Trim$(Mid$(lineStr, 4, Len(lineStr) - 3))
+    pos = FindOp1(rest, "=")
+    If pos = 0 Then
+        Print "For needs ="
+        Exit Function
+    End If
+    varName = Trim$(Left$(rest, pos - 1))
+    rest = Trim$(Mid$(rest, pos + 1, Len(rest) - pos))
+    posTo = InStr(1, Lower$(rest), " to ")
+    If posTo = 0 Then
+        Print "For needs To"
+        Exit Function
+    End If
+    exprFrom = Trim$(Left$(rest, posTo - 1))
+    rest = Trim$(Mid$(rest, posTo + 4, Len(rest) - posTo - 3))
+    posStep = InStr(1, Lower$(rest), " step ")
+    If posStep > 0 Then
+        exprTo = Trim$(Left$(rest, posStep - 1))
+        exprStep = Trim$(Mid$(rest, posStep + 6, Len(rest) - posStep - 5))
+    Else
+        exprTo = rest
+        exprStep = "1"
+    End If
+
+    idx = FindVar(varName)
+    If idx < 0 Then
+        Print "For variable undeclared: " + varName
+        Exit Function
+    End If
+    If GenArith(exprFrom) = 0 Then Exit Function
+    EmitStoreVar(idx)
+
+    If gLoopSp >= MAX_LOOP Then
+        Print "loop nesting too deep"
+        Exit Function
+    End If
+    labTop = NewLabel$()
+    labCont = NewLabel$()
+    labEnd = NewLabel$()
+    gLoopTop(gLoopSp) = labTop
+    gLoopCont(gLoopSp) = labCont
+    gLoopEnd(gLoopSp) = labEnd
+    gLoopKind(gLoopSp) = 3
+    gForVar(gLoopSp) = varName
+    gForStep(gLoopSp) = exprStep
+    gLoopSp = gLoopSp + 1
+
+    EmitLabel(labTop)
+    ' If var > to Then exit (Step>0 蜑肴署)
+    EmitLoadVar(idx)
+    EmitAsm("push eax")
+    If GenArith(exprTo) = 0 Then Exit Function
+    EmitAsm("pop ecx")
+    EmitAsm("cmp ecx, eax")
+    EmitAsm("jg " + labEnd)
+    CompileFor = 1
+End Function
+
+Function CompileNext() As Long
+    Dim sp As Long
+    Dim idx As Long
+    Dim varName As String
+    Dim exprStep As String
+    CompileNext = 0
+    If gLoopSp <= 0 Then
+        Print "Next without For"
+        Exit Function
+    End If
+    If gLoopKind(gLoopSp - 1) <> 3 Then
+        Print "Next without For"
+        Exit Function
+    End If
+    sp = gLoopSp - 1
+    varName = gForVar(sp)
+    exprStep = gForStep(sp)
+    idx = FindVar(varName)
+    If idx < 0 Then
+        Print "Next: bad variable"
+        Exit Function
+    End If
+    EmitLabel(gLoopCont(sp))
+    EmitLoadVar(idx)
+    EmitAsm("push eax")
+    If GenArith(exprStep) = 0 Then Exit Function
+    EmitAsm("pop ecx")
+    EmitAsm("add eax, ecx")
+    EmitStoreVar(idx)
+    EmitAsm("jmp " + gLoopTop(sp))
+    EmitLabel(gLoopEnd(sp))
+    gLoopSp = sp
+    CompileNext = 1
+End Function
+
+Function CompileExitFor() As Long
+    CompileExitFor = 0
+    If gLoopSp <= 0 Then
+        Print "Exit For without For"
+        Exit Function
+    End If
+    If gLoopKind(gLoopSp - 1) <> 3 Then
+        Print "Exit For without For"
+        Exit Function
+    End If
+    EmitAsm("jmp " + gLoopEnd(gLoopSp - 1))
+    CompileExitFor = 1
+End Function
+
+Sub SaveMainScope()
+    Dim i As Long
+    SbMove(VarPtr(gSbSaved), VarPtr(gSbText))
+    gSavedNVars = gNVars
+    gSavedFrame = gFrameSize
+    If gNVars > 0 Then
+        For i = 0 To gNVars - 1
+            gSavedVarName(i) = gVarName(i)
+            gSavedVarOff(i) = gVarOff(i)
+            gSavedVarSize(i) = gVarSize(i)
+            gSavedVarCount(i) = gVarCount(i)
+            gSavedVarIsPtr(i) = gVarIsPtr(i)
+            gSavedVarIsStr(i) = gVarIsStr(i)
+            gSavedVarIsGlobal(i) = gVarIsGlobal(i)
+            gSavedVarIsByRef(i) = gVarIsByRef(i)
+        Next
+    End If
+End Sub
+
+Sub RestoreMainScope()
+    Dim i As Long
+    SbMove(VarPtr(gSbText), VarPtr(gSbSaved))
+    gNVars = gSavedNVars
+    gFrameSize = gSavedFrame
+    If gNVars > 0 Then
+        For i = 0 To gNVars - 1
+            gVarName(i) = gSavedVarName(i)
+            gVarOff(i) = gSavedVarOff(i)
+            gVarSize(i) = gSavedVarSize(i)
+            gVarCount(i) = gSavedVarCount(i)
+            gVarIsPtr(i) = gSavedVarIsPtr(i)
+            gVarIsStr(i) = gSavedVarIsStr(i)
+            gVarIsGlobal(i) = gSavedVarIsGlobal(i)
+            gVarIsByRef(i) = gSavedVarIsByRef(i)
+        Next
+    End If
+End Sub
+
+Function AddArgVar(name As String, off As Long, elemSize As Long, isPtr As Long, isStr As Long, typeIdx As Long, isByRef As Long) As Long
+    Dim idx As Long
+    If gNVars >= MAX_VARS Then
+        Print "too many variables"
+        AddArgVar = -1
+        Exit Function
+    End If
+    idx = gNVars
+    gVarName(idx) = Lower$(name)
+    gVarOff(idx) = off
+    ' gVarSize 縺ｯ豺ｻ蟄励せ繧ｱ繝ｼ繝ｫ / p[i] 縺ｮ隕∫ｴ繧ｵ繧､繧ｺ縲・
+    ' 繝昴う繝ｳ繧ｿ蠑墓焚縺ｯ繝昴う繝ｳ繧ｿ蟷・4)縺ｧ縺ｯ縺ｪ縺乗欠縺怜・縺ｮ繧ｵ繧､繧ｺ繧剃ｿ晄戟縺吶ｋ・・ddVarEx 縺ｨ蜷後§・峨・
+    gVarSize(idx) = elemSize
+    If isStr <> 0 Then gVarSize(idx) = 4
+    gVarCount(idx) = 1
+    gVarIsPtr(idx) = isPtr
+    gVarIsStr(idx) = isStr
+    gVarIsGlobal(idx) = 0
+    gVarIsByRef(idx) = isByRef
+    gVarTypeIdx(idx) = typeIdx
+    gNVars = gNVars + 1
+    AddArgVar = idx
+End Function
+
+Function FindSig(name As String) As Long
+    Dim i As Long
+    Dim n As String
+    n = Lower$(name)
+    FindSig = -1
+    If gNSigs <= 0 Then Exit Function
+    For i = 0 To gNSigs - 1
+        If gSigName(i) = n Then
+            FindSig = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Function SigArgByRef(si As Long, argIndex As Long) As Long
+    Dim bit As Long
+    Dim k As Long
+    Dim masked As Long
+    SigArgByRef = 0
+    If si < 0 Or argIndex < 0 Then Exit Function
+    bit = 1
+    k = 0
+    While k < argIndex
+        bit = bit * 2
+        k = k + 1
+    Wend
+    ' If 譚｡莉ｶ蜀・・ And 縺ｯ隲也炊 And 縺ｫ縺ｪ繧九・縺ｧ縲√ン繝・ヨ遨阪・莉｣蜈･縺ｧ陦後≧
+    masked = gSigByRef(si) And bit
+    If masked <> 0 Then SigArgByRef = 1
+End Function
+
+Sub RegisterSig(name As String, byRefBits As Long)
+    Dim i As Long
+    Dim n As String
+    n = Lower$(name)
+    i = FindSig(n)
+    If i >= 0 Then
+        gSigByRef(i) = byRefBits
+        Exit Sub
+    End If
+    If gNSigs >= MAX_PROCS Then
+        Print "too many procedures"
+        Exit Sub
+    End If
+    gSigName(gNSigs) = n
+    gSigByRef(gNSigs) = byRefBits
+    gNSigs = gNSigs + 1
+End Sub
+
+Function CompileProcHeader(lineStr As String, isFunc As Long) As Long
+    Dim low As String
+    Dim rest As String
+    Dim name As String
+    Dim argsText As String
+    Dim lp As Long
+    Dim rp As Long
+    Dim a As Long
+    Dim arg As String
+    Dim pos As Long
+    Dim argOff As Long
+    Dim i As Long
+    Dim argIsStr As Long
+    Dim argIsPtr As Long
+    Dim argIsByRef As Long
+    Dim argType As String
+    Dim argElem As Long
+    Dim argTypeIdx As Long
+    Dim byRefBits As Long
+    Dim bit As Long
+
+    CompileProcHeader = 0
+    If gInProc <> 0 Then
+        Print "nested Sub/Function not allowed"
+        Exit Function
+    End If
+    If gIfSp <> 0 Or gLoopSp <> 0 Then
+        Print "Sub/Function inside If/loop not allowed"
+        Exit Function
+    End If
+
+    low = Lower$(lineStr)
+    If isFunc <> 0 Then
+        rest = Trim$(Mid$(lineStr, 9, Len(lineStr) - 8))
+    Else
+        rest = Trim$(Mid$(lineStr, 4, Len(lineStr) - 3))
+    End If
+
+    lp = InStr(1, rest, "(")
+    If lp = 0 Then
+        Print "Sub/Function needs ()"
+        Exit Function
+    End If
+    name = Trim$(Left$(rest, lp - 1))
+    rp = 0
+    a = Len(rest)
+    While a >= 1
+        If Mid$(rest, a, 1) = ")" Then
+            rp = a
+            Exit While
+        End If
+        a = a - 1
+    Wend
+    If rp = 0 Or rp <= lp Then
+        Print "bad Sub/Function header"
+        Exit Function
+    End If
+    argsText = ArgsBetween$(rest, lp, rp)
+
+    SaveMainScope()
+    ' 繧ｰ繝ｭ繝ｼ繝舌Ν縺ｯ谿九☆縲ゅΟ繝ｼ繧ｫ繝ｫ縺縺代ヵ繝ｬ繝ｼ繝繧呈眠隕上↓
+    gFrameSize = 0
+    gInProc = 1
+    gProcName = name
+    gProcIsFunc = isFunc
+    gProcArgBytes = 0
+    gRetOff = 0
+    byRefBits = 0
+
+    If isFunc <> 0 Then
+        ' 謌ｻ繧雁､繧ｹ繝ｭ繝・ヨ
+        gFrameSize = 4
+        gRetOff = -4
+    End If
+
+    If argsText <> "" Then
+        If SplitArgs(argsText) = 0 Then Exit Function
+        argOff = 8
+        bit = 1
+        For i = 0 To gNArgs - 1
+            arg = Trim$(gArgs(i))
+            argIsByRef = 0
+            ' ByRef/ByVal 繧帝勁蜴ｻ・・yRef 縺ｯ繝昴う繝ｳ繧ｿ貂｡縺励→縺励※險倬鹸・・
+            If StartsWith(Lower$(arg), "byref ") <> 0 Then
+                argIsByRef = 1
+                arg = Trim$(Mid$(arg, 7, Len(arg) - 6))
+            ElseIf StartsWith(Lower$(arg), "byval ") <> 0 Then
+                arg = Trim$(Mid$(arg, 7, Len(arg) - 6))
+            End If
+            pos = InStr(1, Lower$(arg), " as ")
+            argIsStr = 0
+            argIsPtr = 0
+            argElem = 4
+            argTypeIdx = -1
+            If pos > 0 Then
+                argType = Trim$(Mid$(arg, pos + 4, Len(arg) - pos - 3))
+                ExpandTypeName(argType, argIsPtr)
+                If Lower$(argType) = "string" Then argIsStr = 1
+                argElem = TypeSizeOf(argType)
+                If argElem <= 0 Then argElem = 4
+                argTypeIdx = FindType(argType)
+                arg = Trim$(Left$(arg, pos - 1))
+            End If
+            If AddArgVar(arg, argOff, argElem, argIsPtr, argIsStr, argTypeIdx, argIsByRef) < 0 Then Exit Function
+            If argIsByRef <> 0 Then byRefBits = byRefBits Or bit
+            bit = bit * 2
+            argOff = argOff + 4
+            gProcArgBytes = gProcArgBytes + 4
+        Next
+    End If
+
+    RegisterSig(name, byRefBits)
+    CompileProcHeader = 1
+End Function
+
+Function CompileEndProc() As Long
+    CompileEndProc = 0
+    If gInProc = 0 Then
+        Print "End Sub/Function without header"
+        Exit Function
+    End If
+    If gIfSp <> 0 Or gLoopSp <> 0 Then
+        Print "unclosed If/loop in procedure"
+        Exit Function
+    End If
+
+    SbMove(VarPtr(gSbTmp), VarPtr(gSbText))
+    EmitAsm("push ebp")
+    EmitAsm("mov ebp, esp")
+    If gFrameSize > 0 Then
+        EmitAsm("sub esp, " + Trim$(Str$(gFrameSize)))
+    End If
+    SbAppendSb(VarPtr(gSbText), VarPtr(gSbTmp))
+    SbClear(VarPtr(gSbTmp))
+
+    If gProcIsFunc <> 0 Then
+        EmitAsm("mov ebx, ebp")
+        EmitAsm("add ebx, " + Trim$(Str$(gRetOff)))
+        EmitAsm("mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    End If
+    EmitAsm("mov esp, ebp")
+    EmitAsm("pop ebp")
+    If gProcArgBytes > 0 Then
+        EmitAsm("ret " + Trim$(Str$(gProcArgBytes)))
+    Else
+        EmitAsm("ret")
+    End If
+
+    SbAppendStr(VarPtr(gSbProc), "_" + gProcName + ":")
+    SbAppendCRLF(VarPtr(gSbProc))
+    SbAppendSb(VarPtr(gSbProc), VarPtr(gSbText))
+    SbAppendCRLF(VarPtr(gSbProc))
+    SbClear(VarPtr(gSbText))
+
+    gInProc = 0
+    gProcName = ""
+    gProcIsFunc = 0
+    RestoreMainScope()
+    CompileEndProc = 1
+End Function
+
+Function CompileExitProc() As Long
+    CompileExitProc = 0
+    If gInProc = 0 Then
+        Print "Exit Sub/Function outside procedure"
+        Exit Function
+    End If
+    If gProcIsFunc <> 0 Then
+        EmitAsm("mov ebx, ebp")
+        EmitAsm("add ebx, " + Trim$(Str$(gRetOff)))
+        EmitAsm("mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+    End If
+    EmitAsm("mov esp, ebp")
+    EmitAsm("pop ebp")
+    If gProcArgBytes > 0 Then
+        EmitAsm("ret " + Trim$(Str$(gProcArgBytes)))
+    Else
+        EmitAsm("ret")
+    End If
+    CompileExitProc = 1
+End Function
+
+Function CompileCallStmt(lineStr As String) As Long
+    Dim lp As Long
+    Dim rp As Long
+    Dim a As Long
+    Dim name As String
+    Dim argsText As String
+    Dim i As Long
+    Dim si As Long
+
+    CompileCallStmt = 0
+    lp = InStr(1, lineStr, "(")
+    If lp <= 1 Then Exit Function
+    name = Trim$(Left$(lineStr, lp - 1))
+    If Lower$(name) = "if" Or Lower$(name) = "while" Or Lower$(name) = "for" Then Exit Function
+
+    rp = 0
+    a = Len(lineStr)
+    While a >= 1
+        If Mid$(lineStr, a, 1) = ")" Then
+            rp = a
+            Exit While
+        End If
+        a = a - 1
+    Wend
+    If rp = 0 Or rp <= lp Then
+        Print "bad call: " + lineStr
+        Exit Function
+    End If
+    argsText = ArgsBetween$(lineStr, lp, rp)
+
+    If argsText = "" Then
+        gNArgs = 0
+    Else
+        If SplitArgs(argsText) = 0 Then Exit Function
+    End If
+
+    si = FindSig(name)
+    ' stdcall: 蜿ｳ縺九ｉ push・・tep -1 縺ｮ For 縺ｯ逕滓・繧ｳ繝ｼ繝峨′諤ｪ縺励＞縺ｮ縺ｧ While 繧剃ｽｿ縺・ｼ・
+    If gNArgs > 0 Then
+        i = gNArgs - 1
+        While i >= 0
+            If SigArgByRef(si, i) <> 0 Then
+                If GenArithAddr(gArgs(i)) = 0 Then Exit Function
+            Else
+                If GenArith(gArgs(i)) = 0 Then Exit Function
+            End If
+            EmitAsm("push eax")
+            i = i - 1
+        Wend
+    End If
+    EmitCallName(name)
+    CompileCallStmt = 1
+End Function
+
+Sub ExpandIncludesSub(src As *Byte, srcSize As Long, currentFile As String, depth As Long)
+    Dim i As Long
+    Dim start As Long
+    Dim c As Long
+    Dim n As Long
+    Dim lineBuf[MAX_LINE] As Byte
+    Dim lineStr As String
+    Dim low As String
+    Dim q1 As Long
+    Dim q2 As Long
+    Dim inc As String
+    Dim full As String
+    Dim child As *Byte
+    Dim childSize As Long
+    Dim j As Long
+    Dim outText As String
+    Dim childText As String
+
+    gExpandResult = ""
+    If depth >= 16 Then
+        Print "#include nesting/cycle too deep"
+        Exit Sub
+    End If
+    i = 0
+    While i < srcSize
+        start = i
+        While i < srcSize
+            c = src[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        n = i - start
+        If n >= MAX_LINE Then n = MAX_LINE - 1
+        If n > 0 Then memcpy(lineBuf, VarPtr(src[start]), n)
+        lineBuf[n] = 0
+        lineStr = MakeStr(lineBuf)
+        low = Lower$(Trim$(StripComment$(lineStr)))
+        If StartsWith(low, "#include") <> 0 Then
+            q1 = InStr(1, lineStr, Chr$(34))
+            q2 = 0
+            If q1 > 0 Then q2 = InStr(q1 + 1, lineStr, Chr$(34))
+            If q1 = 0 Or q2 <= q1 Then
+                Print "bad #include: " + lineStr
+                gExpandResult = ""
+                Exit Sub
+            End If
+            inc = Mid$(lineStr, q1 + 1, q2 - q1 - 1)
+            full = inc
+            If InStr(1, inc, ":") = 0 And Left$(inc, 1) <> "\" And Left$(inc, 1) <> "/" Then
+                full = DirOf$(currentFile) + inc
+            End If
+            For j = 0 To depth - 1
+                If Lower$(gIncludeStack(j)) = Lower$(full) Then
+                    Print "#include cycle: " + full
+                    gExpandResult = ""
+                    Exit Sub
+                End If
+            Next
+            LoadFileToGlobal(StrPtr(full))
+            child = gLoadPtr
+            childSize = gLastLoadSize
+            If child = NULL Then
+                Print "cannot include: " + full
+                gExpandResult = ""
+                Exit Sub
+            End If
+            gIncludeStack(depth) = full
+            ExpandIncludesSub(child, childSize, full, depth + 1)
+            childText = gExpandResult
+            free(child)
+            outText = outText + childText
+        Else
+            outText = outText + lineStr + Chr$(13) + Chr$(10)
+        End If
+        If i < srcSize And src[i] = 13 Then i = i + 1
+        If i < srcSize And src[i] = 10 Then i = i + 1
+    Wend
+    gExpandResult = outText
+End Sub
+
+Function ExpandIncludes$(src As *Byte, srcSize As Long, currentFile As String, depth As Long) As String
+    ExpandIncludesSub(src, srcSize, currentFile, depth)
+    ExpandIncludes$ = gExpandResult
+End Function
+
+' 螳溯｡後ヵ繧｡繧､繝ｫ髫｣ or 繧ｫ繝ｬ繝ｳ繝医・ Include\default\default.idx
+Function DefaultIncludeIdx$() As String
+    Dim buf[MAX_PATH] As Byte
+    Dim s As String
+    Dim i As Long
+    Dim n As Long
+    Dim ch As String
+    Dim slashPos As Long
+    Dim dir As String
+    Dim p As String
+
+    GetModuleFileName(NULL, buf, MAX_PATH)
+    s = MakeStr(buf)
+    n = Len(s)
+    slashPos = 0
+    For i = 1 To n
+        ch = Mid$(s, i, 1)
+        If ch = "\" Or ch = "/" Then slashPos = i
+    Next
+    If slashPos > 0 Then
+        dir = Left$(s, slashPos)
+    Else
+        dir = ""
+    End If
+    p = dir + "Include\default\default.idx"
+    If FileExists(p) <> 0 Then
+        DefaultIncludeIdx$ = p
+        Exit Function
+    End If
+    p = "Include\default\default.idx"
+    If FileExists(p) <> 0 Then
+        DefaultIncludeIdx$ = p
+        Exit Function
+    End If
+    DefaultIncludeIdx$ = ""
+End Function
+
+' 繧ｽ繝ｼ繧ｹ縺ｫ譏守､ｺ縺後↑縺上※繧・Include/default 繧貞・鬆ｭ縺ｸ螻暮幕
+Sub PrependDefaultIncludes()
+    Dim idx As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim saved As String
+
+    idx = DefaultIncludeIdx$()
+    If idx = "" Then Exit Sub
+    LoadFileToGlobal(StrPtr(idx))
+    p = gLoadPtr
+    n = gLastLoadSize
+    If p = 0 Or n <= 0 Then Exit Sub
+    saved = gExpandResult
+    ExpandIncludesSub(p, n, idx, 0)
+    free(p)
+    If gExpandResult = "" Then
+        gExpandResult = saved
+        Exit Sub
+    End If
+    gExpandResult = gExpandResult + saved
+End Sub
+
+Function CompileBuffer(src As *Byte, srcSize As Long) As Long
+    Dim i As Long
+    Dim start As Long
+    Dim lineBuf[MAX_LINE] As Byte
+    Dim lenLine As Long
+    Dim c As Long
+    Dim lineStr As String
+    Dim low As String
+
+    CompileBuffer = 0
+    gCompileOk = 0
+    gSrcLine = 0
+    gSrcLineText = ""
+    SbClear(VarPtr(gSbData))
+    SbClear(VarPtr(gSbText))
+    SbClear(VarPtr(gSbProc))
+    SbClear(VarPtr(gSbRt))
+    SbClear(VarPtr(gSbOut))
+    SbClear(VarPtr(gSbTmp))
+    SbClear(VarPtr(gSbSaved))
+    gStrCount = 0
+    gUseMsgBox = 0
+    gEmittedExit = 0
+    gUseStringRt = 0
+    gUseHostRt = 0
+    gUseInput = 0
+    gApiExternLines = ""
+    gNVars = 0
+    gNSigs = 0
+    gFrameSize = 0
+    InitBuiltinConsts()
+    gNTypes = 0
+    gNTypeDefs = 0
+    gNFields = 0
+    gInType = 0
+    gCurType = -1
+    gLabelId = 0
+    gIfSp = 0
+    gLoopSp = 0
+    gSelSp = 0
+    i = 0
+    While i < MAX_SELECT
+        gSelSlotReady(i) = 0
+        i = i + 1
+    Wend
+    gInProc = 0
+    gProcName = ""
+    gProcIsFunc = 0
+
+    i = 0
+    While i < srcSize
+        start = i
+        While i < srcSize
+            c = src[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        gSrcLine = gSrcLine + 1
+        lenLine = i - start
+        If lenLine >= MAX_LINE Then lenLine = MAX_LINE - 1
+        If lenLine > 0 Then
+            memcpy(lineBuf, VarPtr(src[start]), lenLine)
+        End If
+        lineBuf[lenLine] = 0
+        lineStr = Trim$(StripComment$(MakeStr(lineBuf)))
+        gSrcLineText = lineStr
+
+        If lineStr <> "" Then
+            low = Lower$(lineStr)
+            If StartsWith(low, "#console") <> 0 Or StartsWith(low, "#strict") <> 0 Then
+                ' ignore
+            ElseIf gInType <> 0 Then
+                If low = "end type" Then
+                    If CompileTypeEnd() = 0 Then
+                        Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                        Exit Function
+                    End If
+                ElseIf CompileTypeField(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "typedef ") <> 0 Then
+                If CompileTypeDef(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "type ") <> 0 Then
+                If CompileTypeStart(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "end select" Then
+                If CompileEndSelect() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "end" Then
+                ' End = 繝励Ο繧ｻ繧ｹ邨ゆｺ・ｼ・ub 蜀・・ USAGE 遲峨〒繧ゑｼ・
+                EmitAsm("push 0")
+                EmitCallName("ExitProcess")
+                gEmittedExit = 1
+            ElseIf StartsWith(low, "select case ") <> 0 Then
+                If CompileSelectCase(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "case ") <> 0 Then
+                If CompileCase(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "elseif ") <> 0 Then
+                If CompileElseIfThen(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "else" Then
+                If CompileElse() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "end if" Then
+                If CompileEndIf() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "wend" Then
+                If CompileWend() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "loop" Or StartsWith(low, "loop ") <> 0 Then
+                If CompileLoop(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "next" Or StartsWith(low, "next ") <> 0 Then
+                If CompileNext() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "exit while" Then
+                If CompileExitWhile() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "exit do" Then
+                If CompileExitDo() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "exit for" Then
+                If CompileExitFor() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "exit sub" Or low = "exit function" Then
+                If CompileExitProc() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "end sub" Or low = "end function" Then
+                If CompileEndProc() = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf low = "do" Or StartsWith(low, "do ") <> 0 Then
+                If CompileDo(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "while ") <> 0 Then
+                If CompileWhile(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "for ") <> 0 Then
+                If CompileFor(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "sub ") <> 0 Then
+                If CompileProcHeader(lineStr, 0) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "function ") <> 0 Then
+                If CompileProcHeader(lineStr, 1) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "if ") <> 0 Then
+                If CompileIfThen(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "const ") <> 0 Then
+                If CompileConst(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "dim ") <> 0 Then
+                If CompileDim(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "print ") <> 0 Then
+                If CompilePrint(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(low, "input ") <> 0 Then
+                If CompileInput(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(lineStr, "MessageBox(") <> 0 Then
+                If CompileMessageBox(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf StartsWith(lineStr, "ExitProcess(") <> 0 Then
+                If CompileExitProcess(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf FindOp1(lineStr, "=") > 0 Then
+                If CompileAssign(lineStr) = 0 Then
+                    Print "error: at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            ElseIf InStr(1, lineStr, "(") > 1 Then
+                If CompileCallStmt(lineStr) = 0 Then
+                    Print "error: unknown statement at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                    Exit Function
+                End If
+            Else
+                Print "error: unknown statement at line " + Trim$(Str$(gSrcLine)) + ": " + lineStr
+                Exit Function
+            End If
+        End If
+
+        If i < srcSize And src[i] = 13 Then i = i + 1
+        If i < srcSize And src[i] = 10 Then i = i + 1
+    Wend
+
+    If gInProc <> 0 Then
+        Print "error: unclosed Sub/Function at end of file"
+        Exit Function
+    End If
+    If gInType <> 0 Then
+        Print "error: unclosed Type at end of file"
+        Exit Function
+    End If
+    If gIfSp <> 0 Then
+        Print "error: unclosed If at end of file"
+        Exit Function
+    End If
+    If gLoopSp <> 0 Then
+        Print "error: unclosed loop (While/For) at end of file"
+        Exit Function
+    End If
+
+    SbMove(VarPtr(gSbTmp), VarPtr(gSbText))
+    If gNVars > 0 Then
+        EmitAsm("push ebp")
+        EmitAsm("mov ebp, esp")
+        EmitAsm("sub esp, " + Trim$(Str$(gFrameSize)))
+    End If
+    SbAppendSb(VarPtr(gSbText), VarPtr(gSbTmp))
+    SbClear(VarPtr(gSbTmp))
+
+    If gEmittedExit = 0 Then
+        EmitAsm("push 0")
+        EmitCallName("ExitProcess")
+        gEmittedExit = 1
+    End If
+
+    SbAppendStr(VarPtr(gSbOut), "bits 32")
+    SbAppendCRLF(VarPtr(gSbOut))
+    SbAppendCRLF(VarPtr(gSbOut))
+    SbAppendStr(VarPtr(gSbOut), "; generated by abc (Phase5)")
+    SbAppendCRLF(VarPtr(gSbOut))
+    If gUseMsgBox <> 0 Then
+        SbAppendStr(VarPtr(gSbOut), "extern _MessageBoxA@16")
+        SbAppendCRLF(VarPtr(gSbOut))
+    End If
+    If gApiExternLines <> "" Then
+        SbAppendStr(VarPtr(gSbOut), gApiExternLines)
+        SbAppendCRLF(VarPtr(gSbOut))
+    End If
+    If gUseStringRt <> 0 Then
+        SbAppendStr(VarPtr(gSbOut), "extern _lstrlenA@4")
+        SbAppendCRLF(VarPtr(gSbOut))
+        SbAppendStr(VarPtr(gSbOut), "extern _lstrcpyA@8")
+        SbAppendCRLF(VarPtr(gSbOut))
+        SbAppendStr(VarPtr(gSbOut), "extern _lstrcatA@8")
+        SbAppendCRLF(VarPtr(gSbOut))
+        SbAppendStr(VarPtr(gSbOut), "extern _lstrcmpA@8")
+        SbAppendCRLF(VarPtr(gSbOut))
+        SbAppendStr(VarPtr(gSbOut), "extern _GetProcessHeap@0")
+        SbAppendCRLF(VarPtr(gSbOut))
+        SbAppendStr(VarPtr(gSbOut), "extern _HeapAlloc@12")
+        SbAppendCRLF(VarPtr(gSbOut))
+        SbAppendStr(VarPtr(gSbOut), "extern _GetStdHandle@4")
+        SbAppendCRLF(VarPtr(gSbOut))
+        SbAppendStr(VarPtr(gSbOut), "extern _WriteFile@20")
+        SbAppendCRLF(VarPtr(gSbOut))
+        If gUseInput <> 0 Then
+            SbAppendStr(VarPtr(gSbOut), "extern _ReadFile@20")
+            SbAppendCRLF(VarPtr(gSbOut))
+        End If
+        SbAppendCRLF(VarPtr(gSbOut))
+    End If
+    SbAppendStr(VarPtr(gSbOut), "section .data")
+    SbAppendCRLF(VarPtr(gSbOut))
+    If SbIsEmpty(VarPtr(gSbData)) = 0 Then
+        SbAppendSb(VarPtr(gSbOut), VarPtr(gSbData))
+    Else
+        SbAppendStr(VarPtr(gSbOut), "    dummy db 0")
+        SbAppendCRLF(VarPtr(gSbOut))
+    End If
+    SbAppendCRLF(VarPtr(gSbOut))
+    SbAppendStr(VarPtr(gSbOut), "section .text")
+    SbAppendCRLF(VarPtr(gSbOut))
+    SbAppendStr(VarPtr(gSbOut), "    global _main")
+    SbAppendCRLF(VarPtr(gSbOut))
+    SbAppendCRLF(VarPtr(gSbOut))
+    If SbIsEmpty(VarPtr(gSbProc)) = 0 Then
+        SbAppendSb(VarPtr(gSbOut), VarPtr(gSbProc))
+    End If
+    If SbIsEmpty(VarPtr(gSbRt)) = 0 Then
+        SbAppendSb(VarPtr(gSbOut), VarPtr(gSbRt))
+        SbAppendCRLF(VarPtr(gSbOut))
+    End If
+    SbAppendStr(VarPtr(gSbOut), "_main:")
+    SbAppendCRLF(VarPtr(gSbOut))
+    SbAppendSb(VarPtr(gSbOut), VarPtr(gSbText))
+
+    gCompileOk = 1
+    CompileBuffer = 1
+End Function
+
+' --- 繝｡繧､繝ｳ ---
+' String 髢｢謨ｰ縺ｮ謌ｻ繧贋ｻ｣蜈･縺梧ｪ縺励＞縺ｮ縺ｧ縲∝・蜉帙・ *Byte + gLastLoadSize縲∝・蜉帙・繧ｰ繝ｭ繝ｼ繝舌Ν縺ｸ
+Dim inPath[MAX_PATH] As Byte
+Dim outPath[MAX_PATH] As Byte
+Dim srcBuf As *Byte
+Dim srcSize As Long
+Dim outName As String
+
+If GetCmd(1, inPath) = 0 Then
+    USAGE()
+End If
+If GetCmd(2, outPath) = 0 Then
+    outName = ChangeExtension$(MakeStr(inPath), ".asm")
+    lstrcpy(outPath, StrPtr(outName))
+End If
+
+LoadFileToGlobal(inPath)
+srcBuf = gLoadPtr
+srcSize = gLastLoadSize
+If srcBuf = NULL Or srcSize <= 0 Then
+    Print "error: cannot open input: " + MakeStr(inPath)
+    End
+End If
+Print "loaded bytes=" + Str$(srcSize)
+
+' String 謌ｻ繧雁､邨檎罰縺ｯ螢翫ｌ繧九％縺ｨ縺後≠繧九・縺ｧ縲∝ｱ暮幕邨先棡縺ｯ gExpandResult 繧剃ｽｿ縺・
+ExpandIncludesSub(srcBuf, srcSize, MakeStr(inPath), 0)
+free(srcBuf)
+If gExpandResult = "" Then
+    Print "error: #include expand failed for: " + MakeStr(inPath)
+    End
+End If
+' Include/default・・inTypes 遲会ｼ峨ｒ繧ｽ繝ｼ繧ｹ譏守､ｺ縺ｪ縺励〒蜈磯ｭ縺ｫ謖ｿ蜈･
+PrependDefaultIncludes()
+If CompileBuffer(StrPtr(gExpandResult), Len(gExpandResult)) = 0 Then
+    Print "error: compile failed for: " + MakeStr(inPath)
+    End
+End If
+If gCompileOk = 0 Or gSbOut.len <= 0 Then
+    Print "error: compile produced no asm output for: " + MakeStr(inPath)
+    End
+End If
+
+If WriteAll(outPath, gSbOut.p, gSbOut.len) = 0 Then
+    Print "error: cannot write output: " + MakeStr(outPath)
+Else
+    Print "OK: " + MakeStr(inPath) + " -> " + MakeStr(outPath) + " (" + Trim$(Str$(gSbOut.len)) + " bytes)"
+End If
+
+End
+' ---- Utils.abp ----
+' Utils.abp - 譁・ｭ怜・繝ｻ繝代せ蜈ｱ騾壹Θ繝ｼ繝・ぅ繝ｪ繝・ぅ
+' 蜷・ヤ繝ｼ繝ｫ縺ｯ xxx.idx 邨檎罰縺ｧ #include 縺吶ｋ・・pj 縺ｮ #SOURCE 縺ｫ繧ょ・謖呻ｼ・
+
+Function IsSpace(c As Long) As Long
+    If c = Asc(" ") Or c = 9 Or c = 13 Or c = 10 Then
+        IsSpace = 1
+    Else
+        IsSpace = 0
+    End If
+End Function
+
+Function Trim$(s As String) As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim j As Long
+    Dim n As Long
+    n = Len(s)
+    If n = 0 Then
+        Trim$ = ""
+        Exit Function
+    End If
+    p = StrPtr(s)
+    i = 0
+    While i < n And IsSpace(p[i]) <> 0
+        i = i + 1
+    Wend
+    j = n - 1
+    While j >= i And IsSpace(p[j]) <> 0
+        j = j - 1
+    Wend
+    If j < i Then
+        Trim$ = ""
+    Else
+        Trim$ = Mid$(s, i + 1, j - i + 1)
+    End If
+End Function
+
+' 螟ｧ譁・ｭ怜ｰ乗枚蟄励ｒ辟｡隕悶＠縺滓枚蟄怜・豈碑ｼ・ｼ医・繧､繝ｳ繧ｿ豈碑ｼ・↓關ｽ縺ｨ縺輔↑縺・ｼ・
+Function StrEqCI(a As String, b As String) As Long
+    Dim i As Long
+    Dim n As Long
+    Dim pa As *Byte
+    Dim pb As *Byte
+    Dim ca As Long
+    Dim cb As Long
+    StrEqCI = 0
+    n = Len(a)
+    If n <> Len(b) Then Exit Function
+    If n = 0 Then
+        StrEqCI = 1
+        Exit Function
+    End If
+    pa = StrPtr(a)
+    pb = StrPtr(b)
+    For i = 0 To n - 1
+        ca = pa[i]
+        cb = pb[i]
+        If ca >= Asc("A") And ca <= Asc("Z") Then ca = ca + 32
+        If cb >= Asc("A") And cb <= Asc("Z") Then cb = cb + 32
+        If ca <> cb Then Exit Function
+    Next
+    StrEqCI = 1
+End Function
+
+' Mid$/Left$ 縺ｮ驛ｨ蛻・枚蟄怜・縺ｯ Len 縺ｨ迢ｬ遶九＠縺・\0 邨らｫｯ繧呈戟縺溘↑縺・％縺ｨ縺後≠繧九・
+' MakeStr(StrPtr(s)) 縺ｯ lstrlen 萓晏ｭ倥・縺溘ａ菴ｿ繧上★縲´en 蛻・□縺代さ繝斐・縺励※縺九ｉ MakeStr 縺吶ｋ縲・
+Function DupStr$(s As String) As String
+    Dim n As Long
+    Dim i As Long
+    Dim p As *Byte
+    Dim q As *Byte
+    Dim tmp As Long
+    Dim bp As *Byte
+    n = Len(s)
+    If n = 0 Then
+        DupStr$ = ""
+        Exit Function
+    End If
+    q = malloc(n + 1)
+    If q = 0 Then
+        DupStr$ = ""
+        Exit Function
+    End If
+    p = StrPtr(s)
+    bp = VarPtr(tmp)
+    For i = 0 To n - 1
+        tmp = p[i]
+        q[i] = bp[0]
+    Next
+    q[n] = 0
+    DupStr$ = MakeStr(q)
+    free(q)
+End Function
+
+Function Lower$(s As String) As String
+    Dim p As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim c As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+    Dim r As String
+    n = Len(s)
+    If n = 0 Then
+        Lower$ = ""
+        Exit Function
+    End If
+    ' Len 繝吶・繧ｹ隍・｣ｽ縺ｮ縺・∴蟆乗枚蟄怜喧・・id$(s,1,n) / MakeStr(StrPtr) 縺ｯ荳榊庄・・
+    r = DupStr$(s)
+    p = StrPtr(r)
+    bp = VarPtr(tmp)
+    For i = 0 To n - 1
+        c = p[i]
+        If c >= Asc("A") And c <= Asc("Z") Then
+            tmp = c + 32
+            p[i] = bp[0]
+        End If
+    Next
+    Lower$ = r
+End Function
+
+' 螟ｧ譁・ｭ怜ｰ乗枚蟄励ｒ蛹ｺ蛻･縺吶ｋ蜑肴婿荳閾ｴ
+Function StartsWith(s As String, prefix As String) As Long
+    Dim n As Long
+    Dim m As Long
+    n = Len(s)
+    m = Len(prefix)
+    If n < m Then
+        StartsWith = 0
+    ElseIf Left$(s, m) = prefix Then
+        StartsWith = 1
+    Else
+        StartsWith = 0
+    End If
+End Function
+
+' 螟ｧ譁・ｭ怜ｰ乗枚蟄励ｒ蛹ｺ蛻･縺励↑縺・燕譁ｹ荳閾ｴ
+Function StartsWithCI(s As String, prefix As String) As Long
+    Dim n As Long
+    Dim m As Long
+    Dim a As String
+    n = Len(s)
+    m = Len(prefix)
+    If n < m Then
+        StartsWithCI = 0
+        Exit Function
+    End If
+    If m = 0 Then
+        StartsWithCI = 1
+        Exit Function
+    End If
+    a = Left$(s, m)
+    StartsWithCI = StrEqCI(a, prefix)
+End Function
+
+' 諡｡蠑ｵ蟄舌ｒ髯､縺・◆繝代せ・医ョ繧｣繝ｬ繧ｯ繝医Μ蜷ｫ繧・・
+Function BaseName$(inPath As String) As String
+    Dim i As Long
+    Dim n As Long
+    Dim ch As String
+    Dim dotPos As Long
+    Dim slashPos As Long
+    n = Len(inPath)
+    dotPos = 0
+    slashPos = 0
+    For i = 1 To n
+        ch = Mid$(inPath, i, 1)
+        If ch = "\" Or ch = "/" Then
+            slashPos = i
+            dotPos = 0
+        ElseIf ch = "." Then
+            dotPos = i
+        End If
+    Next
+    If dotPos > slashPos Then
+        BaseName$ = Left$(inPath, dotPos - 1)
+    Else
+        BaseName$ = inPath
+    End If
+End Function
+
+' 繝・ぅ繝ｬ繧ｯ繝医Μ驛ｨ蛻・ｼ域忰蟆ｾ縺ｫ \ 縺ｾ縺溘・ / 繧貞性繧・峨ら┌縺代ｌ縺ｰ ""
+Function DirOf$(path As String) As String
+    Dim i As Long
+    Dim n As Long
+    Dim ch As String
+    Dim slashPos As Long
+    n = Len(path)
+    slashPos = 0
+    For i = 1 To n
+        ch = Mid$(path, i, 1)
+        If ch = "\" Or ch = "/" Then
+            slashPos = i
+        End If
+    Next
+    If slashPos > 0 Then
+        DirOf$ = Left$(path, slashPos)
+    Else
+        DirOf$ = ""
+    End If
+End Function
+
+Function FileNameOnly$(path As String) As String
+    Dim d As String
+    Dim n As Long
+    d = DirOf$(path)
+    n = Len(d)
+    If n = 0 Then
+        FileNameOnly$ = path
+    Else
+        FileNameOnly$ = Mid$(path, n + 1, Len(path) - n)
+    End If
+End Function
+
+Function EndsWithExt(path As String, ext As String) As Long
+    Dim n As Long
+    Dim m As Long
+    Dim i As Long
+    Dim cp As Long
+    Dim ce As Long
+    Dim pp As *Byte
+    Dim pe As *Byte
+    n = Len(path)
+    m = Len(ext)
+    EndsWithExt = 0
+    If n < m Then Exit Function
+    If m = 0 Then
+        EndsWithExt = 1
+        Exit Function
+    End If
+    pp = StrPtr(path)
+    pe = StrPtr(ext)
+    For i = 0 To m - 1
+        cp = pp[n - m + i]
+        ce = pe[i]
+        If cp >= Asc("A") And cp <= Asc("Z") Then cp = cp + 32
+        If ce >= Asc("A") And ce <= Asc("Z") Then ce = ce + 32
+        If cp <> ce Then Exit Function
+    Next
+    EndsWithExt = 1
+End Function
+
+' 諡｡蠑ｵ蟄舌ｒ newExt・井ｾ・ ".asm"・峨↓鄂ｮ謠帙＠縺溘ヱ繧ｹ繧定ｿ斐☆
+Function ChangeExtension$(inPath As String, newExt As String) As String
+    Dim base As String
+    base = BaseName$(inPath)
+    ChangeExtension$ = base + newExt
+End Function
+' ---- Common.abp ----
+' Common.abp - 繧ｳ繝槭Φ繝芽｡後・繝｡繝｢繝ｪ繝ｻ譖ｸ蠑上・蜈ｱ騾壼・逅・
+' WinAPI 螳壽焚 (MAX_PATH / NULL 遲・ 縺ｯ繝帙せ繝医・繝・ム縺ｾ縺溘・ abc 邨・∩霎ｼ縺ｿ繧剃ｽｿ縺・
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[MAX_PATH] As Byte
+    Dim n As Long
+    Dim m As Long
+    Dim pBuf As *Byte
+
+    pBuf = buf
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    cmd[cmdlen] = &H20
+    pBuf[0] = 0
+    cidx = 0
+
+    For n = 0 To cmdlen
+        If cmd[n] = &H20 And cmd[n + 1] = &H20 Then
+            memcpy(VarPtr(cmd[n]), VarPtr(cmd[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+
+    For n = 0 To cmdlen
+        m = 0
+        While cmd[n] <> &H20
+            ctmp[m] = cmd[n]
+            m = m + 1
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+    GetCmd = 0
+End Function
+
+Sub ZeroMem(p As *Byte, n As Long)
+    Dim i As Long
+    Dim q As *Byte
+    If n <= 0 Then Exit Sub
+    q = p
+    For i = 0 To n - 1
+        q[i] = 0
+    Next
+End Sub
+
+Function HexPad$(num As Long, digits As Long) As String
+    Dim s As String
+    s = Hex$(num)
+    While Len(s) < digits
+        s = "0" + s
+    Wend
+    HexPad$ = s
+End Function
+' ---- FileIO.abp ----
+' FileIO.abp - 繝輔ぃ繧､繝ｫ蜈･蜃ｺ蜉帛・騾壼・逅・
+' 繝帙せ繝・AB: 繝昴う繝ｳ繧ｿ蠑墓焚縺ｮ縺ｿ ByVal NULL縲・ANDLE 遲峨・ NULL/0
+
+Dim gLastLoadSize As Long
+Dim gLoadPtr As *Byte
+
+Function FileExists(path As String) As Long
+    Dim attr As DWord
+    attr = GetFileAttributes(StrPtr(path))
+    If attr = &HFFFFFFFF Then
+        FileExists = 0
+    Else
+        FileExists = 1
+    End If
+End Function
+
+' Function 謌ｻ繧・(*Byte) 縺悟｣翫ｌ繧九％縺ｨ縺後≠繧九◆繧√∫ｵ先棡縺ｯ gLoadPtr / gLastLoadSize 縺ｸ
+Sub LoadFileToGlobal(path As *Byte)
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    gLoadPtr = 0
+    gLastLoadSize = 0
+
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Sub
+
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Sub
+    End If
+
+    p = malloc(fsiz + 1)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Sub
+    End If
+
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    CloseHandle(hFile)
+    p[fsiz] = 0
+    gLastLoadSize = fsiz
+    gLoadPtr = p
+End Sub
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    LoadFileToGlobal(path)
+    outSize = gLastLoadSize
+    LoadFile = gLoadPtr
+End Function
+
+Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+
+    WriteAll = 0
+    hFile = CreateFile(path, GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+
+    WriteFile(hFile, p, size, VarPtr(nWritten), ByVal NULL)
+    CloseHandle(hFile)
+    If nWritten = size Then WriteAll = 1
+End Function
+
+Function LoadTextFile$(path As String) As String
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    LoadTextFile$ = ""
+    hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then
+        Print "cannot open: " + path
+        Exit Function
+    End If
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz < 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    p = malloc(fsiz + 1)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    If fsiz > 0 Then
+        ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    End If
+    CloseHandle(hFile)
+    p[fsiz] = 0
+    LoadTextFile$ = MakeStr(p)
+    free(p)
+End Function
+
+Function WriteTextFile(path As String, text As String) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+    Dim n As Long
+
+    WriteTextFile = 0
+    n = Len(text)
+    hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    If n > 0 Then
+        WriteFile(hFile, StrPtr(text), n, VarPtr(nWritten), ByVal NULL)
+    Else
+        nWritten = 0
+    End If
+    CloseHandle(hFile)
+    If nWritten = n Then
+        WriteTextFile = 1
+    End If
+End Function
+' ---- StringBuffer.abp ----
+' StringBuffer.abp - 蜿ｯ螟蛾聞繝舌う繝医ヰ繝・ヵ繧｡・医け繝ｩ繧ｹ縺ｪ縺暦ｼ・
+' 蟾ｨ螟ｧ縺ｪ String 騾｣邨舌・ O(n^2) 繧帝∩縺代ｋ縺溘ａ縲∵忰蟆ｾ霑ｽ險・+ 蛟榊｢礼｢ｺ菫・
+' 豕ｨ: abc 縺ｯ base->field[i] 譛ｪ蟇ｾ蠢懊・縺溘ａ縲∵ｷｻ蟄励・荳譎・*Byte 邨檎罰
+
+Const SB_INIT_CAP = 4096
+
+Type StringBuffer
+    p As *Byte
+    len As Long
+    cap As Long
+End Type
+
+Sub SbInit(sb As *StringBuffer)
+    sb->p = 0
+    sb->len = 0
+    sb->cap = 0
+End Sub
+
+Sub SbFree(sb As *StringBuffer)
+    Dim p As *Byte
+    p = sb->p
+    If p <> 0 Then
+        free(p)
+    End If
+    sb->p = 0
+    sb->len = 0
+    sb->cap = 0
+End Sub
+
+Sub SbClear(sb As *StringBuffer)
+    Dim p As *Byte
+    sb->len = 0
+    p = sb->p
+    If p <> 0 Then
+        p[0] = 0
+    End If
+End Sub
+
+Function SbEnsure(sb As *StringBuffer, need As Long) As Long
+    Dim np As *Byte
+    Dim ncap As Long
+    Dim op As *Byte
+    Dim n As Long
+    SbEnsure = 0
+    If need <= sb->cap Then
+        SbEnsure = 1
+        Exit Function
+    End If
+    ncap = sb->cap
+    If ncap <= 0 Then ncap = SB_INIT_CAP
+    While ncap < need
+        ncap = ncap * 2
+    Wend
+    np = malloc(ncap)
+    If np = 0 Then
+        Print "StringBuffer: out of memory"
+        Exit Function
+    End If
+    n = sb->len
+    op = sb->p
+    If n > 0 And op <> 0 Then
+        memcpy(np, op, n)
+    End If
+    If op <> 0 Then
+        free(op)
+    End If
+    sb->p = np
+    sb->cap = ncap
+    SbEnsure = 1
+End Function
+
+Sub SbAppendBytes(sb As *StringBuffer, src As *Byte, n As Long)
+    Dim p As *Byte
+    Dim off As Long
+    If n <= 0 Then Exit Sub
+    If SbEnsure(sb, sb->len + n + 1) = 0 Then
+        ExitProcess(1)
+    End If
+    p = sb->p
+    off = sb->len
+    memcpy(VarPtr(p[off]), src, n)
+    off = off + n
+    sb->len = off
+    p[off] = 0
+End Sub
+
+Sub SbAppendStr(sb As *StringBuffer, s As String)
+    Dim n As Long
+    n = Len(s)
+    If n <= 0 Then Exit Sub
+    SbAppendBytes(sb, StrPtr(s), n)
+End Sub
+
+Sub SbAppendCRLF(sb As *StringBuffer)
+    Dim crlf[2] As Byte
+    crlf[0] = 13
+    crlf[1] = 10
+    SbAppendBytes(sb, crlf, 2)
+End Sub
+
+Sub SbAppendSb(dst As *StringBuffer, src As *StringBuffer)
+    Dim sp As *Byte
+    Dim n As Long
+    n = src->len
+    If n <= 0 Then Exit Sub
+    sp = src->p
+    SbAppendBytes(dst, sp, n)
+End Sub
+
+Sub SbAppendByte(sb As *StringBuffer, b As Long)
+    Dim p As *Byte
+    Dim off As Long
+    If SbEnsure(sb, sb->len + 2) = 0 Then
+        ExitProcess(1)
+    End If
+    p = sb->p
+    off = sb->len
+    p[off] = b And &HFF
+    off = off + 1
+    sb->len = off
+    p[off] = 0
+End Sub
+
+Sub SbAppendZeros(sb As *StringBuffer, n As Long)
+    Dim p As *Byte
+    Dim off As Long
+    If n <= 0 Then Exit Sub
+    If SbEnsure(sb, sb->len + n + 1) = 0 Then
+        ExitProcess(1)
+    End If
+    p = sb->p
+    off = sb->len
+    ZeroMem(VarPtr(p[off]), n)
+    off = off + n
+    sb->len = off
+    p[off] = 0
+End Sub
+
+' dst 繧定ｧ｣謾ｾ縺励《rc 縺ｮ謇譛画ｨｩ繧堤ｧｻ縺呻ｼ・rc 縺ｯ遨ｺ縺ｫ縺ｪ繧具ｼ・
+Sub SbMove(dst As *StringBuffer, src As *StringBuffer)
+    Dim p As *Byte
+    p = dst->p
+    If p <> 0 Then
+        free(p)
+    End If
+    dst->p = src->p
+    dst->len = src->len
+    dst->cap = src->cap
+    src->p = 0
+    src->len = 0
+    src->cap = 0
+End Sub
+
+Function SbLen(sb As *StringBuffer) As Long
+    SbLen = sb->len
+End Function
+
+Function SbData(sb As *StringBuffer) As *Byte
+    SbData = sb->p
+End Function
+
+Function SbIsEmpty(sb As *StringBuffer) As Long
+    If sb->len <= 0 Then
+        SbIsEmpty = 1
+    Else
+        SbIsEmpty = 0
+    End If
+End Function
+
+Function SbToString$(sb As *StringBuffer) As String
+    Dim p As *Byte
+    Dim n As Long
+    p = sb->p
+    n = sb->len
+    If p = 0 Or n <= 0 Then
+        SbToString$ = ""
+    Else
+        p[n] = 0
+        SbToString$ = MakeStr(p)
+    End If
+End Function
+' ---- abcGlobals.abp ----
+' abcGlobals.abp - abc 縺ｮ Const / Dim・育ｵ仙粋譎ゅ・ Lexer/Emit 繧医ｊ蜑阪↓鄂ｮ縺擾ｼ・
+
+Const MAX_ARGS = 16
+Const MAX_LINE = 512
+Const MAX_VARS = 1024
+Const MAX_CONSTS = 256
+Const MAX_TYPES = 64
+Const MAX_TYPEDEFS = 64
+Const MAX_FIELDS = 256
+Const MAX_APIS = 24
+Const MAX_IF = 16
+Const MAX_LOOP = 16
+Const MAX_SELECT = 16
+Const MAX_PROCS = 512
+
+Dim gArgs(MAX_ARGS - 1) As String
+Dim gNArgs As Long
+Dim gAsmArgs(MAX_ARGS - 1) As String
+Dim gSbData As StringBuffer
+Dim gSbText As StringBuffer
+Dim gSbProc As StringBuffer
+Dim gSbRt As StringBuffer
+Dim gSbOut As StringBuffer
+Dim gSbTmp As StringBuffer
+Dim gSbSaved As StringBuffer
+Dim gStrCount As Long
+Dim gUseMsgBox As Long
+Dim gEmittedExit As Long
+
+Dim gVarName(MAX_VARS - 1) As String
+Dim gVarOff(MAX_VARS - 1) As Long
+Dim gVarSize(MAX_VARS - 1) As Long
+Dim gVarCount(MAX_VARS - 1) As Long
+Dim gVarIsPtr(MAX_VARS - 1) As Long
+Dim gVarIsStr(MAX_VARS - 1) As Long
+Dim gVarIsGlobal(MAX_VARS - 1) As Long
+Dim gVarIsByRef(MAX_VARS - 1) As Long
+Dim gVarTypeIdx(MAX_VARS - 1) As Long
+Dim gNVars As Long
+Dim gFrameSize As Long
+Dim gLabelId As Long
+Dim gIfElse(MAX_IF - 1) As String
+Dim gIfEnd(MAX_IF - 1) As String
+Dim gIfSp As Long
+
+Dim gSelEnd(MAX_SELECT - 1) As String
+Dim gSelNext(MAX_SELECT - 1) As String
+Dim gSelStarted(MAX_SELECT - 1) As Long
+Dim gSelSlotReady(MAX_SELECT - 1) As Long
+Dim gSelSp As Long
+
+Dim gConstName(MAX_CONSTS - 1) As String
+Dim gConstVal(MAX_CONSTS - 1) As Long
+Dim gNConsts As Long
+
+Dim gLoopTop(MAX_LOOP - 1) As String
+Dim gLoopCont(MAX_LOOP - 1) As String
+Dim gLoopEnd(MAX_LOOP - 1) As String
+Dim gLoopKind(MAX_LOOP - 1) As Long
+Dim gForVar(MAX_LOOP - 1) As String
+Dim gForStep(MAX_LOOP - 1) As String
+Dim gLoopSp As Long
+
+Dim gInProc As Long
+Dim gProcName As String
+Dim gProcIsFunc As Long
+Dim gProcArgBytes As Long
+Dim gRetOff As Long
+Dim gSavedNVars As Long
+Dim gSavedFrame As Long
+Dim gSavedVarName(MAX_VARS - 1) As String
+Dim gSavedVarOff(MAX_VARS - 1) As Long
+Dim gSavedVarSize(MAX_VARS - 1) As Long
+Dim gSavedVarCount(MAX_VARS - 1) As Long
+Dim gSavedVarIsPtr(MAX_VARS - 1) As Long
+Dim gSavedVarIsStr(MAX_VARS - 1) As Long
+Dim gSavedVarIsGlobal(MAX_VARS - 1) As Long
+Dim gSavedVarIsByRef(MAX_VARS - 1) As Long
+Dim gUseStringRt As Long
+Dim gUseHostRt As Long
+Dim gUseInput As Long
+
+' Sub/Function 繧ｷ繧ｰ繝阪メ繝｣・・yRef 蠑墓焚繝薙ャ繝医Ｃit0 = 隨ｬ1蠑墓焚・・
+Dim gSigName(MAX_PROCS - 1) As String
+Dim gSigByRef(MAX_PROCS - 1) As Long
+Dim gNSigs As Long
+
+' Phase 6: 繝ｦ繝ｼ繧ｶ繝ｼ螳夂ｾｩ Type 縺ｨ繝輔ぅ繝ｼ繝ｫ繝峨・繝｡繧ｿ繝・・繧ｿ
+Dim gTypeName(MAX_TYPES - 1) As String
+Dim gTypeSize(MAX_TYPES - 1) As Long
+Dim gTypeFirstField(MAX_TYPES - 1) As Long
+Dim gTypeLastField(MAX_TYPES - 1) As Long
+Dim gNTypes As Long
+Dim gTypeDefName(MAX_TYPEDEFS - 1) As String
+Dim gTypeDefTarget(MAX_TYPEDEFS - 1) As String
+Dim gNTypeDefs As Long
+Dim gFieldType(MAX_FIELDS - 1) As Long
+Dim gFieldName(MAX_FIELDS - 1) As String
+Dim gFieldOff(MAX_FIELDS - 1) As Long
+Dim gFieldSize(MAX_FIELDS - 1) As Long
+Dim gFieldCount(MAX_FIELDS - 1) As Long
+Dim gFieldNext(MAX_FIELDS - 1) As Long
+Dim gNFields As Long
+Dim gInType As Long
+Dim gCurType As Long
+
+' 譌｢遏･ stdcall API 縺ｮ菴ｿ逕ｨ迥ｶ豕・
+Dim gApiUsed(MAX_APIS - 1) As Long
+Dim gApiExternLines As String
+Dim gIncludeStack(15) As String
+
+Dim gExpandResult As String
+Dim gCompileOk As Long
+Dim gSrcLine As Long
+Dim gSrcLineText As String
+' ---- abcLexer.abp ----
+' abcLexer.abp - 蟄怜唱隗｣譫撰ｼ亥ｼ乗枚蟄怜・ 竊・繝医・繧ｯ繝ｳ蛻暦ｼ・
+' 繝医・繧ｯ繝ｳ繝ｻAST 逕ｨ縺ｮ蜈ｱ譛峨・繝ｼ繝ｫ繧ゅ％縺薙↓鄂ｮ縺・
+
+Const TK_EOF = 0
+Const TK_NUM = 1
+Const TK_IDENT = 2
+Const TK_STR = 3
+Const TK_PLUS = 4
+Const TK_MINUS = 5
+Const TK_STAR = 6
+Const TK_SLASH = 7
+Const TK_BSLASH = 8
+Const TK_EQ = 9
+Const TK_NE = 10
+Const TK_LT = 11
+Const TK_GT = 12
+Const TK_LE = 13
+Const TK_GE = 14
+Const TK_LPAREN = 15
+Const TK_RPAREN = 16
+Const TK_LBRACK = 17
+Const TK_RBRACK = 18
+Const TK_COMMA = 19
+Const TK_DOT = 20
+Const TK_ARROW = 21
+Const TK_AND = 22
+Const TK_OR = 23
+Const TK_XOR = 24
+Const TK_MOD = 25
+
+Const MAX_TOKS = 1024
+Const MAX_AST = 1024
+Const MAX_POOL = 512
+Const AST_NIL = -1
+
+' 繝医・繧ｯ繝ｳ・井ｸｦ蛻鈴・蛻暦ｼ・
+Dim gTokKind(1023) As Long
+Dim gTokSIdx(1023) As Long
+Dim gTokIVal(1023) As Long
+Dim gNTok As Long
+Dim gTokPos As Long
+
+' 譁・ｭ怜・繝励・繝ｫ・郁ｭ伜挨蟄舌・繝ｪ繝・Λ繝ｫ譛ｬ譁・ｼ・
+Dim gPool(511) As String
+Dim gNPool As Long
+
+' AST・井ｸｦ蛻鈴・蛻暦ｼ・
+Dim gAstKind(1023) As Long
+Dim gAstOp(1023) As Long
+Dim gAstA(1023) As Long
+Dim gAstB(1023) As Long
+Dim gAstC(1023) As Long
+Dim gAstD(1023) As Long
+Dim gAstIVal(1023) As Long
+Dim gAstSIdx(1023) As Long
+Dim gAstFlags(1023) As Long
+Dim gNAst As Long
+Dim gParseCondMode As Long
+
+Function LexIsIdentStart(c As Long) As Long
+    If c >= Asc("A") And c <= Asc("Z") Then
+        LexIsIdentStart = 1
+    ElseIf c >= Asc("a") And c <= Asc("z") Then
+        LexIsIdentStart = 1
+    ElseIf c = Asc("_") Then
+        LexIsIdentStart = 1
+    Else
+        LexIsIdentStart = 0
+    End If
+End Function
+
+Function LexIsIdentChar(c As Long) As Long
+    If LexIsIdentStart(c) <> 0 Then
+        LexIsIdentChar = 1
+    ElseIf c >= Asc("0") And c <= Asc("9") Then
+        LexIsIdentChar = 1
+    ElseIf c = Asc("$") Then
+        LexIsIdentChar = 1
+    Else
+        LexIsIdentChar = 0
+    End If
+End Function
+
+Function PoolAdd(s As String) As Long
+    If gNPool >= MAX_POOL Then
+        Print "string pool overflow"
+        PoolAdd = -1
+        Exit Function
+    End If
+    gPool(gNPool) = s
+    PoolAdd = gNPool
+    gNPool = gNPool + 1
+End Function
+
+Function TokPush(kind As Long, sIdx As Long, iVal As Long) As Long
+    If gNTok >= MAX_TOKS Then
+        Print "token overflow"
+        TokPush = 0
+        Exit Function
+    End If
+    gTokKind(gNTok) = kind
+    gTokSIdx(gNTok) = sIdx
+    gTokIVal(gNTok) = iVal
+    gNTok = gNTok + 1
+    TokPush = 1
+End Function
+
+Function LexKeywordKind(name As String) As Long
+    Dim n As String
+    n = Lower$(name)
+    LexKeywordKind = TK_IDENT
+    If n = "and" Then LexKeywordKind = TK_AND
+    If n = "or" Then LexKeywordKind = TK_OR
+    If n = "xor" Then LexKeywordKind = TK_XOR
+    If n = "mod" Then LexKeywordKind = TK_MOD
+    If n = "byval" Then LexKeywordKind = TK_IDENT
+    If n = "byref" Then LexKeywordKind = TK_IDENT
+End Function
+
+Function LexParseNum(p As *Byte, n As Long, ByRef pos As Long, ByRef outVal As Long) As Long
+    Dim i As Long
+    Dim sign As Long
+    Dim v As Long
+    Dim c As Long
+    Dim start As Long
+
+    LexParseNum = 0
+    i = pos
+    sign = 1
+    If i < n And p[i] = Asc("-") Then
+        ' 蜊倬・・繝代・繧ｵ蛛ｴ縲ゅ％縺薙〒縺ｯ謨ｰ蛟､譛ｬ菴薙・縺ｿ
+    End If
+    start = i
+    If i + 1 < n And p[i] = Asc("&") And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+        i = i + 2
+        v = 0
+        If i >= n Then Exit Function
+        While i < n
+            c = p[i]
+            If c >= Asc("0") And c <= Asc("9") Then
+                v = v * 16 + (c - Asc("0"))
+            ElseIf c >= Asc("A") And c <= Asc("F") Then
+                v = v * 16 + (c - Asc("A") + 10)
+            ElseIf c >= Asc("a") And c <= Asc("f") Then
+                v = v * 16 + (c - Asc("a") + 10)
+            Else
+                Exit While
+            End If
+            i = i + 1
+        Wend
+        If i = start + 2 Then Exit Function
+        outVal = v
+        pos = i
+        LexParseNum = 1
+        Exit Function
+    End If
+
+    If i >= n Then Exit Function
+    If p[i] < Asc("0") Or p[i] > Asc("9") Then Exit Function
+    v = 0
+    While i < n
+        c = p[i]
+        If c < Asc("0") Or c > Asc("9") Then Exit While
+        v = v * 10 + (c - Asc("0"))
+        i = i + 1
+    Wend
+    outVal = v
+    pos = i
+    LexParseNum = 1
+End Function
+
+' 蠑乗枚蟄怜・繧偵ヨ繝ｼ繧ｯ繝ｳ蛹悶よ・蜉溘〒 1
+Function LexExpr(expr As String) As Long
+    Dim e As String
+    Dim p As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim c As Long
+    Dim start As Long
+    Dim name As String
+    Dim lit As String
+    Dim sIdx As Long
+    Dim kw As Long
+    Dim numVal As Long
+    Dim closed As Long
+
+    LexExpr = 0
+    e = Trim$(expr)
+    gNTok = 0
+    gTokPos = 0
+    gNPool = 0
+    gNAst = 0
+
+    n = Len(e)
+    If n = 0 Then
+        Print "empty expression"
+        Exit Function
+    End If
+    p = StrPtr(e)
+    i = 0
+
+    While i < n
+        c = p[i]
+        If c = Asc(" ") Or c = 9 Then
+            i = i + 1
+        ElseIf c = Asc("+") Then
+            If TokPush(TK_PLUS, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("-") And i + 1 < n And p[i + 1] = Asc(">") Then
+            If TokPush(TK_ARROW, -1, 0) = 0 Then Exit Function
+            i = i + 2
+        ElseIf c = Asc("-") Then
+            If TokPush(TK_MINUS, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("*") Then
+            If TokPush(TK_STAR, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("/") Then
+            If TokPush(TK_SLASH, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("\") Then
+            If TokPush(TK_BSLASH, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("=") Then
+            If TokPush(TK_EQ, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("<") Then
+            If i + 1 < n And p[i + 1] = Asc(">") Then
+                If TokPush(TK_NE, -1, 0) = 0 Then Exit Function
+                i = i + 2
+            ElseIf i + 1 < n And p[i + 1] = Asc("=") Then
+                If TokPush(TK_LE, -1, 0) = 0 Then Exit Function
+                i = i + 2
+            Else
+                If TokPush(TK_LT, -1, 0) = 0 Then Exit Function
+                i = i + 1
+            End If
+        ElseIf c = Asc(">") Then
+            If i + 1 < n And p[i + 1] = Asc("=") Then
+                If TokPush(TK_GE, -1, 0) = 0 Then Exit Function
+                i = i + 2
+            Else
+                If TokPush(TK_GT, -1, 0) = 0 Then Exit Function
+                i = i + 1
+            End If
+        ElseIf c = Asc("(") Then
+            If TokPush(TK_LPAREN, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc(")") Then
+            If TokPush(TK_RPAREN, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = &H5B Then
+            If TokPush(TK_LBRACK, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = &H5D Then
+            If TokPush(TK_RBRACK, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc(",") Then
+            If TokPush(TK_COMMA, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc(".") Then
+            If TokPush(TK_DOT, -1, 0) = 0 Then Exit Function
+            i = i + 1
+        ElseIf c = Asc("&") And i + 1 < n And (p[i + 1] = Asc("H") Or p[i + 1] = Asc("h")) Then
+            If LexParseNum(p, n, i, numVal) = 0 Then
+                Print "bad hex number"
+                Exit Function
+            End If
+            If TokPush(TK_NUM, -1, numVal) = 0 Then Exit Function
+        ElseIf c >= Asc("0") And c <= Asc("9") Then
+            If LexParseNum(p, n, i, numVal) = 0 Then
+                Print "bad number"
+                Exit Function
+            End If
+            If TokPush(TK_NUM, -1, numVal) = 0 Then Exit Function
+        ElseIf c = 34 Then
+            ' VB 鬚ｨ: "..." 蜀・・ "" 縺ｯ譁・ｭ・"
+            i = i + 1
+            lit = ""
+            closed = 0
+            While i < n
+                If p[i] = 34 Then
+                    If i + 1 < n And p[i + 1] = 34 Then
+                        lit = lit + Chr$(34)
+                        i = i + 2
+                    Else
+                        i = i + 1
+                        closed = 1
+                        Exit While
+                    End If
+                Else
+                    lit = lit + Chr$(p[i])
+                    i = i + 1
+                End If
+            Wend
+            If closed = 0 Then
+                Print "unterminated string"
+                Exit Function
+            End If
+            sIdx = PoolAdd(lit)
+            If sIdx < 0 Then Exit Function
+            If TokPush(TK_STR, sIdx, 0) = 0 Then Exit Function
+        ElseIf LexIsIdentStart(c) <> 0 Then
+            start = i
+            i = i + 1
+            While i < n
+                If LexIsIdentChar(p[i]) = 0 Then Exit While
+                i = i + 1
+            Wend
+            name = Mid$(e, start + 1, i - start)
+            ' byval/byref 縺ｯ隱ｭ縺ｿ鬟帙・縺暦ｼ・enArith 莠呈鋤・・
+            If Lower$(name) = "byval" Or Lower$(name) = "byref" Then
+                ' skip
+            Else
+                kw = LexKeywordKind(name)
+                sIdx = PoolAdd(name)
+                If sIdx < 0 Then Exit Function
+                If TokPush(kw, sIdx, 0) = 0 Then Exit Function
+            End If
+        Else
+            Print "bad token near: " + Mid$(e, i + 1, 8)
+            Exit Function
+        End If
+    Wend
+
+    If TokPush(TK_EOF, -1, 0) = 0 Then Exit Function
+    gTokPos = 0
+    LexExpr = 1
+End Function
+' ---- abcParser.abp ----
+' abcParser.abp - 讒区枚隗｣譫撰ｼ医ヨ繝ｼ繧ｯ繝ｳ 竊・AST・・
+
+Const NK_NUM = 1
+Const NK_IDENT = 2
+Const NK_STR = 3
+Const NK_BIN = 4
+Const NK_UNARY = 5
+Const NK_CALL = 6
+Const NK_INDEX = 7
+Const NK_MEMBER = 8
+Const NK_VARPTR = 9
+Const NK_SIZEOF = 10
+Const NK_CMP = 11
+Const NK_LOGOR = 12
+Const NK_LOGAND = 13
+Const NK_ARG = 14
+Const NK_ADDRESSOF = 15
+
+Const OP_ADD = 1
+Const OP_SUB = 2
+Const OP_MUL = 3
+Const OP_DIV = 4
+Const OP_MOD = 5
+Const OP_AND = 6
+Const OP_OR = 7
+Const OP_XOR = 8
+Const OP_NEG = 9
+Const OP_EQ = 10
+Const OP_NE = 11
+Const OP_LT = 12
+Const OP_GT = 13
+Const OP_LE = 14
+Const OP_GE = 15
+Const OP_DOT = 16
+Const OP_ARROW = 17
+
+Function AstNew(kind As Long) As Long
+    Dim ni As Long
+    If gNAst >= MAX_AST Then
+        Print "AST overflow"
+        AstNew = -1
+        Exit Function
+    End If
+    ni = gNAst
+    gAstKind(ni) = kind
+    gAstOp(ni) = 0
+    gAstA(ni) = AST_NIL
+    gAstB(ni) = AST_NIL
+    gAstC(ni) = AST_NIL
+    gAstD(ni) = AST_NIL
+    gAstIVal(ni) = 0
+    gAstSIdx(ni) = -1
+    gAstFlags(ni) = 0
+    gNAst = gNAst + 1
+    AstNew = ni
+End Function
+
+Function TokPeek() As Long
+    If gTokPos >= gNTok Then
+        TokPeek = TK_EOF
+    Else
+        TokPeek = gTokKind(gTokPos)
+    End If
+End Function
+
+Function TokTake() As Long
+    Dim k As Long
+    k = TokPeek()
+    If gTokPos < gNTok Then gTokPos = gTokPos + 1
+    TokTake = k
+End Function
+
+Function TokExpect(kind As Long) As Long
+    Dim k As Long
+    If TokPeek() <> kind Then
+        TokExpect = 0
+        Exit Function
+    End If
+    k = TokTake()
+    TokExpect = 1
+End Function
+
+Function ParseExpr() As Long
+    ParseExpr = ParseBitOr()
+End Function
+
+Function ParseCondExpr() As Long
+    ParseCondExpr = ParseLogOr()
+End Function
+
+Function ParseLogOr() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseLogAnd()
+    If left < 0 Then
+        ParseLogOr = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_OR
+        k = TokTake()
+        right = ParseLogAnd()
+        If right < 0 Then
+            ParseLogOr = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_LOGOR)
+        If ni < 0 Then
+            ParseLogOr = -1
+            Exit Function
+        End If
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseLogOr = left
+End Function
+
+Function ParseLogAnd() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseCmp()
+    If left < 0 Then
+        ParseLogAnd = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_AND
+        k = TokTake()
+        right = ParseCmp()
+        If right < 0 Then
+            ParseLogAnd = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_LOGAND)
+        If ni < 0 Then
+            ParseLogAnd = -1
+            Exit Function
+        End If
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseLogAnd = left
+End Function
+
+Function ParseCmp() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    Dim op As Long
+    left = ParseExprNoLog()
+    If left < 0 Then
+        ParseCmp = -1
+        Exit Function
+    End If
+    k = TokPeek()
+    op = 0
+    If k = TK_EQ Then
+        op = OP_EQ
+    ElseIf k = TK_NE Then
+        op = OP_NE
+    ElseIf k = TK_LT Then
+        op = OP_LT
+    ElseIf k = TK_GT Then
+        op = OP_GT
+    ElseIf k = TK_LE Then
+        op = OP_LE
+    ElseIf k = TK_GE Then
+        op = OP_GE
+    End If
+    If op = 0 Then
+        ParseCmp = left
+        Exit Function
+    End If
+    k = TokTake()
+    right = ParseExprNoLog()
+    If right < 0 Then
+        ParseCmp = -1
+        Exit Function
+    End If
+    ni = AstNew(NK_CMP)
+    If ni < 0 Then
+        ParseCmp = -1
+        Exit Function
+    End If
+    gAstOp(ni) = op
+    gAstA(ni) = left
+    gAstB(ni) = right
+    ParseCmp = ni
+End Function
+
+' 譚｡莉ｶ縺ｮ豈碑ｼ・が繝壹Λ繝ｳ繝臥畑: And/Or 縺ｯ隲也炊貍皮ｮ怜ｭ舌→縺励※谿九☆・医ン繝・ヨ And 縺ｫ鬟溘ｏ縺帙↑縺・ｼ・
+' Xor 縺縺代・蛟､貍皮ｮ励→縺励※縺薙％縺ｧ謇ｱ縺・
+Function ParseExprNoLog() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseAdd()
+    If left < 0 Then
+        ParseExprNoLog = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_XOR
+        k = TokTake()
+        right = ParseAdd()
+        If right < 0 Then
+            ParseExprNoLog = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseExprNoLog = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_XOR
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseExprNoLog = left
+End Function
+
+Function ParseBitOr() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseBitXor()
+    If left < 0 Then
+        ParseBitOr = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_OR
+        k = TokTake()
+        right = ParseBitXor()
+        If right < 0 Then
+            ParseBitOr = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseBitOr = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_OR
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseBitOr = left
+End Function
+
+Function ParseBitXor() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseBitAnd()
+    If left < 0 Then
+        ParseBitXor = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_XOR
+        k = TokTake()
+        right = ParseBitAnd()
+        If right < 0 Then
+            ParseBitXor = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseBitXor = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_XOR
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseBitXor = left
+End Function
+
+Function ParseBitAnd() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseAdd()
+    If left < 0 Then
+        ParseBitAnd = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_AND
+        k = TokTake()
+        right = ParseAdd()
+        If right < 0 Then
+            ParseBitAnd = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseBitAnd = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_AND
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseBitAnd = left
+End Function
+
+Function ParseAdd() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseMul()
+    If left < 0 Then
+        ParseAdd = -1
+        Exit Function
+    End If
+    k = TokPeek()
+    While k = TK_PLUS Or k = TK_MINUS
+        k = TokTake()
+        right = ParseMul()
+        If right < 0 Then
+            ParseAdd = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseAdd = -1
+            Exit Function
+        End If
+        If k = TK_PLUS Then
+            gAstOp(ni) = OP_ADD
+        Else
+            gAstOp(ni) = OP_SUB
+        End If
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+        k = TokPeek()
+    Wend
+    ParseAdd = left
+End Function
+
+Function ParseMul() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    Dim op As Long
+    left = ParseUnary()
+    If left < 0 Then
+        ParseMul = -1
+        Exit Function
+    End If
+    k = TokPeek()
+    While k = TK_STAR Or k = TK_BSLASH Or k = TK_SLASH Or k = TK_MOD
+        k = TokTake()
+        op = 0
+        If k = TK_STAR Then
+            op = OP_MUL
+        ElseIf k = TK_BSLASH Or k = TK_SLASH Then
+            op = OP_DIV
+        ElseIf k = TK_MOD Then
+            op = OP_MOD
+        End If
+        right = ParseUnary()
+        If right < 0 Then
+            ParseMul = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseMul = -1
+            Exit Function
+        End If
+        gAstOp(ni) = op
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+        k = TokPeek()
+    Wend
+    ParseMul = left
+End Function
+
+Function ParseUnary() As Long
+    Dim ni As Long
+    Dim child As Long
+    Dim k As Long
+    If TokPeek() = TK_MINUS Then
+        k = TokTake()
+        child = ParseUnary()
+        If child < 0 Then
+            ParseUnary = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_UNARY)
+        If ni < 0 Then
+            ParseUnary = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_NEG
+        gAstA(ni) = child
+        ParseUnary = ni
+        Exit Function
+    End If
+    ParseUnary = ParsePostfix()
+End Function
+
+Function ParseArgList() As Long
+    Dim head As Long
+    Dim tail As Long
+    Dim arg As Long
+    Dim ni As Long
+    Dim k As Long
+    head = AST_NIL
+    tail = AST_NIL
+    If TokPeek() = TK_RPAREN Then
+        ParseArgList = AST_NIL
+        Exit Function
+    End If
+    While TokPeek() <> TK_EOF
+        arg = ParseExpr()
+        If arg < 0 Then
+            ParseArgList = -2
+            Exit Function
+        End If
+        ni = AstNew(NK_ARG)
+        If ni < 0 Then
+            ParseArgList = -2
+            Exit Function
+        End If
+        gAstA(ni) = arg
+        gAstB(ni) = AST_NIL
+        If head = AST_NIL Then
+            head = ni
+            tail = ni
+        Else
+            gAstB(tail) = ni
+            tail = ni
+        End If
+        If TokPeek() <> TK_COMMA Then Exit While
+        k = TokTake()
+    Wend
+    ParseArgList = head
+End Function
+
+Function ParsePostfix() As Long
+    Dim ni As Long
+    Dim child As Long
+    Dim idx As Long
+    Dim args As Long
+    Dim name As String
+    Dim sIdx As Long
+    Dim k As Long
+    Dim fieldIdx As Long
+    Dim opKind As Long
+
+    If TokPeek() = TK_LPAREN Then
+        k = TokTake()
+        If gParseCondMode <> 0 Then
+            child = ParseCondExpr()
+        Else
+            child = ParseExpr()
+        End If
+        If child < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        If TokExpect(TK_RPAREN) = 0 Then
+            Print "expected )"
+            ParsePostfix = -1
+            Exit Function
+        End If
+        ParsePostfix = child
+        Exit Function
+    End If
+
+    If TokPeek() = TK_NUM Then
+        ni = AstNew(NK_NUM)
+        If ni < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        gAstIVal(ni) = gTokIVal(gTokPos)
+        k = TokTake()
+        ParsePostfix = ni
+        Exit Function
+    End If
+
+    If TokPeek() = TK_STR Then
+        ni = AstNew(NK_STR)
+        If ni < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        gAstSIdx(ni) = gTokSIdx(gTokPos)
+        k = TokTake()
+        ParsePostfix = ni
+        Exit Function
+    End If
+
+    If TokPeek() <> TK_IDENT Then
+        Print "expected expression"
+        ParsePostfix = -1
+        Exit Function
+    End If
+
+    sIdx = gTokSIdx(gTokPos)
+    name = Lower$(gPool(sIdx))
+    k = TokTake()
+    ' VarPtr(...) / SizeOf(...) / AddressOf(...)
+    If name = "varptr" And TokPeek() = TK_LPAREN Then
+        k = TokTake()
+        child = ParseExpr()
+        If child < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        If TokExpect(TK_RPAREN) = 0 Then
+            Print "VarPtr needs )"
+            ParsePostfix = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_VARPTR)
+        If ni < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        gAstA(ni) = child
+        ParsePostfix = ni
+        Exit Function
+    End If
+
+    If name = "addressof" And TokPeek() = TK_LPAREN Then
+        k = TokTake()
+        If TokPeek() <> TK_IDENT Then
+            Print "AddressOf needs procedure name"
+            ParsePostfix = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_ADDRESSOF)
+        If ni < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        gAstSIdx(ni) = gTokSIdx(gTokPos)
+        k = TokTake()
+        If TokExpect(TK_RPAREN) = 0 Then
+            Print "AddressOf needs )"
+            ParsePostfix = -1
+            Exit Function
+        End If
+        ParsePostfix = ni
+        Exit Function
+    End If
+
+    If name = "sizeof" And TokPeek() = TK_LPAREN Then
+        k = TokTake()
+        If TokPeek() = TK_IDENT Then
+            ni = AstNew(NK_SIZEOF)
+            If ni < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            gAstSIdx(ni) = gTokSIdx(gTokPos)
+            k = TokTake()
+            If TokExpect(TK_RPAREN) = 0 Then
+                Print "SizeOf needs )"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            ParsePostfix = ni
+            Exit Function
+        End If
+        Print "SizeOf needs name"
+        ParsePostfix = -1
+        Exit Function
+    End If
+
+    ' 蜻ｼ縺ｳ蜃ｺ縺・/ 豺ｻ蟄・/ 繝｡繝ｳ繝・
+    ni = AstNew(NK_IDENT)
+    If ni < 0 Then
+        ParsePostfix = -1
+        Exit Function
+    End If
+    gAstSIdx(ni) = sIdx
+
+    k = TokPeek()
+    While k = TK_LPAREN Or k = TK_LBRACK Or k = TK_DOT Or k = TK_ARROW
+        If k = TK_LPAREN Then
+            k = TokTake()
+            args = ParseArgList()
+            If args < -1 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            If TokExpect(TK_RPAREN) = 0 Then
+                Print "expected )"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            child = AstNew(NK_CALL)
+            If child < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            gAstSIdx(child) = gAstSIdx(ni)
+            gAstA(child) = args
+            ni = child
+        ElseIf k = TK_LBRACK Then
+            k = TokTake()
+            idx = ParseExpr()
+            If idx < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            If TokExpect(TK_RBRACK) = 0 Then
+                Print "expected ]"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            child = AstNew(NK_INDEX)
+            If child < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            gAstA(child) = ni
+            gAstB(child) = idx
+            ni = child
+        Else
+            ' DOT or ARROW
+            opKind = TokTake()
+            If TokPeek() <> TK_IDENT Then
+                Print "expected field name"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            fieldIdx = gTokSIdx(gTokPos)
+            k = TokTake()
+            child = AstNew(NK_MEMBER)
+            If child < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            If opKind = TK_ARROW Then
+                gAstOp(child) = OP_ARROW
+            Else
+                gAstOp(child) = OP_DOT
+            End If
+            gAstA(child) = ni
+            gAstSIdx(child) = fieldIdx
+            ni = child
+        End If
+        k = TokPeek()
+    Wend
+
+    ' expr As Type / expr As *Type ・亥､縺ｯ螟峨∴縺壼梛縺縺托ｼ・
+    If TokPeek() = TK_IDENT Then
+        If Lower$(gPool(gTokSIdx(gTokPos))) = "as" Then
+            k = TokTake()
+            If TokPeek() = TK_STAR Then
+                k = TokTake()
+            End If
+            If TokPeek() <> TK_IDENT Then
+                Print "expected type after As"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            k = TokTake()
+        End If
+    End If
+
+    ParsePostfix = ni
+End Function
+' ---- abcEmit.abp ----
+' abcEmit.abp - AST 縺九ｉ ASM 繧堤函謌・
+
+Function AstIsString(ni As Long) As Long
+    Dim name As String
+    Dim idx As Long
+    Dim base As Long
+    AstIsString = 0
+    If ni < 0 Then Exit Function
+    If gAstKind(ni) = NK_STR Then
+        AstIsString = 1
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_BIN And gAstOp(ni) = OP_ADD Then
+        If AstIsString(gAstA(ni)) <> 0 Or AstIsString(gAstB(ni)) <> 0 Then
+            AstIsString = 1
+        End If
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_CALL Then
+        name = Lower$(gPool(gAstSIdx(ni)))
+        ' VB 諷｣鄙・ 蜷榊燕縺・$ 縺ｧ邨ゅｏ繧矩未謨ｰ縺ｯ String 謌ｻ繧奇ｼ域忰蟆ｾ繝舌う繝医〒蛻､螳夲ｼ・
+        idx = Len(name)
+        If idx > 0 Then
+            ' Mid$/譁・ｭ怜・ = 縺ｫ萓晏ｭ倥○縺壹∵忰蟆ｾ縺・$ 縺玖ｦ九ｋ
+            If Asc(Mid$(name, idx, 1)) = Asc("$") Then
+                AstIsString = 1
+                Exit Function
+            End If
+        End If
+        If name = "chr$" Or name = "left$" Or name = "mid$" Or name = "right$" Or name = "str$" Or name = "hex$" Or name = "lower$" Or name = "trim$" Or name = "makestr" Then
+            AstIsString = 1
+            Exit Function
+        End If
+        idx = FindVar(gPool(gAstSIdx(ni)))
+        If idx >= 0 Then
+            AstIsString = gVarIsStr(idx)
+        End If
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_IDENT Then
+        idx = FindVar(gPool(gAstSIdx(ni)))
+        If idx >= 0 Then AstIsString = gVarIsStr(idx)
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_INDEX Or gAstKind(ni) = NK_CALL Then
+        ' CALL 縺ｧ螟画焚豺ｻ蟄励・蝣ｴ蜷医・荳九〒 IDENT 謇ｱ縺・↓縺ｪ繧九％縺ｨ縺悟､壹＞
+    End If
+    If gAstKind(ni) = NK_INDEX Then
+        base = gAstA(ni)
+        If gAstKind(base) = NK_IDENT Then
+            idx = FindVar(gPool(gAstSIdx(base)))
+            If idx >= 0 Then AstIsString = gVarIsStr(idx)
+        End If
+    End If
+End Function
+
+Function CountArgs(argHead As Long) As Long
+    Dim n As Long
+    Dim p As Long
+    n = 0
+    p = argHead
+    While p <> AST_NIL
+        n = n + 1
+        p = gAstB(p)
+    Wend
+    CountArgs = n
+End Function
+
+Function ArgAt(argHead As Long, index As Long) As Long
+    Dim p As Long
+    Dim i As Long
+    p = argHead
+    i = 0
+    While p <> AST_NIL
+        If i = index Then
+            ArgAt = gAstA(p)
+            Exit Function
+        End If
+        i = i + 1
+        p = gAstB(p)
+    Wend
+    ArgAt = AST_NIL
+End Function
+
+' 蟾ｦ霎ｺ蛟､繧｢繝峨Ξ繧ｹ 竊・eax・・yRef 螳溷ｼ墓焚・・
+Function EmitLValueAddr(ni As Long) As Long
+    Dim kind As Long
+    Dim name As String
+    Dim idx As Long
+    Dim args As Long
+    Dim fieldSize As Long
+    Dim access As String
+
+    EmitLValueAddr = 0
+    If ni < 0 Then Exit Function
+    kind = gAstKind(ni)
+
+    If kind = NK_IDENT Then
+        name = gPool(gAstSIdx(ni))
+        idx = FindVar(name)
+        If idx < 0 Then
+            Print "ByRef undeclared: " + name
+            Exit Function
+        End If
+        EmitAddrOfVar(idx)
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    If kind = NK_INDEX Then
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "ByRef bad index"
+            Exit Function
+        End If
+        name = gPool(gAstSIdx(gAstA(ni)))
+        idx = FindVar(name)
+        If idx < 0 Then
+            Print "ByRef undeclared: " + name
+            Exit Function
+        End If
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitScaleAddBase(idx)
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    If kind = NK_MEMBER Then
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "ByRef member base must be ident"
+            Exit Function
+        End If
+        If gAstOp(ni) = OP_ARROW Then
+            access = gPool(gAstSIdx(gAstA(ni))) + "->" + gPool(gAstSIdx(ni))
+        Else
+            access = gPool(gAstSIdx(gAstA(ni))) + "." + gPool(gAstSIdx(ni))
+        End If
+        fieldSize = 0
+        If EmitMemberAddr(access, fieldSize) = 0 Then
+            Print "ByRef bad member: " + access
+            Exit Function
+        End If
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    If kind = NK_CALL Then
+        ' a(i) 豺ｻ蟄怜ｽ｢蠑・
+        name = gPool(gAstSIdx(ni))
+        idx = FindVar(name)
+        args = gAstA(ni)
+        If idx < 0 Or CountArgs(args) <> 1 Then
+            Print "ByRef needs a variable: " + name
+            Exit Function
+        End If
+        If EmitExpr(ArgAt(args, 0)) = 0 Then Exit Function
+        EmitScaleAddBase(idx)
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    Print "ByRef needs a variable"
+End Function
+
+Function EmitExpr(ni As Long) As Long
+    Dim kind As Long
+    Dim op As Long
+    Dim name As String
+    Dim idx As Long
+    Dim ci As Long
+    Dim args As Long
+    Dim nArgs As Long
+    Dim a0 As Long
+    Dim a1 As Long
+    Dim a2 As Long
+    Dim i As Long
+    Dim base As Long
+    Dim lit As String
+    Dim label As String
+    Dim fieldSize As Long
+    Dim access As String
+    Dim fi As Long
+    Dim ti As Long
+    Dim si As Long
+
+    EmitExpr = 0
+    If ni < 0 Then Exit Function
+    kind = gAstKind(ni)
+    op = gAstOp(ni)
+
+    If kind = NK_NUM Then
+        EmitAsm("mov eax, " + Trim$(Str$(gAstIVal(ni))))
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_STR Then
+        lit = Chr$(34) + gPool(gAstSIdx(ni)) + Chr$(34)
+        label = AddStringLit$(lit)
+        EmitAsm("push " + label)
+        EmitAsm("pop eax")
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_IDENT Then
+        name = gPool(gAstSIdx(ni))
+        If Lower$(name) = "null" Then
+            EmitAsm("mov eax, 0")
+            EmitExpr = 1
+            Exit Function
+        End If
+        ' Function 蜀・〒閾ｪ蛻・・蜷榊燕繧貞盾辣ｧ 竊・謌ｻ繧雁､繧ｹ繝ｭ繝・ヨ
+        If gInProc <> 0 And gProcIsFunc <> 0 Then
+            If StrEqCI(name, gProcName) <> 0 Then
+                EmitAsm("mov ebx, ebp")
+                EmitAsm("add ebx, " + Trim$(Str$(gRetOff)))
+                EmitAsm("mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+                EmitExpr = 1
+                Exit Function
+            End If
+        End If
+        ci = FindConst(name)
+        If ci >= 0 Then
+            EmitAsm("mov eax, " + Trim$(Str$(gConstVal(ci))))
+            EmitExpr = 1
+            Exit Function
+        End If
+        idx = FindVar(name)
+        If idx >= 0 Then
+            If gVarCount(idx) > 1 Then
+                ' 驟榊・蜷榊腰菴・竊・蜈磯ｭ繧｢繝峨Ξ繧ｹ
+                EmitAddrVar(idx)
+                EmitAsm("mov eax, ebx")
+            ElseIf gVarTypeIdx(idx) >= 0 And gVarIsPtr(idx) = 0 Then
+                ' UDT・・ype 螟画焚・俄・ ByRef 逶ｸ蠖薙〒繧｢繝峨Ξ繧ｹ繧呈ｸ｡縺・
+                ' ・亥､繝ｭ繝ｼ繝峨・ eax 縺ｫ霈峨ｉ縺ｪ縺・/ CreateProcess 遲峨・ WinAPI 蜷代￠・・
+                EmitAddrVar(idx)
+                EmitAsm("mov eax, ebx")
+            Else
+                EmitLoadVar(idx)
+            End If
+            EmitExpr = 1
+            Exit Function
+        End If
+        Print "error: unknown or undeclared name in expression: " + name
+        Print "  hint: Dim/Const it first, or check spelling; unary minus uses '- x' form"
+        Exit Function
+    End If
+
+    If kind = NK_UNARY And op = OP_NEG Then
+        If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+        EmitAsm("neg eax")
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_BIN Then
+        If op = OP_ADD And (AstIsString(gAstA(ni)) <> 0 Or AstIsString(gAstB(ni)) <> 0) Then
+            EnsureStringRt()
+            If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            EmitAsm("call _rt_Cat")
+            EmitExpr = 1
+            Exit Function
+        End If
+        If op = OP_SUB Or op = OP_DIV Or op = OP_MOD Then
+            If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+            EmitAsm("mov ecx, eax")
+            EmitAsm("pop eax")
+            If op = OP_SUB Then
+                EmitAsm("sub eax, ecx")
+            ElseIf op = OP_DIV Then
+                EmitAsm("xor edx, edx")
+                EmitAsm("div ecx")
+            Else
+                EmitAsm("xor edx, edx")
+                EmitAsm("div ecx")
+                EmitAsm("mov eax, edx")
+            End If
+            EmitExpr = 1
+            Exit Function
+        End If
+        If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+        EmitAsm("push eax")
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitAsm("pop ecx")
+        If op = OP_ADD Then
+            EmitAsm("add eax, ecx")
+        ElseIf op = OP_MUL Then
+            EmitAsm("imul eax, ecx")
+        ElseIf op = OP_AND Then
+            EmitAsm("and eax, ecx")
+        ElseIf op = OP_OR Then
+            EmitAsm("or eax, ecx")
+        ElseIf op = OP_XOR Then
+            EmitAsm("xor eax, ecx")
+        Else
+            Print "unknown bin op"
+            Exit Function
+        End If
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_VARPTR Then
+        base = gAstA(ni)
+        If gAstKind(base) = NK_IDENT Then
+            idx = FindVar(gPool(gAstSIdx(base)))
+            If idx < 0 Then
+                Print "VarPtr undeclared: " + gPool(gAstSIdx(base))
+                Exit Function
+            End If
+            EmitAddrOfVar(idx)
+            EmitAsm("mov eax, ebx")
+            EmitExpr = 1
+            Exit Function
+        End If
+        If gAstKind(base) = NK_CALL Then
+            name = gPool(gAstSIdx(base))
+            idx = FindVar(name)
+            args = gAstA(base)
+            If idx < 0 Or CountArgs(args) <> 1 Then
+                Print "VarPtr bad index"
+                Exit Function
+            End If
+            If EmitExpr(ArgAt(args, 0)) = 0 Then Exit Function
+            EmitScaleAddBase(idx)
+            EmitAsm("mov eax, ebx")
+            EmitExpr = 1
+            Exit Function
+        End If
+        If gAstKind(base) = NK_INDEX Then
+            If gAstKind(gAstA(base)) <> NK_IDENT Then
+                Print "VarPtr bad index"
+                Exit Function
+            End If
+            idx = FindVar(gPool(gAstSIdx(gAstA(base))))
+            If idx < 0 Then
+                Print "VarPtr undeclared"
+                Exit Function
+            End If
+            If EmitExpr(gAstB(base)) = 0 Then Exit Function
+            EmitScaleAddBase(idx)
+            EmitAsm("mov eax, ebx")
+            EmitExpr = 1
+            Exit Function
+        End If
+        Print "VarPtr bad form"
+        Exit Function
+    End If
+
+    If kind = NK_SIZEOF Then
+        name = gPool(gAstSIdx(ni))
+        idx = FindVar(name)
+        If idx >= 0 Then
+            EmitAsm("mov eax, " + Trim$(Str$(gVarSize(idx))))
+            EmitExpr = 1
+            Exit Function
+        End If
+        i = TypeSizeOf(name)
+        If i > 0 Then
+            EmitAsm("mov eax, " + Trim$(Str$(i)))
+            EmitExpr = 1
+            Exit Function
+        End If
+        Print "unknown SizeOf target: " + name
+        Exit Function
+    End If
+
+    If kind = NK_ADDRESSOF Then
+        ' 謇狗ｶ壹″繝ｩ繝吶Ν _Name 縺ｮ繧｢繝峨Ξ繧ｹ・・tdcall 繧ｳ繝ｼ繝ｫ繝舌ャ繧ｯ逕ｨ・・
+        name = gPool(gAstSIdx(ni))
+        If IsIdentName(name) = 0 Then
+            Print "AddressOf needs procedure name"
+            Exit Function
+        End If
+        EmitAsm("mov eax, _" + name)
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_MEMBER Then
+        ' EmitMemberAddr 莠呈鋤縺ｮ譁・ｭ怜・繧堤ｵ・∩遶九※
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "member base must be ident"
+            Exit Function
+        End If
+        If gAstOp(ni) = OP_ARROW Then
+            access = gPool(gAstSIdx(gAstA(ni))) + "->" + gPool(gAstSIdx(ni))
+        Else
+            access = gPool(gAstSIdx(gAstA(ni))) + "." + gPool(gAstSIdx(ni))
+        End If
+        fieldSize = 0
+        If EmitMemberAddr(access, fieldSize) = 0 Then
+            Print "error: bad member access: " + access
+            Print "  hint: base must be a Dim'd Type (or Type pointer for ->)"
+            Exit Function
+        End If
+        EmitLoadSized(fieldSize)
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_INDEX Then
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "index base must be ident"
+            Exit Function
+        End If
+        name = gPool(gAstSIdx(gAstA(ni)))
+        idx = FindVar(name)
+        If idx < 0 Then
+            Print "undeclared: " + name
+            Exit Function
+        End If
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitScaleAddBase(idx)
+        EmitLoadSized(gVarSize(idx))
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_CALL Then
+        name = gPool(gAstSIdx(ni))
+        args = gAstA(ni)
+        nArgs = CountArgs(args)
+        idx = FindVar(name)
+
+        ' 螟画焚縺ｮ a(i) 豺ｻ蟄・
+        If idx >= 0 Then
+            If nArgs <> 1 Then
+                Print "bad index arity: " + name
+                Exit Function
+            End If
+            If EmitExpr(ArgAt(args, 0)) = 0 Then Exit Function
+            EmitScaleAddBase(idx)
+            EmitLoadSized(gVarSize(idx))
+            EmitExpr = 1
+            Exit Function
+        End If
+
+        ' 譁・ｭ怜・邨・∩霎ｼ縺ｿ
+        If Lower$(name) = "len" Or Lower$(name) = "asc" Or Lower$(name) = "strptr" Or Lower$(name) = "chr$" Or Lower$(name) = "left$" Or Lower$(name) = "mid$" Or Lower$(name) = "right$" Or Lower$(name) = "str$" Or Lower$(name) = "hex$" Or Lower$(name) = "val" Or Lower$(name) = "loword" Or Lower$(name) = "hiword" Or Lower$(name) = "makeintresource" Then
+            a0 = ArgAt(args, 0)
+            a1 = ArgAt(args, 1)
+            a2 = ArgAt(args, 2)
+            If Lower$(name) = "len" Or Lower$(name) = "asc" Or Lower$(name) = "strptr" Or Lower$(name) = "chr$" Or Lower$(name) = "str$" Or Lower$(name) = "hex$" Or Lower$(name) = "val" Or Lower$(name) = "loword" Or Lower$(name) = "hiword" Or Lower$(name) = "makeintresource" Then
+                If nArgs <> 1 Then
+                    Print Lower$(name) + " needs 1 argument"
+                    Exit Function
+                End If
+                ' Len(讒矩菴・ 縺ｯ EmitExpr(a0) 蜑阪↓蛻､螳夲ｼ亥､縺ｯ荳崎ｦ・ｼ・
+                If Lower$(name) = "len" Then
+                    If gAstKind(a0) = NK_IDENT Then
+                        idx = FindVar(gPool(gAstSIdx(a0)))
+                        If idx >= 0 Then
+                            If gVarIsStr(idx) = 0 And gVarTypeIdx(idx) >= 0 And gVarCount(idx) = 1 Then
+                                EmitAsm("mov eax, " + Trim$(Str$(gTypeSize(gVarTypeIdx(idx)))))
+                                EmitExpr = 1
+                                Exit Function
+                            End If
+                        End If
+                    End If
+                End If
+                If EmitExpr(a0) = 0 Then Exit Function
+                If Lower$(name) = "strptr" Then
+                    EmitExpr = 1
+                    Exit Function
+                End If
+                If Lower$(name) = "loword" Then
+                    EmitAsm("and eax, 65535")
+                    EmitExpr = 1
+                    Exit Function
+                End If
+                If Lower$(name) = "hiword" Then
+                    EmitAsm("shr eax, 16")
+                    EmitAsm("and eax, 65535")
+                    EmitExpr = 1
+                    Exit Function
+                End If
+                If Lower$(name) = "makeintresource" Then
+                    EmitExpr = 1
+                    Exit Function
+                End If
+                EnsureStringRt()
+                EmitAsm("push eax")
+                If Lower$(name) = "len" Then
+                    EmitAsm("call _rt_Len")
+                ElseIf Lower$(name) = "asc" Then
+                    EmitAsm("call _rt_Asc")
+                ElseIf Lower$(name) = "str$" Then
+                    EmitAsm("call _rt_Str")
+                ElseIf Lower$(name) = "hex$" Then
+                    EmitAsm("call _rt_Hex")
+                ElseIf Lower$(name) = "val" Then
+                    EmitAsm("call _rt_Val")
+                Else
+                    EmitAsm("call _rt_Chr")
+                End If
+                EmitExpr = 1
+                Exit Function
+            ElseIf Lower$(name) = "left$" Then
+                If nArgs <> 2 Then
+                    Print "Left$ needs 2 arguments"
+                    Exit Function
+                End If
+                EnsureStringRt()
+                If EmitExpr(a1) = 0 Then Exit Function
+                EmitAsm("push eax")
+                If EmitExpr(a0) = 0 Then Exit Function
+                EmitAsm("push eax")
+                EmitAsm("call _rt_Left")
+                EmitExpr = 1
+                Exit Function
+            ElseIf Lower$(name) = "right$" Then
+                ' Right$(s, n) = Mid$(s, Len(s)-n+1, n)
+                If nArgs <> 2 Then
+                    Print "Right$ needs 2 arguments"
+                    Exit Function
+                End If
+                EnsureStringRt()
+                If EmitExpr(a0) = 0 Then Exit Function
+                EmitAsm("push eax")
+                EmitAsm("push eax")
+                EmitAsm("call _rt_Len")
+                EmitAsm("push eax")
+                If EmitExpr(a1) = 0 Then Exit Function
+                EmitAsm("mov ecx, eax")
+                EmitAsm("pop eax")
+                EmitAsm("sub eax, ecx")
+                EmitAsm("add eax, 1")
+                EmitAsm("pop edx")
+                EmitAsm("push ecx")
+                EmitAsm("push eax")
+                EmitAsm("push edx")
+                EmitAsm("call _rt_Mid")
+                EmitExpr = 1
+                Exit Function
+            Else
+                If nArgs <> 2 And nArgs <> 3 Then
+                    Print "Mid$ needs 2 or 3 arguments"
+                    Exit Function
+                End If
+                EnsureStringRt()
+                If nArgs = 3 Then
+                    If EmitExpr(a2) = 0 Then Exit Function
+                Else
+                    EmitAsm("mov eax, -1")
+                End If
+                EmitAsm("push eax")
+                If EmitExpr(a1) = 0 Then Exit Function
+                EmitAsm("push eax")
+                If EmitExpr(a0) = 0 Then Exit Function
+                EmitAsm("push eax")
+                EmitAsm("call _rt_Mid")
+                EmitExpr = 1
+                Exit Function
+            End If
+        End If
+
+        ' 荳闊ｬ蜻ｼ縺ｳ蜃ｺ縺暦ｼ・tdcall: 蜿ｳ縺九ｉ push・・
+        si = FindSig(name)
+        i = nArgs - 1
+        While i >= 0
+            If SigArgByRef(si, i) <> 0 Then
+                If EmitLValueAddr(ArgAt(args, i)) = 0 Then Exit Function
+            Else
+                If EmitExpr(ArgAt(args, i)) = 0 Then Exit Function
+            End If
+            EmitAsm("push eax")
+            i = i - 1
+        Wend
+        EmitCallName(name)
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    Print "EmitExpr: bad node"
+End Function
+
+Function EmitCond(ni As Long, falseLab As String) As Long
+    Dim rightLab As String
+    Dim doneLab As String
+    Dim isStr As Long
+    Dim op As Long
+
+    EmitCond = 0
+    If ni < 0 Then Exit Function
+
+    If gAstKind(ni) = NK_LOGOR Then
+        rightLab = NewLabel$()
+        doneLab = NewLabel$()
+        If EmitCond(gAstA(ni), rightLab) = 0 Then Exit Function
+        EmitAsm("jmp " + doneLab)
+        EmitLabel(rightLab)
+        If EmitCond(gAstB(ni), falseLab) = 0 Then Exit Function
+        EmitLabel(doneLab)
+        EmitCond = 1
+        Exit Function
+    End If
+
+    If gAstKind(ni) = NK_LOGAND Then
+        If EmitCond(gAstA(ni), falseLab) = 0 Then Exit Function
+        EmitCond = EmitCond(gAstB(ni), falseLab)
+        Exit Function
+    End If
+
+    If gAstKind(ni) = NK_CMP Then
+        op = gAstOp(ni)
+        isStr = AstIsString(gAstA(ni)) Or AstIsString(gAstB(ni))
+        If (op = OP_EQ Or op = OP_NE) And isStr <> 0 Then
+            EnsureStringRt()
+            If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            EmitAsm("call _lstrcmpA@8")
+            EmitAsm("cmp eax, 0")
+            If op = OP_EQ Then
+                EmitAsm("jne " + falseLab)
+            Else
+                EmitAsm("je " + falseLab)
+            End If
+            EmitCond = 1
+            Exit Function
+        End If
+        If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+        EmitAsm("push eax")
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitAsm("pop ecx")
+        EmitAsm("cmp ecx, eax")
+        If op = OP_EQ Then
+            EmitAsm("jne " + falseLab)
+        ElseIf op = OP_NE Then
+            EmitAsm("je " + falseLab)
+        ElseIf op = OP_LT Then
+            EmitAsm("jge " + falseLab)
+        ElseIf op = OP_GT Then
+            EmitAsm("jle " + falseLab)
+        ElseIf op = OP_LE Then
+            EmitAsm("jg " + falseLab)
+        ElseIf op = OP_GE Then
+            EmitAsm("jl " + falseLab)
+        End If
+        EmitCond = 1
+        Exit Function
+    End If
+
+    ' 蛟､縺ｮ逵溷⊃
+    If EmitExpr(ni) = 0 Then Exit Function
+    EmitAsm("cmp eax, 0")
+    EmitAsm("je " + falseLab)
+    EmitCond = 1
+End Function

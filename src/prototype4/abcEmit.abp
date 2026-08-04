@@ -1,0 +1,621 @@
+' abcEmit.abp - AST から ASM を生成
+
+Function AstIsString(ni As Long) As Long
+    Dim name As String
+    Dim idx As Long
+    Dim base As Long
+    AstIsString = 0
+    If ni < 0 Then Exit Function
+    If gAstKind(ni) = NK_STR Then
+        AstIsString = 1
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_BIN And gAstOp(ni) = OP_ADD Then
+        If AstIsString(gAstA(ni)) <> 0 Or AstIsString(gAstB(ni)) <> 0 Then
+            AstIsString = 1
+        End If
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_CALL Then
+        name = Lower$(gPool(gAstSIdx(ni)))
+        ' VB 慣習: 名前が $ で終わる関数は String 戻り（末尾バイトで判定）
+        idx = Len(name)
+        If idx > 0 Then
+            ' Mid$/文字列 = に依存せず、末尾が $ か見る
+            If Asc(Mid$(name, idx, 1)) = Asc("$") Then
+                AstIsString = 1
+                Exit Function
+            End If
+        End If
+        If name = "chr$" Or name = "left$" Or name = "mid$" Or name = "right$" Or name = "str$" Or name = "hex$" Or name = "lower$" Or name = "trim$" Or name = "makestr" Then
+            AstIsString = 1
+            Exit Function
+        End If
+        idx = FindVar(gPool(gAstSIdx(ni)))
+        If idx >= 0 Then
+            AstIsString = gVarIsStr(idx)
+        End If
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_IDENT Then
+        idx = FindVar(gPool(gAstSIdx(ni)))
+        If idx >= 0 Then AstIsString = gVarIsStr(idx)
+        Exit Function
+    End If
+    If gAstKind(ni) = NK_INDEX Or gAstKind(ni) = NK_CALL Then
+        ' CALL で変数添字の場合は下で IDENT 扱いになることが多い
+    End If
+    If gAstKind(ni) = NK_INDEX Then
+        base = gAstA(ni)
+        If gAstKind(base) = NK_IDENT Then
+            idx = FindVar(gPool(gAstSIdx(base)))
+            If idx >= 0 Then AstIsString = gVarIsStr(idx)
+        End If
+    End If
+End Function
+
+Function CountArgs(argHead As Long) As Long
+    Dim n As Long
+    Dim p As Long
+    n = 0
+    p = argHead
+    While p <> AST_NIL
+        n = n + 1
+        p = gAstB(p)
+    Wend
+    CountArgs = n
+End Function
+
+Function ArgAt(argHead As Long, index As Long) As Long
+    Dim p As Long
+    Dim i As Long
+    p = argHead
+    i = 0
+    While p <> AST_NIL
+        If i = index Then
+            ArgAt = gAstA(p)
+            Exit Function
+        End If
+        i = i + 1
+        p = gAstB(p)
+    Wend
+    ArgAt = AST_NIL
+End Function
+
+' 左辺値アドレス → eax（ByRef 実引数）
+Function EmitLValueAddr(ni As Long) As Long
+    Dim kind As Long
+    Dim name As String
+    Dim idx As Long
+    Dim args As Long
+    Dim fieldSize As Long
+    Dim access As String
+
+    EmitLValueAddr = 0
+    If ni < 0 Then Exit Function
+    kind = gAstKind(ni)
+
+    If kind = NK_IDENT Then
+        name = gPool(gAstSIdx(ni))
+        idx = FindVar(name)
+        If idx < 0 Then
+            Print "ByRef undeclared: " + name
+            Exit Function
+        End If
+        EmitAddrOfVar(idx)
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    If kind = NK_INDEX Then
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "ByRef bad index"
+            Exit Function
+        End If
+        name = gPool(gAstSIdx(gAstA(ni)))
+        idx = FindVar(name)
+        If idx < 0 Then
+            Print "ByRef undeclared: " + name
+            Exit Function
+        End If
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitScaleAddBase(idx)
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    If kind = NK_MEMBER Then
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "ByRef member base must be ident"
+            Exit Function
+        End If
+        If gAstOp(ni) = OP_ARROW Then
+            access = gPool(gAstSIdx(gAstA(ni))) + "->" + gPool(gAstSIdx(ni))
+        Else
+            access = gPool(gAstSIdx(gAstA(ni))) + "." + gPool(gAstSIdx(ni))
+        End If
+        fieldSize = 0
+        If EmitMemberAddr(access, fieldSize) = 0 Then
+            Print "ByRef bad member: " + access
+            Exit Function
+        End If
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    If kind = NK_CALL Then
+        ' a(i) 添字形式
+        name = gPool(gAstSIdx(ni))
+        idx = FindVar(name)
+        args = gAstA(ni)
+        If idx < 0 Or CountArgs(args) <> 1 Then
+            Print "ByRef needs a variable: " + name
+            Exit Function
+        End If
+        If EmitExpr(ArgAt(args, 0)) = 0 Then Exit Function
+        EmitScaleAddBase(idx)
+        EmitAsm("mov eax, ebx")
+        EmitLValueAddr = 1
+        Exit Function
+    End If
+
+    Print "ByRef needs a variable"
+End Function
+
+Function EmitExpr(ni As Long) As Long
+    Dim kind As Long
+    Dim op As Long
+    Dim name As String
+    Dim idx As Long
+    Dim ci As Long
+    Dim args As Long
+    Dim nArgs As Long
+    Dim a0 As Long
+    Dim a1 As Long
+    Dim a2 As Long
+    Dim i As Long
+    Dim base As Long
+    Dim lit As String
+    Dim label As String
+    Dim fieldSize As Long
+    Dim access As String
+    Dim fi As Long
+    Dim ti As Long
+    Dim si As Long
+
+    EmitExpr = 0
+    If ni < 0 Then Exit Function
+    kind = gAstKind(ni)
+    op = gAstOp(ni)
+
+    If kind = NK_NUM Then
+        EmitAsm("mov eax, " + Trim$(Str$(gAstIVal(ni))))
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_STR Then
+        lit = Chr$(34) + gPool(gAstSIdx(ni)) + Chr$(34)
+        label = AddStringLit$(lit)
+        EmitAsm("push " + label)
+        EmitAsm("pop eax")
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_IDENT Then
+        name = gPool(gAstSIdx(ni))
+        If Lower$(name) = "null" Then
+            EmitAsm("mov eax, 0")
+            EmitExpr = 1
+            Exit Function
+        End If
+        ' Function 内で自分の名前を参照 → 戻り値スロット
+        If gInProc <> 0 And gProcIsFunc <> 0 Then
+            If StrEqCI(name, gProcName) <> 0 Then
+                EmitAsm("mov ebx, ebp")
+                EmitAsm("add ebx, " + Trim$(Str$(gRetOff)))
+                EmitAsm("mov eax, " + Chr$(&H5B) + "ebx" + Chr$(&H5D))
+                EmitExpr = 1
+                Exit Function
+            End If
+        End If
+        ci = FindConst(name)
+        If ci >= 0 Then
+            EmitAsm("mov eax, " + Trim$(Str$(gConstVal(ci))))
+            EmitExpr = 1
+            Exit Function
+        End If
+        idx = FindVar(name)
+        If idx >= 0 Then
+            If gVarCount(idx) > 1 Then
+                ' 配列名単体 → 先頭アドレス
+                EmitAddrVar(idx)
+                EmitAsm("mov eax, ebx")
+            ElseIf gVarTypeIdx(idx) >= 0 And gVarIsPtr(idx) = 0 Then
+                ' UDT（Type 変数）→ ByRef 相当でアドレスを渡す
+                ' （値ロードは eax に載らない / CreateProcess 等の WinAPI 向け）
+                EmitAddrVar(idx)
+                EmitAsm("mov eax, ebx")
+            Else
+                EmitLoadVar(idx)
+            End If
+            EmitExpr = 1
+            Exit Function
+        End If
+        Print "error: unknown or undeclared name in expression: " + name
+        Print "  hint: Dim/Const it first, or check spelling; unary minus uses '- x' form"
+        Exit Function
+    End If
+
+    If kind = NK_UNARY And op = OP_NEG Then
+        If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+        EmitAsm("neg eax")
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_BIN Then
+        If op = OP_ADD And (AstIsString(gAstA(ni)) <> 0 Or AstIsString(gAstB(ni)) <> 0) Then
+            EnsureStringRt()
+            If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            EmitAsm("call _rt_Cat")
+            EmitExpr = 1
+            Exit Function
+        End If
+        If op = OP_SUB Or op = OP_DIV Or op = OP_MOD Then
+            If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+            EmitAsm("mov ecx, eax")
+            EmitAsm("pop eax")
+            If op = OP_SUB Then
+                EmitAsm("sub eax, ecx")
+            ElseIf op = OP_DIV Then
+                EmitAsm("xor edx, edx")
+                EmitAsm("div ecx")
+            Else
+                EmitAsm("xor edx, edx")
+                EmitAsm("div ecx")
+                EmitAsm("mov eax, edx")
+            End If
+            EmitExpr = 1
+            Exit Function
+        End If
+        If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+        EmitAsm("push eax")
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitAsm("pop ecx")
+        If op = OP_ADD Then
+            EmitAsm("add eax, ecx")
+        ElseIf op = OP_MUL Then
+            EmitAsm("imul eax, ecx")
+        ElseIf op = OP_AND Then
+            EmitAsm("and eax, ecx")
+        ElseIf op = OP_OR Then
+            EmitAsm("or eax, ecx")
+        ElseIf op = OP_XOR Then
+            EmitAsm("xor eax, ecx")
+        Else
+            Print "unknown bin op"
+            Exit Function
+        End If
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_VARPTR Then
+        base = gAstA(ni)
+        If gAstKind(base) = NK_IDENT Then
+            idx = FindVar(gPool(gAstSIdx(base)))
+            If idx < 0 Then
+                Print "VarPtr undeclared: " + gPool(gAstSIdx(base))
+                Exit Function
+            End If
+            EmitAddrOfVar(idx)
+            EmitAsm("mov eax, ebx")
+            EmitExpr = 1
+            Exit Function
+        End If
+        If gAstKind(base) = NK_CALL Then
+            name = gPool(gAstSIdx(base))
+            idx = FindVar(name)
+            args = gAstA(base)
+            If idx < 0 Or CountArgs(args) <> 1 Then
+                Print "VarPtr bad index"
+                Exit Function
+            End If
+            If EmitExpr(ArgAt(args, 0)) = 0 Then Exit Function
+            EmitScaleAddBase(idx)
+            EmitAsm("mov eax, ebx")
+            EmitExpr = 1
+            Exit Function
+        End If
+        If gAstKind(base) = NK_INDEX Then
+            If gAstKind(gAstA(base)) <> NK_IDENT Then
+                Print "VarPtr bad index"
+                Exit Function
+            End If
+            idx = FindVar(gPool(gAstSIdx(gAstA(base))))
+            If idx < 0 Then
+                Print "VarPtr undeclared"
+                Exit Function
+            End If
+            If EmitExpr(gAstB(base)) = 0 Then Exit Function
+            EmitScaleAddBase(idx)
+            EmitAsm("mov eax, ebx")
+            EmitExpr = 1
+            Exit Function
+        End If
+        Print "VarPtr bad form"
+        Exit Function
+    End If
+
+    If kind = NK_SIZEOF Then
+        name = gPool(gAstSIdx(ni))
+        idx = FindVar(name)
+        If idx >= 0 Then
+            EmitAsm("mov eax, " + Trim$(Str$(gVarSize(idx))))
+            EmitExpr = 1
+            Exit Function
+        End If
+        i = TypeSizeOf(name)
+        If i > 0 Then
+            EmitAsm("mov eax, " + Trim$(Str$(i)))
+            EmitExpr = 1
+            Exit Function
+        End If
+        Print "unknown SizeOf target: " + name
+        Exit Function
+    End If
+
+    If kind = NK_MEMBER Then
+        ' EmitMemberAddr 互換の文字列を組み立て
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "member base must be ident"
+            Exit Function
+        End If
+        If gAstOp(ni) = OP_ARROW Then
+            access = gPool(gAstSIdx(gAstA(ni))) + "->" + gPool(gAstSIdx(ni))
+        Else
+            access = gPool(gAstSIdx(gAstA(ni))) + "." + gPool(gAstSIdx(ni))
+        End If
+        fieldSize = 0
+        If EmitMemberAddr(access, fieldSize) = 0 Then
+            Print "error: bad member access: " + access
+            Print "  hint: base must be a Dim'd Type (or Type pointer for ->)"
+            Exit Function
+        End If
+        EmitLoadSized(fieldSize)
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_INDEX Then
+        If gAstKind(gAstA(ni)) <> NK_IDENT Then
+            Print "index base must be ident"
+            Exit Function
+        End If
+        name = gPool(gAstSIdx(gAstA(ni)))
+        idx = FindVar(name)
+        If idx < 0 Then
+            Print "undeclared: " + name
+            Exit Function
+        End If
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitScaleAddBase(idx)
+        EmitLoadSized(gVarSize(idx))
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_CALL Then
+        name = gPool(gAstSIdx(ni))
+        args = gAstA(ni)
+        nArgs = CountArgs(args)
+        idx = FindVar(name)
+
+        ' 変数の a(i) 添字
+        If idx >= 0 Then
+            If nArgs <> 1 Then
+                Print "bad index arity: " + name
+                Exit Function
+            End If
+            If EmitExpr(ArgAt(args, 0)) = 0 Then Exit Function
+            EmitScaleAddBase(idx)
+            EmitLoadSized(gVarSize(idx))
+            EmitExpr = 1
+            Exit Function
+        End If
+
+        ' 文字列組み込み
+        If Lower$(name) = "len" Or Lower$(name) = "asc" Or Lower$(name) = "strptr" Or Lower$(name) = "chr$" Or Lower$(name) = "left$" Or Lower$(name) = "mid$" Or Lower$(name) = "right$" Or Lower$(name) = "str$" Or Lower$(name) = "hex$" Or Lower$(name) = "val" Then
+            a0 = ArgAt(args, 0)
+            a1 = ArgAt(args, 1)
+            a2 = ArgAt(args, 2)
+            If Lower$(name) = "len" Or Lower$(name) = "asc" Or Lower$(name) = "strptr" Or Lower$(name) = "chr$" Or Lower$(name) = "str$" Or Lower$(name) = "hex$" Or Lower$(name) = "val" Then
+                If nArgs <> 1 Then
+                    Print Lower$(name) + " needs 1 argument"
+                    Exit Function
+                End If
+                If EmitExpr(a0) = 0 Then Exit Function
+                If Lower$(name) = "strptr" Then
+                    EmitExpr = 1
+                    Exit Function
+                End If
+                EnsureStringRt()
+                EmitAsm("push eax")
+                If Lower$(name) = "len" Then
+                    EmitAsm("call _rt_Len")
+                ElseIf Lower$(name) = "asc" Then
+                    EmitAsm("call _rt_Asc")
+                ElseIf Lower$(name) = "str$" Then
+                    EmitAsm("call _rt_Str")
+                ElseIf Lower$(name) = "hex$" Then
+                    EmitAsm("call _rt_Hex")
+                ElseIf Lower$(name) = "val" Then
+                    EmitAsm("call _rt_Val")
+                Else
+                    EmitAsm("call _rt_Chr")
+                End If
+                EmitExpr = 1
+                Exit Function
+            ElseIf Lower$(name) = "left$" Then
+                If nArgs <> 2 Then
+                    Print "Left$ needs 2 arguments"
+                    Exit Function
+                End If
+                EnsureStringRt()
+                If EmitExpr(a1) = 0 Then Exit Function
+                EmitAsm("push eax")
+                If EmitExpr(a0) = 0 Then Exit Function
+                EmitAsm("push eax")
+                EmitAsm("call _rt_Left")
+                EmitExpr = 1
+                Exit Function
+            ElseIf Lower$(name) = "right$" Then
+                ' Right$(s, n) = Mid$(s, Len(s)-n+1, n)
+                If nArgs <> 2 Then
+                    Print "Right$ needs 2 arguments"
+                    Exit Function
+                End If
+                EnsureStringRt()
+                If EmitExpr(a0) = 0 Then Exit Function
+                EmitAsm("push eax")
+                EmitAsm("push eax")
+                EmitAsm("call _rt_Len")
+                EmitAsm("push eax")
+                If EmitExpr(a1) = 0 Then Exit Function
+                EmitAsm("mov ecx, eax")
+                EmitAsm("pop eax")
+                EmitAsm("sub eax, ecx")
+                EmitAsm("add eax, 1")
+                EmitAsm("pop edx")
+                EmitAsm("push ecx")
+                EmitAsm("push eax")
+                EmitAsm("push edx")
+                EmitAsm("call _rt_Mid")
+                EmitExpr = 1
+                Exit Function
+            Else
+                If nArgs <> 2 And nArgs <> 3 Then
+                    Print "Mid$ needs 2 or 3 arguments"
+                    Exit Function
+                End If
+                EnsureStringRt()
+                If nArgs = 3 Then
+                    If EmitExpr(a2) = 0 Then Exit Function
+                Else
+                    EmitAsm("mov eax, -1")
+                End If
+                EmitAsm("push eax")
+                If EmitExpr(a1) = 0 Then Exit Function
+                EmitAsm("push eax")
+                If EmitExpr(a0) = 0 Then Exit Function
+                EmitAsm("push eax")
+                EmitAsm("call _rt_Mid")
+                EmitExpr = 1
+                Exit Function
+            End If
+        End If
+
+        ' 一般呼び出し（stdcall: 右から push）
+        si = FindSig(name)
+        i = nArgs - 1
+        While i >= 0
+            If SigArgByRef(si, i) <> 0 Then
+                If EmitLValueAddr(ArgAt(args, i)) = 0 Then Exit Function
+            Else
+                If EmitExpr(ArgAt(args, i)) = 0 Then Exit Function
+            End If
+            EmitAsm("push eax")
+            i = i - 1
+        Wend
+        EmitCallName(name)
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    Print "EmitExpr: bad node"
+End Function
+
+Function EmitCond(ni As Long, falseLab As String) As Long
+    Dim rightLab As String
+    Dim doneLab As String
+    Dim isStr As Long
+    Dim op As Long
+
+    EmitCond = 0
+    If ni < 0 Then Exit Function
+
+    If gAstKind(ni) = NK_LOGOR Then
+        rightLab = NewLabel$()
+        doneLab = NewLabel$()
+        If EmitCond(gAstA(ni), rightLab) = 0 Then Exit Function
+        EmitAsm("jmp " + doneLab)
+        EmitLabel(rightLab)
+        If EmitCond(gAstB(ni), falseLab) = 0 Then Exit Function
+        EmitLabel(doneLab)
+        EmitCond = 1
+        Exit Function
+    End If
+
+    If gAstKind(ni) = NK_LOGAND Then
+        If EmitCond(gAstA(ni), falseLab) = 0 Then Exit Function
+        EmitCond = EmitCond(gAstB(ni), falseLab)
+        Exit Function
+    End If
+
+    If gAstKind(ni) = NK_CMP Then
+        op = gAstOp(ni)
+        isStr = AstIsString(gAstA(ni)) Or AstIsString(gAstB(ni))
+        If (op = OP_EQ Or op = OP_NE) And isStr <> 0 Then
+            EnsureStringRt()
+            If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+            EmitAsm("push eax")
+            EmitAsm("call _lstrcmpA@8")
+            EmitAsm("cmp eax, 0")
+            If op = OP_EQ Then
+                EmitAsm("jne " + falseLab)
+            Else
+                EmitAsm("je " + falseLab)
+            End If
+            EmitCond = 1
+            Exit Function
+        End If
+        If EmitExpr(gAstA(ni)) = 0 Then Exit Function
+        EmitAsm("push eax")
+        If EmitExpr(gAstB(ni)) = 0 Then Exit Function
+        EmitAsm("pop ecx")
+        EmitAsm("cmp ecx, eax")
+        If op = OP_EQ Then
+            EmitAsm("jne " + falseLab)
+        ElseIf op = OP_NE Then
+            EmitAsm("je " + falseLab)
+        ElseIf op = OP_LT Then
+            EmitAsm("jge " + falseLab)
+        ElseIf op = OP_GT Then
+            EmitAsm("jle " + falseLab)
+        ElseIf op = OP_LE Then
+            EmitAsm("jg " + falseLab)
+        ElseIf op = OP_GE Then
+            EmitAsm("jl " + falseLab)
+        End If
+        EmitCond = 1
+        Exit Function
+    End If
+
+    ' 値の真偽
+    If EmitExpr(ni) = 0 Then Exit Function
+    EmitAsm("cmp eax, 0")
+    EmitAsm("je " + falseLab)
+    EmitCond = 1
+End Function

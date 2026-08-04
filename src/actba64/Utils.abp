@@ -1,0 +1,134 @@
+' Win32 / CRT constants for self-host (host abc also provides these)
+Const NULL = 0
+Const MAX_PATH = 260
+Const GENERIC_READ = &H80000000
+Const GENERIC_WRITE = &H40000000
+Const FILE_SHARE_READ = 1
+Const OPEN_EXISTING = 3
+Const CREATE_ALWAYS = 2
+Const FILE_ATTRIBUTE_NORMAL = 128
+Const INVALID_HANDLE_VALUE = &HFFFFFFFF
+
+Function AlignUp(v As DWord, a As DWord) As DWord
+    ' power-of-2 align: (v+a-1) & -a
+    AlignUp = (v + a - 1) And (0 - a)
+End Function
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim line[4096] As Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[260] As Byte
+    Dim n As Long
+    Dim m As Long
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    If cmdlen > 4094 Then cmdlen = 4094
+    ' GetCommandLine のバッファは書き換え不可。作業用にコピーする
+    memcpy(VarPtr(line), cmd, cmdlen)
+    line[cmdlen] = &H20
+    line[cmdlen + 1] = 0
+    buf[0] = 0
+    cidx = 0
+    For n = 0 To cmdlen
+        If line[n] = &H20 And line[n + 1] = &H20 Then
+            memcpy(VarPtr(line[n]), VarPtr(line[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+    For n = 0 To cmdlen
+        m = 0
+        While line[n] <> &H20
+            If m < 259 Then
+                ctmp[m] = line[n]
+                m = m + 1
+            End If
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+    GetCmd = 0
+End Function
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    Dim hFile As Long
+    Dim fsiz As Long
+    Dim nRead As Long
+    Dim p As *Byte
+    LoadFile = 0
+    outSize = 0
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    fsiz = GetFileSize(hFile, 0)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    p = malloc(fsiz)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), 0)
+    CloseHandle(hFile)
+    outSize = fsiz
+    LoadFile = p
+End Function
+
+Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
+    Dim hFile As Long
+    Dim nWritten As Long
+    WriteAll = 0
+    hFile = CreateFile(path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    WriteFile(hFile, p, size, VarPtr(nWritten), 0)
+    CloseHandle(hFile)
+    If nWritten = size Then
+        WriteAll = 1
+    End If
+End Function
+
+Sub ZeroMem(p As *Byte, n As Long)
+    Dim i As Long
+    If n <= 0 Then Exit Sub
+    For i = 0 To n - 1
+        p[i] = 0
+    Next
+End Sub
+
+Sub PutDword(p As *Byte, off As DWord, v As DWord)
+    memcpy(VarPtr(p[off]), VarPtr(v), 4)
+End Sub
+
+Sub PutWord(p As *Byte, off As DWord, v As Word)
+    memcpy(VarPtr(p[off]), VarPtr(v), 2)
+End Sub
+
+Sub WriteDosStub(buf As *Byte)
+    buf[&H40] = &H0E
+    buf[&H41] = &H1F
+    buf[&H42] = &HBA
+    buf[&H43] = &H0E
+    buf[&H44] = &H00
+    buf[&H45] = &HB4
+    buf[&H46] = &H09
+    buf[&H47] = &HCD
+    buf[&H48] = &H21
+    buf[&H49] = &HB8
+    buf[&H4A] = &H01
+    buf[&H4B] = &H4C
+    buf[&H4C] = &HCD
+    buf[&H4D] = &H21
+    lstrcpy(VarPtr(buf[&H4E]), "This program cannot be run in DOS mode.")
+    buf[&H75] = &H0D
+    buf[&H76] = &H0A
+    buf[&H77] = &H24
+End Sub

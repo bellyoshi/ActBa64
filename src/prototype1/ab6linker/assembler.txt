@@ -1,0 +1,213 @@
+アセンブラ（Assembler）の自作へようこそ！コンパイラ・リンカー・アセンブラという3大ツールチェーンの中で、アセンブラは「最もシンプルかつ直感的で、作っていて楽しい」パーツです。アセンブラが行う仕事の本質は、「テキストの命令（push 0 や mov eax, ebx）を、対応するx86マシン語（バイナリ）に1対1〜1対数個で翻訳し、COFF（.obj）形式にパッキングすること」です。自作アセンブラの全体像と、具体的な作成アプローチを整理してみましょう。1. 自作アセンブラの全体の処理フローアセンブラはテキストファイルを先頭から1行ずつ読み込んで処理していきます。[ テキスト (.asm) ]
+   │  "mov eax, 1" / "call _ExitProcess"
+   ▼
+1. 字句解析・構文解析 (Lexer / Parser)
+   │  命令名 (mnemonic) と オペランド (register / immediate / memory) を分類
+   ▼
+2. 命令の機械語変換 (Code Generation)
+   │  "mov eax, 1"  → B8 01 00 00 00
+   │  "call label"  → E8 [未定のアドレス] + リロケーション登録
+   ▼
+3. シンボルテーブルの構築
+   │  "_main:" などのラベルがコード内の何バイト目にあるかを記録
+   ▼
+4. COFF (.obj) フォーマットへの出力
+   │  マシン語バイナリ＋COFFヘッダー＋シンボル表＋リロケーション表を書き出す
+   ▼
+[ オブジェクトファイル (.obj) ]
+2. アセンブラ作りの心臓部：「x86マシン語の組み立て」x86（32bit）命令のマシン語変換は、命令のパターンによって難易度が変わります。① 最も簡単：オペランドなし命令単一の1バイトに変換するだけです。nop  $\rightarrow$ 90ret  $\rightarrow$ C3② 次に簡単：レジスタへの即値代入（32bit）mov レジスタ, 数値 のパターンです。x86ではレジスタごとに専用の1バイト命令（Opcode）が用意されています。mov eax, 0x12345678 $\rightarrow$ B8 78 56 34 12 (B8 + 32bit即値)mov ecx, 0x12345678 $\rightarrow$ B9 78 56 34 12 (B9 + 32bit即値)③ アセンブラ最大の難所：ModR/M バイトの計算mov [ebp-4], eax や add eax, ebx のように、「レジスタ同士」や「メモリとレジスタ」のやり取りをする命令です。x86では、オペランドの組み合わせを ModR/M（モッド・アールエム） という1バイトのビットフィールドで表現します。ModR/M バイトの構造 (8 bits)
+[ Mod (2 bits) ] [ Reg/Opcode (3 bits) ] [ R/M (3 bits) ]
+Mod (モード): メモリ参照の形式（レジスタ直接、[ebp+offset8]、[ebp+offset32] など）Reg: 転送元（または転送先）のレジスタ番号 (eax=0, ecx=1, edx=2 ...)R/M: もう一方のレジスタ番号またはメモリアドレス指定💡 コツ：最初は「使う命令のパターン」だけに絞る！x86の全命令に対応しようとするとIntelのマニュアル（数千ページ）に潰されます。最初はコンパイラが出力する 10種類ほどの基本命令（push, pop, mov, add, sub, cmp, jmp, call, ret） だけをターゲットに限定するのが成功の秘密です。3. アセンブラ実装の2パス（2-Pass）アルゴリズムアセンブラを作るときに必ず直面するのが「前方参照（まだ登場していないラベルへのジャンプ）」問題です。コード スニペット    jmp _future_label   ; この時点では _future_label が何バイト目にあるか分からない！
+    nop
+_future_label:
+    ret
+これを解決するために、アセンブラはコードを2回読み込み（2-Pass）します。1.1st Pass (位置計算):アドレス計算とラベル登録。テキストを1行ずつパースし、「各命令が何バイトの機械語になるか」だけを計算してロケーションカウンタ（位置ポインタ）を進める。_label: を発見したら、その時点の「アドレス（バイト数）」をシンボルテーブルに保存する。2.2nd Pass (機械語出力):バイナリ生成とリロケーション。もう一度テキストを先頭から読み込み、今度は実際の機械語バイナリを出力する。jmp _future_label が出てきたら、1st Pass で作成したシンボルテーブルから目的のアドレスを引き出して相対差分を計算・埋め込む。4. 自作アセンブラ開発のロードマップ自作リンカーの時と同様に、段階を踏んで作ると確実に動くものが完成します。ステップ1：超最小アセンブラ（固定命令のみ）入力：push 0 / call _ExitProcess だけが書かれたテキスト処理：push 0 を見つけたら 6A 00 をバッファに追加。call _ExitProcess を見つけたら E8 00 00 00 00 を追加し、COFFリロケーションテーブルに「_ExitProcess への参照」を1件登録。COFF構造体（前回作成した知識がそのまま使えます！）に流し込んで .obj を書き出す。ステップ2：数値パラメータとレジスタの解析push 42 $\rightarrow$ 6A 2Amov eax, 1 $\rightarrow$ B8 01 00 00 00文字列からレジスタ名（eax, ebx 等）や10進数・16進数をパースする処理を追加。ステップ3：ラベルとジャンプ（1st Pass / 2nd Pass）_label: 構文の解析と、jmp _label / je _label などの相対ジャンプ命令の補正計算を実装。次の一歩アセンブラが完成すれば、自分で吐き出した .obj を「前に作った自作リンカー」に食わせて、一気通貫で .exe を生み出すことができるようになります！まずは「push 0 と call だけを変換して .obj を吐き出す最小のプログラム」の設計から始めてみますか？
+
+bits 32
+
+
+
+; 外部関数の宣言（Windows API）
+
+; 32ビットAPIは先頭にアンダースコア `_` がつく場合が多いです
+
+extern _MessageBoxA@16
+
+extern _ExitProcess@4
+
+
+
+section .data
+
+title_text db 'Hello', 0
+
+msg_text db 'Hello World!', 0
+
+
+
+section .text
+
+global _main
+
+
+
+_main:
+
+; --- MessageBoxA(hWnd, lpText, lpCaption, uType) の呼び出し ---
+
+; 引数は右から順（逆順）に push します
+
+push 0 ; uType = MB_OK (0)
+
+push title_text ; lpCaption = "Hello"
+
+push msg_text ; lpText = "Hello World!"
+
+push 0 ; hWnd = NULL (0)
+
+call _MessageBoxA@16
+
+
+
+; --- ExitProcess(uExitCode) の呼び出し ---
+
+push 0 ; uExitCode = 0
+
+call _ExitProcess@4
+
+これがアセンブルできるようにしたい
+
+提示していただいた NASM 形式のアセンブリコード、素晴らしいチョイスです！
+
+MessageBoxA（メッセージボックス表示）と ExitProcess（プロセス終了）の呼び出し、文字列データの定義（.data）、そしてシンボルの公開・参照（global / extern）という、アセンブラ作りに必要な要素がすべて凝縮された最高のテストケースです。
+
+このコードを自作アセンブラでパースして .obj に変換するために、アセンブラ内部で何を処理すべきかを分解して整理しましょう。
+
+このコードをアセンブルするために必要な処理
+アセンブラを作る視点で見ると、このコードは以下の5つの要素で構成されています。
+
+1. ディレクティブ解析   : bits 32, section .data, section .text, global, extern
+2. データ定義解析       : db 'Hello', 0
+3. レジスタ/即値 push  : push 0, push title_text
+4. 関数呼び出し (call)  : call _MessageBoxA@16
+5. シンボル・COFF出力   : .obj フォーマットへのパッキング
+構文ごとのマシン語変換ルール（変換表）
+自作アセンブラの内部では、入力されたテキスト行を読み、以下のバイト配列に変換していきます。
+
+① .data セクション（文字列データ定義）
+title_text db 'Hello', 0
+→ ASCIIコード 48 65 6C 6C 6F 00 （6バイト）
+
+msg_text db 'Hello World!', 0
+→ ASCIIコード 48 65 6C 6C 6F 20 57 6F 72 6C 64 21 00 （13バイト）
+
+内部処理:
+title_text や msg_text というラベル名をシンボルテーブルに登録し、そのアドレスを .data セクション内のオフセット（0x0000 や 0x0006）として記録します。
+
+② .text セクション（実行コード）
+_main: から始まる各命令のマシン語変換です。
+
+アセンブリ命令	変換後のマシン語 (16進数)	内部処理の解説
+push 0	6A 00	小さい数値（1バイト即値）の push は 6A ＋ 1バイト値
+push title_text	68 00 00 00 00	
+DIR32リロケーション必要！
+
+
+ラベル（絶対アドレス）の push は 68 ＋ 4バイト仮アドレス。COFFのリロケーションテーブルに「.data セクションへの参照」として登録
+
+push msg_text	68 06 00 00 00	同上（msg_text のオフセット 0x0006 を仮埋め）
+push 0	6A 00	6A 00
+call _MessageBoxA@16	E8 00 00 00 00	
+REL32リロケーション必要！
+
+
+外部関数呼び出しは E8 ＋ 4バイト仮アドレス。COFFのリロケーションテーブルに「外部シンボル _MessageBoxA@16 への参照」として登録
+
+push 0	6A 00	6A 00
+call _ExitProcess@4	E8 00 00 00 00	外部シンボル _ExitProcess@4 への参照として登録
+COFF (.obj) 出力時に作るべきデータ構造
+このアセンブリコードから自作アセンブラが出力すべき .obj ファイルには、以下の情報が含まれることになります。
+
+┌────────────────────────────────────────────────────────┐
+│ 1. COFF Header                                         │
+│    ・セクション数: 2 (.text と .data)                  │
+│    ・シンボル数  : 5 (_main, _MessageBoxA@16, など)    │
+├────────────────────────────────────────────────────────┤
+│ 2. Section Headers                                     │
+│    ・.text セクション (マシン語コード)                 │
+│    ・.data セクション (文字列データ)                   │
+├────────────────────────────────────────────────────────┤
+│ 3. Raw Data (.text / .data)                            │
+│    ・.text: 6A 00 68 00... (上記マシン語の連結)         │
+│    ・.data: 'Hello\0Hello World!\0'                    │
+├────────────────────────────────────────────────────────┤
+│ 4. Relocation Table (.text用)                          │
+│    ・Offset 0x03 -> .data の title_text へ (DIR32)     │
+│    ・Offset 0x08 -> .data の msg_text へ (DIR32)       │
+│    ・Offset 0x0F -> 外部シンボル _MessageBoxA@16 (REL32)│
+│    ・Offset 0x16 -> 外部シンボル _ExitProcess@4 (REL32) │
+├────────────────────────────────────────────────────────┤
+│ 5. Symbol Table                                        │
+│    ・_main            (External, .text の offset 0x00) │
+│    ・_MessageBoxA@16  (External, Undefined)            │
+│    ・_ExitProcess@4   (External, Undefined)            │
+│    ・title_text       (Static/Label, .data offset 0x00)│
+│    ・msg_text         (Static/Label, .data offset 0x06)│
+└────────────────────────────────────────────────────────┘
+自作アセンブラの実装コード設計（パーサーの骨格）
+1行ずつ読み込んで処理するパーサー（構文解析部）の擬似アルゴリズムです。
+
+Basic
+' 自作アセンブラのメインループ (1st Pass / 2nd Pass)
+Do While Not FileEof(hIn)
+    lineStr = Trim(FileReadLine(hIn))
+    
+    ' コメント（; 以降）をカット
+    lineStr = RemoveComment(lineStr)
+    If lineStr = "" Then Continue Do
+    
+    ' トークン分解 (例: "push 0" -> op="push", arg1="0")
+    ParseLine(lineStr, op, arg1, arg2)
+    
+    Select Case LCase(op)
+        Case "section"
+            currentSection = arg1 ' .text か .data かを切り替え
+            
+        Case "extern", "global"
+            ' シンボルテーブルに登録（外部参照 / 公開フラグを立てる）
+            AddSymbol(arg1, SYMBOL_EXTERNAL)
+            
+        Case "db"
+            ' 文字列リテラルや数値を .data バッファに書く
+            EmitDataBytes(arg1)
+            
+        Case "push"
+            If IsNumeric(arg1) Then
+                ' 即値 push -> 6A xx
+                EmitByte(&H6A)
+                EmitByte(Val(arg1))
+            Else
+                ' ラベル参照 push -> 68 xx xx xx xx + リロケーション登録
+                EmitByte(&H68)
+                AddRelocation(currentOffset, arg1, REL_TYPE_DIR32)
+                EmitDWord(0) ' 仮のアドレス 00 00 00 00
+            End If
+            
+        Case "call"
+            ' call 命令 -> E8 xx xx xx xx + リロケーション登録
+            EmitByte(&HE8)
+            AddRelocation(currentOffset, arg1, REL_TYPE_REL32)
+            EmitDWord(0) ' 仮のアドレス 00 00 00 00
+            
+    End Select
+Loop
+開発の進め方のアドバイス
+このコードをターゲットにする場合、最初は全構文に対応しようとせず、以下の順番で機能を実装していくのが一番近道です。
+
+文字列 db のパース: 'Hello', 0 をバイト列 48 65 6C 6C 6F 00 に変換して .data セクションを作る機能。
+
+push / call の機械語変換: 6A, 68, E8 の命令コードを出力する機能。
+
+COFFフォーマットの書き出し: 作成したバイト列とリロケーション情報、シンボルテーブルを .obj ファイルとして書き出す機能。
+
+このコードが自作アセンブラで .obj に変換でき、それを以前の「自作リンカー（またはGoLink）」に通してメッセージボックスが表示された瞬間、アセンブラ自作プロジェクトの核心部はクリアとなります！

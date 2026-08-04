@@ -1,0 +1,191 @@
+' ===================================================
+'  IR - intermediate representation
+' ===================================================
+
+Const OP_NOP = 0
+Const OP_ENTER = 1
+Const OP_LEAVE = 2
+Const OP_XOR_ECX = 3
+Const OP_XOR_R9D = 4
+Const OP_LEA_RDX_STR = 5
+Const OP_LEA_R8_STR = 6
+Const OP_CALL_API = 7
+Const OP_RET = 8
+Const OP_MOV_ECX = 9
+Const OP_MOV_EAX_IMM = 10
+Const OP_LOAD_LOCAL = 11
+Const OP_STORE_LOCAL = 12
+Const OP_PUSH_RAX = 13
+Const OP_POP_RCX = 14
+Const OP_ADD_EAX_ECX = 15
+Const OP_IMUL_EAX_ECX = 16
+Const OP_MOV_ECX_EAX = 17
+Const OP_CMP_ECX_EAX = 18
+Const OP_TEST_EAX = 19
+Const OP_LABEL = 20
+Const OP_JMP = 21
+Const OP_JZ = 22
+Const OP_JNZ = 23
+Const OP_JE = 24
+Const OP_JNE = 25
+Const OP_JL = 26
+Const OP_JLE = 27
+Const OP_JG = 28
+Const OP_JGE = 29
+Const OP_INC_LOCAL = 30
+Const OP_MOV_EDX_IMM = 31
+Const OP_CALL_LAB = 32
+Const OP_STORE_LOCAL_ECX = 33
+Const OP_STORE_LOCAL_EDX = 34
+Const OP_MOV_EDX_EAX = 35
+Const OP_LEA_RAX_STR = 36
+Const OP_MOV_RCX_RAX = 37
+Const OP_MOV_RDX_RAX = 38
+Const OP_MOV_R8_RAX = 39
+Const OP_MOVZX_EAX_BYTE = 40
+Const OP_TEST_RAX = 41
+Const OP_RT_CAT = 42
+Const OP_RT_LEFT = 43
+Const OP_RT_MID = 44
+Const OP_XOR_EAX = 45
+Const OP_LEA_LOCAL = 46
+Const OP_ADD_RAX_RCX = 47
+Const OP_LOADZX_BYTE_RAX = 48
+Const OP_STORE_BYTE_RAX_CL = 49
+Const OP_POP_RDX = 50
+Const OP_XCHG_RAX_RCX = 51
+Const OP_ADD_RAX_IMM = 52
+Const OP_LOADZX_WORD_RAX = 53
+Const OP_STORE_WORD_RAX_CX = 54
+Const OP_LOAD_DWORD_RAX = 55
+Const OP_STORE_DWORD_RAX_ECX = 56
+Const OP_LOAD_QWORD_RAX = 57
+Const OP_STORE_QWORD_RAX_RCX = 58
+Const OP_AND_EAX_ECX = 59
+Const OP_OR_EAX_ECX = 60
+Const OP_NEG_EAX = 61
+Const OP_SUB_EAX_ECX = 62
+Const OP_LEA_RAX_LAB = 63
+Const OP_SHL_ECX_3 = 64
+Const OP_POP_RAX = 65
+Const OP_POP_R8 = 66
+Const OP_MOV_RAX_R8 = 67
+Const OP_SUB_RSP = 68
+Const OP_ADD_RSP = 69
+Const OP_STORE_RSP_RAX = 70
+Const OP_MOV_R9_RAX = 71
+Const OP_STORE_LOCAL_R8 = 72
+Const OP_STORE_LOCAL_R9 = 73
+Const OP_XOR_EDX = 74
+Const OP_DIV_ECX = 75
+Const OP_MOV_EAX_EDX = 76
+
+Const IR_DLL_USER32 = 1
+Const IR_DLL_KERNEL32 = 2
+
+Const IR_MAX_OPS = 262144
+Const IR_STR_LEN = 64
+Const IR_MAX_FIXUPS = 32768
+Const IR_MAX_LABELS = 32768
+
+Type IrOp
+    op As Long
+    arg1 As DWord
+    arg2 As DWord
+    strId As Long
+End Type
+
+Type IrList
+    ops As *IrOp
+    strs As *Byte
+    count As Long
+    capacity As Long
+    frameSize As Long
+End Type
+
+Function IrCreate(capacity As Long) As *IrList
+    Dim list As *IrList
+    IrCreate = NULL
+    list = calloc(SizeOf(IrList))
+    If list = NULL Then Exit Function
+    list.ops = calloc(SizeOf(IrOp) * capacity)
+    list.strs = calloc(IR_STR_LEN * capacity)
+    If list.ops = NULL Or list.strs = NULL Then
+        If list.ops <> NULL Then free(list.ops)
+        If list.strs <> NULL Then free(list.strs)
+        free(list)
+        Exit Function
+    End If
+    list.count = 0
+    list.capacity = capacity
+    list.frameSize = &H28
+    IrCreate = list
+End Function
+
+Sub IrFree(list As *IrList)
+    If list = NULL Then Exit Sub
+    If list.ops <> NULL Then free(list.ops)
+    If list.strs <> NULL Then free(list.strs)
+    free(list)
+End Sub
+
+Sub IrSetStrAt(list As *IrList, idx As Long, s As *Byte)
+    Dim i As Long
+    Dim off As Long
+    Dim strs As *Byte
+    strs = list.strs
+    off = idx * IR_STR_LEN
+    i = 0
+    While s[i] <> 0 And i < IR_STR_LEN - 1
+        strs[off + i] = s[i]
+        i = i + 1
+    Wend
+    strs[off + i] = 0
+End Sub
+
+Sub IrCopyStrAt(list As *IrList, idx As Long, dst As *Byte)
+    Dim i As Long
+    Dim off As Long
+    Dim strs As *Byte
+    strs = list.strs
+    off = idx * IR_STR_LEN
+    i = 0
+    Do
+        dst[i] = strs[off + i]
+        If strs[off + i] = 0 Then Exit Sub
+        i = i + 1
+        If i >= IR_STR_LEN Then
+            dst[IR_STR_LEN - 1] = 0
+            Exit Sub
+        End If
+    Loop
+End Sub
+
+Function IrEmit(list As *IrList, op As Long, arg1 As DWord, arg2 As DWord) As Long
+    Dim ops As *IrOp
+    Dim i As Long
+    Dim strs As *Byte
+    IrEmit = -1
+    If list.count >= list.capacity Then Exit Function
+    ops = list.ops
+    strs = list.strs
+    i = list.count
+    ops[i].op = op
+    ops[i].arg1 = arg1
+    ops[i].arg2 = arg2
+    ops[i].strId = -1
+    strs[i * IR_STR_LEN] = 0
+    IrEmit = i
+    list.count = i + 1
+End Function
+
+Function IrEmitStr(list As *IrList, op As Long, arg1 As DWord, s As *Byte) As Long
+    Dim idx As Long
+    idx = IrEmit(list, op, arg1, 0)
+    If idx < 0 Then
+        IrEmitStr = -1
+        Exit Function
+    End If
+    IrSetStrAt(list, idx, s)
+    IrEmitStr = idx
+End Function

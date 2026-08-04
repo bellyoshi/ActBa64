@@ -1,0 +1,644 @@
+' abcParser.abp - 構文解析（トークン → AST）
+
+Const NK_NUM = 1
+Const NK_IDENT = 2
+Const NK_STR = 3
+Const NK_BIN = 4
+Const NK_UNARY = 5
+Const NK_CALL = 6
+Const NK_INDEX = 7
+Const NK_MEMBER = 8
+Const NK_VARPTR = 9
+Const NK_SIZEOF = 10
+Const NK_CMP = 11
+Const NK_LOGOR = 12
+Const NK_LOGAND = 13
+Const NK_ARG = 14
+
+Const OP_ADD = 1
+Const OP_SUB = 2
+Const OP_MUL = 3
+Const OP_DIV = 4
+Const OP_MOD = 5
+Const OP_AND = 6
+Const OP_OR = 7
+Const OP_XOR = 8
+Const OP_NEG = 9
+Const OP_EQ = 10
+Const OP_NE = 11
+Const OP_LT = 12
+Const OP_GT = 13
+Const OP_LE = 14
+Const OP_GE = 15
+Const OP_DOT = 16
+Const OP_ARROW = 17
+
+Function AstNew(kind As Long) As Long
+    Dim ni As Long
+    If gNAst >= MAX_AST Then
+        Print "AST overflow"
+        AstNew = -1
+        Exit Function
+    End If
+    ni = gNAst
+    gAstKind(ni) = kind
+    gAstOp(ni) = 0
+    gAstA(ni) = AST_NIL
+    gAstB(ni) = AST_NIL
+    gAstC(ni) = AST_NIL
+    gAstD(ni) = AST_NIL
+    gAstIVal(ni) = 0
+    gAstSIdx(ni) = -1
+    gAstFlags(ni) = 0
+    gNAst = gNAst + 1
+    AstNew = ni
+End Function
+
+Function TokPeek() As Long
+    If gTokPos >= gNTok Then
+        TokPeek = TK_EOF
+    Else
+        TokPeek = gTokKind(gTokPos)
+    End If
+End Function
+
+Function TokTake() As Long
+    Dim k As Long
+    k = TokPeek()
+    If gTokPos < gNTok Then gTokPos = gTokPos + 1
+    TokTake = k
+End Function
+
+Function TokExpect(kind As Long) As Long
+    Dim k As Long
+    If TokPeek() <> kind Then
+        TokExpect = 0
+        Exit Function
+    End If
+    k = TokTake()
+    TokExpect = 1
+End Function
+
+Function ParseExpr() As Long
+    ParseExpr = ParseBitOr()
+End Function
+
+Function ParseCondExpr() As Long
+    ParseCondExpr = ParseLogOr()
+End Function
+
+Function ParseLogOr() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseLogAnd()
+    If left < 0 Then
+        ParseLogOr = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_OR
+        k = TokTake()
+        right = ParseLogAnd()
+        If right < 0 Then
+            ParseLogOr = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_LOGOR)
+        If ni < 0 Then
+            ParseLogOr = -1
+            Exit Function
+        End If
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseLogOr = left
+End Function
+
+Function ParseLogAnd() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseCmp()
+    If left < 0 Then
+        ParseLogAnd = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_AND
+        k = TokTake()
+        right = ParseCmp()
+        If right < 0 Then
+            ParseLogAnd = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_LOGAND)
+        If ni < 0 Then
+            ParseLogAnd = -1
+            Exit Function
+        End If
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseLogAnd = left
+End Function
+
+Function ParseCmp() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    Dim op As Long
+    left = ParseExprNoLog()
+    If left < 0 Then
+        ParseCmp = -1
+        Exit Function
+    End If
+    k = TokPeek()
+    op = 0
+    If k = TK_EQ Then
+        op = OP_EQ
+    ElseIf k = TK_NE Then
+        op = OP_NE
+    ElseIf k = TK_LT Then
+        op = OP_LT
+    ElseIf k = TK_GT Then
+        op = OP_GT
+    ElseIf k = TK_LE Then
+        op = OP_LE
+    ElseIf k = TK_GE Then
+        op = OP_GE
+    End If
+    If op = 0 Then
+        ParseCmp = left
+        Exit Function
+    End If
+    k = TokTake()
+    right = ParseExprNoLog()
+    If right < 0 Then
+        ParseCmp = -1
+        Exit Function
+    End If
+    ni = AstNew(NK_CMP)
+    If ni < 0 Then
+        ParseCmp = -1
+        Exit Function
+    End If
+    gAstOp(ni) = op
+    gAstA(ni) = left
+    gAstB(ni) = right
+    ParseCmp = ni
+End Function
+
+' 条件の比較オペランド用: And/Or は論理演算子として残す（ビット And に食わせない）
+' Xor だけは値演算としてここで扱う
+Function ParseExprNoLog() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseAdd()
+    If left < 0 Then
+        ParseExprNoLog = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_XOR
+        k = TokTake()
+        right = ParseAdd()
+        If right < 0 Then
+            ParseExprNoLog = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseExprNoLog = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_XOR
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseExprNoLog = left
+End Function
+
+Function ParseBitOr() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseBitXor()
+    If left < 0 Then
+        ParseBitOr = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_OR
+        k = TokTake()
+        right = ParseBitXor()
+        If right < 0 Then
+            ParseBitOr = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseBitOr = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_OR
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseBitOr = left
+End Function
+
+Function ParseBitXor() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseBitAnd()
+    If left < 0 Then
+        ParseBitXor = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_XOR
+        k = TokTake()
+        right = ParseBitAnd()
+        If right < 0 Then
+            ParseBitXor = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseBitXor = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_XOR
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseBitXor = left
+End Function
+
+Function ParseBitAnd() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseAdd()
+    If left < 0 Then
+        ParseBitAnd = -1
+        Exit Function
+    End If
+    While TokPeek() = TK_AND
+        k = TokTake()
+        right = ParseAdd()
+        If right < 0 Then
+            ParseBitAnd = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseBitAnd = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_AND
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+    Wend
+    ParseBitAnd = left
+End Function
+
+Function ParseAdd() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    left = ParseMul()
+    If left < 0 Then
+        ParseAdd = -1
+        Exit Function
+    End If
+    k = TokPeek()
+    While k = TK_PLUS Or k = TK_MINUS
+        k = TokTake()
+        right = ParseMul()
+        If right < 0 Then
+            ParseAdd = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseAdd = -1
+            Exit Function
+        End If
+        If k = TK_PLUS Then
+            gAstOp(ni) = OP_ADD
+        Else
+            gAstOp(ni) = OP_SUB
+        End If
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+        k = TokPeek()
+    Wend
+    ParseAdd = left
+End Function
+
+Function ParseMul() As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ni As Long
+    Dim k As Long
+    Dim op As Long
+    left = ParseUnary()
+    If left < 0 Then
+        ParseMul = -1
+        Exit Function
+    End If
+    k = TokPeek()
+    While k = TK_STAR Or k = TK_BSLASH Or k = TK_SLASH Or k = TK_MOD
+        k = TokTake()
+        op = 0
+        If k = TK_STAR Then
+            op = OP_MUL
+        ElseIf k = TK_BSLASH Or k = TK_SLASH Then
+            op = OP_DIV
+        ElseIf k = TK_MOD Then
+            op = OP_MOD
+        End If
+        right = ParseUnary()
+        If right < 0 Then
+            ParseMul = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_BIN)
+        If ni < 0 Then
+            ParseMul = -1
+            Exit Function
+        End If
+        gAstOp(ni) = op
+        gAstA(ni) = left
+        gAstB(ni) = right
+        left = ni
+        k = TokPeek()
+    Wend
+    ParseMul = left
+End Function
+
+Function ParseUnary() As Long
+    Dim ni As Long
+    Dim child As Long
+    Dim k As Long
+    If TokPeek() = TK_MINUS Then
+        k = TokTake()
+        child = ParseUnary()
+        If child < 0 Then
+            ParseUnary = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_UNARY)
+        If ni < 0 Then
+            ParseUnary = -1
+            Exit Function
+        End If
+        gAstOp(ni) = OP_NEG
+        gAstA(ni) = child
+        ParseUnary = ni
+        Exit Function
+    End If
+    ParseUnary = ParsePostfix()
+End Function
+
+Function ParseArgList() As Long
+    Dim head As Long
+    Dim tail As Long
+    Dim arg As Long
+    Dim ni As Long
+    Dim k As Long
+    head = AST_NIL
+    tail = AST_NIL
+    If TokPeek() = TK_RPAREN Then
+        ParseArgList = AST_NIL
+        Exit Function
+    End If
+    While TokPeek() <> TK_EOF
+        arg = ParseExpr()
+        If arg < 0 Then
+            ParseArgList = -2
+            Exit Function
+        End If
+        ni = AstNew(NK_ARG)
+        If ni < 0 Then
+            ParseArgList = -2
+            Exit Function
+        End If
+        gAstA(ni) = arg
+        gAstB(ni) = AST_NIL
+        If head = AST_NIL Then
+            head = ni
+            tail = ni
+        Else
+            gAstB(tail) = ni
+            tail = ni
+        End If
+        If TokPeek() <> TK_COMMA Then Exit While
+        k = TokTake()
+    Wend
+    ParseArgList = head
+End Function
+
+Function ParsePostfix() As Long
+    Dim ni As Long
+    Dim child As Long
+    Dim idx As Long
+    Dim args As Long
+    Dim name As String
+    Dim sIdx As Long
+    Dim k As Long
+    Dim fieldIdx As Long
+    Dim opKind As Long
+
+    If TokPeek() = TK_LPAREN Then
+        k = TokTake()
+        If gParseCondMode <> 0 Then
+            child = ParseCondExpr()
+        Else
+            child = ParseExpr()
+        End If
+        If child < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        If TokExpect(TK_RPAREN) = 0 Then
+            Print "expected )"
+            ParsePostfix = -1
+            Exit Function
+        End If
+        ParsePostfix = child
+        Exit Function
+    End If
+
+    If TokPeek() = TK_NUM Then
+        ni = AstNew(NK_NUM)
+        If ni < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        gAstIVal(ni) = gTokIVal(gTokPos)
+        k = TokTake()
+        ParsePostfix = ni
+        Exit Function
+    End If
+
+    If TokPeek() = TK_STR Then
+        ni = AstNew(NK_STR)
+        If ni < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        gAstSIdx(ni) = gTokSIdx(gTokPos)
+        k = TokTake()
+        ParsePostfix = ni
+        Exit Function
+    End If
+
+    If TokPeek() <> TK_IDENT Then
+        Print "expected expression"
+        ParsePostfix = -1
+        Exit Function
+    End If
+
+    sIdx = gTokSIdx(gTokPos)
+    name = Lower$(gPool(sIdx))
+    k = TokTake()
+    ' VarPtr(...) / SizeOf(...)
+    If name = "varptr" And TokPeek() = TK_LPAREN Then
+        k = TokTake()
+        child = ParseExpr()
+        If child < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        If TokExpect(TK_RPAREN) = 0 Then
+            Print "VarPtr needs )"
+            ParsePostfix = -1
+            Exit Function
+        End If
+        ni = AstNew(NK_VARPTR)
+        If ni < 0 Then
+            ParsePostfix = -1
+            Exit Function
+        End If
+        gAstA(ni) = child
+        ParsePostfix = ni
+        Exit Function
+    End If
+
+    If name = "sizeof" And TokPeek() = TK_LPAREN Then
+        k = TokTake()
+        If TokPeek() = TK_IDENT Then
+            ni = AstNew(NK_SIZEOF)
+            If ni < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            gAstSIdx(ni) = gTokSIdx(gTokPos)
+            k = TokTake()
+            If TokExpect(TK_RPAREN) = 0 Then
+                Print "SizeOf needs )"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            ParsePostfix = ni
+            Exit Function
+        End If
+        Print "SizeOf needs name"
+        ParsePostfix = -1
+        Exit Function
+    End If
+
+    ' 呼び出し / 添字 / メンバ
+    ni = AstNew(NK_IDENT)
+    If ni < 0 Then
+        ParsePostfix = -1
+        Exit Function
+    End If
+    gAstSIdx(ni) = sIdx
+
+    k = TokPeek()
+    While k = TK_LPAREN Or k = TK_LBRACK Or k = TK_DOT Or k = TK_ARROW
+        If k = TK_LPAREN Then
+            k = TokTake()
+            args = ParseArgList()
+            If args < -1 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            If TokExpect(TK_RPAREN) = 0 Then
+                Print "expected )"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            child = AstNew(NK_CALL)
+            If child < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            gAstSIdx(child) = gAstSIdx(ni)
+            gAstA(child) = args
+            ni = child
+        ElseIf k = TK_LBRACK Then
+            k = TokTake()
+            idx = ParseExpr()
+            If idx < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            If TokExpect(TK_RBRACK) = 0 Then
+                Print "expected ]"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            child = AstNew(NK_INDEX)
+            If child < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            gAstA(child) = ni
+            gAstB(child) = idx
+            ni = child
+        Else
+            ' DOT or ARROW
+            opKind = TokTake()
+            If TokPeek() <> TK_IDENT Then
+                Print "expected field name"
+                ParsePostfix = -1
+                Exit Function
+            End If
+            fieldIdx = gTokSIdx(gTokPos)
+            k = TokTake()
+            child = AstNew(NK_MEMBER)
+            If child < 0 Then
+                ParsePostfix = -1
+                Exit Function
+            End If
+            If opKind = TK_ARROW Then
+                gAstOp(child) = OP_ARROW
+            Else
+                gAstOp(child) = OP_DOT
+            End If
+            gAstA(child) = ni
+            gAstSIdx(child) = fieldIdx
+            ni = child
+        End If
+        k = TokPeek()
+    Wend
+
+    ParsePostfix = ni
+End Function

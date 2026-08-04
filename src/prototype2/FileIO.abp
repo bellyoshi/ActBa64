@@ -1,0 +1,117 @@
+' FileIO.abp - ファイル入出力共通処理
+' ホスト AB: ポインタ引数のみ ByVal NULL。HANDLE 等は NULL/0
+
+Dim gLastLoadSize As Long
+Dim gLoadPtr As *Byte
+
+Function FileExists(path As String) As Long
+    Dim attr As DWord
+    attr = GetFileAttributes(StrPtr(path))
+    If attr = &HFFFFFFFF Then
+        FileExists = 0
+    Else
+        FileExists = 1
+    End If
+End Function
+
+' Function 戻り (*Byte) が壊れることがあるため、結果は gLoadPtr / gLastLoadSize へ
+Sub LoadFileToGlobal(path As *Byte)
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    gLoadPtr = 0
+    gLastLoadSize = 0
+
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Sub
+
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Sub
+    End If
+
+    p = malloc(fsiz + 1)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Sub
+    End If
+
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    CloseHandle(hFile)
+    p[fsiz] = 0
+    gLastLoadSize = fsiz
+    gLoadPtr = p
+End Sub
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    LoadFileToGlobal(path)
+    outSize = gLastLoadSize
+    LoadFile = gLoadPtr
+End Function
+
+Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+
+    WriteAll = 0
+    hFile = CreateFile(path, GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+
+    WriteFile(hFile, p, size, VarPtr(nWritten), ByVal NULL)
+    CloseHandle(hFile)
+    If nWritten = size Then WriteAll = 1
+End Function
+
+Function LoadTextFile$(path As String) As String
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    LoadTextFile$ = ""
+    hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then
+        Print "cannot open: " + path
+        Exit Function
+    End If
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz < 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    p = malloc(fsiz + 1)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    If fsiz > 0 Then
+        ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    End If
+    CloseHandle(hFile)
+    p[fsiz] = 0
+    LoadTextFile$ = MakeStr(p)
+    free(p)
+End Function
+
+Function WriteTextFile(path As String, text As String) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+    Dim n As Long
+
+    WriteTextFile = 0
+    n = Len(text)
+    hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    If n > 0 Then
+        WriteFile(hFile, StrPtr(text), n, VarPtr(nWritten), ByVal NULL)
+    Else
+        nWritten = 0
+    End If
+    CloseHandle(hFile)
+    If nWritten = n Then
+        WriteTextFile = 1
+    End If
+End Function

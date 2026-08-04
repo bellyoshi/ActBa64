@@ -1,0 +1,149 @@
+' ===================================================
+'  Compiler - source -> Lexer -> AST -> IR -> PE
+' ===================================================
+
+Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As Long
+    Dim builder As *ImportBuilder
+    Dim idataBuf As *Byte
+    Dim idataSize As DWord
+    Dim codeMem As *Byte
+    Dim cb As CodeBuffer
+    Dim textVirt As DWord
+    Dim idataRva As DWord
+
+    CompileIrToPe = 0
+
+    builder = calloc(SizeOf(ImportBuilder))
+    If builder = NULL Then Exit Function
+    IbInit(builder)
+
+    IrCollect(list, builder)
+
+    idataBuf = calloc(65536)
+    If idataBuf = NULL Then
+        free(builder)
+        Exit Function
+    End If
+
+    codeMem = calloc(1048576)
+    If codeMem = NULL Then
+        free(idataBuf)
+        free(builder)
+        Exit Function
+    End If
+    cb.buf = codeMem
+    cb.capacity = 1048576
+
+    ' 1st pass: measure .text size (RIP imm は長さに影響しない)
+    IbFinalize(builder, IDATA_RVA, idataBuf, idataSize)
+    cb.size = 0
+    IrEmitCode(list, VarPtr(cb), builder)
+    If cb.size >= cb.capacity Then
+        free(codeMem)
+        free(idataBuf)
+        free(builder)
+        Exit Function
+    End If
+
+    textVirt = AlignUp(cb.size, SECTION_ALIGN)
+    idataRva = TEXT_RVA + textVirt
+
+    ' 2nd pass: idata を .text 直後に置き直し、正しい RIP で再 emit
+    IbFinalize(builder, idataRva, idataBuf, idataSize)
+    cb.size = 0
+    IrEmitCode(list, VarPtr(cb), builder)
+    If cb.size >= cb.capacity Then
+        free(codeMem)
+        free(idataBuf)
+        free(builder)
+        Exit Function
+    End If
+    If AlignUp(cb.size, SECTION_ALIGN) <> textVirt Then
+        free(codeMem)
+        free(idataBuf)
+        free(builder)
+        Exit Function
+    End If
+
+    If WritePe64(outPath, codeMem, cb.size, idataBuf, idataSize, builder, subsystem) <> 0 Then
+        CompileIrToPe = 1
+    End If
+
+    free(codeMem)
+    free(idataBuf)
+    free(builder)
+End Function
+
+Function CompileSource(src As *Byte, outPath As *Byte) As Long
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim subsystem As Long
+
+    CompileSource = 0
+
+    ast = AstCreate(AST_MAX_NODES)
+    If ast = NULL Then Exit Function
+    If ParseSource(src, ast) = 0 Then
+        AstFree(ast)
+        Exit Function
+    End If
+
+    list = IrCreate(IR_MAX_OPS)
+    If list = NULL Then
+        AstFree(ast)
+        Exit Function
+    End If
+
+    subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI
+    If AstToIr(ast, list, subsystem) = 0 Then
+        IrFree(list)
+        AstFree(ast)
+        Exit Function
+    End If
+
+    If CompileIrToPe(list, outPath, subsystem) <> 0 Then
+        CompileSource = 1
+    End If
+
+    IrFree(list)
+    AstFree(ast)
+End Function
+
+Function CompileToyFile(srcPath As *Byte, outPath As *Byte) As Long
+    Dim src As *Byte
+    Dim srcSize As Long
+    Dim expanded As *Byte
+
+    CompileToyFile = 0
+    src = LoadFile(srcPath, srcSize)
+    If src = NULL Then Exit Function
+    If srcSize <= 0 Then
+        free(src)
+        Exit Function
+    End If
+
+    expanded = ExpandIncludes(src, srcSize, srcPath)
+    free(src)
+    If expanded = NULL Then Exit Function
+
+    CompileToyFile = CompileSource(expanded, outPath)
+    free(expanded)
+End Function
+
+Function CompileToyPj(pjPath As *Byte, outPath As *Byte) As Long
+    Dim combined As *Byte
+
+    CompileToyPj = 0
+    combined = CombinePjSources(pjPath)
+    If combined = NULL Then Exit Function
+    CompileToyPj = CompileSource(combined, outPath)
+    free(combined)
+End Function
+
+Function CompileInput(srcPath As *Byte, outPath As *Byte) As Long
+    If PpPathEndsWithPj(srcPath) <> 0 Then
+        CompileInput = CompileToyPj(srcPath, outPath)
+    Else
+        CompileInput = CompileToyFile(srcPath, outPath)
+    End If
+End Function

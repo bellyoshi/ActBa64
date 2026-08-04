@@ -1,0 +1,92 @@
+#include "abc.idx"
+
+#console
+
+' abc - ABP コンパイラ (.abp -> .asm)
+' 使い方: abc <input.abp> [output.asm]
+'
+' Const/Dim は abcGlobals.abp
+' 本体は abcTime / abcAsm / abcLexer / abcParser / abcEmit / abcCompile
+
+Sub USAGE()
+    Print "abc - Phase5 ABP compiler (.abp -> .asm)"
+    Print "usage: abc <input.abp> [output.asm]"
+    End
+End Sub
+
+Function Main() As Long
+    ' String 関数の戻り代入が怪しいので、入力は *Byte + gLastLoadSize、出力はグローバルへ
+    Dim inPath[MAX_PATH] As Byte
+    Dim outPath[MAX_PATH] As Byte
+    Dim srcBuf As *Byte
+    Dim srcSize As Long
+    Dim outName As String
+    Dim tMain As Long
+    Dim t0 As Long
+    Dim t1 As Long
+
+    tMain = AbcTick()
+    If GetCmd(1, inPath) = 0 Then
+        USAGE()
+    End If
+    If GetCmd(2, outPath) = 0 Then
+        outName = ChangeExtension$(MakeStr(inPath), ".asm")
+        lstrcpy(outPath, StrPtr(outName))
+    End If
+
+    t0 = AbcTick()
+    LoadFileToGlobal(inPath)
+    srcBuf = gLoadPtr
+    srcSize = gLastLoadSize
+    t1 = AbcTick()
+    AbcTimePrint("main.load", t0, t1)
+    If srcBuf = NULL Or srcSize <= 0 Then
+        Print "error: cannot open input: " + MakeStr(inPath)
+        End
+    End If
+    Print "loaded bytes=" + Str$(srcSize)
+
+    ' String 戻り値経由は壊れることがあるので、展開結果は gSbExpand / gExpandResult を使う
+    t0 = AbcTick()
+    ExpandIncludesSub(srcBuf, srcSize, MakeStr(inPath), 0)
+    free(srcBuf)
+    t1 = AbcTick()
+    AbcTimePrint("main.expand_includes", t0, t1)
+    If SbIsEmpty(VarPtr(gSbExpand)) <> 0 Then
+        Print "error: #include expand failed for: " + MakeStr(inPath)
+        End
+    End If
+    ' Include/default（WinTypes 等）をソース明示なしで先頭に挿入
+    t0 = AbcTick()
+    PrependDefaultIncludes()
+    t1 = AbcTick()
+    AbcTimePrint("main.prepend_default", t0, t1)
+    If ABC_TIME_DEBUG <> 0 Then
+        Print "time: main.expand_bytes=" + Trim$(Str$(SbLen(VarPtr(gSbExpand))))
+    End If
+    t0 = AbcTick()
+    If CompileBuffer(SbData(VarPtr(gSbExpand)), SbLen(VarPtr(gSbExpand))) = 0 Then
+        Print "error: compile failed for: " + MakeStr(inPath)
+        End
+    End If
+    t1 = AbcTick()
+    AbcTimePrint("main.compile_buffer", t0, t1)
+    If gCompileOk = 0 Or gSbOut.len <= 0 Then
+        Print "error: compile produced no asm output for: " + MakeStr(inPath)
+        End
+    End If
+
+    t0 = AbcTick()
+    If WriteAll(outPath, gSbOut.p, gSbOut.len) = 0 Then
+        Print "error: cannot write output: " + MakeStr(outPath)
+    Else
+        Print "OK: " + MakeStr(inPath) + " -> " + MakeStr(outPath) + " (" + Trim$(Str$(gSbOut.len)) + " bytes)"
+    End If
+    t1 = AbcTick()
+    AbcTimePrint("main.write", t0, t1)
+    AbcTimePrint("main.total", tMain, t1)
+
+    Main = 0
+End Function
+
+Main()

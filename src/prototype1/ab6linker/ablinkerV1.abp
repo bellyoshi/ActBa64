@@ -1,0 +1,460 @@
+#include "ablinkerV1.idx"
+
+#console
+
+' ablinkerV1 - PEヘッダー自前ビルド + REL32 リロケーション
+' 使い方: ablinkerV1 <input.obj> [output.exe]
+'
+' V0との違い: header_template.bin を使わず、構造体で PE を組み立てる
+' .idata は V1 では ExitProcess 固定をコードで生成 (V2で自動生成へ)
+
+Const IMAGE_BASE = &H00400000
+Const TEXT_RVA = &H00001000
+Const IDATA_RVA = &H00002000
+Const SECTION_ALIGN = &H1000
+Const FILE_ALIGN = &H200
+Const SIZEOF_HEADERS = &H200
+Const TEXT_RAW_SIZE = &H200
+Const IDATA_RAW_SIZE = &H200
+Const IMPORT_THUNK_RVA = &H2008
+Const IMPORT_THUNK_ADDR = &H00402008
+Const E_LFANEW = &H80
+
+Sub USAGE()
+    Print "ablinkerV1 - PE Header Builder Linker"
+    Print "usage: ablinkerV1 <input.obj> [output.exe]"
+    End
+End Sub
+
+Function HexPad$(num As DWord, digits As Long) As String
+    Dim s As String
+    s = Hex$(num)
+    While Len(s) < digits
+        s = "0" + s
+    Wend
+    HexPad$ = s
+End Function
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim cmd As *Byte
+    Dim cmdlen As Long
+    Dim cidx As Long
+    Dim ctmp[MAX_PATH] As Byte
+    Dim n As Long
+    Dim m As Long
+
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    cmd[cmdlen] = &H20
+    buf[0] = 0
+    cidx = 0
+
+    For n = 0 To cmdlen
+        If cmd[n] = &H20 And cmd[n + 1] = &H20 Then
+            memcpy(VarPtr(cmd[n]), VarPtr(cmd[n + 1]), cmdlen - n)
+            n = n - 1
+            cmdlen = cmdlen - 1
+        End If
+    Next
+
+    For n = 0 To cmdlen
+        m = 0
+        While cmd[n] <> &H20
+            ctmp[m] = cmd[n]
+            m = m + 1
+            n = n + 1
+        Wend
+        ctmp[m] = 0
+        If cidx = cnt Then
+            lstrcpy(buf, ctmp)
+            GetCmd = 1
+            Exit Function
+        End If
+        cidx = cidx + 1
+    Next
+    GetCmd = 0
+End Function
+
+Function IsTextSection(name As *Byte) As Long
+    If name[0] = Asc(".") And name[1] = Asc("t") And name[2] = Asc("e") And name[3] = Asc("x") And name[4] = Asc("t") Then
+        IsTextSection = 1
+    Else
+        IsTextSection = 0
+    End If
+End Function
+
+Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    LoadFile = NULL
+    outSize = 0
+    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz <= 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    p = malloc(fsiz)
+    If p = NULL Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    CloseHandle(hFile)
+    outSize = fsiz
+    LoadFile = p
+End Function
+
+Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+    WriteAll = 0
+    hFile = CreateFile(path, GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    WriteFile(hFile, p, size, VarPtr(nWritten), ByVal NULL)
+    CloseHandle(hFile)
+    If nWritten = size Then WriteAll = 1
+End Function
+
+Sub ZeroMem(p As *Byte, n As Long)
+    Dim i As Long
+    For i = 0 To n - 1
+        p[i] = 0
+    Next
+End Sub
+
+Sub PutDword(p As *Byte, off As DWord, v As DWord)
+    memcpy(VarPtr(p[off]), VarPtr(v), 4)
+End Sub
+
+Sub PutWord(p As *Byte, off As DWord, v As Word)
+    memcpy(VarPtr(p[off]), VarPtr(v), 2)
+End Sub
+
+' REL32 / DIR32
+Sub ApplyRelocPtr(codeBuf As *Byte, reloc As *COFF_RELOCATION, targetAddr As DWord, currentRVA As DWord)
+    Dim patchOffset As DWord
+    Dim relativeOffset As Long
+    Dim absAddr As DWord
+
+    patchOffset = reloc->VirtualAddress
+    If reloc->RelType = IMAGE_REL_I386_REL32 Then
+        relativeOffset = targetAddr - (IMAGE_BASE + currentRVA + patchOffset + 4)
+        memcpy(VarPtr(codeBuf[patchOffset]), VarPtr(relativeOffset), 4)
+    ElseIf reloc->RelType = IMAGE_REL_I386_DIR32 Then
+        absAddr = targetAddr
+        memcpy(VarPtr(codeBuf[patchOffset]), VarPtr(absAddr), 4)
+    End If
+End Sub
+
+' DOSスタブ (簡易)
+Sub WriteDosStub(buf As *Byte)
+    ' 0x40 から短いスタブ
+    buf[&H40] = &H0E
+    buf[&H41] = &H1F
+    buf[&H42] = &HBA
+    buf[&H43] = &H0E
+    buf[&H44] = &H00
+    buf[&H45] = &HB4
+    buf[&H46] = &H09
+    buf[&H47] = &HCD
+    buf[&H48] = &H21
+    buf[&H49] = &HB8
+    buf[&H4A] = &H01
+    buf[&H4B] = &H4C
+    buf[&H4C] = &HCD
+    buf[&H4D] = &H21
+    lstrcpy(VarPtr(buf[&H4E]), "This program cannot be run in DOS mode.")
+    buf[&H75] = &H0D
+    buf[&H76] = &H0A
+    buf[&H77] = &H24
+End Sub
+
+' PEヘッダー一式を buf[0 .. SIZEOF_HEADERS) にオフセット書き込みで組み立てる
+' (構造体パディング差を避けるため PutWord/PutDword を使用)
+Sub BuildPeHeaders(buf As *Byte, textVirtSize As DWord)
+    Dim optOff As DWord
+    Dim sectOff As DWord
+    Dim chars As Word
+    Dim sectChars As DWord
+
+    ZeroMem(buf, SIZEOF_HEADERS)
+
+    ' --- DOS Header (64 bytes) ---
+    PutWord(buf, 0, IMAGE_DOS_SIGNATURE)
+    PutWord(buf, 2, &H90)
+    PutWord(buf, 4, 3)
+    PutWord(buf, 8, 4)
+    PutWord(buf, 12, &HFFFF)
+    PutWord(buf, 16, &HB8)
+    PutWord(buf, 24, &H40)
+    PutDword(buf, 60, E_LFANEW)
+    WriteDosStub(buf)
+
+    ' --- PE Signature ---
+    PutDword(buf, E_LFANEW, IMAGE_NT_SIGNATURE)
+
+    ' --- COFF File Header ---
+    PutWord(buf, E_LFANEW + 4, IMAGE_FILE_MACHINE_I386)
+    PutWord(buf, E_LFANEW + 6, 2)
+    PutDword(buf, E_LFANEW + 8, 0)
+    PutDword(buf, E_LFANEW + 12, 0)
+    PutDword(buf, E_LFANEW + 16, 0)
+    PutWord(buf, E_LFANEW + 20, SIZEOF_OPTIONAL_HEADER32)
+    chars = IMAGE_FILE_RELOCS_STRIPPED Or IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_32BIT_MACHINE
+    PutWord(buf, E_LFANEW + 22, chars)
+
+    ' --- Optional Header PE32 ---
+    optOff = E_LFANEW + 24
+    PutWord(buf, optOff + 0, IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+    buf[optOff + 2] = 1
+    buf[optOff + 3] = 0
+    PutDword(buf, optOff + 4, TEXT_RAW_SIZE)
+    PutDword(buf, optOff + 8, IDATA_RAW_SIZE)
+    PutDword(buf, optOff + 12, 0)
+    PutDword(buf, optOff + 16, TEXT_RVA)
+    PutDword(buf, optOff + 20, TEXT_RVA)
+    PutDword(buf, optOff + 24, 0)
+    PutDword(buf, optOff + 28, IMAGE_BASE)
+    PutDword(buf, optOff + 32, SECTION_ALIGN)
+    PutDword(buf, optOff + 36, FILE_ALIGN)
+    PutWord(buf, optOff + 40, 4)
+    PutWord(buf, optOff + 42, 0)
+    PutWord(buf, optOff + 44, 0)
+    PutWord(buf, optOff + 46, 0)
+    PutWord(buf, optOff + 48, 4)
+    PutWord(buf, optOff + 50, 0)
+    PutDword(buf, optOff + 52, 0)
+    PutDword(buf, optOff + 56, &H3000)
+    PutDword(buf, optOff + 60, SIZEOF_HEADERS)
+    PutDword(buf, optOff + 64, 0)
+    PutWord(buf, optOff + 68, IMAGE_SUBSYSTEM_WINDOWS_CUI)
+    PutWord(buf, optOff + 70, 0)
+    PutDword(buf, optOff + 72, &H100000)
+    PutDword(buf, optOff + 76, &H1000)
+    PutDword(buf, optOff + 80, &H100000)
+    PutDword(buf, optOff + 84, &H1000)
+    PutDword(buf, optOff + 88, 0)
+    PutDword(buf, optOff + 92, 16)
+
+    ' DataDirectory[1]=Import, [12]=IAT
+    PutDword(buf, optOff + 96 + 8, &H2010)
+    PutDword(buf, optOff + 96 + 12, &H28)
+    PutDword(buf, optOff + 96 + 96, &H2000)
+    PutDword(buf, optOff + 96 + 100, 8)
+
+    sectChars = IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ
+    sectOff = optOff + SIZEOF_OPTIONAL_HEADER32
+
+    ' --- .text ---
+    lstrcpy(VarPtr(buf[sectOff]), ".text")
+    PutDword(buf, sectOff + 8, textVirtSize)
+    PutDword(buf, sectOff + 12, TEXT_RVA)
+    PutDword(buf, sectOff + 16, TEXT_RAW_SIZE)
+    PutDword(buf, sectOff + 20, SIZEOF_HEADERS)
+    PutDword(buf, sectOff + 36, sectChars)
+
+    ' --- .idata ---
+    sectOff = sectOff + SIZEOF_SECTION_HEADER
+    lstrcpy(VarPtr(buf[sectOff]), ".idata")
+    PutDword(buf, sectOff + 8, &H5C)
+    PutDword(buf, sectOff + 12, IDATA_RVA)
+    PutDword(buf, sectOff + 16, IDATA_RAW_SIZE)
+    PutDword(buf, sectOff + 20, SIZEOF_HEADERS + TEXT_RAW_SIZE)
+    PutDword(buf, sectOff + 36, sectChars)
+End Sub
+
+' ExitProcess 固定の .idata を生成 (RVA 0x2000 基準)
+Sub BuildIdata(buf As *Byte)
+    ZeroMem(buf, IDATA_RAW_SIZE)
+
+    ' IAT @ RVA 0x2000
+    PutDword(buf, &H00, &H204E)
+    PutDword(buf, &H04, 0)
+
+    ' jmp dword ptr [0x402000] @ RVA 0x2008 (import thunk)
+    buf[&H08] = &HFF
+    buf[&H09] = &H25
+    PutDword(buf, &H0A, &H00402000)
+
+    ' IMAGE_IMPORT_DESCRIPTOR @ RVA 0x2010
+    PutDword(buf, &H10, &H2038)
+    PutDword(buf, &H14, 0)
+    PutDword(buf, &H18, 0)
+    PutDword(buf, &H1C, &H2040)
+    PutDword(buf, &H20, &H2000)
+    ' null descriptor @ 0x2024 は ZeroMem済み
+
+    ' ILT @ RVA 0x2038
+    PutDword(buf, &H38, &H204E)
+    PutDword(buf, &H3C, 0)
+
+    ' DLL名 @ RVA 0x2040
+    lstrcpy(VarPtr(buf[&H40]), "KERNEL32.dll")
+
+    ' Hint/Name @ RVA 0x204E
+    PutWord(buf, &H4E, 0)
+    lstrcpy(VarPtr(buf[&H50]), "ExitProcess")
+End Sub
+
+' --- メイン ---
+Dim inPath[MAX_PATH] As Byte
+Dim outPath[MAX_PATH] As Byte
+Dim objBuf As *Byte
+Dim objSize As Long
+Dim codeBuf As *Byte
+Dim idataBuf As *Byte
+Dim outBuf As *Byte
+Dim hdr As COFF_HEADER
+Dim sect As SECTION_HEADER
+Dim reloc As COFF_RELOCATION
+Dim sym As COFF_SYMBOL
+Dim i As Long
+Dim j As Long
+Dim nSect As Long
+Dim nRel As Long
+Dim sectOff As DWord
+Dim off As DWord
+Dim textSectIdx As Long
+Dim textRawPtr As DWord
+Dim textRawSize As DWord
+Dim textRelPtr As DWord
+Dim textRelCount As Long
+Dim codeSize As Long
+Dim targetAddr As DWord
+Dim outSize As Long
+Dim textVirtSize As DWord
+
+lstrcpy(outPath, "a.exe")
+If GetCmd(1, inPath) = 0 Then
+    USAGE()
+End If
+If GetCmd(2, outPath) = 0 Then
+    lstrcpy(outPath, "a.exe")
+End If
+
+objBuf = LoadFile(inPath, objSize)
+If objBuf = NULL Then
+    Print "cannot open: " + MakeStr(inPath)
+    End
+End If
+If objSize < SIZEOF_COFF_HEADER Then
+    Print "obj too small"
+    free(objBuf)
+    End
+End If
+
+memcpy(VarPtr(hdr), objBuf, SIZEOF_COFF_HEADER)
+If hdr.Machine <> IMAGE_FILE_MACHINE_I386 Then
+    Print "not i386 COFF"
+    free(objBuf)
+    End
+End If
+
+sectOff = SIZEOF_COFF_HEADER + hdr.SizeOfOptionalHeader
+nSect = hdr.NumberOfSections
+textSectIdx = -1
+textRawPtr = 0
+textRawSize = 0
+textRelPtr = 0
+textRelCount = 0
+
+If nSect > 0 Then
+    For i = 0 To nSect - 1
+        off = sectOff + i * SIZEOF_SECTION_HEADER
+        memcpy(VarPtr(sect), VarPtr(objBuf[off]), SIZEOF_SECTION_HEADER)
+        If IsTextSection(VarPtr(sect.Name(0))) <> 0 Then
+            textSectIdx = i
+            textRawPtr = sect.PointerToRawData
+            textRawSize = sect.SizeOfRawData
+            textRelPtr = sect.PointerToRelocations
+            textRelCount = sect.NumberOfRelocations
+            Exit For
+        End If
+    Next
+End If
+
+If textSectIdx < 0 Or textRawSize = 0 Then
+    Print ".text section not found"
+    free(objBuf)
+    End
+End If
+If textRawPtr + textRawSize > objSize Then
+    Print ".text out of range"
+    free(objBuf)
+    End
+End If
+
+codeBuf = calloc(TEXT_RAW_SIZE)
+codeSize = textRawSize
+If codeSize > TEXT_RAW_SIZE Then
+    Print ".text too large (max 512)"
+    free(codeBuf)
+    free(objBuf)
+    End
+End If
+memcpy(codeBuf, VarPtr(objBuf[textRawPtr]), codeSize)
+textVirtSize = codeSize
+If textVirtSize < &H10 Then
+    textVirtSize = &H10
+End If
+
+' リロケーション
+nRel = textRelCount
+If nRel > 0 Then
+    For j = 0 To nRel - 1
+        off = textRelPtr + j * SIZEOF_COFF_RELOCATION
+        memcpy(VarPtr(reloc), VarPtr(objBuf[off]), SIZEOF_COFF_RELOCATION)
+        If reloc.SymbolTableIndex >= hdr.NumberOfSymbols Then
+            Print "bad symbol index"
+            free(codeBuf)
+            free(objBuf)
+            End
+        End If
+        off = hdr.PointerToSymbolTable + reloc.SymbolTableIndex * SIZEOF_COFF_SYMBOL
+        memcpy(VarPtr(sym), VarPtr(objBuf[off]), SIZEOF_COFF_SYMBOL)
+
+        If sym.SectionNumber = IMAGE_SYM_UNDEFINED Then
+            targetAddr = IMPORT_THUNK_ADDR
+        ElseIf sym.SectionNumber = 1 Then
+            targetAddr = IMAGE_BASE + TEXT_RVA + sym.Value
+        Else
+            Print "unsupported section: " + Str$(sym.SectionNumber)
+            free(codeBuf)
+            free(objBuf)
+            End
+        End If
+
+        ApplyRelocPtr(codeBuf, VarPtr(reloc), targetAddr, TEXT_RVA)
+        Print "reloc[" + Str$(j) + "] VA=0x" + HexPad$(reloc.VirtualAddress, 8) + _
+            " RelType=" + Str$(reloc.RelType) + " -> 0x" + HexPad$(targetAddr, 8)
+    Next
+End If
+
+' 出力組み立て
+outSize = SIZEOF_HEADERS + TEXT_RAW_SIZE + IDATA_RAW_SIZE
+outBuf = calloc(outSize)
+idataBuf = calloc(IDATA_RAW_SIZE)
+
+BuildPeHeaders(outBuf, textVirtSize)
+BuildIdata(idataBuf)
+memcpy(VarPtr(outBuf[SIZEOF_HEADERS]), codeBuf, TEXT_RAW_SIZE)
+memcpy(VarPtr(outBuf[SIZEOF_HEADERS + TEXT_RAW_SIZE]), idataBuf, IDATA_RAW_SIZE)
+
+If WriteAll(outPath, outBuf, outSize) = 0 Then
+    Print "cannot write: " + MakeStr(outPath)
+Else
+    Print "OK: " + MakeStr(inPath) + " -> " + MakeStr(outPath)
+    Print "PE headers built in code (no template)"
+    Print "size=" + Str$(outSize) + " entry=0x" + HexPad$(IMAGE_BASE + TEXT_RVA, 8)
+End If
+
+free(idataBuf)
+free(outBuf)
+free(codeBuf)
+free(objBuf)
+End

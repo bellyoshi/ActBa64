@@ -1,0 +1,195 @@
+' Expect: 8
+' Target: actba64
+' StringBuffer self-contained (no #include)
+#console
+
+Sub ZeroMem(p As *Byte, n As Long)
+    Dim i As Long
+    Dim q As *Byte
+    If n <= 0 Then Exit Sub
+    q = p
+    For i = 0 To n - 1
+        q[i] = 0
+    Next
+End Sub
+
+Const SB_INIT_CAP = 64
+
+Type StringBuffer
+    p As *Byte
+    len As Long
+    cap As Long
+End Type
+
+Sub SbInit(sb As *StringBuffer)
+    sb->p = 0
+    sb->len = 0
+    sb->cap = 0
+End Sub
+
+Sub SbFree(sb As *StringBuffer)
+    Dim p As *Byte
+    p = sb->p
+    If p <> 0 Then
+        free(p)
+    End If
+    sb->p = 0
+    sb->len = 0
+    sb->cap = 0
+End Sub
+
+Sub SbClear(sb As *StringBuffer)
+    Dim p As *Byte
+    sb->len = 0
+    p = sb->p
+    If p <> 0 Then
+        p[0] = 0
+    End If
+End Sub
+
+Function SbEnsure(sb As *StringBuffer, need As Long) As Long
+    Dim np As *Byte
+    Dim ncap As Long
+    Dim op As *Byte
+    Dim n As Long
+    SbEnsure = 0
+    If need <= sb->cap Then
+        SbEnsure = 1
+        Exit Function
+    End If
+    ncap = sb->cap
+    If ncap <= 0 Then ncap = SB_INIT_CAP
+    While ncap < need
+        ncap = ncap * 2
+    Wend
+    np = malloc(ncap)
+    If np = 0 Then
+        ExitProcess(1)
+    End If
+    n = sb->len
+    op = sb->p
+    If n > 0 Then
+        If op <> 0 Then
+            memcpy(np, op, n)
+        End If
+    End If
+    If op <> 0 Then
+        free(op)
+    End If
+    sb->p = np
+    sb->cap = ncap
+    SbEnsure = 1
+End Function
+
+Sub SbAppendBytes(sb As *StringBuffer, src As *Byte, n As Long)
+    Dim p As *Byte
+    Dim off As Long
+    If n <= 0 Then Exit Sub
+    If SbEnsure(sb, sb->len + n + 1) = 0 Then
+        ExitProcess(1)
+    End If
+    p = sb->p
+    off = sb->len
+    memcpy(VarPtr(p[off]), src, n)
+    off = off + n
+    sb->len = off
+    p[off] = 0
+End Sub
+
+Sub SbAppendStr(sb As *StringBuffer, s As String)
+    Dim n As Long
+    n = Len(s)
+    If n <= 0 Then Exit Sub
+    SbAppendBytes(sb, StrPtr(s), n)
+End Sub
+
+Sub SbAppendCRLF(sb As *StringBuffer)
+    Dim crlf[2] As Byte
+    crlf[0] = 13
+    crlf[1] = 10
+    SbAppendBytes(sb, VarPtr(crlf), 2)
+End Sub
+
+Sub SbAppendSb(dst As *StringBuffer, src As *StringBuffer)
+    Dim sp As *Byte
+    Dim n As Long
+    n = src->len
+    If n <= 0 Then Exit Sub
+    sp = src->p
+    SbAppendBytes(dst, sp, n)
+End Sub
+
+Sub SbAppendByte(sb As *StringBuffer, b As Long)
+    Dim p As *Byte
+    Dim off As Long
+    If SbEnsure(sb, sb->len + 2) = 0 Then
+        ExitProcess(1)
+    End If
+    p = sb->p
+    off = sb->len
+    p[off] = b And &HFF
+    off = off + 1
+    sb->len = off
+    p[off] = 0
+End Sub
+
+Function SbLen(sb As *StringBuffer) As Long
+    SbLen = sb->len
+End Function
+
+Function SbIsEmpty(sb As *StringBuffer) As Long
+    If sb->len <= 0 Then
+        SbIsEmpty = 1
+    Else
+        SbIsEmpty = 0
+    End If
+End Function
+
+Function SbToString$(sb As *StringBuffer) As String
+    Dim p As *Byte
+    Dim n As Long
+    p = sb->p
+    n = sb->len
+    If p = 0 Then
+        SbToString$ = ""
+    Else
+        If n <= 0 Then
+            SbToString$ = ""
+        Else
+            p[n] = 0
+            SbToString$ = MakeStr(p)
+        End If
+    End If
+End Function
+
+Dim sb As StringBuffer
+Dim other As StringBuffer
+Dim s As String
+Dim n As Long
+
+SbInit(VarPtr(sb))
+SbInit(VarPtr(other))
+
+If SbIsEmpty(VarPtr(sb)) = 0 Then
+    ExitProcess(1)
+End If
+
+SbAppendStr(VarPtr(sb), "foo")
+SbAppendStr(VarPtr(sb), "bar")
+SbAppendCRLF(VarPtr(sb))
+
+SbClear(VarPtr(sb))
+SbAppendStr(VarPtr(sb), "xy")
+SbAppendByte(VarPtr(sb), Asc("z"))
+
+SbAppendStr(VarPtr(other), "!")
+SbAppendSb(VarPtr(sb), VarPtr(other))
+
+s = SbToString$(VarPtr(sb))
+n = SbLen(VarPtr(sb))
+n = n + Len(s)
+
+SbFree(VarPtr(other))
+SbFree(VarPtr(sb))
+
+ExitProcess(n)

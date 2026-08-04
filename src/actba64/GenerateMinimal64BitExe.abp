@@ -1,0 +1,179 @@
+' ===================================================
+'  Minimal 64bit PE (PE32+) EXE Writer with Imports
+' ===================================================
+
+
+
+' AlignUp ?????????????????????g?p ...
+
+' ExitProcess(42) ????‘o???@?B??R?[?h???
+Sub BuildTestCodeWithImport(codeBuf As *Byte, ByRef codeSize As Long)
+    ' x64 ?A?Z???u??:
+    '   sub rsp, 40           ; 48 83 EC 28  (?V???h?E?X?y?[?X 32?o?C?g + ?A???C?????g????)
+    '   mov ecx, 42           ; B9 2A 00 00 00  (??1???? = 42)
+    '   call [rip + offset]   ; FF 15 xx xx xx xx  (IAT_ExitProcess ??? RIP ?????‘o??)
+    '   add rsp, 40           ; 48 83 C4 28
+    '   ret                   ; C3
+    
+    ' TEXT_RVA = 0x1000, IDATA_RVA = 0x2000 ?????
+    ' IAT ?????I?t?Z?b?g?v?Z:
+    ' call ????????????u?????I?t?Z?b?g???v?Z
+    ' 0x1000 + 0x0E (call???????) ???? 0x2000 (IAT???u) ???I?t?Z?b?g = 0x0FF2
+    Dim iatOffset As DWord
+    ' call ends at offset 0x0F (not 0x0E): 4+5+6 = 15
+    iatOffset = IDATA_RVA - (TEXT_RVA + &H0F)
+
+    Dim raw(19) As Byte
+    ' sub rsp, 40
+    raw[0] = &H48 : raw[1] = &H83 : raw[2] = &HEC : raw[3] = &H28
+    ' mov ecx, 42
+    raw[4] = &HB9 : raw[5] = 42   : raw[6] = 0    : raw[7] = 0    : raw[8] = 0
+    ' call [rip + iatOffset]
+    raw[9] = &HFF : raw[10] = &H15
+    PutDword(VarPtr(raw[11]), 0, iatOffset)
+    ' add rsp, 40
+    raw[15] = &H48 : raw[16] = &H83 : raw[17] = &HC4 : raw[18] = &H28
+    ' ret
+    raw[19] = &HC3
+
+    memcpy(codeBuf, VarPtr(raw[0]), 20)
+    codeSize = 20
+End Sub
+
+Function Generate64BitExeWithImport(outPath As *Byte) As Long
+    Dim outBuf As *Byte
+    Dim outSize As Long
+    Dim textRaw As DWord, textVirt As DWord
+    Dim idataRaw As DWord, idataVirt As DWord
+    Dim sizeImage As DWord
+    Dim optOff As DWord, sectOff As DWord
+    Dim codeBuf(63) As Byte
+    Dim codeSize As Long
+
+    ' 1. ?e?X?g?R?[?h????
+    BuildTestCodeWithImport(codeBuf, codeSize)
+
+    ' 2. ?e?Z?N?V??????T?C?Y?v?Z
+    textVirt = AlignUp(codeSize, SECTION_ALIGN)
+    textRaw = AlignUp(codeSize, FILE_ALIGN)
+
+    ' .idata ?Z?N?V??????f?[?^?\?z?i?? 0x100 ?o?C?g?j
+    idataVirt = SECTION_ALIGN
+    idataRaw = FILE_ALIGN
+
+    sizeImage = TEXT_RVA + textVirt + idataVirt
+    outSize = SIZEOF_HEADERS + textRaw + idataRaw
+
+    outBuf = calloc(outSize)
+    If outBuf = NULL Then Exit Function
+
+    ' --- [ PE / DOS Headers ] ---
+    ZeroMem(outBuf, SIZEOF_HEADERS)
+    PutWord(outBuf, 0, IMAGE_DOS_SIGNATURE)
+    PutDword(outBuf, 60, E_LFANEW)
+    WriteDosStub(outBuf)
+
+    ' NT Header
+    PutDword(outBuf, E_LFANEW, IMAGE_NT_SIGNATURE)
+    PutWord(outBuf, E_LFANEW + 4, IMAGE_FILE_MACHINE_AMD64)
+    PutWord(outBuf, E_LFANEW + 6, 2) ' ?? ?Z?N?V???????? 2 ???X (.text, .idata)
+    PutWord(outBuf, E_LFANEW + 20, SIZEOF_OPTIONAL_HEADER64)
+    PutWord(outBuf, E_LFANEW + 22, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_LARGE_ADDRESS_AWARE)
+
+    ' Optional Header
+    optOff = E_LFANEW + 24
+    PutWord(outBuf, optOff + 0, IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+    PutDword(outBuf, optOff + 4, textRaw)
+    PutDword(outBuf, optOff + 16, TEXT_RVA)               ' EntryPoint (0x1000)
+    PutDword(outBuf, optOff + 20, TEXT_RVA)               ' BaseOfCode
+    PutDword(outBuf, optOff + 24, IMAGE_BASE_LOW)
+    PutDword(outBuf, optOff + 28, IMAGE_BASE_HIGH)
+    PutDword(outBuf, optOff + 32, SECTION_ALIGN)
+    PutDword(outBuf, optOff + 36, FILE_ALIGN)
+    ' Windows ?? MajorSubsystemVersion=0 ?? PE32+ ?????????
+    ' ?i?u????A?v??????g????PC?????s????????v?j
+    PutWord(outBuf, optOff + 40, 5)                       ' MajorOperatingSystemVersion
+    PutWord(outBuf, optOff + 42, 2)                       ' MinorOperatingSystemVersion
+    PutWord(outBuf, optOff + 48, 5)                       ' MajorSubsystemVersion
+    PutWord(outBuf, optOff + 50, 2)                       ' MinorSubsystemVersion
+    PutDword(outBuf, optOff + 56, sizeImage)
+    PutDword(outBuf, optOff + 60, SIZEOF_HEADERS)
+    PutWord(outBuf, optOff + 68, IMAGE_SUBSYSTEM_WINDOWS_CUI)
+    PutDword(outBuf, optOff + 72, &H100000)               ' SizeOfStackReserve
+    PutDword(outBuf, optOff + 80, &H1000)                 ' SizeOfStackCommit
+    PutDword(outBuf, optOff + 88, &H100000)               ' SizeOfHeapReserve
+    PutDword(outBuf, optOff + 96, &H1000)                 ' SizeOfHeapCommit
+    PutDword(outBuf, optOff + 108, 16)                    ' NumberOfRvaAndSizes
+
+    ' ?? DataDirectory[1]: Import Table Directory ??o?^
+    ' (optOff + 120 = DataDirectory[1] Import Table)
+    PutDword(outBuf, optOff + 120, IDATA_RVA + &H10)      ' Import Directory RVA (IDT, DD[1])
+    PutDword(outBuf, optOff + 124, &H28)                  ' Size (IDT 20?o?C?g x 2)
+    ' DataDirectory[12]: IAT
+    PutDword(outBuf, optOff + 208, IDATA_RVA)             ' IAT RVA
+    PutDword(outBuf, optOff + 212, 16)                    ' IAT Size (entry + null)
+
+    ' --- [ Section Headers ] ---
+    sectOff = optOff + SIZEOF_OPTIONAL_HEADER64
+
+    ' 1. .text Header
+    lstrcpy(VarPtr(outBuf[sectOff]), ".text")
+    PutDword(outBuf, sectOff + 8, codeSize)               ' VirtualSize
+    PutDword(outBuf, sectOff + 12, TEXT_RVA)              ' VirtualAddress
+    PutDword(outBuf, sectOff + 16, textRaw)               ' SizeOfRawData
+    PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS)        ' PointerToRawData
+    PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ)
+
+    ' 2. .idata Header
+    sectOff = sectOff + 40
+    lstrcpy(VarPtr(outBuf[sectOff]), ".idata")
+    PutDword(outBuf, sectOff + 8, &H100)                  ' VirtualSize
+    PutDword(outBuf, sectOff + 12, IDATA_RVA)             ' VirtualAddress (0x2000)
+    PutDword(outBuf, sectOff + 16, idataRaw)              ' SizeOfRawData
+    PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS + textRaw) ' PointerToRawData
+    PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
+
+    ' --- [ Section Data Writing ] ---
+    
+    ' Write .text Data
+    memcpy(VarPtr(outBuf[SIZEOF_HEADERS]), VarPtr(codeBuf[0]), codeSize)
+
+    ' Write .idata Data
+    Dim idataFileOff As DWord
+    idataFileOff = SIZEOF_HEADERS + textRaw
+
+    ' Offset 0x00: IAT (Import Address Table) -> 8?o?C?g
+    ' Offset 0x08: Null Terminator for IAT
+    ' Offset 0x10: Import Directory Table (20?o?C?g)
+    ' Offset 0x24: Null Directory Entry (20?o?C?g)
+    ' Offset 0x38: ILT (Import Lookup Table) -> 8?o?C?g
+    ' Offset 0x40: Null Terminator for ILT
+    ' Offset 0x48: Hint/Name Table ("ExitProcess")
+    ' Offset 0x60: DLL Name ("kernel32.dll")
+
+    Dim hintNameRva As DWord : hintNameRva = IDATA_RVA + &H48
+    Dim dllNameRva  As DWord : dllNameRva  = IDATA_RVA + &H60
+    Dim iltRva      As DWord : iltRva      = IDATA_RVA + &H38
+    Dim iatRva      As DWord : iatRva      = IDATA_RVA + &H00
+
+    ' 1. IAT & ILT ?? Hint/Name RVA ?????????? (64bit????8?o?C?g????????)
+    PutDword(outBuf, idataFileOff + &H00, hintNameRva) ' IAT Entry 0
+    PutDword(outBuf, idataFileOff + &H38, hintNameRva) ' ILT Entry 0
+
+    ' 2. Import Directory Table (IDT)
+    PutDword(outBuf, idataFileOff + &H10 + 0,  iltRva)     ' OriginalFirstThunk (ILT)
+    PutDword(outBuf, idataFileOff + &H10 + 12, dllNameRva) ' Name RVA
+    PutDword(outBuf, idataFileOff + &H10 + 16, iatRva)     ' FirstThunk (IAT)
+
+    ' 3. Hint / Name Table ("\0\0ExitProcess\0")
+    PutWord(outBuf, idataFileOff + &H48, 0)                ' Hint = 0
+    lstrcpy(VarPtr(outBuf[idataFileOff + &H4A]), "ExitProcess")
+
+    ' 4. DLL Name ("kernel32.dll\0")
+    lstrcpy(VarPtr(outBuf[idataFileOff + &H60]), "kernel32.dll")
+
+    ' ?t?@?C???????o??
+    WriteAll(outPath, outBuf, outSize)
+    free(outBuf)
+    Generate64BitExeWithImport = 1
+End Function
