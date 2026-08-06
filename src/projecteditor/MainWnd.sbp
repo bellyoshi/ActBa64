@@ -1,19 +1,33 @@
-'-----------------------------------------------------------------------------
-'  ıCıxıııg ıvıııVı[ıWıı
-'-----------------------------------------------------------------------------
-' ıııtı@ıCıııBAAıEıBıııhıE [MainWnd] ıJıEııCıxıııgıııRı[ıfıBıııOıııııB
-' ıEıBıııhıE ınıııhıı: hMainWnd
-
-' TODO: ııııuıCOııı[ıoııııııAı\ıııAııAııEııı`ıııııB
-
+Declare Function ImmGetContext Lib "imm32.dll" (ByVal hWnd As HWND) As Long
+Declare Function ImmReleaseContext Lib "imm32.dll" (ByVal hWnd As HWND, ByVal hIMC As Long) As Long
+Declare Function ImmGetCompositionStringA Lib "imm32.dll" (ByVal hIMC As Long, ByVal dwIndex As Long, ByVal lpBuf As *Byte, ByVal dwBufLen As Long) As Long
+Const GCS_RESULTSTR = &H0800
+Const GCS_COMPSTR   = &H0008
 
 Dim g_strConfirmed As String
-'Dim g_strComp As String
+Dim g_strComp As String
+
+Function ImmCompToStr$(hIMC As Long, dwIndex As Long) As String
+    Dim n As Long
+    Dim buf As *Byte
+
+    ImmCompToStr$ = ""
+    n = ImmGetCompositionStringA(hIMC, dwIndex, 0, 0)
+    If n <= 0 Then Exit Function
+
+    buf = malloc(n + 1)
+    If buf = 0 Then Exit Function
+
+    ImmGetCompositionStringA(hIMC, dwIndex, buf, n)
+    buf[n] = 0
+    ImmCompToStr$ = MakeStr(buf)
+    free(buf)
+End Function
 
 Sub DrawTextEngine(hDC As HDC)
     Dim displayStr As String
 
-    displayStr = g_strConfirmed ' & g_strComp
+    displayStr = g_strConfirmed & g_strComp
 
     Dim hBrush As HBRUSH, rect As RECT
     GetClientRect(GetActiveWindow(), rect)
@@ -25,11 +39,7 @@ Sub DrawTextEngine(hDC As HDC)
     TextOut(hDC, 10, 10, displayStr, Len(displayStr))
 End Sub
 
-'-----------------------------------------------------------------------------
-' ıEıBıııhıEıııbıZı[ıWıııııııııııRı[ıııoıbıNııE
-
 Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
-	' TODO: ııııuıCEıBıııhıEıııbıZı[ıWıııııııııııRı[ıhıııLıqıııııB
     Select Case dwMsg
 
         Case WM_CHAR
@@ -40,8 +50,25 @@ Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As L
             ElseIf wParam >= 32 Then
                 g_strConfirmed = g_strConfirmed & Chr$(wParam)
             End If
-                        InvalidateRect(hWnd, ByVal 0, TRUE)
- '           Return 0
+            InvalidateRect(hWnd, ByVal 0, TRUE)
+
+        Case WM_IME_COMPOSITION
+            Dim hIMC As Long
+            hIMC = ImmGetContext(hWnd)
+
+            If hIMC <> 0 Then
+                If (lParam And GCS_RESULTSTR) <> 0 Then
+                    g_strConfirmed = g_strConfirmed & ImmCompToStr$(hIMC, GCS_RESULTSTR)
+                    g_strComp = ""
+                ElseIf (lParam And GCS_COMPSTR) <> 0 Then
+                    g_strComp = ImmCompToStr$(hIMC, GCS_COMPSTR)
+                End If
+
+                ImmReleaseContext(hWnd, hIMC)
+            End If
+
+            InvalidateRect(hWnd, ByVal 0, TRUE)
+
         Case WM_PAINT
             Dim ps As PAINTSTRUCT
             Dim hDC As HDC
@@ -51,13 +78,9 @@ Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As L
 
             EndPaint(hWnd, ps)
     End Select
-	' ıEıCıEıxıEııEıï¿½Eï¿½gï¿½Eï¿½vï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½Vï¿½Eï¿½[ï¿½Eï¿½Wï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ÌŒÄ‚Ñoï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½sï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½Ü‚ï¿½ï¿½Eï¿½B
+
 	MainWndProc=EventCall_MainWnd(hWnd,dwMsg,wParam,lParam)
 End Function
-
-
-'-----------------------------------------------------------------------------
-' ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ç‰ºï¿½Eï¿½ÍAï¿½Eï¿½Cï¿½Eï¿½xï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½gï¿½Eï¿½vï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½Vï¿½Eï¿½[ï¿½Eï¿½Wï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½Lï¿½Eï¿½qï¿½Eï¿½ï¿½Eï¿½ï¿½Eï¿½é‚½ï¿½Eï¿½ß‚Ì—Ìˆï¿½É‚È‚ï¿½Ü‚ï¿½ï¿½Eï¿½B
 
 Sub MainWnd_Destroy()
 	editor_DestroyObjects()
