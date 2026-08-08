@@ -1,0 +1,531 @@
+Const TEXTBUF_INITIAL_GAP = 1024
+Const LINEOFF_INITIAL_CAP = 64
+
+Type TextBuffer
+    buffer As *Byte
+    gap_start As Long
+    gap_end As Long
+    capacity As Long
+End Type
+
+Type LineOffsetTable
+    offsets As *Long
+    count As Long
+    capacity As Long
+End Type
+
+Dim g_textBuf As TextBuffer
+Dim g_lineOff As LineOffsetTable
+Dim g_strComp As String
+
+Function IsSjisLeadByte(ByVal b As Long) As Long
+    If (b >= &H81 And b <= &H9F) Or (b >= &HE0 And b <= &HFC) Then
+        IsSjisLeadByte = 1
+    Else
+        IsSjisLeadByte = 0
+    End If
+End Function
+
+Sub LineOff_EnsureCap(ByVal need As Long)
+    Dim newCap As Long
+    Dim newBuf As *Long
+    Dim nCopy As Long
+
+    If g_lineOff.offsets <> 0 And need <= g_lineOff.capacity Then Exit Sub
+
+    newCap = g_lineOff.capacity
+    If newCap <= 0 Then newCap = LINEOFF_INITIAL_CAP
+    While newCap < need
+        newCap = newCap * 2
+    Wend
+
+    newBuf = malloc(newCap * 4)
+    If newBuf = 0 Then Exit Sub
+
+    If g_lineOff.offsets <> 0 Then
+        nCopy = g_lineOff.count
+        If nCopy > 0 Then
+            memcpy(newBuf, g_lineOff.offsets, nCopy * 4)
+        End If
+        free(g_lineOff.offsets)
+    End If
+
+    g_lineOff.offsets = newBuf
+    g_lineOff.capacity = newCap
+End Sub
+
+Sub LineOff_Init()
+    If g_lineOff.offsets <> 0 Then
+        free(g_lineOff.offsets)
+        g_lineOff.offsets = 0
+    End If
+    g_lineOff.count = 0
+    g_lineOff.capacity = 0
+    LineOff_EnsureCap(LINEOFF_INITIAL_CAP)
+    g_lineOff.offsets[0] = 0
+    g_lineOff.count = 1
+End Sub
+
+Sub LineOff_Destroy()
+    If g_lineOff.offsets <> 0 Then
+        free(g_lineOff.offsets)
+        g_lineOff.offsets = 0
+    End If
+    g_lineOff.count = 0
+    g_lineOff.capacity = 0
+End Sub
+
+Function TextBuf_GetByte(ByVal logicalIndex As Long) As Byte
+    Dim rightLen As Long
+    Dim tmp As Byte
+    Dim bp As *Byte
+
+    TextBuf_GetByte = 0
+    rightLen = g_textBuf.capacity - g_textBuf.gap_end
+    If logicalIndex < 0 Then Exit Function
+    If logicalIndex >= g_textBuf.gap_start + rightLen Then Exit Function
+
+    bp = VarPtr(tmp)
+    If logicalIndex < g_textBuf.gap_start Then
+        bp[0] = g_textBuf.buffer[logicalIndex]
+    Else
+        bp[0] = g_textBuf.buffer[g_textBuf.gap_end + (logicalIndex - g_textBuf.gap_start)]
+    End If
+    TextBuf_GetByte = tmp
+End Function
+
+Sub TextBuf_RebuildLineOffsets()
+    Dim docLen As Long
+    Dim i As Long
+    Dim b As Long
+
+    TextBuf_EnsureInit()
+    LineOff_EnsureCap(1)
+    g_lineOff.offsets[0] = 0
+    g_lineOff.count = 1
+
+    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+    i = 0
+    While i < docLen
+        b = TextBuf_GetByte(i)
+        If b = 13 And i + 1 < docLen And TextBuf_GetByte(i + 1) = 10 Then
+            i = i + 1
+            LineOff_EnsureCap(g_lineOff.count + 1)
+            g_lineOff.offsets[g_lineOff.count] = i + 1
+            g_lineOff.count = g_lineOff.count + 1
+        ElseIf b = 10 Or b = 13 Then
+            LineOff_EnsureCap(g_lineOff.count + 1)
+            g_lineOff.offsets[g_lineOff.count] = i + 1
+            g_lineOff.count = g_lineOff.count + 1
+        End If
+        i = i + 1
+    Wend
+End Sub
+
+Function TextBuf_LineCount() As Long
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+    TextBuf_LineCount = g_lineOff.count
+End Function
+
+Function TextBuf_GetLineStart(ByVal lineNo As Long) As Long
+    TextBuf_GetLineStart = 0
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+    If lineNo < 1 Or lineNo > g_lineOff.count Then Exit Function
+    TextBuf_GetLineStart = g_lineOff.offsets[lineNo - 1]
+End Function
+
+Function TextBuf_GetLineEnd(ByVal lineNo As Long) As Long
+    Dim docLen As Long
+    Dim e As Long
+
+    TextBuf_GetLineEnd = 0
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+    If lineNo < 1 Or lineNo > g_lineOff.count Then Exit Function
+
+    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+    If lineNo < g_lineOff.count Then
+        e = g_lineOff.offsets[lineNo]
+    Else
+        e = docLen
+    End If
+
+    While e > g_lineOff.offsets[lineNo - 1]
+        If TextBuf_GetByte(e - 1) = 10 Or TextBuf_GetByte(e - 1) = 13 Then
+            e = e - 1
+        Else
+            Exit While
+        End If
+    Wend
+
+    TextBuf_GetLineEnd = e
+End Function
+
+Function TextBuf_GetLineText$(ByVal lineNo As Long) As String
+    Dim s As Long
+    Dim e As Long
+    Dim n As Long
+    Dim i As Long
+    Dim out As *Byte
+
+    TextBuf_GetLineText$ = ""
+    s = TextBuf_GetLineStart(lineNo)
+    e = TextBuf_GetLineEnd(lineNo)
+    If e < s Then Exit Function
+    n = e - s
+    If n <= 0 Then Exit Function
+
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+
+    For i = 0 To n - 1
+        out[i] = TextBuf_GetByte(s + i)
+    Next
+    out[n] = 0
+
+    TextBuf_GetLineText$ = MakeStr(out)
+    free(out)
+End Function
+
+Function TextBuf_GetLineAtIndex(ByVal logicalIndex As Long) As Long
+    Dim i As Long
+    Dim docLen As Long
+
+    TextBuf_GetLineAtIndex = 1
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+
+    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+    If logicalIndex < 0 Then logicalIndex = 0
+    If logicalIndex > docLen Then logicalIndex = docLen
+
+    i = g_lineOff.count
+    While i >= 1
+        If logicalIndex >= g_lineOff.offsets[i - 1] Then
+            TextBuf_GetLineAtIndex = i
+            Exit Function
+        End If
+        i = i - 1
+    Wend
+End Function
+
+Function TextBuf_CursorLine() As Long
+    TextBuf_EnsureInit()
+    TextBuf_CursorLine = TextBuf_GetLineAtIndex(g_textBuf.gap_start)
+End Function
+
+Function TextBuf_GetTextBeforeCursorOnLine$() As String
+    Dim lineNo As Long
+    Dim s As Long
+    Dim e As Long
+    Dim n As Long
+    Dim i As Long
+    Dim out As *Byte
+
+    TextBuf_GetTextBeforeCursorOnLine$ = ""
+    TextBuf_EnsureInit()
+    lineNo = TextBuf_CursorLine()
+    s = TextBuf_GetLineStart(lineNo)
+    e = g_textBuf.gap_start
+    If e < s Then Exit Function
+    n = e - s
+    If n <= 0 Then Exit Function
+
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+
+    For i = 0 To n - 1
+        out[i] = TextBuf_GetByte(s + i)
+    Next
+    out[n] = 0
+
+    TextBuf_GetTextBeforeCursorOnLine$ = MakeStr(out)
+    free(out)
+End Function
+
+Sub InitTextBuffer()
+    If g_textBuf.buffer <> 0 Then
+        free(g_textBuf.buffer)
+    End If
+    g_textBuf.capacity = TEXTBUF_INITIAL_GAP
+    g_textBuf.buffer = malloc(g_textBuf.capacity)
+    g_textBuf.gap_start = 0
+    g_textBuf.gap_end = g_textBuf.capacity
+    LineOff_Init()
+End Sub
+
+Sub TextBuf_EnsureInit()
+    If g_textBuf.buffer = 0 Then
+        InitTextBuffer()
+    End If
+End Sub
+
+Sub TextBuf_Destroy()
+    If g_textBuf.buffer <> 0 Then
+        free(g_textBuf.buffer)
+        g_textBuf.buffer = 0
+    End If
+    g_textBuf.gap_start = 0
+    g_textBuf.gap_end = 0
+    g_textBuf.capacity = 0
+    g_strComp = ""
+    LineOff_Destroy()
+End Sub
+
+Sub TextBuf_GrowGap()
+    Dim newCap As Long
+    Dim newBuf As *Byte
+    Dim rightLen As Long
+    Dim newGapEnd As Long
+
+    rightLen = g_textBuf.capacity - g_textBuf.gap_end
+    newCap = g_textBuf.capacity * 2
+    If newCap < g_textBuf.capacity + TEXTBUF_INITIAL_GAP Then
+        newCap = g_textBuf.capacity + TEXTBUF_INITIAL_GAP
+    End If
+
+    newBuf = malloc(newCap)
+    If newBuf = 0 Then Exit Sub
+
+    If g_textBuf.gap_start > 0 Then
+        memcpy(newBuf, g_textBuf.buffer, g_textBuf.gap_start)
+    End If
+
+    newGapEnd = newCap - rightLen
+    If rightLen > 0 Then
+        memcpy(VarPtr(newBuf[newGapEnd]), VarPtr(g_textBuf.buffer[g_textBuf.gap_end]), rightLen)
+    End If
+
+    free(g_textBuf.buffer)
+    g_textBuf.buffer = newBuf
+    g_textBuf.gap_end = newGapEnd
+    g_textBuf.capacity = newCap
+End Sub
+
+Sub TextBuf_InsertChar(ByVal c As Long)
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    TextBuf_EnsureInit()
+
+    If g_textBuf.gap_start = g_textBuf.gap_end Then
+        TextBuf_GrowGap()
+        If g_textBuf.gap_start = g_textBuf.gap_end Then Exit Sub
+    End If
+
+    tmp = c And &HFF
+    bp = VarPtr(tmp)
+    g_textBuf.buffer[g_textBuf.gap_start] = bp[0]
+    g_textBuf.gap_start = g_textBuf.gap_start + 1
+    TextBuf_RebuildLineOffsets()
+End Sub
+
+Sub TextBuf_Delete()
+    Dim i As Long
+    Dim lastStart As Long
+    Dim b As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    TextBuf_EnsureInit()
+    If g_textBuf.gap_start <= 0 Then Exit Sub
+
+    i = 0
+    lastStart = 0
+    bp = VarPtr(tmp)
+    While i < g_textBuf.gap_start
+        lastStart = i
+        bp[0] = g_textBuf.buffer[i]
+        b = tmp And &HFF
+        If IsSjisLeadByte(b) <> 0 And i + 1 < g_textBuf.gap_start Then
+            i = i + 2
+        Else
+            i = i + 1
+        End If
+    Wend
+
+    g_textBuf.gap_start = lastStart
+    TextBuf_RebuildLineOffsets()
+End Sub
+
+Function TextBuf_PrevCharBytes() As Long
+    Dim i As Long
+    Dim lastStart As Long
+    Dim b As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    TextBuf_PrevCharBytes = 0
+    If g_textBuf.gap_start <= 0 Then Exit Function
+
+    i = 0
+    lastStart = 0
+    bp = VarPtr(tmp)
+    While i < g_textBuf.gap_start
+        lastStart = i
+        bp[0] = g_textBuf.buffer[i]
+        b = tmp And &HFF
+        If IsSjisLeadByte(b) <> 0 And i + 1 < g_textBuf.gap_start Then
+            i = i + 2
+        Else
+            i = i + 1
+        End If
+    Wend
+
+    TextBuf_PrevCharBytes = g_textBuf.gap_start - lastStart
+End Function
+
+Function TextBuf_NextCharBytes() As Long
+    Dim b As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    TextBuf_NextCharBytes = 0
+    If g_textBuf.gap_end >= g_textBuf.capacity Then Exit Function
+
+    bp = VarPtr(tmp)
+    bp[0] = g_textBuf.buffer[g_textBuf.gap_end]
+    b = tmp And &HFF
+    If IsSjisLeadByte(b) <> 0 And g_textBuf.gap_end + 1 < g_textBuf.capacity Then
+        TextBuf_NextCharBytes = 2
+    Else
+        TextBuf_NextCharBytes = 1
+    End If
+End Function
+
+Sub TextBuf_MoveCursorTo(ByVal newIndex As Long)
+    Dim docLen As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    TextBuf_EnsureInit()
+
+    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+    If newIndex < 0 Then newIndex = 0
+    If newIndex > docLen Then newIndex = docLen
+
+    If newIndex = g_textBuf.gap_start Then Exit Sub
+
+    bp = VarPtr(tmp)
+
+    If newIndex < g_textBuf.gap_start Then
+        While g_textBuf.gap_start > newIndex
+            g_textBuf.gap_end = g_textBuf.gap_end - 1
+            g_textBuf.gap_start = g_textBuf.gap_start - 1
+            bp[0] = g_textBuf.buffer[g_textBuf.gap_start]
+            g_textBuf.buffer[g_textBuf.gap_end] = bp[0]
+        Wend
+    Else
+        While g_textBuf.gap_start < newIndex
+            bp[0] = g_textBuf.buffer[g_textBuf.gap_end]
+            g_textBuf.buffer[g_textBuf.gap_start] = bp[0]
+            g_textBuf.gap_start = g_textBuf.gap_start + 1
+            g_textBuf.gap_end = g_textBuf.gap_end + 1
+        Wend
+    End If
+End Sub
+
+Sub TextBuf_MoveCursorLeft()
+    Dim n As Long
+
+    TextBuf_EnsureInit()
+    n = TextBuf_PrevCharBytes()
+    If n <= 0 Then Exit Sub
+    TextBuf_MoveCursorTo(g_textBuf.gap_start - n)
+End Sub
+
+Sub TextBuf_MoveCursorRight()
+    Dim n As Long
+
+    TextBuf_EnsureInit()
+    n = TextBuf_NextCharBytes()
+    If n <= 0 Then Exit Sub
+    TextBuf_MoveCursorTo(g_textBuf.gap_start + n)
+End Sub
+
+Sub TextBuf_Append(s As String)
+    Dim n As Long
+    Dim i As Long
+    Dim p As *Byte
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    n = Len(s)
+    If n <= 0 Then Exit Sub
+    p = StrPtr(s)
+    bp = VarPtr(tmp)
+    For i = 0 To n - 1
+        bp[0] = p[i]
+        TextBuf_InsertChar(tmp And &HFF)
+    Next
+End Sub
+
+Sub TextBuf_AppendChar(ByVal ch As Long)
+    TextBuf_InsertChar(ch)
+End Sub
+
+Sub TextBuf_Clear()
+    TextBuf_EnsureInit()
+    g_textBuf.gap_start = 0
+    g_textBuf.gap_end = g_textBuf.capacity
+    g_strComp = ""
+    LineOff_Init()
+End Sub
+
+Sub TextBuf_SetComp(s As String)
+    g_strComp = s
+End Sub
+
+Sub TextBuf_ClearComp()
+    g_strComp = ""
+End Sub
+
+Function TextBuf_Len() As Long
+    TextBuf_EnsureInit()
+    TextBuf_Len = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+End Function
+
+Function TextBuf_GetConfirmed$() As String
+    Dim n As Long
+    Dim rightLen As Long
+    Dim out As *Byte
+
+    TextBuf_EnsureInit()
+    rightLen = g_textBuf.capacity - g_textBuf.gap_end
+    n = g_textBuf.gap_start + rightLen
+    If n <= 0 Then
+        TextBuf_GetConfirmed$ = ""
+        Exit Function
+    End If
+
+    out = malloc(n + 1)
+    If out = 0 Then
+        TextBuf_GetConfirmed$ = ""
+        Exit Function
+    End If
+
+    If g_textBuf.gap_start > 0 Then
+        memcpy(out, g_textBuf.buffer, g_textBuf.gap_start)
+    End If
+    If rightLen > 0 Then
+        memcpy(VarPtr(out[g_textBuf.gap_start]), VarPtr(g_textBuf.buffer[g_textBuf.gap_end]), rightLen)
+    End If
+    out[n] = 0
+
+    TextBuf_GetConfirmed$ = MakeStr(out)
+    free(out)
+End Function
+
+Function TextBuf_GetDisplay$() As String
+    TextBuf_GetDisplay$ = TextBuf_GetConfirmed$() & g_strComp
+End Function
