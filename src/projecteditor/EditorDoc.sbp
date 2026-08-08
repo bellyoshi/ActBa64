@@ -1,0 +1,198 @@
+Dim g_docPath As String
+Dim g_docDirty As Long
+
+Sub EditorDoc_UpdateTitle(hWnd As HWND)
+    Dim title As String
+    If Len(g_docPath) = 0 Then
+        title = "editor - (untitled)"
+    Else
+        title = "editor - " + g_docPath
+    End If
+    If g_docDirty <> 0 Then title = title + " *"
+    SetWindowText(hWnd, title)
+End Sub
+
+Sub EditorDoc_MarkDirty()
+    g_docDirty = 1
+    If hMainWnd <> 0 Then EditorDoc_UpdateTitle(hMainWnd)
+End Sub
+
+Sub EditorDoc_ClearDirty()
+    g_docDirty = 0
+    If hMainWnd <> 0 Then EditorDoc_UpdateTitle(hMainWnd)
+End Sub
+
+Function EditorDoc_LoadTextFile$(path As String) As String
+    Dim hFile As HANDLE
+    Dim fsiz As Long
+    Dim nRead As DWord
+    Dim p As *Byte
+
+    EditorDoc_LoadTextFile$ = ""
+    hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+
+    fsiz = GetFileSize(hFile, NULL)
+    If fsiz < 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+
+    p = malloc(fsiz + 1)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+
+    If fsiz > 0 Then
+        ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
+    End If
+    CloseHandle(hFile)
+    p[fsiz] = 0
+    EditorDoc_LoadTextFile$ = MakeStr(p)
+    free(p)
+End Function
+
+Function EditorDoc_WriteTextFile(path As String, text As String) As Long
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+    Dim n As Long
+
+    EditorDoc_WriteTextFile = 0
+    n = Len(text)
+    hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    If n > 0 Then
+        WriteFile(hFile, StrPtr(text), n, VarPtr(nWritten), ByVal NULL)
+    Else
+        nWritten = 0
+    End If
+    CloseHandle(hFile)
+    If nWritten = n Then EditorDoc_WriteTextFile = 1
+End Function
+
+Sub EditorDoc_New(hWnd As HWND)
+    g_docPath = ""
+    TextBuf_SetText("")
+    EditorUndo_Reset()
+    VirtualScroll_Init()
+    EditorDoc_ClearDirty()
+    EditorDoc_UpdateTitle(hWnd)
+    InvalidateRect(hWnd, ByVal 0, TRUE)
+End Sub
+
+Function EditorDoc_BrowseOpen$(hWnd As HWND) As String
+    Dim ofn As OPENFILENAME
+    Dim fileName[MAX_PATH - 1] As Byte
+    Dim filter As String
+
+    EditorDoc_BrowseOpen$ = ""
+    FillMemory(VarPtr(fileName), MAX_PATH, 0)
+
+    filter = "Source (*.sbp;*.abp;*.bas)" + Chr$(0) + "*.sbp;*.abp;*.bas" + Chr$(0) + "All (*.*)" + Chr$(0) + "*.*" + Chr$(0) + Chr$(0)
+
+    FillMemory(VarPtr(ofn), Len(ofn), 0)
+    ofn.lStructSize = Len(ofn)
+    ofn.hwndOwner = hWnd
+    ofn.lpstrFilter = StrPtr(filter)
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = fileName
+    ofn.nMaxFile = MAX_PATH
+    ofn.Flags = OFN_FILEMUSTEXIST Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER
+
+    If GetOpenFileName(ofn) <> 0 Then
+        EditorDoc_BrowseOpen$ = MakeStr(fileName)
+    End If
+End Function
+
+Function EditorDoc_BrowseSave$(hWnd As HWND) As String
+    Dim ofn As OPENFILENAME
+    Dim fileName[MAX_PATH - 1] As Byte
+    Dim filter As String
+    Dim defExt As String
+    Dim i As Long
+    Dim n As Long
+    Dim p As *Byte
+
+    EditorDoc_BrowseSave$ = ""
+    FillMemory(VarPtr(fileName), MAX_PATH, 0)
+    defExt = "sbp"
+
+    If Len(g_docPath) > 0 Then
+        n = Len(g_docPath)
+        If n >= MAX_PATH Then n = MAX_PATH - 1
+        p = StrPtr(g_docPath)
+        For i = 0 To n - 1
+            fileName[i] = p[i]
+        Next
+        fileName[n] = 0
+    End If
+
+    filter = "Source (*.sbp;*.abp;*.bas)" + Chr$(0) + "*.sbp;*.abp;*.bas" + Chr$(0) + "All (*.*)" + Chr$(0) + "*.*" + Chr$(0) + Chr$(0)
+
+    FillMemory(VarPtr(ofn), Len(ofn), 0)
+    ofn.lStructSize = Len(ofn)
+    ofn.hwndOwner = hWnd
+    ofn.lpstrFilter = StrPtr(filter)
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = fileName
+    ofn.nMaxFile = MAX_PATH
+    ofn.Flags = OFN_OVERWRITEPROMPT Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER
+    ofn.lpstrDefExt = StrPtr(defExt)
+
+    If GetSaveFileName(ofn) <> 0 Then
+        EditorDoc_BrowseSave$ = MakeStr(fileName)
+    End If
+End Function
+
+Function EditorDoc_SaveAs(hWnd As HWND) As Long
+    Dim path As String
+
+    EditorDoc_SaveAs = 0
+    path = EditorDoc_BrowseSave$(hWnd)
+    If Len(path) = 0 Then Exit Function
+    If EditorDoc_WriteTextFile(path, TextBuf_GetConfirmed$()) = 0 Then
+        MessageBox(hWnd, "Failed to save file.", "editor", MB_OK)
+        Exit Function
+    End If
+    g_docPath = path
+    EditorDoc_ClearDirty()
+    EditorDoc_UpdateTitle(hWnd)
+    EditorDoc_SaveAs = 1
+End Function
+
+Function EditorDoc_Save(hWnd As HWND) As Long
+    EditorDoc_Save = 0
+    If Len(g_docPath) = 0 Then
+        EditorDoc_Save = EditorDoc_SaveAs(hWnd)
+        Exit Function
+    End If
+    If EditorDoc_WriteTextFile(g_docPath, TextBuf_GetConfirmed$()) = 0 Then
+        MessageBox(hWnd, "Failed to save file.", "editor", MB_OK)
+        Exit Function
+    End If
+    EditorDoc_ClearDirty()
+    EditorDoc_UpdateTitle(hWnd)
+    EditorDoc_Save = 1
+End Function
+
+Sub EditorDoc_Open(hWnd As HWND)
+    Dim path As String
+    Dim text As String
+
+    path = EditorDoc_BrowseOpen$(hWnd)
+    If Len(path) = 0 Then Exit Sub
+
+    text = EditorDoc_LoadTextFile$(path)
+    g_docPath = path
+    TextBuf_SetText(text)
+    EditorUndo_Reset()
+    VirtualScroll_Init()
+    EditorDoc_ClearDirty()
+    EditorDoc_UpdateTitle(hWnd)
+    InvalidateRect(hWnd, ByVal 0, TRUE)
+End Sub
+
+Function EditorDoc_EnsureSaved(hWnd As HWND) As Long
+    EditorDoc_EnsureSaved = EditorDoc_Save(hWnd)
+End Function

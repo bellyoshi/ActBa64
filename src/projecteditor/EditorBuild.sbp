@@ -1,0 +1,237 @@
+Declare Function EditorBuild_CreateProcess Lib "kernel32" Alias "CreateProcessA" (ByVal lpApplicationName As Long, ByVal lpCommandLine As *Byte, ByVal lpProcessAttributes As Long, ByVal lpThreadAttributes As Long, ByVal bInheritHandles As Long, ByVal dwCreationFlags As DWord, ByVal lpEnvironment As Long, ByVal lpCurrentDirectory As Long, ByRef lpStartupInfo As STARTUPINFO, ByRef lpProcessInformation As PROCESS_INFORMATION) As Long
+Declare Function EditorBuild_CreatePipe Lib "kernel32" Alias "CreatePipe" (ByRef hReadPipe As HANDLE, ByRef hWritePipe As HANDLE, ByRef lpPipeAttributes As SECURITY_ATTRIBUTES, ByVal nSize As Long) As Long
+Declare Function EditorBuild_SetHandleInformation Lib "kernel32" Alias "SetHandleInformation" (ByVal hObject As HANDLE, ByVal dwMask As DWord, ByVal dwFlags As DWord) As Long
+
+Const EDITORBUILD_HANDLE_FLAG_INHERIT = 1
+
+Function EditorBuild_ExeDir$() As String
+    Dim buf As *Byte
+    Dim s As String
+    Dim n As Long
+    Dim i As Long
+    Dim lastSlash As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    EditorBuild_ExeDir$ = ""
+    buf = malloc(260)
+    If buf = 0 Then Exit Function
+    n = GetModuleFileName(NULL, buf, 260)
+    If n <= 0 Then
+        free(buf)
+        Exit Function
+    End If
+    lastSlash = -1
+    bp = VarPtr(tmp)
+    For i = 0 To n - 1
+        bp[0] = buf[i]
+        tmp = tmp And &HFF
+        If tmp = 92 Or tmp = 47 Then lastSlash = i
+    Next
+    If lastSlash >= 0 Then
+        buf[lastSlash + 1] = 0
+        EditorBuild_ExeDir$ = MakeStr(buf)
+    End If
+    free(buf)
+End Function
+
+Function EditorBuild_ActBa64Path$() As String
+    Dim dir As String
+    dir = EditorBuild_ExeDir$()
+    If Len(dir) = 0 Then
+        EditorBuild_ActBa64Path$ = "actba64.exe"
+    Else
+        EditorBuild_ActBa64Path$ = dir + "actba64.exe"
+    End If
+End Function
+
+Function EditorBuild_ExePathFromDoc$() As String
+    Dim exePath As String
+    Dim p As Long
+
+    exePath = g_docPath
+    p = Len(exePath)
+    While p > 0
+        If Mid$(exePath, p, 1) = "." Then
+            EditorBuild_ExePathFromDoc$ = Left$(exePath, p - 1) + ".exe"
+            Exit Function
+        End If
+        p = p - 1
+    Wend
+    EditorBuild_ExePathFromDoc$ = g_docPath + ".exe"
+End Function
+
+Function EditorBuild_QuoteArg$(s As String) As String
+    Dim i As Long
+    Dim need As Long
+
+    need = 0
+    For i = 1 To Len(s)
+        If Mid$(s, i, 1) = " " Then
+            need = 1
+            Exit For
+        End If
+    Next
+    If need <> 0 Then
+        EditorBuild_QuoteArg$ = Chr$(34) + s + Chr$(34)
+    Else
+        EditorBuild_QuoteArg$ = s
+    End If
+End Function
+
+Function EditorBuild_CompileArgs$() As String
+    Dim outExe As String
+    outExe = EditorBuild_ExePathFromDoc$()
+    EditorBuild_CompileArgs$ = EditorBuild_QuoteArg$(g_docPath) + " -o " + EditorBuild_QuoteArg$(outExe)
+End Function
+
+Function EditorBuild_ReadPipeAll$(hRead As HANDLE) As String
+    Dim cap As Long
+    Dim used As Long
+    Dim nRead As DWord
+    Dim buf As *Byte
+    Dim tmp As *Byte
+    Dim chunk[1023] As Byte
+    Dim i As Long
+
+    EditorBuild_ReadPipeAll$ = ""
+    cap = 4096
+    used = 0
+    buf = malloc(cap)
+    If buf = 0 Then Exit Function
+
+    While ReadFile(hRead, chunk, 1024, VarPtr(nRead), ByVal NULL) <> 0
+        If nRead = 0 Then Exit While
+        If used + nRead + 1 > cap Then
+            While used + nRead + 1 > cap
+                cap = cap * 2
+            Wend
+            tmp = malloc(cap)
+            If tmp = 0 Then
+                free(buf)
+                Exit Function
+            End If
+            If used > 0 Then memcpy(tmp, buf, used)
+            free(buf)
+            buf = tmp
+        End If
+        For i = 0 To nRead - 1
+            buf[used + i] = chunk[i]
+        Next
+        used = used + nRead
+    Wend
+
+    buf[used] = 0
+    EditorBuild_ReadPipeAll$ = MakeStr(buf)
+    free(buf)
+End Function
+
+Function EditorBuild_RunCapture(cmdLine As String, ByRef outText As String, ByRef exitCode As Long) As Long
+    Dim sa As SECURITY_ATTRIBUTES
+    Dim si As STARTUPINFO
+    Dim pi As PROCESS_INFORMATION
+    Dim hRead As HANDLE
+    Dim hWrite As HANDLE
+    Dim cmd As String
+    Dim pCmd As *Byte
+    Dim code As DWord
+
+    EditorBuild_RunCapture = 0
+    outText = ""
+    exitCode = 1
+
+    FillMemory(VarPtr(sa), Len(sa), 0)
+    sa.nLength = Len(sa)
+    sa.bInheritHandle = 1
+    hRead = 0
+    hWrite = 0
+    If EditorBuild_CreatePipe(hRead, hWrite, sa, 0) = 0 Then Exit Function
+    EditorBuild_SetHandleInformation(hRead, EDITORBUILD_HANDLE_FLAG_INHERIT, 0)
+
+    FillMemory(VarPtr(si), Len(si), 0)
+    FillMemory(VarPtr(pi), Len(pi), 0)
+    si.cb = Len(si)
+    si.dwFlags = STARTF_USESHOWWINDOW Or STARTF_USESTDHANDLES
+    si.wShowWindow = SW_HIDE
+    si.hStdOutput = hWrite
+    si.hStdError = hWrite
+    si.hStdInput = 0
+
+    cmd = cmdLine
+    pCmd = StrPtr(cmd)
+    If EditorBuild_CreateProcess(0, pCmd, 0, 0, 1, CREATE_NO_WINDOW, 0, 0, si, pi) = 0 Then
+        CloseHandle(hRead)
+        CloseHandle(hWrite)
+        Exit Function
+    End If
+
+    CloseHandle(hWrite)
+    CloseHandle(pi.hThread)
+
+    outText = EditorBuild_ReadPipeAll$(hRead)
+    CloseHandle(hRead)
+
+    WaitForSingleObject(pi.hProcess, INFINITE)
+    code = 1
+    GetExitCodeProcess(pi.hProcess, code)
+    exitCode = code
+    CloseHandle(pi.hProcess)
+    EditorBuild_RunCapture = 1
+End Function
+
+Function EditorBuild_DoCompile(hWnd As HWND) As Long
+    Dim actba As String
+    Dim cmd As String
+    Dim exitCode As Long
+    Dim outText As String
+    Dim msg As String
+
+    EditorBuild_DoCompile = 0
+    actba = EditorBuild_ActBa64Path$()
+    If EditorDoc_EnsureSaved(hWnd) = 0 Then Exit Function
+
+    MessageWnd_Open(hWnd)
+    MessageWnd_SetText("Compiling..." + Chr$(13) + Chr$(10))
+
+    cmd = EditorBuild_QuoteArg$(actba) + " " + EditorBuild_CompileArgs$()
+    If EditorBuild_RunCapture(cmd, outText, exitCode) = 0 Then
+        MessageWnd_SetText("Failed to launch actba64.exe (place beside editor.exe)." + Chr$(13) + Chr$(10))
+        Exit Function
+    End If
+
+    If Len(outText) = 0 Then
+        If exitCode = 0 Then
+            msg = "Compile succeeded." + Chr$(13) + Chr$(10)
+        Else
+            msg = "Compile failed. (exit=" + Str$(exitCode) + ")" + Chr$(13) + Chr$(10)
+        End If
+    Else
+        msg = outText
+        If Right$(msg, 1) <> Chr$(10) Then msg = msg + Chr$(13) + Chr$(10)
+        If exitCode = 0 Then
+            msg = msg + "Compile succeeded." + Chr$(13) + Chr$(10)
+        Else
+            msg = msg + "Compile failed. (exit=" + Str$(exitCode) + ")" + Chr$(13) + Chr$(10)
+        End If
+    End If
+    MessageWnd_SetText(msg)
+
+    If exitCode <> 0 Then Exit Function
+    EditorBuild_DoCompile = 1
+End Function
+
+Sub EditorBuild_Compile(hWnd As HWND)
+    EditorBuild_DoCompile(hWnd)
+End Sub
+
+Sub EditorBuild_Run(hWnd As HWND)
+    Dim exePath As String
+
+    If EditorBuild_DoCompile(hWnd) = 0 Then Exit Sub
+
+    exePath = EditorBuild_ExePathFromDoc$()
+    MessageWnd_Append("Running " + exePath + Chr$(13) + Chr$(10))
+    If ShellExecute(hWnd, "open", exePath, 0, 0, SW_SHOWNORMAL) <= 32 Then
+        MessageWnd_Append("Failed to run program." + Chr$(13) + Chr$(10))
+    End If
+End Sub

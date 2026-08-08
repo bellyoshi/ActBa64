@@ -1,0 +1,88 @@
+Const UNDO_MAX = 64
+
+Dim g_undoText[64] As String
+Dim g_undoCount As Long
+Dim g_undoIndex As Long
+Dim g_undoSuppress As Long
+Dim g_undoCoalesce As Long
+
+Sub EditorUndo_Suppress(ByVal onOff As Long)
+    g_undoSuppress = onOff
+End Sub
+
+Sub EditorUndo_Push(s As String)
+    Dim i As Long
+
+    If g_undoIndex < g_undoCount - 1 Then
+        For i = g_undoIndex + 1 To g_undoCount - 1
+            g_undoText[i] = ""
+        Next
+        g_undoCount = g_undoIndex + 1
+    End If
+
+    If g_undoCount >= UNDO_MAX Then
+        For i = 0 To UNDO_MAX - 2
+            g_undoText[i] = g_undoText[i + 1]
+        Next
+        g_undoCount = UNDO_MAX - 1
+        If g_undoIndex > 0 Then g_undoIndex = g_undoIndex - 1
+    End If
+
+    g_undoIndex = g_undoCount
+    g_undoText[g_undoIndex] = s
+    g_undoCount = g_undoCount + 1
+End Sub
+
+Sub EditorUndo_Reset()
+    Dim i As Long
+    For i = 0 To UNDO_MAX - 1
+        g_undoText[i] = ""
+    Next
+    g_undoCount = 0
+    g_undoIndex = -1
+    g_undoCoalesce = 0
+    EditorUndo_Push(TextBuf_GetConfirmed$())
+End Sub
+
+Sub EditorUndo_BeforeEdit()
+    If g_undoSuppress <> 0 Then Exit Sub
+    If g_undoCoalesce <> 0 Then Exit Sub
+    If g_undoCount <= 0 Then EditorUndo_Reset()
+    g_undoCoalesce = 1
+End Sub
+
+Sub EditorUndo_EndCoalesce()
+    If g_undoCoalesce = 0 Then Exit Sub
+    g_undoCoalesce = 0
+    If g_undoSuppress <> 0 Then Exit Sub
+    If TextBuf_GetConfirmed$() <> g_undoText[g_undoIndex] Then
+        EditorUndo_Push(TextBuf_GetConfirmed$())
+    End If
+End Sub
+
+Sub EditorUndo_ApplyIndex()
+    EditorUndo_Suppress(1)
+    TextBuf_SetText(g_undoText[g_undoIndex])
+    EditorUndo_Suppress(0)
+    g_undoCoalesce = 0
+End Sub
+
+Sub EditorUndo_Undo()
+    If g_undoCount <= 0 Then EditorUndo_Reset()
+
+    g_undoCoalesce = 0
+    If TextBuf_GetConfirmed$() <> g_undoText[g_undoIndex] Then
+        EditorUndo_ApplyIndex()
+        Exit Sub
+    End If
+
+    If g_undoIndex <= 0 Then Exit Sub
+    g_undoIndex = g_undoIndex - 1
+    EditorUndo_ApplyIndex()
+End Sub
+
+Sub EditorUndo_Redo()
+    If g_undoIndex >= g_undoCount - 1 Then Exit Sub
+    g_undoIndex = g_undoIndex + 1
+    EditorUndo_ApplyIndex()
+End Sub

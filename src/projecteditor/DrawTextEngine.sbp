@@ -1,0 +1,180 @@
+Dim g_caretX As Long
+Dim g_caretY As Long
+Dim g_caretCreated As Long
+
+Sub EditorCaret_Create(hWnd As HWND)
+    If g_caretCreated <> 0 Then Exit Sub
+    CreateCaret(hWnd, NULL, 2, VS_LINE_HEIGHT - 2)
+    g_caretCreated = 1
+    ShowCaret(hWnd)
+End Sub
+
+Sub EditorCaret_Destroy()
+    If g_caretCreated = 0 Then Exit Sub
+    DestroyCaret()
+    g_caretCreated = 0
+End Sub
+
+Sub EditorCaret_Update(hDC As HDC, hWnd As HWND)
+    Dim curLine As Long
+    Dim prefix As String
+    Dim sz As SIZE
+    Dim visibleRows As Long
+    Dim lastLine As Long
+
+    curLine = TextBuf_CursorLine()
+    visibleRows = VirtualScroll_VisibleRows(hWnd)
+    lastLine = g_viewTopLine + visibleRows - 1
+
+    If curLine < g_viewTopLine Or curLine > lastLine Then
+        g_caretX = -10
+        g_caretY = -10
+    Else
+        prefix = TextBuf_GetTextBeforeCursorOnLine$()
+        If Len(g_strComp) > 0 Then
+            prefix = prefix & g_strComp
+        End If
+
+        sz.cx = 0
+        sz.cy = 0
+        If Len(prefix) > 0 Then
+            GetTextExtentPoint32(hDC, prefix, Len(prefix), sz)
+        End If
+
+        g_caretX = VS_MARGIN_X + sz.cx
+        g_caretY = VS_MARGIN_Y + (curLine - g_viewTopLine) * VS_LINE_HEIGHT
+    End If
+
+    If g_caretCreated <> 0 Then
+        SetCaretPos(g_caretX, g_caretY)
+    End If
+End Sub
+
+Sub EditorHitTestClick(hWnd As HWND, ByVal x As Long, ByVal y As Long)
+    Dim hDC As HDC
+    Dim hFontMono As HFONT
+    Dim hFontOld As HFONT
+    Dim lineNo As Long
+    Dim lineCount As Long
+    Dim lineStart As Long
+    Dim lineEnd As Long
+    Dim i As Long
+    Dim n As Long
+    Dim b As Long
+    Dim best As Long
+    Dim prev As Long
+    Dim prefix As String
+    Dim sz As SIZE
+    Dim prevCx As Long
+    Dim targetX As Long
+
+    lineCount = TextBuf_LineCount()
+    If lineCount < 1 Then Exit Sub
+
+    If y < VS_MARGIN_Y Then
+        lineNo = g_viewTopLine
+    Else
+        lineNo = g_viewTopLine + (y - VS_MARGIN_Y) \ VS_LINE_HEIGHT
+    End If
+    If lineNo < 1 Then lineNo = 1
+    If lineNo > lineCount Then lineNo = lineCount
+
+    lineStart = TextBuf_GetLineStart(lineNo)
+    lineEnd = TextBuf_GetLineEnd(lineNo)
+    targetX = x - VS_MARGIN_X
+    If targetX <= 0 Then
+        TextBuf_MoveCursorTo(lineStart)
+        TextBuf_SyncPreferredCol()
+        Exit Sub
+    End If
+
+    hDC = GetDC(hWnd)
+    hFontMono = EditorFont_Create(-16)
+    hFontOld = SelectObject(hDC, hFontMono)
+
+    best = lineStart
+    prev = lineStart
+    prevCx = 0
+    i = lineStart
+    While i < lineEnd
+        b = TextBuf_GetByte(i)
+        If IsSjisLeadByte(b) <> 0 And i + 1 < lineEnd Then
+            n = 2
+        Else
+            n = 1
+        End If
+        prev = i
+        i = i + n
+        prefix = TextBuf_GetLinePrefix$(lineNo, i)
+        sz.cx = 0
+        sz.cy = 0
+        If Len(prefix) > 0 Then
+            GetTextExtentPoint32(hDC, prefix, Len(prefix), sz)
+        End If
+        If sz.cx >= targetX Then
+            If targetX - prevCx <= sz.cx - targetX Then
+                best = prev
+            Else
+                best = i
+            End If
+            Exit While
+        End If
+        best = i
+        prevCx = sz.cx
+    Wend
+
+    SelectObject(hDC, hFontOld)
+    DeleteObject(hFontMono)
+    ReleaseDC(hWnd, hDC)
+
+    TextBuf_MoveCursorTo(best)
+    TextBuf_SyncPreferredCol()
+End Sub
+
+Sub DrawTextEngine(hDC As HDC, hWnd As HWND)
+    Dim hFontMono As HFONT
+    Dim hFontOld As HFONT
+    Dim hBrush As HBRUSH
+    Dim rect As RECT
+    Dim lineCount As Long
+    Dim visibleRows As Long
+    Dim lineNo As Long
+    Dim lastLine As Long
+    Dim y As Long
+    Dim lineStr As String
+    Dim curLine As Long
+
+    GetClientRect(hWnd, rect)
+    hBrush = CreateSolidBrush(RGB(255, 255, 255))
+    FillRect(hDC, rect, hBrush)
+    DeleteObject(hBrush)
+
+    VirtualScroll_Clamp(hWnd)
+    lineCount = TextBuf_LineCount()
+    visibleRows = VirtualScroll_VisibleRows(hWnd)
+    lastLine = g_viewTopLine + visibleRows - 1
+    If lastLine > lineCount Then lastLine = lineCount
+    curLine = TextBuf_CursorLine()
+
+    hFontMono = EditorFont_Create(-16)
+    hFontOld = SelectObject(hDC, hFontMono)
+    SetBkMode(hDC, TRANSPARENT)
+
+    lineNo = g_viewTopLine
+    While lineNo <= lastLine
+        y = VS_MARGIN_Y + (lineNo - g_viewTopLine) * VS_LINE_HEIGHT
+        lineStr = TextBuf_GetLineText$(lineNo)
+        If lineNo = curLine And Len(g_strComp) > 0 Then
+            lineStr = lineStr & g_strComp
+        End If
+        If Len(lineStr) > 0 Then
+            Hl_DrawLine(hDC, VS_MARGIN_X, y, lineStr)
+        End If
+        lineNo = lineNo + 1
+    Wend
+
+    EditorCaret_Update(hDC, hWnd)
+
+    SelectObject(hDC, hFontOld)
+    DeleteObject(hFontMono)
+End Sub

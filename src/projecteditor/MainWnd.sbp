@@ -1,0 +1,239 @@
+Declare Function ImmGetContext Lib "imm32.dll" (ByVal hWnd As HWND) As Long
+Declare Function ImmReleaseContext Lib "imm32.dll" (ByVal hWnd As HWND, ByVal hIMC As Long) As Long
+Declare Function ImmGetCompositionStringA Lib "imm32.dll" (ByVal hIMC As Long, ByVal dwIndex As Long, ByVal lpBuf As *Byte, ByVal dwBufLen As Long) As Long
+Const GCS_RESULTSTR = &H0800
+Const GCS_COMPSTR   = &H0008
+
+Type POINT
+    x As Long
+    y As Long
+End Type
+
+Type COMPOSITIONFORM
+    dwStyle As Long
+    ptCurrentPos As POINT
+    rcArea As RECT
+End Type
+
+Declare Function ImmSetCompositionWindow Lib "imm32.dll" (ByVal hIMC As Long, lpCOMPOSITIONFORM As *COMPOSITIONFORM) As Long
+
+Const CFS_POINT = &H0002
+
+Sub UpdateImePosition(hWnd As HWND, x As Long, y As Long)
+    Dim hIMC As Long
+    Dim cf As COMPOSITIONFORM
+
+    hIMC = ImmGetContext(hWnd)
+    If hIMC <> 0 Then
+        cf.dwStyle = CFS_POINT
+        cf.ptCurrentPos.x = x
+        cf.ptCurrentPos.y = y
+        ImmSetCompositionWindow(hIMC, VarPtr(cf))
+        ImmReleaseContext(hWnd, hIMC)
+    End If
+End Sub
+
+Function ImmCompToStr$(hIMC As Long, dwIndex As Long) As String
+    Dim n As Long
+    Dim buf As *Byte
+
+    ImmCompToStr$ = ""
+    n = ImmGetCompositionStringA(hIMC, dwIndex, 0, 0)
+    If n <= 0 Then Exit Function
+
+    buf = malloc(n + 1)
+    If buf = 0 Then Exit Function
+
+    ImmGetCompositionStringA(hIMC, dwIndex, buf, n)
+    buf[n] = 0
+    ImmCompToStr$ = MakeStr(buf)
+    free(buf)
+End Function
+
+Function WheelDeltaFromWParam(ByVal wParam As WPARAM) As Long
+    Dim d As Long
+    d = (wParam \ 65536) And 65535
+    If d >= 32768 Then d = d - 65536
+    WheelDeltaFromWParam = d
+End Function
+
+Sub EditorInvalidate(hWnd As HWND)
+    EditorUndo_EndCoalesce()
+    coreBridgeEnsureCursorVisible(hWnd)
+    InvalidateRect(hWnd, ByVal 0, TRUE)
+End Sub
+
+Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
+    Select Case dwMsg
+
+        Case WM_CHAR
+            If wParam = VK_BACK Then
+                coreBridgeDeleteCharBeforeCursor()
+            ElseIf wParam = 13 Then
+                TextBuf_AppendChar(10)
+            ElseIf wParam >= 32 Then
+                TextBuf_AppendChar(wParam)
+            End If
+            EditorInvalidate(hWnd)
+
+        Case WM_KEYDOWN
+            If wParam = VK_LEFT Then
+                coreBridgeMoveCursor("left")
+                EditorInvalidate(hWnd)
+            ElseIf wParam = VK_RIGHT Then
+                coreBridgeMoveCursor("right")
+                EditorInvalidate(hWnd)
+            ElseIf wParam = VK_UP Then
+                coreBridgeMoveCursor("up")
+                EditorInvalidate(hWnd)
+            ElseIf wParam = VK_DOWN Then
+                coreBridgeMoveCursor("down")
+                EditorInvalidate(hWnd)
+            ElseIf wParam = VK_PRIOR Then
+                coreBridgeScrollBy(hWnd, -VirtualScroll_VisibleRows(hWnd))
+                InvalidateRect(hWnd, ByVal 0, TRUE)
+            ElseIf wParam = VK_NEXT Then
+                coreBridgeScrollBy(hWnd, VirtualScroll_VisibleRows(hWnd))
+                InvalidateRect(hWnd, ByVal 0, TRUE)
+            End If
+
+        Case WM_LBUTTONDOWN
+            Dim clickX As Long
+            Dim clickY As Long
+            clickX = lParam And 65535
+            If clickX >= 32768 Then clickX = clickX - 65536
+            clickY = (lParam \ 65536) And 65535
+            If clickY >= 32768 Then clickY = clickY - 65536
+            SetFocus(hWnd)
+            coreBridgeClick(hWnd, clickX, clickY)
+            EditorInvalidate(hWnd)
+            MainWndProc = 0
+            Exit Function
+
+        Case WM_MOUSEWHEEL
+            If WheelDeltaFromWParam(wParam) > 0 Then
+                coreBridgeScrollBy(hWnd, -3)
+            Else
+                coreBridgeScrollBy(hWnd, 3)
+            End If
+            InvalidateRect(hWnd, ByVal 0, TRUE)
+            MainWndProc = 0
+            Exit Function
+
+        Case WM_IME_COMPOSITION
+            Dim hIMC As Long
+            hIMC = ImmGetContext(hWnd)
+
+            If hIMC <> 0 Then
+                If (lParam And GCS_RESULTSTR) <> 0 Then
+                    TextBuf_Append(ImmCompToStr$(hIMC, GCS_RESULTSTR))
+                    TextBuf_ClearComp()
+                ElseIf (lParam And GCS_COMPSTR) <> 0 Then
+                    TextBuf_SetComp(ImmCompToStr$(hIMC, GCS_COMPSTR))
+                End If
+
+                ImmReleaseContext(hWnd, hIMC)
+            End If
+
+            EditorInvalidate(hWnd)
+            MainWndProc = 0
+            Exit Function
+
+        Case WM_IME_ENDCOMPOSITION
+            TextBuf_ClearComp()
+            EditorInvalidate(hWnd)
+            MainWndProc = 0
+            Exit Function
+
+        Case WM_PAINT
+            Dim ps As PAINTSTRUCT
+            Dim hDC As HDC
+            hDC = BeginPaint(hWnd, ps)
+
+            DrawTextEngine(hDC, hWnd)
+
+            EndPaint(hWnd, ps)
+
+        Case WM_SETFOCUS
+            EditorCaret_Create(hWnd)
+            InvalidateRect(hWnd, ByVal 0, TRUE)
+
+        Case WM_KILLFOCUS
+            EditorCaret_Destroy()
+
+        Case WM_SIZE
+            VirtualScroll_Clamp(hWnd)
+            InvalidateRect(hWnd, ByVal 0, TRUE)
+
+        Case WM_IME_STARTCOMPOSITION
+            UpdateImePosition(hWnd, g_caretX, g_caretY)
+            MainWndProc = 0
+            Exit Function
+    End Select
+
+	MainWndProc=EventCall_MainWnd(hWnd,dwMsg,wParam,lParam)
+End Function
+
+Sub MainWnd_Destroy()
+	EditorCaret_Destroy()
+	EditorFont_Shutdown()
+	TextBuf_Destroy()
+	editor_DestroyObjects()
+	PostQuitMessage(0)
+End Sub
+
+Sub MainWnd_IDM_FILENEW_MenuClick()
+    EditorUndo_EndCoalesce()
+    EditorDoc_New(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_FILEOPEN_MenuClick()
+    EditorUndo_EndCoalesce()
+    EditorDoc_Open(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_UNDO_MenuClick()
+    EditorUndo_Undo()
+    EditorDoc_MarkDirty()
+    EditorInvalidate(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_REDO_MenuClick()
+    EditorUndo_Redo()
+    EditorDoc_MarkDirty()
+    EditorInvalidate(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_CUT_MenuClick()
+    EditorClip_CutAll(hMainWnd)
+    EditorInvalidate(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_COPY_MenuClick()
+    EditorClip_CopyAll(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_PASTE_MenuClick()
+    EditorClip_Paste(hMainWnd)
+    EditorInvalidate(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_RUN_MenuClick()
+    EditorUndo_EndCoalesce()
+    EditorBuild_Run(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_COMPILE_MenuClick()
+    EditorUndo_EndCoalesce()
+    EditorBuild_Compile(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_SAVEAS_MenuClick()
+    EditorUndo_EndCoalesce()
+    EditorDoc_SaveAs(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_SAVE_MenuClick()
+    EditorUndo_EndCoalesce()
+    EditorDoc_Save(hMainWnd)
+End Sub
