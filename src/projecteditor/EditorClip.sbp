@@ -1,0 +1,61 @@
+Declare Function IsClipboardFormatAvailable Lib "user32.dll" (ByVal format As Long) As Long
+
+Sub EditorClip_CopyAll(hWnd As HWND)
+    Dim s As String
+    Dim n As Long
+    Dim hMem As HANDLE
+    Dim p As *Byte
+
+    s = TextBuf_GetConfirmed$()
+    n = Len(s)
+    If OpenClipboard(hWnd) = 0 Then Exit Sub
+    EmptyClipboard()
+    hMem = GlobalAlloc(GMEM_MOVEABLE, n + 1)
+    If hMem <> 0 Then
+        p = GlobalLock(hMem)
+        If p <> 0 Then
+            If n > 0 Then memcpy(p, StrPtr(s), n)
+            p[n] = 0
+            GlobalUnlock(hMem)
+            SetClipboardData(CF_TEXT, hMem)
+        End If
+    End If
+    CloseClipboard()
+End Sub
+
+Sub EditorClip_CutAll(hWnd As HWND)
+    EditorUndo_EndCoalesce()
+    EditorUndo_BeforeEdit()
+    EditorClip_CopyAll(hWnd)
+    TextBuf_SetText("")
+    EditorUndo_EndCoalesce()
+    EditorDoc_MarkDirty()
+End Sub
+
+Sub EditorClip_Paste(hWnd As HWND)
+    Dim hMem As HANDLE
+    Dim p As *Byte
+    Dim s As String
+
+    If IsClipboardFormatAvailable(CF_TEXT) = 0 Then Exit Sub
+    If OpenClipboard(hWnd) = 0 Then Exit Sub
+    hMem = GetClipboardData(CF_TEXT)
+    If hMem = 0 Then
+        CloseClipboard()
+        Exit Sub
+    End If
+    p = GlobalLock(hMem)
+    If p = 0 Then
+        CloseClipboard()
+        Exit Sub
+    End If
+    s = MakeStr(p)
+    GlobalUnlock(hMem)
+    CloseClipboard()
+
+    EditorUndo_EndCoalesce()
+    EditorUndo_BeforeEdit()
+    TextBuf_Append(s)
+    EditorUndo_EndCoalesce()
+    EditorDoc_MarkDirty()
+End Sub

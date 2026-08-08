@@ -1,0 +1,216 @@
+Const HL_KEYWORD = 1
+Const HL_COMMENT = 2
+Const HL_STRING = 3
+Const HL_NUMBER = 4
+Const HL_NORMAL = 0
+
+Function Hl_IsAlpha(ByVal b As Long) As Long
+    If (b >= 65 And b <= 90) Or (b >= 97 And b <= 122) Or b = 95 Then
+        Hl_IsAlpha = 1
+    Else
+        Hl_IsAlpha = 0
+    End If
+End Function
+
+Function Hl_IsDigit(ByVal b As Long) As Long
+    If b >= 48 And b <= 57 Then
+        Hl_IsDigit = 1
+    Else
+        Hl_IsDigit = 0
+    End If
+End Function
+
+Function Hl_IsHexDigit(ByVal b As Long) As Long
+    If Hl_IsDigit(b) <> 0 Then
+        Hl_IsHexDigit = 1
+    ElseIf (b >= 65 And b <= 70) Or (b >= 97 And b <= 102) Then
+        Hl_IsHexDigit = 1
+    Else
+        Hl_IsHexDigit = 0
+    End If
+End Function
+
+Function Hl_IsAlnum(ByVal b As Long) As Long
+    If Hl_IsAlpha(b) <> 0 Or Hl_IsDigit(b) <> 0 Then
+        Hl_IsAlnum = 1
+    Else
+        Hl_IsAlnum = 0
+    End If
+End Function
+
+Function Hl_Lower$(s As String) As String
+    Dim n As Long
+    Dim i As Long
+    Dim p As *Byte
+    Dim ch As Byte
+    Dim r As String
+
+    Hl_Lower$ = ""
+    n = Len(s)
+    If n <= 0 Then Exit Function
+    r = Mid$(s, 1, n)
+    p = StrPtr(r)
+    For i = 0 To n - 1
+        ch = p[i]
+        If ch >= 65 And ch <= 90 Then
+            ch = ch + 32
+        End If
+        p[i] = ch
+    Next
+    Hl_Lower$ = r
+End Function
+
+Function Hl_IsKeyword(s As String) As Long
+    Dim k As String
+    Hl_IsKeyword = 0
+    k = Hl_Lower$(s)
+    If k = "and" Or k = "or" Or k = "xor" Or k = "mod" Then Hl_IsKeyword = 1
+    If k = "if" Or k = "then" Or k = "elseif" Or k = "else" Or k = "end" Then Hl_IsKeyword = 1
+    If k = "dim" Or k = "const" Or k = "typedef" Or k = "type" Then Hl_IsKeyword = 1
+    If k = "sub" Or k = "function" Or k = "declare" Or k = "lib" Or k = "alias" Then Hl_IsKeyword = 1
+    If k = "while" Or k = "wend" Or k = "for" Or k = "next" Then Hl_IsKeyword = 1
+    If k = "do" Or k = "loop" Or k = "until" Or k = "select" Or k = "case" Then Hl_IsKeyword = 1
+    If k = "exit" Or k = "return" Or k = "print" Or k = "input" Then Hl_IsKeyword = 1
+    If k = "as" Or k = "byref" Or k = "byval" Or k = "to" Or k = "step" Then Hl_IsKeyword = 1
+    If k = "varptr" Or k = "addressof" Or k = "sizeof" Then Hl_IsKeyword = 1
+    If k = "long" Or k = "byte" Or k = "string" Or k = "integer" Or k = "dword" Then Hl_IsKeyword = 1
+    If k = "hwnd" Or k = "hdc" Or k = "true" Or k = "false" Or k = "null" Then Hl_IsKeyword = 1
+End Function
+
+Function Hl_ColorOf(ByVal kind As Long) As Long
+    If kind = HL_KEYWORD Then
+        Hl_ColorOf = RGB(0, 0, 200)
+    ElseIf kind = HL_COMMENT Then
+        Hl_ColorOf = RGB(0, 128, 0)
+    ElseIf kind = HL_STRING Then
+        Hl_ColorOf = RGB(163, 21, 21)
+    Else
+        Hl_ColorOf = RGB(0, 0, 0)
+    End If
+End Function
+
+Function Hl_MidBytes$(s As String, ByVal start1 As Long, ByVal n As Long) As String
+    Dim p As *Byte
+    Dim out As *Byte
+    Dim i As Long
+    Dim slen As Long
+
+    Hl_MidBytes$ = ""
+    slen = Len(s)
+    If start1 < 1 Or n <= 0 Or start1 > slen Then Exit Function
+    If start1 + n - 1 > slen Then n = slen - start1 + 1
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+    p = StrPtr(s)
+    For i = 0 To n - 1
+        out[i] = p[start1 - 1 + i]
+    Next
+    out[n] = 0
+    Hl_MidBytes$ = MakeStr(out)
+    free(out)
+End Function
+
+Sub Hl_Emit(hDC As HDC, ByRef x As Long, ByVal y As Long, seg As String, ByVal kind As Long)
+    Dim sz As SIZE
+    If Len(seg) <= 0 Then Exit Sub
+    SetTextColor(hDC, Hl_ColorOf(kind))
+    sz.cx = 0
+    sz.cy = 0
+    GetTextExtentPoint32(hDC, seg, Len(seg), sz)
+    TextOut(hDC, x, y, seg, Len(seg))
+    x = x + sz.cx
+End Sub
+
+Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String)
+    Dim n As Long
+    Dim i As Long
+    Dim b As Long
+    Dim startI As Long
+    Dim word As String
+    Dim seg As String
+    Dim p As *Byte
+    Dim tmp As Long
+    Dim bp As *Byte
+    Dim kind As Long
+
+    n = Len(lineStr)
+    If n <= 0 Then Exit Sub
+    p = StrPtr(lineStr)
+    bp = VarPtr(tmp)
+    i = 0
+
+    While i < n
+        bp[0] = p[i]
+        b = tmp And &HFF
+
+        If b = 39 Then
+            seg = Hl_MidBytes$(lineStr, i + 1, n - i)
+            Hl_Emit(hDC, x, y, seg, HL_COMMENT)
+            i = n
+
+        ElseIf b = 34 Then
+            startI = i
+            i = i + 1
+            While i < n
+                bp[0] = p[i]
+                b = tmp And &HFF
+                If b = 34 Then
+                    i = i + 1
+                    Exit While
+                End If
+                If IsSjisLeadByte(b) <> 0 And i + 1 < n Then
+                    i = i + 2
+                Else
+                    i = i + 1
+                End If
+            Wend
+            seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+            Hl_Emit(hDC, x, y, seg, HL_STRING)
+
+        ElseIf Hl_IsAlpha(b) <> 0 Then
+            startI = i
+            i = i + 1
+            While i < n
+                bp[0] = p[i]
+                b = tmp And &HFF
+                If Hl_IsAlnum(b) = 0 And b <> 36 Then Exit While
+                i = i + 1
+            Wend
+            word = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+            kind = HL_NORMAL
+            If Hl_IsKeyword(word) <> 0 Then kind = HL_KEYWORD
+            Hl_Emit(hDC, x, y, word, kind)
+
+        ElseIf Hl_IsDigit(b) <> 0 Or b = 38 Then
+            startI = i
+            If b = 38 Then
+                i = i + 1
+                If i < n Then
+                    bp[0] = p[i]
+                    b = tmp And &HFF
+                    If b = 72 Or b = 104 Then i = i + 1
+                End If
+            End If
+            While i < n
+                bp[0] = p[i]
+                b = tmp And &HFF
+                If Hl_IsHexDigit(b) = 0 Then Exit While
+                i = i + 1
+            Wend
+            seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+            Hl_Emit(hDC, x, y, seg, HL_NUMBER)
+
+        ElseIf IsSjisLeadByte(b) <> 0 And i + 1 < n Then
+            seg = Hl_MidBytes$(lineStr, i + 1, 2)
+            Hl_Emit(hDC, x, y, seg, HL_NORMAL)
+            i = i + 2
+
+        Else
+            seg = Hl_MidBytes$(lineStr, i + 1, 1)
+            Hl_Emit(hDC, x, y, seg, HL_NORMAL)
+            i = i + 1
+        End If
+    Wend
+
+    SetTextColor(hDC, Hl_ColorOf(HL_NORMAL))
+End Sub
