@@ -63,13 +63,15 @@ Function EditorBuild_CompileArgs$() As String
     EditorBuild_CompileArgs$ = Chr$(34) + g_docPath + Chr$(34) + " -o " + Chr$(34) + outExe + Chr$(34)
 End Function
 
-Function EditorBuild_LaunchHidden(cmdLine As String) As Long
+Function EditorBuild_LaunchHidden(cmdLine As String, ByVal waitDone As Long, ByRef exitCode As Long) As Long
     Dim si As STARTUPINFO
     Dim pi As PROCESS_INFORMATION
     Dim cmd As String
     Dim pCmd As *Byte
+    Dim code As DWord
 
     EditorBuild_LaunchHidden = 0
+    exitCode = 1
     FillMemory(VarPtr(si), Len(si), 0)
     FillMemory(VarPtr(pi), Len(pi), 0)
     si.cb = Len(si)
@@ -79,35 +81,52 @@ Function EditorBuild_LaunchHidden(cmdLine As String) As Long
     cmd = cmdLine
     pCmd = StrPtr(cmd)
     If EditorBuild_CreateProcess(0, pCmd, 0, 0, 0, CREATE_NO_WINDOW, 0, 0, si, pi) = 0 Then Exit Function
+
     CloseHandle(pi.hThread)
+    If waitDone <> 0 Then
+        WaitForSingleObject(pi.hProcess, INFINITE)
+        code = 1
+        GetExitCodeProcess(pi.hProcess, code)
+        exitCode = code
+    Else
+        exitCode = 0
+    End If
     CloseHandle(pi.hProcess)
     EditorBuild_LaunchHidden = 1
 End Function
 
-Sub EditorBuild_Compile(hWnd As HWND)
+Function EditorBuild_DoCompile(hWnd As HWND, ByVal waitDone As Long) As Long
     Dim actba As String
     Dim cmd As String
+    Dim exitCode As Long
 
+    EditorBuild_DoCompile = 0
     actba = EditorBuild_ActBa64Path$()
-    If EditorDoc_EnsureSaved(hWnd) = 0 Then Exit Sub
+    If EditorDoc_EnsureSaved(hWnd) = 0 Then Exit Function
 
     cmd = Chr$(34) + actba + Chr$(34) + " " + EditorBuild_CompileArgs$()
-    If EditorBuild_LaunchHidden(cmd) = 0 Then
+    If EditorBuild_LaunchHidden(cmd, waitDone, exitCode) = 0 Then
         MessageBox(hWnd, "Failed to launch actba64.exe (place beside editor.exe).", "editor", MB_OK)
+        Exit Function
     End If
+    If waitDone <> 0 And exitCode <> 0 Then
+        MessageBox(hWnd, "Compile failed.", "editor", MB_OK)
+        Exit Function
+    End If
+    EditorBuild_DoCompile = 1
+End Function
+
+Sub EditorBuild_Compile(hWnd As HWND)
+    EditorBuild_DoCompile(hWnd, 0)
 End Sub
 
 Sub EditorBuild_Run(hWnd As HWND)
-    Dim params As String
     Dim exePath As String
-    Dim actba As String
 
-    actba = EditorBuild_ActBa64Path$()
-    If EditorDoc_EnsureSaved(hWnd) = 0 Then Exit Sub
+    If EditorBuild_DoCompile(hWnd, 1) = 0 Then Exit Sub
 
     exePath = EditorBuild_ExePathFromDoc$()
-    params = "/C " + Chr$(34) + Chr$(34) + actba + Chr$(34) + " " + EditorBuild_CompileArgs$() + " && " + Chr$(34) + exePath + Chr$(34) + Chr$(34)
-    If ShellExecute(hWnd, "open", "cmd.exe", params, 0, SW_SHOWNORMAL) <= 32 Then
-        MessageBox(hWnd, "Failed to compile/run.", "editor", MB_OK)
+    If ShellExecute(hWnd, "open", exePath, 0, 0, SW_SHOWNORMAL) <= 32 Then
+        MessageBox(hWnd, "Failed to run program.", "editor", MB_OK)
     End If
 End Sub
