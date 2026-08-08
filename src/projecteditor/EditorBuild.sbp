@@ -1,0 +1,113 @@
+Declare Function EditorBuild_CreateProcess Lib "kernel32" Alias "CreateProcessA" (ByVal lpApplicationName As Long, ByVal lpCommandLine As *Byte, ByVal lpProcessAttributes As Long, ByVal lpThreadAttributes As Long, ByVal bInheritHandles As Long, ByVal dwCreationFlags As DWord, ByVal lpEnvironment As Long, ByVal lpCurrentDirectory As Long, ByRef lpStartupInfo As STARTUPINFO, ByRef lpProcessInformation As PROCESS_INFORMATION) As Long
+
+Function EditorBuild_ExeDir$() As String
+    Dim buf As *Byte
+    Dim s As String
+    Dim n As Long
+    Dim i As Long
+    Dim lastSlash As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+
+    EditorBuild_ExeDir$ = ""
+    buf = malloc(260)
+    If buf = 0 Then Exit Function
+    n = GetModuleFileName(NULL, buf, 260)
+    If n <= 0 Then
+        free(buf)
+        Exit Function
+    End If
+    lastSlash = -1
+    bp = VarPtr(tmp)
+    For i = 0 To n - 1
+        bp[0] = buf[i]
+        tmp = tmp And &HFF
+        If tmp = 92 Or tmp = 47 Then lastSlash = i
+    Next
+    If lastSlash >= 0 Then
+        buf[lastSlash + 1] = 0
+        EditorBuild_ExeDir$ = MakeStr(buf)
+    End If
+    free(buf)
+End Function
+
+Function EditorBuild_ActBa64Path$() As String
+    Dim dir As String
+    dir = EditorBuild_ExeDir$()
+    If Len(dir) = 0 Then
+        EditorBuild_ActBa64Path$ = "actba64.exe"
+    Else
+        EditorBuild_ActBa64Path$ = dir + "actba64.exe"
+    End If
+End Function
+
+Function EditorBuild_ExePathFromDoc$() As String
+    Dim exePath As String
+    Dim p As Long
+
+    exePath = g_docPath
+    p = Len(exePath)
+    While p > 0
+        If Mid$(exePath, p, 1) = "." Then
+            EditorBuild_ExePathFromDoc$ = Left$(exePath, p - 1) + ".exe"
+            Exit Function
+        End If
+        p = p - 1
+    Wend
+    EditorBuild_ExePathFromDoc$ = g_docPath + ".exe"
+End Function
+
+Function EditorBuild_CompileArgs$() As String
+    Dim outExe As String
+    outExe = EditorBuild_ExePathFromDoc$()
+    EditorBuild_CompileArgs$ = Chr$(34) + g_docPath + Chr$(34) + " -o " + Chr$(34) + outExe + Chr$(34)
+End Function
+
+Function EditorBuild_LaunchHidden(cmdLine As String) As Long
+    Dim si As STARTUPINFO
+    Dim pi As PROCESS_INFORMATION
+    Dim cmd As String
+    Dim pCmd As *Byte
+
+    EditorBuild_LaunchHidden = 0
+    FillMemory(VarPtr(si), Len(si), 0)
+    FillMemory(VarPtr(pi), Len(pi), 0)
+    si.cb = Len(si)
+    si.dwFlags = STARTF_USESHOWWINDOW
+    si.wShowWindow = SW_HIDE
+
+    cmd = cmdLine
+    pCmd = StrPtr(cmd)
+    If EditorBuild_CreateProcess(0, pCmd, 0, 0, 0, CREATE_NO_WINDOW, 0, 0, si, pi) = 0 Then Exit Function
+    CloseHandle(pi.hThread)
+    CloseHandle(pi.hProcess)
+    EditorBuild_LaunchHidden = 1
+End Function
+
+Sub EditorBuild_Compile(hWnd As HWND)
+    Dim actba As String
+    Dim cmd As String
+
+    actba = EditorBuild_ActBa64Path$()
+    If EditorDoc_EnsureSaved(hWnd) = 0 Then Exit Sub
+
+    cmd = Chr$(34) + actba + Chr$(34) + " " + EditorBuild_CompileArgs$()
+    If EditorBuild_LaunchHidden(cmd) = 0 Then
+        MessageBox(hWnd, "Failed to launch actba64.exe (place beside editor.exe).", "editor", MB_OK)
+    End If
+End Sub
+
+Sub EditorBuild_Run(hWnd As HWND)
+    Dim params As String
+    Dim exePath As String
+    Dim actba As String
+
+    actba = EditorBuild_ActBa64Path$()
+    If EditorDoc_EnsureSaved(hWnd) = 0 Then Exit Sub
+
+    exePath = EditorBuild_ExePathFromDoc$()
+    params = "/C " + Chr$(34) + Chr$(34) + actba + Chr$(34) + " " + EditorBuild_CompileArgs$() + " && " + Chr$(34) + exePath + Chr$(34) + Chr$(34)
+    If ShellExecute(hWnd, "open", "cmd.exe", params, 0, SW_SHOWNORMAL) <= 32 Then
+        MessageBox(hWnd, "Failed to compile/run.", "editor", MB_OK)
+    End If
+End Sub

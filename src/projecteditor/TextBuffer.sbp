@@ -169,6 +169,31 @@ Function TextBuf_GetLineEnd(ByVal lineNo As Long) As Long
     TextBuf_GetLineEnd = e
 End Function
 
+Function TextBuf_GetLinePrefix$(ByVal lineNo As Long, ByVal endIndex As Long) As String
+    Dim s As Long
+    Dim e As Long
+    Dim n As Long
+    Dim i As Long
+    Dim out As *Byte
+
+    TextBuf_GetLinePrefix$ = ""
+    s = TextBuf_GetLineStart(lineNo)
+    e = TextBuf_GetLineEnd(lineNo)
+    If endIndex < s Then Exit Function
+    If endIndex > e Then endIndex = e
+    n = endIndex - s
+    If n <= 0 Then Exit Function
+
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+    For i = 0 To n - 1
+        out[i] = TextBuf_GetByte(s + i)
+    Next
+    out[n] = 0
+    TextBuf_GetLinePrefix$ = MakeStr(out)
+    free(out)
+End Function
+
 Function TextBuf_GetLineText$(ByVal lineNo As Long) As String
     Dim s As Long
     Dim e As Long
@@ -223,6 +248,94 @@ Function TextBuf_CursorLine() As Long
     TextBuf_EnsureInit()
     TextBuf_CursorLine = TextBuf_GetLineAtIndex(g_textBuf.gap_start)
 End Function
+
+Dim g_preferredCol As Long
+
+Sub TextBuf_SyncPreferredCol()
+    Dim lineNo As Long
+    Dim s As Long
+
+    TextBuf_EnsureInit()
+    lineNo = TextBuf_CursorLine()
+    s = TextBuf_GetLineStart(lineNo)
+    g_preferredCol = g_textBuf.gap_start - s
+    If g_preferredCol < 0 Then g_preferredCol = 0
+End Sub
+
+Function TextBuf_SnapInLine(ByVal lineStart As Long, ByVal lineEnd As Long, ByVal desired As Long) As Long
+    Dim i As Long
+    Dim n As Long
+    Dim b As Long
+
+    If desired <= lineStart Then
+        TextBuf_SnapInLine = lineStart
+        Exit Function
+    End If
+    If desired >= lineEnd Then
+        TextBuf_SnapInLine = lineEnd
+        Exit Function
+    End If
+
+    i = lineStart
+    While i < lineEnd
+        b = TextBuf_GetByte(i)
+        If IsSjisLeadByte(b) <> 0 And i + 1 < lineEnd Then
+            n = 2
+        Else
+            n = 1
+        End If
+        If i + n > desired Then
+            TextBuf_SnapInLine = i
+            Exit Function
+        End If
+        i = i + n
+        If i = desired Then
+            TextBuf_SnapInLine = i
+            Exit Function
+        End If
+    Wend
+    TextBuf_SnapInLine = lineEnd
+End Function
+
+Function TextBuf_IndexFromLineCol(ByVal lineNo As Long, ByVal col As Long) As Long
+    Dim s As Long
+    Dim e As Long
+
+    TextBuf_IndexFromLineCol = 0
+    TextBuf_EnsureInit()
+    If lineNo < 1 Then lineNo = 1
+    If lineNo > TextBuf_LineCount() Then lineNo = TextBuf_LineCount()
+    s = TextBuf_GetLineStart(lineNo)
+    e = TextBuf_GetLineEnd(lineNo)
+    If col < 0 Then col = 0
+    TextBuf_IndexFromLineCol = TextBuf_SnapInLine(s, e, s + col)
+End Function
+
+Sub TextBuf_MoveCursorUp()
+    Dim lineNo As Long
+
+    TextBuf_EnsureInit()
+    lineNo = TextBuf_CursorLine()
+    If lineNo <= 1 Then
+        TextBuf_MoveCursorTo(TextBuf_GetLineStart(1))
+        Exit Sub
+    End If
+    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(lineNo - 1, g_preferredCol))
+End Sub
+
+Sub TextBuf_MoveCursorDown()
+    Dim lineNo As Long
+    Dim lineCount As Long
+
+    TextBuf_EnsureInit()
+    lineNo = TextBuf_CursorLine()
+    lineCount = TextBuf_LineCount()
+    If lineNo >= lineCount Then
+        TextBuf_MoveCursorTo(TextBuf_GetLineEnd(lineCount))
+        Exit Sub
+    End If
+    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(lineNo + 1, g_preferredCol))
+End Sub
 
 Function TextBuf_GetTextBeforeCursorOnLine$() As String
     Dim lineNo As Long
@@ -317,6 +430,7 @@ Sub TextBuf_InsertChar(ByVal c As Long)
     Dim bp As *Byte
 
     TextBuf_EnsureInit()
+    EditorUndo_BeforeEdit()
 
     If g_textBuf.gap_start = g_textBuf.gap_end Then
         TextBuf_GrowGap()
@@ -328,6 +442,8 @@ Sub TextBuf_InsertChar(ByVal c As Long)
     g_textBuf.buffer[g_textBuf.gap_start] = bp[0]
     g_textBuf.gap_start = g_textBuf.gap_start + 1
     TextBuf_RebuildLineOffsets()
+    TextBuf_SyncPreferredCol()
+    If g_undoSuppress = 0 Then EditorDoc_MarkDirty()
 End Sub
 
 Sub TextBuf_Delete()
@@ -339,6 +455,7 @@ Sub TextBuf_Delete()
 
     TextBuf_EnsureInit()
     If g_textBuf.gap_start <= 0 Then Exit Sub
+    EditorUndo_BeforeEdit()
 
     i = 0
     lastStart = 0
@@ -356,6 +473,8 @@ Sub TextBuf_Delete()
 
     g_textBuf.gap_start = lastStart
     TextBuf_RebuildLineOffsets()
+    TextBuf_SyncPreferredCol()
+    If g_undoSuppress = 0 Then EditorDoc_MarkDirty()
 End Sub
 
 Function TextBuf_PrevCharBytes() As Long
@@ -442,6 +561,7 @@ Sub TextBuf_MoveCursorLeft()
     n = TextBuf_PrevCharBytes()
     If n <= 0 Then Exit Sub
     TextBuf_MoveCursorTo(g_textBuf.gap_start - n)
+    TextBuf_SyncPreferredCol()
 End Sub
 
 Sub TextBuf_MoveCursorRight()
@@ -451,6 +571,7 @@ Sub TextBuf_MoveCursorRight()
     n = TextBuf_NextCharBytes()
     If n <= 0 Then Exit Sub
     TextBuf_MoveCursorTo(g_textBuf.gap_start + n)
+    TextBuf_SyncPreferredCol()
 End Sub
 
 Sub TextBuf_Append(s As String)
@@ -480,6 +601,18 @@ Sub TextBuf_Clear()
     g_textBuf.gap_end = g_textBuf.capacity
     g_strComp = ""
     LineOff_Init()
+    g_preferredCol = 0
+End Sub
+
+Sub TextBuf_SetText(s As String)
+    EditorUndo_Suppress(1)
+    TextBuf_Clear()
+    If Len(s) > 0 Then
+        TextBuf_Append(s)
+    End If
+    TextBuf_MoveCursorTo(0)
+    TextBuf_SyncPreferredCol()
+    EditorUndo_Suppress(0)
 End Sub
 
 Sub TextBuf_SetComp(s As String)
