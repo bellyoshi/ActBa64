@@ -14,19 +14,24 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     CompileIrToPe = 0
 
     builder = calloc(SizeOf(ImportBuilder))
-    If builder = NULL Then Exit Function
+    If builder = NULL Then
+        Print "error: out of memory (import builder)"
+        Exit Function
+    End If
     IbInit(builder)
 
     IrCollect(list, builder)
 
     idataBuf = calloc(65536)
     If idataBuf = NULL Then
+        Print "error: out of memory (.idata)"
         free(builder)
         Exit Function
     End If
 
     codeMem = calloc(1048576)
     If codeMem = NULL Then
+        Print "error: out of memory (.text)"
         free(idataBuf)
         free(builder)
         Exit Function
@@ -39,6 +44,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     cb.size = 0
     IrEmitCode(list, VarPtr(cb), builder)
     If cb.size >= cb.capacity Then
+        Print "error: code too large"
         free(codeMem)
         free(idataBuf)
         free(builder)
@@ -53,12 +59,14 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     cb.size = 0
     IrEmitCode(list, VarPtr(cb), builder)
     If cb.size >= cb.capacity Then
+        Print "error: code too large"
         free(codeMem)
         free(idataBuf)
         free(builder)
         Exit Function
     End If
     If AlignUp(cb.size, SECTION_ALIGN) <> textVirt Then
+        Print "error: code size unstable between emit passes"
         free(codeMem)
         free(idataBuf)
         free(builder)
@@ -67,6 +75,8 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
 
     If WritePe64(outPath, codeMem, cb.size, idataBuf, idataSize, builder, subsystem) <> 0 Then
         CompileIrToPe = 1
+    Else
+        Print "error: cannot write: " + MakeStr(outPath)
     End If
 
     free(codeMem)
@@ -82,7 +92,10 @@ Function CompileSource(src As *Byte, outPath As *Byte) As Long
     CompileSource = 0
 
     ast = AstCreate(AST_MAX_NODES)
-    If ast = NULL Then Exit Function
+    If ast = NULL Then
+        Print "error: out of memory (ast)"
+        Exit Function
+    End If
     If ParseSource(src, ast) = 0 Then
         AstFree(ast)
         Exit Function
@@ -90,12 +103,14 @@ Function CompileSource(src As *Byte, outPath As *Byte) As Long
 
     list = IrCreate(IR_MAX_OPS)
     If list = NULL Then
+        Print "error: out of memory (ir)"
         AstFree(ast)
         Exit Function
     End If
 
     subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI
     If AstToIr(ast, list, subsystem) = 0 Then
+        Print "error: codegen failed"
         IrFree(list)
         AstFree(ast)
         Exit Function
@@ -116,15 +131,22 @@ Function CompileToyFile(srcPath As *Byte, outPath As *Byte) As Long
 
     CompileToyFile = 0
     src = LoadFile(srcPath, srcSize)
-    If src = NULL Then Exit Function
+    If src = NULL Then
+        Print "error: cannot open: " + MakeStr(srcPath)
+        Exit Function
+    End If
     If srcSize <= 0 Then
+        Print "error: empty source: " + MakeStr(srcPath)
         free(src)
         Exit Function
     End If
 
     expanded = ExpandIncludes(src, srcSize, srcPath)
     free(src)
-    If expanded = NULL Then Exit Function
+    If expanded = NULL Then
+        Print "error: preprocess failed: " + MakeStr(srcPath)
+        Exit Function
+    End If
 
     CompileToyFile = CompileSource(expanded, outPath)
     free(expanded)
@@ -135,7 +157,10 @@ Function CompileToyPj(pjPath As *Byte, outPath As *Byte) As Long
 
     CompileToyPj = 0
     combined = CombinePjSources(pjPath)
-    If combined = NULL Then Exit Function
+    If combined = NULL Then
+        Print "error: cannot load project: " + MakeStr(pjPath)
+        Exit Function
+    End If
     CompileToyPj = CompileSource(combined, outPath)
     free(combined)
 End Function

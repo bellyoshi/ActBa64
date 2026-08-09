@@ -124,6 +124,8 @@ Const GENERIC_READ = &H80000000
 Dim a As Long
 Dim b = 3 As Long
 Dim c As Integer = 4
+Dim s$
+Dim t As String
 Dim p As *Byte
 Dim buf[259] As Byte
 Dim xs(7) As Long
@@ -131,6 +133,7 @@ Dim h As COFF_HEADER
 ```
 
 - **actba64** の `Const`: 整数リテラル（符号付き）中心。複雑な定数式は制限あり
+- **actba64** の `Dim name$`: `As String` 省略可（末尾 `$`）
 - **actba32**: より広い定数式。`Include\default` で組み込み定数を自動導入
 
 ### 3.2 手続き
@@ -197,6 +200,7 @@ Loop
 
 Print 式
 Print 式;
+Input 変数          ' actba64: String のみ。stdin から1行
 End
 ExitProcess(式)
 ```
@@ -211,7 +215,8 @@ ExitProcess(式)
 | `Exit Do` / `Exit While` | ○ | ○ |
 | `Exit For` | ✕ | ○ |
 | `Print` | ○ | ○ |
-| `Input` / `MsgBox` | ✕ | ○（ランタイム／API） |
+| `Input` | ○（**String のみ**） | ○（String / 数値） |
+| `MsgBox` | ✕ | ○（ランタイム／API） |
 
 ---
 
