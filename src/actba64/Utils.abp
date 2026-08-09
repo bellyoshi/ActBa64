@@ -25,28 +25,37 @@ Function GetCmd(cnt As Long, buf As *Byte) As Long
     cmd = GetCommandLine()
     cmdlen = lstrlen(cmd)
     If cmdlen > 4094 Then cmdlen = 4094
-    ' GetCommandLine のバッファは書き換え不可。作業用にコピーする
+    ' GetCommandLine buffer is read-only; copy first
     memcpy(VarPtr(line), cmd, cmdlen)
-    line[cmdlen] = &H20
-    line[cmdlen + 1] = 0
+    line[cmdlen] = 0
     buf[0] = 0
     cidx = 0
-    For n = 0 To cmdlen
-        If line[n] = &H20 And line[n + 1] = &H20 Then
-            memcpy(VarPtr(line[n]), VarPtr(line[n + 1]), cmdlen - n)
-            n = n - 1
-            cmdlen = cmdlen - 1
-        End If
-    Next
-    For n = 0 To cmdlen
-        m = 0
-        While line[n] <> &H20
-            If m < 259 Then
-                ctmp[m] = line[n]
-                m = m + 1
-            End If
+    n = 0
+    While n < cmdlen
+        While n < cmdlen And line[n] = 32
             n = n + 1
         Wend
+        If n >= cmdlen Then Exit While
+        m = 0
+        If line[n] = 34 Then
+            n = n + 1
+            While n < cmdlen And line[n] <> 34
+                If m < 259 Then
+                    ctmp[m] = line[n]
+                    m = m + 1
+                End If
+                n = n + 1
+            Wend
+            If n < cmdlen And line[n] = 34 Then n = n + 1
+        Else
+            While n < cmdlen And line[n] <> 32
+                If m < 259 Then
+                    ctmp[m] = line[n]
+                    m = m + 1
+                End If
+                n = n + 1
+            Wend
+        End If
         ctmp[m] = 0
         If cidx = cnt Then
             lstrcpy(buf, ctmp)
@@ -54,10 +63,9 @@ Function GetCmd(cnt As Long, buf As *Byte) As Long
             Exit Function
         End If
         cidx = cidx + 1
-    Next
+    Wend
     GetCmd = 0
 End Function
-
 Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
     Dim hFile As Long
     Dim fsiz As Long
