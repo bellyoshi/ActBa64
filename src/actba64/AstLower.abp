@@ -33,6 +33,7 @@ Type LowerCtx
     rtMidLab As Long
     rtStrLab As Long
     rtPrintLab As Long
+    rtInputLab As Long
 End Type
 
 Function LowToLower(c As Long) As Long
@@ -735,6 +736,13 @@ Function LowEnsureRtPrint(ctx As *LowerCtx) As Long
     LowEnsureRtPrint = ctx.rtPrintLab
 End Function
 
+Function LowEnsureRtInput(ctx As *LowerCtx) As Long
+    If ctx.rtInputLab < 0 Then
+        ctx.rtInputLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtInput = ctx.rtInputLab
+End Function
+
 Sub LowEmitRtCatBody(ctx As *LowerCtx)
     Dim list As *IrList
     Dim sApi(15) As Byte
@@ -1101,6 +1109,120 @@ Sub LowEmitRtPrintBody(ctx As *LowerCtx)
     lstrcpy(VarPtr(sApi), "WriteFile")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
     IrEmit(list, OP_ADD_RSP, 48, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' Input$ ― stdin から1行読み、ヒープ上の文字列を返す（CR 無視 / LF で終了）
+Sub LowEmitRtInputBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim sApi(15) As Byte
+    Dim labFail As Long
+    Dim labLoop As Long
+    Dim labDone As Long
+    Dim labSkipCr As Long
+
+    If ctx.rtInputLab < 0 Then Exit Sub
+    list = ctx.list
+    labFail = LowNewLab(ctx)
+    labLoop = LowNewLab(ctx)
+    labDone = LowNewLab(ctx)
+    labSkipCr = LowNewLab(ctx)
+
+    ' locals: -8 ch, -16 handle, -24 buf, -32 len, -40 nRead
+    IrEmit(list, OP_LABEL, ctx.rtInputLab, 0)
+    IrEmit(list, OP_ENTER, 80, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 256, 0)
+    IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "HeapAlloc")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labFail, 0)
+
+    IrEmit(list, OP_MOV_ECX, &HFFFFFFF6, 0)
+    lstrcpy(VarPtr(sApi), "GetStdHandle")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+
+    IrEmit(list, OP_LABEL, labLoop, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 255, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labDone, 0)
+
+    IrEmit(list, OP_SUB_RSP, 48, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, 32, 0)
+    IrEmit(list, OP_LEA_LOCAL, -40, 0)
+    IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+    IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    IrEmit(list, OP_LEA_LOCAL, -8, 0)
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "ReadFile")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_ADD_RSP, 48, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+
+    IrEmit(list, OP_LEA_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 13, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JE, labSkipCr, 0)
+
+    IrEmit(list, OP_LEA_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 10, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JE, labDone, 0)
+
+    IrEmit(list, OP_LEA_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_INC_LOCAL, -32, 0)
+
+    IrEmit(list, OP_LABEL, labSkipCr, 0)
+    IrEmit(list, OP_JMP, labLoop, 0)
+
+    IrEmit(list, OP_LABEL, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+
+    IrEmit(list, OP_LABEL, labFail, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
 End Sub
 
@@ -2516,6 +2638,40 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
         IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
         LowStmt = 1
+    ElseIf k = AST_INPUT Then
+        ' Input var$ ― String のみ（1行読み取り）
+        If nodes[idx].left < 0 Then
+            ctx.err = 1
+            Exit Function
+        End If
+        If nodes[nodes[idx].left].kind <> AST_VAR Then
+            ctx.err = 1
+            Exit Function
+        End If
+        AstCopyStr(ast, nodes[idx].left, VarPtr(name))
+        si = LowFindSym(ctx, VarPtr(name))
+        If si < 0 Then
+            ctx.err = 1
+            Exit Function
+        End If
+        types = ctx.types
+        If types[si] <> TY_STRING Then
+            ctx.err = 1
+            Exit Function
+        End If
+        lab = LowEnsureRtInput(ctx)
+        IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+        offs = ctx.offs
+        byRefs = ctx.byRefs
+        If byRefs[si] <> 0 Then
+            IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
+            IrEmit(ctx.list, OP_LOAD_LOCAL, offs[si], 0)
+            IrEmit(ctx.list, OP_POP_RCX, 0, 0)
+            IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+        Else
+            IrEmit(ctx.list, OP_STORE_LOCAL, offs[si], 0)
+        End If
+        LowStmt = 1
     ElseIf k = AST_IF Then
         labElse = LowNewLab(ctx)
         labEnd = LowNewLab(ctx)
@@ -2692,6 +2848,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     ctx.rtMidLab = -1
     ctx.rtStrLab = -1
     ctx.rtPrintLab = -1
+    ctx.rtInputLab = -1
     retBuf[0] = 0
 
     nPrint = 0
@@ -3175,6 +3332,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     LowEmitRtMidBody(VarPtr(ctx))
     LowEmitRtStrBody(VarPtr(ctx))
     LowEmitRtPrintBody(VarPtr(ctx))
+    LowEmitRtInputBody(VarPtr(ctx))
 
     free(namesBuf)
     free(offsBuf)

@@ -1013,6 +1013,28 @@ Function ParsePrintStmt(p As *Parser) As Long
     ParsePrintStmt = nPrint
 End Function
 
+' Input var$ ― stdin から 1 行読み取り、String 変数へ代入
+Function ParseInputStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nInput As Long
+    Dim nVar As Long
+    Dim name(63) As Byte
+
+    ParseInputStmt = -1
+    p.pos = p.pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    ast = p.ast
+    nVar = AstAddNode(ast, AST_VAR)
+    If nVar < 0 Then Exit Function
+    AstSetStr(ast, nVar, VarPtr(name))
+    nInput = AstAddNode(ast, AST_INPUT)
+    If nInput < 0 Then Exit Function
+    nodes = ast.nodes
+    nodes[nInput].left = nVar
+    ParseInputStmt = nInput
+End Function
+
 Function ParseExitStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -1087,54 +1109,55 @@ Function ParseDimOne(p As *Parser) As Long
         initE = ParseExpr(p)
         If initE < 0 Then Exit Function
     End If
-    lstrcpy(VarPtr(kAs), "as")
-    If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
-        p.err = 1
-        Exit Function
-    End If
-    p.pos = p.pos + 1
     ty = -1
     ti = -1
     ast = p.ast
     types = ast.types
-    If ParseTokKind(p) = TK_STAR Then
+    lstrcpy(VarPtr(kAs), "as")
+    If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
+        ' Dim name$ → String（As 省略。ActiveBasic 互換）
+        ti = 0
+        While name[ti] <> 0
+            ti = ti + 1
+        Wend
+        If ti > 0 And name[ti - 1] = 36 And bound < 0 Then
+            ty = TY_STRING
+            ti = -1
+        Else
+            p.err = 1
+            Exit Function
+        End If
+    Else
         p.pos = p.pos + 1
-        lstrcpy(VarPtr(kByte), "byte")
-        If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
+        If ParseTokKind(p) = TK_STAR Then
             p.pos = p.pos + 1
-            ty = TY_PTR_BYTE
+            lstrcpy(VarPtr(kByte), "byte")
+            If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
+                p.pos = p.pos + 1
+                ty = TY_PTR_BYTE
+            Else
+                lstrcpy(VarPtr(kLong), "long")
+                If ParseIdentIs(p, VarPtr(kLong)) <> 0 Then
+                    p.pos = p.pos + 1
+                    ty = TY_PTR_LONG
+                ElseIf ParseEatLongAlias(p) <> 0 Then
+                    ty = TY_PTR_LONG
+                Else
+                    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+                        p.err = 1
+                        Exit Function
+                    End If
+                    ti = TyFind(types, VarPtr(typeName))
+                    If ti < 0 Then
+                        p.err = 1
+                        Exit Function
+                    End If
+                    ty = TY_PTR_UDT
+                End If
+            End If
         Else
             lstrcpy(VarPtr(kLong), "long")
             If ParseIdentIs(p, VarPtr(kLong)) <> 0 Then
-                p.pos = p.pos + 1
-                ty = TY_PTR_LONG
-            ElseIf ParseEatLongAlias(p) <> 0 Then
-                ty = TY_PTR_LONG
-            Else
-                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
-                    p.err = 1
-                    Exit Function
-                End If
-                ti = TyFind(types, VarPtr(typeName))
-                If ti < 0 Then
-                    p.err = 1
-                    Exit Function
-                End If
-                ty = TY_PTR_UDT
-            End If
-        End If
-    Else
-        lstrcpy(VarPtr(kLong), "long")
-        If ParseIdentIs(p, VarPtr(kLong)) <> 0 Then
-            If bound >= 0 Then
-                ty = TY_LONG_ARR
-            Else
-                ty = TY_LONG
-            End If
-            p.pos = p.pos + 1
-        Else
-            lstrcpy(VarPtr(kInt), "integer")
-            If ParseIdentIs(p, VarPtr(kInt)) <> 0 Then
                 If bound >= 0 Then
                     ty = TY_LONG_ARR
                 Else
@@ -1142,40 +1165,50 @@ Function ParseDimOne(p As *Parser) As Long
                 End If
                 p.pos = p.pos + 1
             Else
-                lstrcpy(VarPtr(kStr), "string")
-                If ParseIdentIs(p, VarPtr(kStr)) <> 0 Then
+                lstrcpy(VarPtr(kInt), "integer")
+                If ParseIdentIs(p, VarPtr(kInt)) <> 0 Then
                     If bound >= 0 Then
-                        ty = TY_STRING_ARR
+                        ty = TY_LONG_ARR
                     Else
-                        ty = TY_STRING
+                        ty = TY_LONG
                     End If
                     p.pos = p.pos + 1
                 Else
-                    lstrcpy(VarPtr(kByte), "byte")
-                    If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
+                    lstrcpy(VarPtr(kStr), "string")
+                    If ParseIdentIs(p, VarPtr(kStr)) <> 0 Then
+                        If bound >= 0 Then
+                            ty = TY_STRING_ARR
+                        Else
+                            ty = TY_STRING
+                        End If
                         p.pos = p.pos + 1
-                        If bound >= 0 Then
-                            ty = TY_BYTE_ARR
-                        Else
-                            ty = TY_BYTE
-                        End If
-                    ElseIf ParseEatLongAlias(p) <> 0 Then
-                        If bound >= 0 Then
-                            ty = TY_LONG_ARR
-                        Else
-                            ty = TY_LONG
-                        End If
                     Else
-                        If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
-                            p.err = 1
-                            Exit Function
+                        lstrcpy(VarPtr(kByte), "byte")
+                        If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
+                            p.pos = p.pos + 1
+                            If bound >= 0 Then
+                                ty = TY_BYTE_ARR
+                            Else
+                                ty = TY_BYTE
+                            End If
+                        ElseIf ParseEatLongAlias(p) <> 0 Then
+                            If bound >= 0 Then
+                                ty = TY_LONG_ARR
+                            Else
+                                ty = TY_LONG
+                            End If
+                        Else
+                            If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+                                p.err = 1
+                                Exit Function
+                            End If
+                            ti = TyFind(types, VarPtr(typeName))
+                            If ti < 0 Then
+                                p.err = 1
+                                Exit Function
+                            End If
+                            ty = TY_UDT
                         End If
-                        ti = TyFind(types, VarPtr(typeName))
-                        If ti < 0 Then
-                            p.err = 1
-                            Exit Function
-                        End If
-                        ty = TY_UDT
                     End If
                 End If
             End If
@@ -2303,6 +2336,11 @@ Function ParseStmt(p As *Parser) As Long
         ParseStmt = ParsePrintStmt(p)
         Exit Function
     End If
+    lstrcpy(VarPtr(k), "input")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseStmt = ParseInputStmt(p)
+        Exit Function
+    End If
     lstrcpy(VarPtr(k), "exitprocess")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         ParseStmt = ParseExitStmt(p)
@@ -2425,11 +2463,21 @@ End Function
 Function ParseSource(src As *Byte, ast As *Ast) As Long
     Dim lx As *Lexer
     Dim p As Parser
+    Dim toks As *Tok
+    Dim line As Long
+    Dim kind As Long
+    Dim tmp(63) As Byte
 
     ParseSource = 0
     lx = LexCreate(LEX_MAX_TOKS)
-    If lx = NULL Then Exit Function
+    If lx = NULL Then
+        Print "error: out of memory (lexer)"
+        Exit Function
+    End If
     If LexTokenize(lx, src) = 0 Then
+        line = lx.line
+        If line <= 0 Then line = 1
+        Print "error: lex failed at line " + Str$(line)
         LexFree(lx)
         Exit Function
     End If
@@ -2439,6 +2487,18 @@ Function ParseSource(src As *Byte, ast As *Ast) As Long
     p.pos = 0
     p.err = 0
     If ParseProgram(VarPtr(p)) < 0 Or p.err <> 0 Then
+        line = ParseTokLine(VarPtr(p))
+        If line <= 0 Then line = 1
+        kind = ParseTokKind(VarPtr(p))
+        If kind = TK_EOF Then
+            Print "error: parse failed at line " + Str$(line) + ": unexpected end of file"
+        ElseIf kind = TK_IDENT Or kind = TK_STRING Or kind = TK_NUMBER Then
+            toks = lx.toks
+            LexCopyText(lx, toks[p.pos].textOff, VarPtr(tmp))
+            Print "error: parse failed at line " + Str$(line) + " near '" + MakeStr(VarPtr(tmp)) + "'"
+        Else
+            Print "error: parse failed at line " + Str$(line)
+        End If
         LexFree(lx)
         Exit Function
     End If
