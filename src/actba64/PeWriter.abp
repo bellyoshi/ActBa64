@@ -1,6 +1,6 @@
 ' ===================================================
-'  PeWriter - pack .text + .idata + .data(BSS) into PE32+ EXE
-'  Layout: .text, .idata (same as before), then .data for globals
+'  PeWriter - pack .text + .data + .idata into PE32+ EXE
+'  Layout: .text, .data (RW zero-filled), .idata
 ' ===================================================
 
 Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder, subsystem As Long) As Long
@@ -9,6 +9,7 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSiz
     Dim textRaw As DWord
     Dim textVirt As DWord
     Dim dataVirt As DWord
+    Dim dataRaw As DWord
     Dim dataRva As DWord
     Dim idataRaw As DWord
     Dim idataVirt As DWord
@@ -16,24 +17,26 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSiz
     Dim sizeImage As DWord
     Dim optOff As DWord
     Dim sectOff As DWord
+    Dim dataOff As DWord
     Dim idOff As DWord
 
     WritePe64 = 0
 
     textVirt = AlignUp(codeSize, SECTION_ALIGN)
     textRaw = AlignUp(codeSize, FILE_ALIGN)
-    idataRva = TEXT_RVA + textVirt
+    dataVirt = AlignUp(globSize, SECTION_ALIGN)
+    If dataVirt < SECTION_ALIGN Then dataVirt = SECTION_ALIGN
+    dataRaw = AlignUp(dataVirt, FILE_ALIGN)
+    If dataRaw < FILE_ALIGN Then dataRaw = FILE_ALIGN
+    dataRva = TEXT_RVA + textVirt
+    idataRva = dataRva + dataVirt
     idataVirt = AlignUp(idataSize, SECTION_ALIGN)
     If idataVirt < SECTION_ALIGN Then idataVirt = SECTION_ALIGN
     idataRaw = AlignUp(idataSize, FILE_ALIGN)
     If idataRaw < FILE_ALIGN Then idataRaw = FILE_ALIGN
-    dataVirt = AlignUp(globSize, SECTION_ALIGN)
-    If dataVirt < SECTION_ALIGN Then dataVirt = SECTION_ALIGN
-    dataRva = idataRva + idataVirt
 
-    sizeImage = TEXT_RVA + textVirt + idataVirt + dataVirt
-    ' .data is BSS (no file bytes)
-    outSize = SIZEOF_HEADERS + textRaw + idataRaw
+    sizeImage = TEXT_RVA + textVirt + dataVirt + idataVirt
+    outSize = SIZEOF_HEADERS + textRaw + dataRaw + idataRaw
 
     outBuf = calloc(outSize)
     If outBuf = NULL Then Exit Function
@@ -52,8 +55,6 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSiz
     optOff = E_LFANEW + 24
     PutWord(outBuf, optOff + 0, IMAGE_NT_OPTIONAL_HDR64_MAGIC)
     PutDword(outBuf, optOff + 4, textRaw)
-    PutDword(outBuf, optOff + 8, idataRaw)
-    PutDword(outBuf, optOff + 12, dataVirt)
     PutDword(outBuf, optOff + 16, TEXT_RVA)
     PutDword(outBuf, optOff + 20, TEXT_RVA)
     PutDword(outBuf, optOff + 24, IMAGE_BASE_LOW)
@@ -87,23 +88,25 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSiz
     PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ)
 
     sectOff = sectOff + 40
-    lstrcpy(VarPtr(outBuf[sectOff]), ".idata")
-    PutDword(outBuf, sectOff + 8, idataSize)
-    PutDword(outBuf, sectOff + 12, builder.iatRva)
-    PutDword(outBuf, sectOff + 16, idataRaw)
+    lstrcpy(VarPtr(outBuf[sectOff]), ".data")
+    PutDword(outBuf, sectOff + 8, dataVirt)
+    PutDword(outBuf, sectOff + 12, dataRva)
+    PutDword(outBuf, sectOff + 16, dataRaw)
     PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS + textRaw)
     PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
 
     sectOff = sectOff + 40
-    lstrcpy(VarPtr(outBuf[sectOff]), ".data")
-    PutDword(outBuf, sectOff + 8, dataVirt)
-    PutDword(outBuf, sectOff + 12, dataRva)
-    PutDword(outBuf, sectOff + 16, 0)
-    PutDword(outBuf, sectOff + 20, 0)
-    PutDword(outBuf, sectOff + 36, &H80 Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
+    lstrcpy(VarPtr(outBuf[sectOff]), ".idata")
+    PutDword(outBuf, sectOff + 8, idataSize)
+    PutDword(outBuf, sectOff + 12, builder.iatRva)
+    PutDword(outBuf, sectOff + 16, idataRaw)
+    PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS + textRaw + dataRaw)
+    PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
 
     memcpy(VarPtr(outBuf[SIZEOF_HEADERS]), codeBuf, codeSize)
-    idOff = SIZEOF_HEADERS + textRaw
+    dataOff = SIZEOF_HEADERS + textRaw
+    ZeroMem(VarPtr(outBuf[dataOff]), dataRaw)
+    idOff = dataOff + dataRaw
     memcpy(VarPtr(outBuf[idOff]), idataBuf, idataSize)
 
     WriteAll(outPath, outBuf, outSize)
