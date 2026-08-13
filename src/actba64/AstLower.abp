@@ -9,9 +9,6 @@ Const SYM_NAME_LEN = 64
 Const LOW_MF_POPUP = &H10
 Const LOW_MF_SEPARATOR = &H800
 
-' Preproc が .pj の #USEWINDOW を反映する（0 = CUI）
-Dim gPpUseWindow As Long
-
 Type LowerCtx
     list As *IrList
     ast As *Ast
@@ -33,6 +30,9 @@ Type LowerCtx
     constNames As *Byte
     constVals As *Long
     constCount As Long
+    constStrNames As *Byte
+    constStrVals As *Byte
+    constStrCount As Long
     declNames As *Byte
     declApiNames As *Byte
     declDlls As *Long
@@ -179,6 +179,65 @@ Function LowAddConst(ctx As *LowerCtx, name As *Byte, v As Long) As Long
     vals[i] = v
     ctx.constCount = i + 1
     LowAddConst = 1
+End Function
+
+Function LowFindStrConst(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindStrConst = -1
+    names = ctx.constStrNames
+    If names = NULL Then Exit Function
+    i = 0
+    While i < ctx.constStrCount
+        off = i * SYM_NAME_LEN
+        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+            LowFindStrConst = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowAddStrConst(ctx As *LowerCtx, name As *Byte, s As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim vals As *Byte
+    Dim j As Long
+    Dim off As Long
+
+    LowAddStrConst = 0
+    If LowFindStrConst(ctx, name) >= 0 Then
+        LowAddStrConst = 1
+        Exit Function
+    End If
+    If ctx.constStrCount >= SYM_MAX Then
+        ctx.err = 1
+        Exit Function
+    End If
+    If ctx.constStrNames = NULL Or ctx.constStrVals = NULL Then
+        ctx.err = 1
+        Exit Function
+    End If
+    i = ctx.constStrCount
+    names = ctx.constStrNames
+    vals = ctx.constStrVals
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    off = i * AST_STR_LEN
+    j = 0
+    While s[j] <> 0 And j < AST_STR_LEN - 1
+        vals[off + j] = s[j]
+        j = j + 1
+    Wend
+    vals[off + j] = 0
+    ctx.constStrCount = i + 1
+    LowAddStrConst = 1
 End Function
 
 Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
@@ -505,7 +564,8 @@ Sub LowDeclApiName(ctx As *LowerCtx, di As Long, dst As *Byte)
     dst[j] = 0
 End Sub
 
-Sub LowFreeDecl4(a As *Byte, b As *Byte, c As *Long, d As *Long)
+' actba64 のセルフホスト構文は *Long 仮引数を扱えないため *Byte で受ける
+Sub LowFreeDecl4(a As *Byte, b As *Byte, c As *Byte, d As *Byte)
     If a <> NULL Then free(a)
     If b <> NULL Then free(b)
     If c <> NULL Then free(c)
@@ -781,6 +841,10 @@ Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
     End If
     If k = AST_VAR Then
         AstCopyStr(ast, idx, VarPtr(name))
+        If LowFindStrConst(ctx, VarPtr(name)) >= 0 Then
+            LowIsStringExpr = 1
+            Exit Function
+        End If
         si = LowFindSym(ctx, VarPtr(name))
         If si >= 0 Then
             If types[si] = TY_STRING Then LowIsStringExpr = 1
@@ -1660,7 +1724,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim ast As *Ast
     Dim k As Long
     Dim name(63) As Byte
-    Dim buf(63) As Byte
+    Dim buf(255) As Byte
     Dim si As Long
     Dim offs As *Long
     Dim types As *Long
@@ -1674,6 +1738,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim sLen(15) As Byte
     Dim ci As Long
     Dim vals As *Long
+    Dim strs As *Byte
     Dim tt As *TypeTable
     Dim typeIdxs As *Long
     Dim foff As Long
@@ -1740,6 +1805,13 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         If ci >= 0 Then
             vals = ctx.constVals
             IrEmit(list, OP_MOV_EAX_IMM, vals[ci], 0)
+            LowExpr = 1
+            Exit Function
+        End If
+        ci = LowFindStrConst(ctx, VarPtr(name))
+        If ci >= 0 Then
+            strs = ctx.constStrVals
+            IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(strs[ci * AST_STR_LEN]))
             LowExpr = 1
             Exit Function
         End If
@@ -3119,13 +3191,16 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     Dim funcByRefsBuf As *Long
     Dim constNamesBuf As *Byte
     Dim constValsBuf As *Long
+    Dim constStrNamesBuf As *Byte
+    Dim constStrValsBuf As *Byte
     Dim declNamesBuf As *Byte
     Dim declApiNamesBuf As *Byte
-    Dim declDllsBuf As *Long
-    Dim declByRefsBuf As *Long
+    Dim declDllsBuf As *Byte
+    Dim declByRefsBuf As *Byte
     Dim dllKind As Long
     Dim apiBuf(63) As Byte
     Dim libBuf(63) As Byte
+    Dim sConst(255) As Byte
     Dim byRefBits As Long
     Dim bit As Long
     Dim isByRef As Long
@@ -3164,11 +3239,13 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     funcByRefsBuf = calloc(SizeOf(Long) * SYM_MAX)
     constNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
     constValsBuf = calloc(SizeOf(Long) * SYM_MAX)
+    constStrNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
+    constStrValsBuf = calloc(SYM_MAX * AST_STR_LEN)
     declNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
     declApiNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
     declDllsBuf = calloc(SizeOf(Long) * SYM_MAX)
     declByRefsBuf = calloc(SizeOf(Long) * SYM_MAX)
-    If namesBuf = NULL Or offsBuf = NULL Or typesBuf = NULL Or typeIdxsBuf = NULL Or byRefsBuf = NULL Or funcNamesBuf = NULL Or funcLabsBuf = NULL Or funcByRefsBuf = NULL Or constNamesBuf = NULL Or constValsBuf = NULL Or declNamesBuf = NULL Or declApiNamesBuf = NULL Or declDllsBuf = NULL Or declByRefsBuf = NULL Then
+    If namesBuf = NULL Or offsBuf = NULL Or typesBuf = NULL Or typeIdxsBuf = NULL Or byRefsBuf = NULL Or funcNamesBuf = NULL Or funcLabsBuf = NULL Or funcByRefsBuf = NULL Or constNamesBuf = NULL Or constValsBuf = NULL Or constStrNamesBuf = NULL Or constStrValsBuf = NULL Or declNamesBuf = NULL Or declApiNamesBuf = NULL Or declDllsBuf = NULL Or declByRefsBuf = NULL Then
         LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
         If namesBuf <> NULL Then free(namesBuf)
         If offsBuf <> NULL Then free(offsBuf)
@@ -3180,6 +3257,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
         If funcByRefsBuf <> NULL Then free(funcByRefsBuf)
         If constNamesBuf <> NULL Then free(constNamesBuf)
         If constValsBuf <> NULL Then free(constValsBuf)
+        If constStrNamesBuf <> NULL Then free(constStrNamesBuf)
+        If constStrValsBuf <> NULL Then free(constStrValsBuf)
         Exit Function
     End If
 
@@ -3203,6 +3282,9 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     ctx.constNames = constNamesBuf
     ctx.constVals = constValsBuf
     ctx.constCount = 0
+    ctx.constStrNames = constStrNamesBuf
+    ctx.constStrVals = constStrValsBuf
+    ctx.constStrCount = 0
     ctx.declNames = declNamesBuf
     ctx.declApiNames = declApiNamesBuf
     ctx.declDlls = declDllsBuf
@@ -3224,10 +3306,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
         If nodes[stmt].kind = AST_PRINT Then nPrint = nPrint + 1
         stmt = nodes[stmt].nxt
     Wend
-    ' Print uses console WriteFile; keep CUI subsystem
-    If gPpUseWindow <> 0 Then
-        subsystemOut = IMAGE_SUBSYSTEM_WINDOWS_GUI
-    End If
+    ' #USEWINDOW による GUI サブシステム切り替えは CompileSource 側で行う
 
     ' Declare Lib（DLL 種別・エクスポート名・ByRef ビット）を登録
     stmt = nodes[prog].left
@@ -3257,6 +3336,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                free(constStrNamesBuf)
+                free(constStrValsBuf)
                 LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
@@ -3281,6 +3362,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                free(constStrNamesBuf)
+                free(constStrValsBuf)
                 LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
@@ -3288,24 +3371,49 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
         stmt = nodes[stmt].nxt
     Wend
 
-    ' consts
+    ' consts（数値 / 文字列）
     stmt = nodes[prog].left
     While stmt >= 0
         If nodes[stmt].kind = AST_CONST Then
             AstCopyStr(ast, stmt, VarPtr(nm))
-            If LowAddConst(VarPtr(ctx), VarPtr(nm), nodes[stmt].num) = 0 Then
-                free(namesBuf)
-                free(offsBuf)
-                free(typesBuf)
-                free(typeIdxsBuf)
-                free(byRefsBuf)
-                free(funcNamesBuf)
-                free(funcLabsBuf)
-                free(funcByRefsBuf)
-                free(constNamesBuf)
-                free(constValsBuf)
-                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                Exit Function
+            If nodes[stmt].extra <> 0 Then
+                sConst[0] = 0
+                If nodes[stmt].left >= 0 Then
+                    AstCopyStr(ast, nodes[stmt].left, VarPtr(sConst))
+                End If
+                If LowAddStrConst(VarPtr(ctx), VarPtr(nm), VarPtr(sConst)) = 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
+            Else
+                If LowAddConst(VarPtr(ctx), VarPtr(nm), nodes[stmt].num) = 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
             End If
         End If
         stmt = nodes[stmt].nxt
@@ -3338,6 +3446,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                free(constStrNamesBuf)
+                free(constStrValsBuf)
                 LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
@@ -3384,6 +3494,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3403,6 +3515,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3429,6 +3543,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            free(constStrNamesBuf)
+                            free(constStrValsBuf)
                             LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
@@ -3446,6 +3562,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            free(constStrNamesBuf)
+                            free(constStrValsBuf)
                             LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
@@ -3463,6 +3581,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            free(constStrNamesBuf)
+                            free(constStrValsBuf)
                             LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
@@ -3480,6 +3600,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            free(constStrNamesBuf)
+                            free(constStrValsBuf)
                             LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
@@ -3496,6 +3618,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            free(constStrNamesBuf)
+                            free(constStrValsBuf)
                             LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
@@ -3512,6 +3636,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            free(constStrNamesBuf)
+                            free(constStrValsBuf)
                             LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
@@ -3528,6 +3654,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                         free(funcByRefsBuf)
                         free(constNamesBuf)
                         free(constValsBuf)
+                        free(constStrNamesBuf)
+                        free(constStrValsBuf)
                         LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                         Exit Function
                     End If
@@ -3571,6 +3699,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3588,6 +3718,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                free(constStrNamesBuf)
+                free(constStrValsBuf)
                 LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
@@ -3605,6 +3737,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3641,6 +3775,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3658,6 +3794,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3675,6 +3813,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3694,6 +3834,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3710,6 +3852,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3726,6 +3870,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
                     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
@@ -3742,6 +3888,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                free(constStrNamesBuf)
+                free(constStrValsBuf)
                 LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
@@ -3769,6 +3917,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                free(constStrNamesBuf)
+                free(constStrValsBuf)
                 LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
@@ -3795,6 +3945,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     free(funcByRefsBuf)
     free(constNamesBuf)
     free(constValsBuf)
+    free(constStrNamesBuf)
+    free(constStrValsBuf)
     LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
     AstToIr = 1
 End Function
