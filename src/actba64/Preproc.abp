@@ -7,13 +7,10 @@ Const PP_LINE_MAX = 512
 Const PP_ONCE_MAX = 256
 Const PP_ONCE_PATH = 512
 
-' actba64 自身は大域変数を持たないため、include-once の記録と
-' #USEWINDOW の値は状態構造体で受け渡す。
-Type PpState
-    once As *Byte
-    onceCount As Long
-    useWindow As Long
-End Type
+' include-once / #USEWINDOW (module Dims: stage0 Type field limit)
+Dim g_ppOnce As *Byte
+Dim g_ppOnceCount As Long
+Dim g_ppUseWindow As Long
 
 Function PpToLower(c As Long) As Long
     If c >= 65 And c <= 90 Then
@@ -23,25 +20,25 @@ Function PpToLower(c As Long) As Long
     End If
 End Function
 
-Function PpStateInit(st As *PpState) As Long
+Function PpStateInit() As Long
     Dim buf As *Byte
     PpStateInit = 0
     buf = calloc(PP_ONCE_MAX * PP_ONCE_PATH)
     If buf = NULL Then Exit Function
-    st.once = buf
-    st.onceCount = 0
-    st.useWindow = 0
+    g_ppOnce = buf
+    g_ppOnceCount = 0
+    g_ppUseWindow = 0
     PpStateInit = 1
 End Function
 
-Sub PpStateFree(st As *PpState)
-    If st.once <> NULL Then free(st.once)
-    st.once = NULL
-    st.onceCount = 0
+Sub PpStateFree()
+    If g_ppOnce <> NULL Then free(g_ppOnce)
+    g_ppOnce = NULL
+    g_ppOnceCount = 0
 End Sub
 
-Sub PpOnceReset(st As *PpState)
-    st.onceCount = 0
+Sub PpOnceReset()
+    g_ppOnceCount = 0
 End Sub
 
 Function PpPathEq(a As *Byte, b As *Byte) As Long
@@ -56,15 +53,15 @@ Function PpPathEq(a As *Byte, b As *Byte) As Long
     PpPathEq = 1
 End Function
 
-Function PpOnceHas(st As *PpState, path As *Byte) As Long
+Function PpOnceHas(path As *Byte) As Long
     Dim i As Long
     Dim off As Long
     Dim buf As *Byte
     PpOnceHas = 0
-    buf = st.once
+    buf = g_ppOnce
     If buf = NULL Then Exit Function
     i = 0
-    While i < st.onceCount
+    While i < g_ppOnceCount
         off = i * PP_ONCE_PATH
         If PpPathEq(VarPtr(buf[off]), path) <> 0 Then
             PpOnceHas = 1
@@ -74,15 +71,15 @@ Function PpOnceHas(st As *PpState, path As *Byte) As Long
     Wend
 End Function
 
-Sub PpOnceAdd(st As *PpState, path As *Byte)
+Sub PpOnceAdd(path As *Byte)
     Dim buf As *Byte
     Dim dst As *Byte
     Dim off As Long
     Dim j As Long
-    buf = st.once
+    buf = g_ppOnce
     If buf = NULL Then Exit Sub
-    If st.onceCount >= PP_ONCE_MAX Then Exit Sub
-    off = st.onceCount * PP_ONCE_PATH
+    If g_ppOnceCount >= PP_ONCE_MAX Then Exit Sub
+    off = g_ppOnceCount * PP_ONCE_PATH
     dst = VarPtr(buf[off])
     j = 0
     While path[j] <> 0 And j < PP_ONCE_PATH - 1
@@ -90,7 +87,7 @@ Sub PpOnceAdd(st As *PpState, path As *Byte)
         j = j + 1
     Wend
     dst[j] = 0
-    st.onceCount = st.onceCount + 1
+    g_ppOnceCount = g_ppOnceCount + 1
 End Sub
 
 Sub PpDirOf(path As *Byte, dst As *Byte)
@@ -193,7 +190,7 @@ Function PpAppend(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *By
     PpAppend = 1
 End Function
 
-Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long, st As *PpState) As Long
+Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long) As Long
     Dim i As Long
     Dim start As Long
     Dim n As Long
@@ -235,11 +232,11 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
                 lstrcpy(VarPtr(full), VarPtr(dir))
                 lstrcat(VarPtr(full), VarPtr(inc))
             End If
-            If PpOnceHas(st, VarPtr(full)) = 0 Then
+            If PpOnceHas(VarPtr(full)) = 0 Then
                 child = LoadFile(VarPtr(full), childSize)
                 If child = NULL Then Exit Function
-                PpOnceAdd(st, VarPtr(full))
-                If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1, st) = 0 Then
+                PpOnceAdd(VarPtr(full))
+                If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) = 0 Then
                     free(child)
                     Exit Function
                 End If
@@ -259,7 +256,7 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
     PpExpandInto = 1
 End Function
 
-Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte, st As *PpState) As *Byte
+Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte) As *Byte
     Dim dst As *Byte
     Dim dstLen As Long
     Dim dstCap As Long
@@ -271,7 +268,7 @@ Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte, st As *
     If dst = NULL Then Exit Function
     dstLen = 0
     dst[0] = 0
-    If PpExpandInto(dst, dstLen, dstCap, src, srcSize, srcPath, 0, st) = 0 Then
+    If PpExpandInto(dst, dstLen, dstCap, src, srcSize, srcPath, 0) = 0 Then
         free(dst)
         Exit Function
     End If
@@ -358,7 +355,7 @@ End Function
 
 ' ソースに #include が無くても Include\default を先頭へ展開する。
 ' 見つからない場合は警告だけ出して元のソースをそのまま使う。
-Function PpPrependDefaults(src As *Byte, st As *PpState) As *Byte
+Function PpPrependDefaults(src As *Byte) As *Byte
     Dim idxPath(511) As Byte
     Dim idxSrc As *Byte
     Dim idxSize As Long
@@ -379,7 +376,7 @@ Function PpPrependDefaults(src As *Byte, st As *PpState) As *Byte
         PpPrependDefaults = PpDupText(src)
         Exit Function
     End If
-    head = ExpandIncludes(idxSrc, idxSize, VarPtr(idxPath), st)
+    head = ExpandIncludes(idxSrc, idxSize, VarPtr(idxPath))
     free(idxSrc)
     If head = NULL Then
         Print "warning: preprocess failed: " + MakeStr(VarPtr(idxPath))
@@ -532,7 +529,7 @@ Function PpTrimCopy(line As *Byte, n As Long, dst As *Byte, dstMax As Long) As L
     PpTrimCopy = j
 End Function
 
-Function CombinePjSources(pjPath As *Byte, st As *PpState) As *Byte
+Function CombinePjSources(pjPath As *Byte) As *Byte
     Dim pj As *Byte
     Dim pjSize As Long
     Dim i As Long
@@ -557,8 +554,8 @@ Function CombinePjSources(pjPath As *Byte, st As *PpState) As *Byte
     Dim uwVal As Long
 
     CombinePjSources = NULL
-    PpOnceReset(st)
-    st.useWindow = 0
+    PpOnceReset()
+    g_ppUseWindow = 0
     pj = LoadFile(pjPath, pjSize)
     If pj = NULL Then Exit Function
     PpDirOf(pjPath, VarPtr(dir))
@@ -592,7 +589,7 @@ Function CombinePjSources(pjPath As *Byte, st As *PpState) As *Byte
         line[n] = 0
 
         If PpLineUseWindow(VarPtr(line), n, uwVal) <> 0 Then
-            st.useWindow = uwVal
+            g_ppUseWindow = uwVal
         End If
 
         If PpLineIsSourceHeader(VarPtr(line), n) <> 0 Then
@@ -620,15 +617,15 @@ Function CombinePjSources(pjPath As *Byte, st As *PpState) As *Byte
                         lstrcpy(VarPtr(full), VarPtr(dir))
                         lstrcat(VarPtr(full), VarPtr(name))
                     End If
-                    If PpOnceHas(st, VarPtr(full)) = 0 Then
+                    If PpOnceHas(VarPtr(full)) = 0 Then
                         src = LoadFile(VarPtr(full), srcSize)
                         If src = NULL Then
                             free(pj)
                             free(dst)
                             Exit Function
                         End If
-                        PpOnceAdd(st, VarPtr(full))
-                        expanded = ExpandIncludes(src, srcSize, VarPtr(full), st)
+                        PpOnceAdd(VarPtr(full))
+                        expanded = ExpandIncludes(src, srcSize, VarPtr(full))
                         free(src)
                         If expanded = NULL Then
                             free(pj)
