@@ -1,0 +1,674 @@
+' ===================================================
+'  ApiMap - WinAPI name -> DLL kind + export name
+' ===================================================
+
+Function ApiCopy(dst As *Byte, s As *Byte) As Long
+    lstrcpy(dst, s)
+    ApiCopy = 1
+End Function
+
+Function ApiNameEq(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    Dim ca As Long
+    Dim cb As Long
+    ApiNameEq = 0
+    i = 0
+    Do
+        ca = a[i]
+        cb = b[i]
+        If ca >= 65 And ca <= 90 Then ca = ca + 32
+        If cb >= 65 And cb <= 90 Then cb = cb + 32
+        If ca <> cb Then Exit Function
+        If ca = 0 Then
+            ApiNameEq = 1
+            Exit Function
+        End If
+        i = i + 1
+    Loop
+End Function
+
+' Lib "kernel32" / "kernel32.dll" -> IR_DLL_*
+Function LowDllKindFromLib(libName As *Byte) As Long
+    Dim k(63) As Byte
+    Dim i As Long
+    Dim j As Long
+    Dim c As Long
+
+    LowDllKindFromLib = 0
+    i = 0
+    j = 0
+    While libName[i] <> 0 And j < 63
+        c = libName[i]
+        If c >= 65 And c <= 90 Then c = c + 32
+        k[j] = c
+        j = j + 1
+        i = i + 1
+    Wend
+    k[j] = 0
+    ' strip .dll
+    i = 0
+    While k[i] <> 0
+        If k[i] = 46 Then
+            If k[i + 1] = 100 And k[i + 2] = 108 And k[i + 3] = 108 Then
+                k[i] = 0
+            End If
+            Exit While
+        End If
+        i = i + 1
+    Wend
+    lstrcpy(VarPtr(k), VarPtr(k))
+    If ApiNameEq(VarPtr(k), "kernel32") <> 0 Then
+        LowDllKindFromLib = IR_DLL_KERNEL32
+    ElseIf ApiNameEq(VarPtr(k), "user32") <> 0 Then
+        LowDllKindFromLib = IR_DLL_USER32
+    ElseIf ApiNameEq(VarPtr(k), "gdi32") <> 0 Then
+        LowDllKindFromLib = IR_DLL_GDI32
+    ElseIf ApiNameEq(VarPtr(k), "imm32") <> 0 Then
+        LowDllKindFromLib = IR_DLL_IMM32
+    ElseIf ApiNameEq(VarPtr(k), "comdlg32") <> 0 Then
+        LowDllKindFromLib = IR_DLL_COMDLG32
+    ElseIf ApiNameEq(VarPtr(k), "shell32") <> 0 Then
+        LowDllKindFromLib = IR_DLL_SHELL32
+    End If
+End Function
+
+' Map call name to dllKind + api export name. Returns 1 on success.
+Function LowMapWinApi(name As *Byte, ByRef dllKind As Long, apiOut As *Byte) As Long
+    Dim n(63) As Byte
+    Dim i As Long
+    Dim c As Long
+
+    LowMapWinApi = 0
+    dllKind = 0
+    apiOut[0] = 0
+    i = 0
+    While name[i] <> 0 And i < 63
+        c = name[i]
+        If c >= 65 And c <= 90 Then c = c + 32
+        n[i] = c
+        i = i + 1
+    Wend
+    n[i] = 0
+
+    ' --- kernel32 ---
+    If ApiNameEq(VarPtr(n), "exitprocess") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "ExitProcess")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createfile") <> 0 Or ApiNameEq(VarPtr(n), "createfilea") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "CreateFileA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "closehandle") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "CloseHandle")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getfilesize") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetFileSize")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "readfile") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "ReadFile")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "writefile") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "WriteFile")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getfileattributes") <> 0 Or ApiNameEq(VarPtr(n), "getfileattributesa") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetFileAttributesA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getcommandline") <> 0 Or ApiNameEq(VarPtr(n), "getcommandlinea") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetCommandLineA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "lstrlen") <> 0 Or ApiNameEq(VarPtr(n), "lstrlena") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "lstrlenA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "lstrcpy") <> 0 Or ApiNameEq(VarPtr(n), "lstrcpya") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "lstrcpyA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "lstrcat") <> 0 Or ApiNameEq(VarPtr(n), "lstrcata") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "lstrcatA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "lstrcmp") <> 0 Or ApiNameEq(VarPtr(n), "lstrcmpa") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "lstrcmpA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getprocessheap") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetProcessHeap")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "heapalloc") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "HeapAlloc")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "heapfree") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "HeapFree")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getstdhandle") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetStdHandle")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getmodulehandle") <> 0 Or ApiNameEq(VarPtr(n), "getmodulehandlea") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetModuleHandleA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getmodulefilename") <> 0 Or ApiNameEq(VarPtr(n), "getmodulefilenamea") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetModuleFileNameA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createprocess") <> 0 Or ApiNameEq(VarPtr(n), "createprocessa") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "CreateProcessA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "waitforsingleobject") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "WaitForSingleObject")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getexitcodeprocess") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GetExitCodeProcess")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "globalalloc") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GlobalAlloc")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "globallock") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GlobalLock")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "globalunlock") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "GlobalUnlock")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "rtlmovememory") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "RtlMoveMemory")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "rtlfillmemory") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "RtlFillMemory")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createpipe") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "CreatePipe")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "sethandleinformation") <> 0 Then
+        dllKind = IR_DLL_KERNEL32
+        ApiCopy(apiOut, "SetHandleInformation")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+
+    ' --- user32 ---
+    If ApiNameEq(VarPtr(n), "messagebox") <> 0 Or ApiNameEq(VarPtr(n), "messageboxa") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "MessageBoxA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getmessage") <> 0 Or ApiNameEq(VarPtr(n), "getmessagea") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetMessageA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "translatemessage") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "TranslateMessage")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "dispatchmessage") <> 0 Or ApiNameEq(VarPtr(n), "dispatchmessagea") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "DispatchMessageA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createwindowex") <> 0 Or ApiNameEq(VarPtr(n), "createwindowexa") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "CreateWindowExA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "defwindowproc") <> 0 Or ApiNameEq(VarPtr(n), "defwindowproca") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "DefWindowProcA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "registerclassex") <> 0 Or ApiNameEq(VarPtr(n), "registerclassexa") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "RegisterClassExA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "sendmessage") <> 0 Or ApiNameEq(VarPtr(n), "sendmessagea") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SendMessageA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "postmessage") <> 0 Or ApiNameEq(VarPtr(n), "postmessagea") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "PostMessageA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "postquitmessage") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "PostQuitMessage")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getdlgitem") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetDlgItem")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "destroywindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "DestroyWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "loadicon") <> 0 Or ApiNameEq(VarPtr(n), "loadicona") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "LoadIconA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "loadcursor") <> 0 Or ApiNameEq(VarPtr(n), "loadcursora") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "LoadCursorA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "enablewindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "EnableWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getwindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getsyscolor") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetSysColor")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "invalidaterect") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "InvalidateRect")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getclientrect") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetClientRect")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "beginpaint") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "BeginPaint")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "endpaint") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "EndPaint")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getdc") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetDC")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "releasedc") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "ReleaseDC")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "fillrect") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "FillRect")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setfocus") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetFocus")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setforegroundwindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetForegroundWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "showwindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "ShowWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "updatewindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "UpdateWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "movewindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "MoveWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "iswindow") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "IsWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createmenu") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "CreateMenu")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createpopupmenu") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "CreatePopupMenu")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "destroymenu") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "DestroyMenu")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setmenu") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetMenu")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "insertmenu") <> 0 Or ApiNameEq(VarPtr(n), "insertmenua") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "InsertMenuA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createcaret") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "CreateCaret")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "destroycaret") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "DestroyCaret")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setcaretpos") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetCaretPos")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "showcaret") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "ShowCaret")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "openclipboard") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "OpenClipboard")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "closeclipboard") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "CloseClipboard")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "emptyclipboard") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "EmptyClipboard")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setclipboarddata") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetClipboardData")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getclipboarddata") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetClipboardData")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "isclipboardformatavailable") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "IsClipboardFormatAvailable")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setwindowtext") <> 0 Or ApiNameEq(VarPtr(n), "setwindowtexta") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetWindowTextA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getwindowtext") <> 0 Or ApiNameEq(VarPtr(n), "getwindowtexta") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetWindowTextA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getwindowtextlength") <> 0 Or ApiNameEq(VarPtr(n), "getwindowtextlengtha") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "GetWindowTextLengthA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setwindowlong") <> 0 Or ApiNameEq(VarPtr(n), "setwindowlonga") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetWindowLongPtrA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setwindowlongptr") <> 0 Or ApiNameEq(VarPtr(n), "setwindowlongptra") <> 0 Then
+        dllKind = IR_DLL_USER32
+        ApiCopy(apiOut, "SetWindowLongPtrA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+
+    ' --- gdi32 ---
+    If ApiNameEq(VarPtr(n), "createfont") <> 0 Or ApiNameEq(VarPtr(n), "createfonta") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "CreateFontA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "createsolidbrush") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "CreateSolidBrush")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "deleteobject") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "DeleteObject")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "selectobject") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "SelectObject")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "textout") <> 0 Or ApiNameEq(VarPtr(n), "textouta") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "TextOutA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "settextcolor") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "SetTextColor")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "setbkmode") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "SetBkMode")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "gettextextentpoint32") <> 0 Or ApiNameEq(VarPtr(n), "gettextextentpoint32a") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "GetTextExtentPoint32A")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "addfontresourceexa") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "AddFontResourceExA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "removefontresourceexa") <> 0 Then
+        dllKind = IR_DLL_GDI32
+        ApiCopy(apiOut, "RemoveFontResourceExA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+
+    ' --- comdlg32 ---
+    If ApiNameEq(VarPtr(n), "getopenfilename") <> 0 Or ApiNameEq(VarPtr(n), "getopenfilenamea") <> 0 Then
+        dllKind = IR_DLL_COMDLG32
+        ApiCopy(apiOut, "GetOpenFileNameA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "getsavefilename") <> 0 Or ApiNameEq(VarPtr(n), "getsavefilenamea") <> 0 Then
+        dllKind = IR_DLL_COMDLG32
+        ApiCopy(apiOut, "GetSaveFileNameA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+
+    ' --- shell32 ---
+    If ApiNameEq(VarPtr(n), "shellexecute") <> 0 Or ApiNameEq(VarPtr(n), "shellexecutea") <> 0 Then
+        dllKind = IR_DLL_SHELL32
+        ApiCopy(apiOut, "ShellExecuteA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+
+    ' --- imm32 ---
+    If ApiNameEq(VarPtr(n), "immgetcontext") <> 0 Then
+        dllKind = IR_DLL_IMM32
+        ApiCopy(apiOut, "ImmGetContext")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "immreleasecontext") <> 0 Then
+        dllKind = IR_DLL_IMM32
+        ApiCopy(apiOut, "ImmReleaseContext")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "immgetcompositionstringa") <> 0 Then
+        dllKind = IR_DLL_IMM32
+        ApiCopy(apiOut, "ImmGetCompositionStringA")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+    If ApiNameEq(VarPtr(n), "immsetcompositionwindow") <> 0 Then
+        dllKind = IR_DLL_IMM32
+        ApiCopy(apiOut, "ImmSetCompositionWindow")
+        LowMapWinApi = 1
+        Exit Function
+    End If
+End Function

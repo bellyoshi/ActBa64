@@ -84,7 +84,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     free(builder)
 End Function
 
-Function CompileSource(src As *Byte, outPath As *Byte) As Long
+Function CompileSource(src As *Byte, outPath As *Byte, useWindow As Long) As Long
     Dim ast As *Ast
     Dim list As *IrList
     Dim subsystem As Long
@@ -115,6 +115,7 @@ Function CompileSource(src As *Byte, outPath As *Byte) As Long
         AstFree(ast)
         Exit Function
     End If
+    If useWindow <> 0 Then subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI
 
     If CompileIrToPe(list, outPath, subsystem) <> 0 Then
         CompileSource = 1
@@ -128,41 +129,77 @@ Function CompileToyFile(srcPath As *Byte, outPath As *Byte) As Long
     Dim src As *Byte
     Dim srcSize As Long
     Dim expanded As *Byte
+    Dim full As *Byte
+    Dim st As PpState
 
     CompileToyFile = 0
+    If PpStateInit(VarPtr(st)) = 0 Then
+        Print "error: out of memory (preproc)"
+        Exit Function
+    End If
     src = LoadFile(srcPath, srcSize)
     If src = NULL Then
         Print "error: cannot open: " + MakeStr(srcPath)
+        PpStateFree(VarPtr(st))
         Exit Function
     End If
     If srcSize <= 0 Then
         Print "error: empty source: " + MakeStr(srcPath)
         free(src)
+        PpStateFree(VarPtr(st))
         Exit Function
     End If
 
-    expanded = ExpandIncludes(src, srcSize, srcPath)
+    PpOnceReset(VarPtr(st))
+    expanded = ExpandIncludes(src, srcSize, srcPath, VarPtr(st))
     free(src)
     If expanded = NULL Then
         Print "error: preprocess failed: " + MakeStr(srcPath)
+        PpStateFree(VarPtr(st))
         Exit Function
     End If
 
-    CompileToyFile = CompileSource(expanded, outPath)
+    full = PpPrependDefaults(expanded, VarPtr(st))
     free(expanded)
+    If full = NULL Then
+        Print "error: preprocess failed: " + MakeStr(srcPath)
+        PpStateFree(VarPtr(st))
+        Exit Function
+    End If
+
+    CompileToyFile = CompileSource(full, outPath, st.useWindow)
+    free(full)
+    PpStateFree(VarPtr(st))
 End Function
 
 Function CompileToyPj(pjPath As *Byte, outPath As *Byte) As Long
     Dim combined As *Byte
+    Dim full As *Byte
+    Dim st As PpState
 
     CompileToyPj = 0
-    combined = CombinePjSources(pjPath)
-    If combined = NULL Then
-        Print "error: cannot load project: " + MakeStr(pjPath)
+    If PpStateInit(VarPtr(st)) = 0 Then
+        Print "error: out of memory (preproc)"
         Exit Function
     End If
-    CompileToyPj = CompileSource(combined, outPath)
+    combined = CombinePjSources(pjPath, VarPtr(st))
+    If combined = NULL Then
+        Print "error: cannot load project: " + MakeStr(pjPath)
+        PpStateFree(VarPtr(st))
+        Exit Function
+    End If
+
+    full = PpPrependDefaults(combined, VarPtr(st))
     free(combined)
+    If full = NULL Then
+        Print "error: preprocess failed: " + MakeStr(pjPath)
+        PpStateFree(VarPtr(st))
+        Exit Function
+    End If
+
+    CompileToyPj = CompileSource(full, outPath, st.useWindow)
+    free(full)
+    PpStateFree(VarPtr(st))
 End Function
 
 Function CompileInput(srcPath As *Byte, outPath As *Byte) As Long

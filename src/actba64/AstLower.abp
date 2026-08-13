@@ -3,7 +3,14 @@
 ' ===================================================
 
 Const SYM_MAX = 512
-Const SYM_NAME_LEN = 32
+' Declare 名は長くなりうる（EditorBuild_SetHandleInformation = 32 文字）
+Const SYM_NAME_LEN = 64
+
+Const LOW_MF_POPUP = &H10
+Const LOW_MF_SEPARATOR = &H800
+
+' Preproc が .pj の #USEWINDOW を反映する（0 = CUI）
+Dim gPpUseWindow As Long
 
 Type LowerCtx
     list As *IrList
@@ -26,6 +33,11 @@ Type LowerCtx
     constNames As *Byte
     constVals As *Long
     constCount As Long
+    declNames As *Byte
+    declApiNames As *Byte
+    declDlls As *Long
+    declByRefs As *Long
+    declCount As Long
     doEndLab As Long
     whileEndLab As Long
     funcEndLab As Long
@@ -208,6 +220,14 @@ Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
             LowBoundVal = lv - rv
         ElseIf op = BOP_MUL Then
             LowBoundVal = lv * rv
+        ElseIf op = BOP_OR Then
+            LowBoundVal = lv Or rv
+        ElseIf op = BOP_AND Then
+            LowBoundVal = lv And rv
+        ElseIf op = BOP_IDIV Then
+            If rv <> 0 Then
+                LowBoundVal = lv \ rv
+            End If
         End If
     End If
 End Function
@@ -413,6 +433,84 @@ Function LowAddFunc(ctx As *LowerCtx, name As *Byte, lab As Long, byRefBits As L
     ctx.funcCount = i + 1
     LowAddFunc = 1
 End Function
+
+' ---- Declare Lib テーブル ----
+
+Function LowFindDecl(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindDecl = -1
+    names = ctx.declNames
+    i = 0
+    While i < ctx.declCount
+        off = i * SYM_NAME_LEN
+        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+            LowFindDecl = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowAddDecl(ctx As *LowerCtx, name As *Byte, api As *Byte, dllKind As Long, byRefBits As Long) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim apis As *Byte
+    Dim dlls As *Long
+    Dim bys As *Long
+    Dim j As Long
+    Dim off As Long
+
+    LowAddDecl = 0
+    If ctx.declCount >= SYM_MAX Then
+        ctx.err = 1
+        Exit Function
+    End If
+    i = ctx.declCount
+    names = ctx.declNames
+    apis = ctx.declApiNames
+    dlls = ctx.declDlls
+    bys = ctx.declByRefs
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    j = 0
+    While api[j] <> 0 And j < SYM_NAME_LEN - 1
+        apis[off + j] = api[j]
+        j = j + 1
+    Wend
+    apis[off + j] = 0
+    dlls[i] = dllKind
+    bys[i] = byRefBits
+    ctx.declCount = i + 1
+    LowAddDecl = 1
+End Function
+
+Sub LowDeclApiName(ctx As *LowerCtx, di As Long, dst As *Byte)
+    Dim apis As *Byte
+    Dim off As Long
+    Dim j As Long
+    apis = ctx.declApiNames
+    off = di * SYM_NAME_LEN
+    j = 0
+    While apis[off + j] <> 0 And j < SYM_NAME_LEN - 1
+        dst[j] = apis[off + j]
+        j = j + 1
+    Wend
+    dst[j] = 0
+End Sub
+
+Sub LowFreeDecl4(a As *Byte, b As *Byte, c As *Long, d As *Long)
+    If a <> NULL Then free(a)
+    If b <> NULL Then free(b)
+    If c <> NULL Then free(c)
+    If d <> NULL Then free(d)
+End Sub
 
 Function LowAlign16(n As Long) As Long
     LowAlign16 = (n + 15) And (0 - 16)
@@ -667,7 +765,10 @@ Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
     End If
     If k = AST_BUILTIN Then
         bi = nodes[idx].num
-        If bi = BI_LEFT Or bi = BI_MID Then
+        If bi = BI_LEFT Or bi = BI_MID Or bi = BI_RIGHT Then
+            LowIsStringExpr = 1
+        End If
+        If bi = BI_CHR Then
             LowIsStringExpr = 1
         End If
         If bi = BI_STR Then
@@ -1522,6 +1623,38 @@ Function LowExprArg(ctx As *LowerCtx, idx As Long) As Long
     LowExprArg = LowExpr(ctx, idx)
 End Function
 
+' WinAPI へ UDT 変数を渡すときはアドレス渡し（LPRECT 等）
+Function LowArgIsUdtVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim si As Long
+    Dim types As *Long
+
+    LowArgIsUdtVar = 0
+    If idx < 0 Then Exit Function
+    ast = ctx.ast
+    nodes = ast.nodes
+    If nodes[idx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, idx, VarPtr(name))
+    si = LowFindSym(ctx, VarPtr(name))
+    If si < 0 Then Exit Function
+    types = ctx.types
+    If types[si] = TY_UDT Then LowArgIsUdtVar = 1
+End Function
+
+Function LowUseArgAddr(ctx As *LowerCtx, idx As Long, byBits As Long, bit As Long, isApi As Long) As Long
+    Dim v As Long
+    LowUseArgAddr = 0
+    v = byBits And bit
+    If v <> 0 Then
+        LowUseArgAddr = 1
+        Exit Function
+    End If
+    If isApi = 0 Then Exit Function
+    If LowArgIsUdtVar(ctx, idx) <> 0 Then LowUseArgAddr = 1
+End Function
+
 Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -1559,8 +1692,15 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim j As Long
     Dim bbit As Long
     Dim tsizes As *Long
-    Dim apiName(31) As Byte
+    Dim apiName(63) As Byte
     Dim isApi As Long
+    Dim di As Long
+    Dim dllKind As Long
+    Dim dlls As *Long
+    Dim bys As *Long
+    Dim useAddr As Long
+    Dim labA As Long
+    Dim labB As Long
 
     LowExpr = 0
     If idx < 0 Then
@@ -1863,6 +2003,109 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_POP_RCX, 0, 0)
             IrEmit(list, OP_CALL_LAB, lab, 0)
             LowExpr = 1
+        ElseIf nodes[idx].num = BI_CHR Then
+            If LowConstInt(ast, nodes[idx].left, v) <> 0 Then
+                buf[0] = v
+                buf[1] = 0
+                IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(buf))
+                LowExpr = 1
+                Exit Function
+            End If
+            ' HeapAlloc(2); buf[0] = code; buf[1] = 0
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            lstrcpy(VarPtr(sLen), "GetProcessHeap")
+            IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
+            IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+            IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
+            IrEmit(list, OP_MOV_EAX_IMM, 2, 0)
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+            lstrcpy(VarPtr(sLen), "HeapAlloc")
+            IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+            IrEmit(list, OP_MOV_ECX, 0, 0)
+            IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+            LowExpr = 1
+        ElseIf nodes[idx].num = BI_RIGHT Then
+            ' Right$(s, n) => Mid$(s, len - n + 1, n)
+            If nodes[idx].right < 0 Then
+                ctx.err = 1
+                Exit Function
+            End If
+            lab = LowEnsureRtMid(ctx)
+            labA = LowNewLab(ctx)
+            labB = LowNewLab(ctx)
+            labZ = LowNewLab(ctx)
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            ' stack: s, n  →  rax = s, rcx = n
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            ' rax = s (stack: s, n) → rax = lstrlen(s)
+            IrEmit(list, OP_TEST_RAX, 0, 0)
+            IrEmit(list, OP_JZ, labA, 0)
+            IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+            lstrcpy(VarPtr(sLen), "lstrlenA")
+            IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
+            IrEmit(list, OP_JMP, labB, 0)
+            IrEmit(list, OP_LABEL, labA, 0)
+            IrEmit(list, OP_XOR_EAX, 0, 0)
+            IrEmit(list, OP_LABEL, labB, 0)
+            ' start = len - n + 1（n はスタックへ戻す）
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+            IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+            ' if start < 1 then start = 1
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+            IrEmit(list, OP_JL, labZ, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            IrEmit(list, OP_LABEL, labZ, 0)
+            IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_CALL_LAB, lab, 0)
+            LowExpr = 1
+        ElseIf nodes[idx].num = BI_RGB Then
+            If nodes[idx].right < 0 Or nodes[idx].extra < 0 Then
+                ctx.err = 1
+                Exit Function
+            End If
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX, 256, 0)
+            IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].extra) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX, 65536, 0)
+            IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+            LowExpr = 1
+        ElseIf nodes[idx].num = BI_LOWORD Then
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX, 65535, 0)
+            IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+            LowExpr = 1
         Else
             ctx.err = 1
         End If
@@ -2008,16 +2251,29 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         End If
         lab = LowFindFunc(ctx, VarPtr(name))
         isApi = 0
-        If lab < 0 Then
-            If LowMapKernelApi(VarPtr(name), VarPtr(apiName)) = 0 Then
-                ctx.err = 1
-                Exit Function
-            End If
-            isApi = 1
-        End If
+        dllKind = 0
         byBits = 0
-        If isApi = 0 Then
+        If lab >= 0 Then
             byBits = LowFindFuncByRefs(ctx, VarPtr(name))
+        Else
+            di = LowFindDecl(ctx, VarPtr(name))
+            If di >= 0 Then
+                LowDeclApiName(ctx, di, VarPtr(apiName))
+                dlls = ctx.declDlls
+                bys = ctx.declByRefs
+                dllKind = dlls[di]
+                byBits = bys[di]
+                isApi = 1
+            Else
+                If LowMapWinApi(VarPtr(name), dllKind, VarPtr(apiName)) = 0 Then
+                    ctx.err = 1
+                    Exit Function
+                End If
+                isApi = 1
+            End If
+        End If
+        If isApi <> 0 Then
+            If dllKind = 0 Then dllKind = IR_DLL_KERNEL32
         End If
         nArgs = nodes[idx].num
         If nArgs > 16 Then
@@ -2060,8 +2316,8 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 bbit = bbit * 2
                 j = j + 1
             Wend
-            v = byBits And bbit
-            If v <> 0 Then
+            useAddr = LowUseArgAddr(ctx, nodes[args[argi]].left, byBits, bbit, isApi)
+            If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[argi]].left) = 0 Then Exit Function
             Else
                 If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
@@ -2071,8 +2327,8 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         Wend
         ' register args 3,2,1,0
         If nArgs >= 4 Then
-            v = byBits And 8
-            If v <> 0 Then
+            useAddr = LowUseArgAddr(ctx, nodes[args[3]].left, byBits, 8, isApi)
+            If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[3]].left) = 0 Then Exit Function
             Else
                 If LowExprArg(ctx, nodes[args[3]].left) = 0 Then Exit Function
@@ -2080,8 +2336,8 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_R9_RAX, 0, 0)
         End If
         If nArgs >= 3 Then
-            v = byBits And 4
-            If v <> 0 Then
+            useAddr = LowUseArgAddr(ctx, nodes[args[2]].left, byBits, 4, isApi)
+            If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[2]].left) = 0 Then Exit Function
             Else
                 If LowExprArg(ctx, nodes[args[2]].left) = 0 Then Exit Function
@@ -2089,8 +2345,8 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_R8_RAX, 0, 0)
         End If
         If nArgs >= 2 Then
-            v = byBits And 2
-            If v <> 0 Then
+            useAddr = LowUseArgAddr(ctx, nodes[args[1]].left, byBits, 2, isApi)
+            If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[1]].left) = 0 Then Exit Function
             Else
                 If LowExprArg(ctx, nodes[args[1]].left) = 0 Then Exit Function
@@ -2098,8 +2354,8 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
         End If
         If nArgs >= 1 Then
-            v = byBits And 1
-            If v <> 0 Then
+            useAddr = LowUseArgAddr(ctx, nodes[args[0]].left, byBits, 1, isApi)
+            If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[0]].left) = 0 Then Exit Function
             Else
                 If LowExprArg(ctx, nodes[args[0]].left) = 0 Then Exit Function
@@ -2107,7 +2363,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
         End If
         If isApi <> 0 Then
-            IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(apiName))
+            IrEmitStr(list, OP_CALL_API, dllKind, VarPtr(apiName))
         Else
             IrEmit(list, OP_CALL_LAB, lab, 0)
         End If
@@ -2154,6 +2410,16 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             Else
                 IrEmit(list, OP_OR_EAX_ECX, 0, 0)
             End If
+            LowExpr = 1
+        ElseIf op = BOP_IDIV Then
+            ' eax = left, ecx = right, edx = 0 → div ecx
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_XOR_EDX, 0, 0)
+            IrEmit(list, OP_DIV_ECX, 0, 0)
             LowExpr = 1
         Else
             ctx.err = 1
@@ -2419,6 +2685,15 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
     Dim saveWhile As Long
     Dim byRefs As *Long
     Dim types As *Long
+    Dim list As *IrList
+    Dim args(15) As Long
+    Dim argi As Long
+    Dim argn As Long
+    Dim nArgs As Long
+    Dim stk As Long
+    Dim labSub As Long
+    Dim labDone As Long
+    Dim sApi(31) As Byte
 
     LowStmt = 0
     If idx < 0 Then
@@ -2569,6 +2844,81 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         End If
     ElseIf k = AST_FUNC Then
         ' emitted separately
+        LowStmt = 1
+    ElseIf k = AST_DECLARE Then
+        ' 宣言のみ（コード生成なし）
+        LowStmt = 1
+    ElseIf k = AST_INSMENU Then
+        ' InsertMenuA(hMenu, pos, flags, uIDNewItem, lpNewItem)
+        list = ctx.list
+        argi = 0
+        argn = nodes[idx].left
+        While argn >= 0
+            If argi >= 16 Then
+                ctx.err = 1
+                Exit Function
+            End If
+            args[argi] = argn
+            argi = argi + 1
+            argn = nodes[argn].nxt
+        Wend
+        nArgs = argi
+        If nArgs < 3 Then
+            ctx.err = 1
+            Exit Function
+        End If
+        stk = 48
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+        ' lpNewItem（第5引数）
+        If nArgs >= 4 Then
+            If LowExpr(ctx, nodes[args[3]].left) = 0 Then Exit Function
+        Else
+            IrEmit(list, OP_XOR_EAX, 0, 0)
+        End If
+        IrEmit(list, OP_STORE_RSP_RAX, 32, 0)
+        If nArgs >= 6 Then
+            ' hSubMenu <> 0 なら uIDNewItem = hSubMenu かつ MF_POPUP
+            labSub = LowNewLab(ctx)
+            labDone = LowNewLab(ctx)
+            If LowExpr(ctx, nodes[args[5]].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_TEST_RAX, 0, 0)
+            IrEmit(list, OP_JNZ, labSub, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[4]].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+            IrEmit(list, OP_JMP, labDone, 0)
+            IrEmit(list, OP_LABEL, labSub, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX, LOW_MF_POPUP, 0)
+            IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+            IrEmit(list, OP_LABEL, labDone, 0)
+        Else
+            If nArgs >= 5 Then
+                If LowExpr(ctx, nodes[args[4]].left) = 0 Then Exit Function
+            Else
+                IrEmit(list, OP_XOR_EAX, 0, 0)
+            End If
+            IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
+            If nArgs = 3 Then
+                IrEmit(list, OP_MOV_ECX, LOW_MF_SEPARATOR, 0)
+                IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+            End If
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+        End If
+        If LowExpr(ctx, nodes[args[1]].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+        If LowExpr(ctx, nodes[args[0]].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+        lstrcpy(VarPtr(sApi), "InsertMenuA")
+        IrEmitStr(list, OP_CALL_API, IR_DLL_USER32, VarPtr(sApi))
+        IrEmit(list, OP_ADD_RSP, stk, 0)
         LowStmt = 1
     ElseIf k = AST_CALL Then
         If LowExpr(ctx, idx) = 0 Then Exit Function
@@ -2769,10 +3119,17 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     Dim funcByRefsBuf As *Long
     Dim constNamesBuf As *Byte
     Dim constValsBuf As *Long
+    Dim declNamesBuf As *Byte
+    Dim declApiNamesBuf As *Byte
+    Dim declDllsBuf As *Long
+    Dim declByRefsBuf As *Long
+    Dim dllKind As Long
+    Dim apiBuf(63) As Byte
+    Dim libBuf(63) As Byte
     Dim byRefBits As Long
     Dim bit As Long
     Dim isByRef As Long
-    Dim retBuf(31) As Byte
+    Dim retBuf(63) As Byte
     Dim nm(63) As Byte
     Dim labMain As Long
     Dim labFn As Long
@@ -2807,7 +3164,12 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     funcByRefsBuf = calloc(SizeOf(Long) * SYM_MAX)
     constNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
     constValsBuf = calloc(SizeOf(Long) * SYM_MAX)
-    If namesBuf = NULL Or offsBuf = NULL Or typesBuf = NULL Or typeIdxsBuf = NULL Or byRefsBuf = NULL Or funcNamesBuf = NULL Or funcLabsBuf = NULL Or funcByRefsBuf = NULL Or constNamesBuf = NULL Or constValsBuf = NULL Then
+    declNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
+    declApiNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
+    declDllsBuf = calloc(SizeOf(Long) * SYM_MAX)
+    declByRefsBuf = calloc(SizeOf(Long) * SYM_MAX)
+    If namesBuf = NULL Or offsBuf = NULL Or typesBuf = NULL Or typeIdxsBuf = NULL Or byRefsBuf = NULL Or funcNamesBuf = NULL Or funcLabsBuf = NULL Or funcByRefsBuf = NULL Or constNamesBuf = NULL Or constValsBuf = NULL Or declNamesBuf = NULL Or declApiNamesBuf = NULL Or declDllsBuf = NULL Or declByRefsBuf = NULL Then
+        LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
         If namesBuf <> NULL Then free(namesBuf)
         If offsBuf <> NULL Then free(offsBuf)
         If typesBuf <> NULL Then free(typesBuf)
@@ -2841,6 +3203,11 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     ctx.constNames = constNamesBuf
     ctx.constVals = constValsBuf
     ctx.constCount = 0
+    ctx.declNames = declNamesBuf
+    ctx.declApiNames = declApiNamesBuf
+    ctx.declDlls = declDllsBuf
+    ctx.declByRefs = declByRefsBuf
+    ctx.declCount = 0
     ctx.doEndLab = -1
     ctx.whileEndLab = -1
     ctx.funcEndLab = -1
@@ -2858,6 +3225,68 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
         stmt = nodes[stmt].nxt
     Wend
     ' Print uses console WriteFile; keep CUI subsystem
+    If gPpUseWindow <> 0 Then
+        subsystemOut = IMAGE_SUBSYSTEM_WINDOWS_GUI
+    End If
+
+    ' Declare Lib（DLL 種別・エクスポート名・ByRef ビット）を登録
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_DECLARE Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            libBuf[0] = 0
+            apiBuf[0] = 0
+            If nodes[stmt].right >= 0 Then
+                AstCopyStr(ast, nodes[stmt].right, VarPtr(libBuf))
+            End If
+            If nodes[stmt].extra >= 0 Then
+                AstCopyStr(ast, nodes[stmt].extra, VarPtr(apiBuf))
+            End If
+            If apiBuf[0] = 0 Then
+                AstCopyStr(ast, stmt, VarPtr(apiBuf))
+            End If
+            dllKind = LowDllKindFromLib(VarPtr(libBuf))
+            If dllKind = 0 Then
+                free(namesBuf)
+                free(offsBuf)
+                free(typesBuf)
+                free(typeIdxsBuf)
+                free(byRefsBuf)
+                free(funcNamesBuf)
+                free(funcLabsBuf)
+                free(funcByRefsBuf)
+                free(constNamesBuf)
+                free(constValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                Exit Function
+            End If
+            byRefBits = 0
+            bit = 1
+            param = nodes[stmt].left
+            While param >= 0
+                If nodes[param].num <> 0 Then
+                    byRefBits = byRefBits + bit
+                End If
+                bit = bit * 2
+                param = nodes[param].nxt
+            Wend
+            If LowAddDecl(VarPtr(ctx), VarPtr(nm), VarPtr(apiBuf), dllKind, byRefBits) = 0 Then
+                free(namesBuf)
+                free(offsBuf)
+                free(typesBuf)
+                free(typeIdxsBuf)
+                free(byRefsBuf)
+                free(funcNamesBuf)
+                free(funcLabsBuf)
+                free(funcByRefsBuf)
+                free(constNamesBuf)
+                free(constValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                Exit Function
+            End If
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
 
     ' consts
     stmt = nodes[prog].left
@@ -2875,6 +3304,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
         End If
@@ -2908,6 +3338,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
             nodes[stmt].extra = labFn
@@ -2953,6 +3384,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 param = nodes[param].nxt
@@ -2971,6 +3403,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
             End If
@@ -2996,6 +3429,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
                         nbytes = bound + 1
@@ -3012,6 +3446,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
                         nbytes = (bound + 1) * 8
@@ -3028,6 +3463,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
                         nbytes = (bound + 1) * 8
@@ -3044,6 +3480,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
                         tsizes = tt.typeSizes
@@ -3059,6 +3496,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
                     ElseIf ty = TY_PTR_UDT Then
@@ -3074,6 +3512,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(funcByRefsBuf)
                             free(constNamesBuf)
                             free(constValsBuf)
+                            LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                             Exit Function
                         End If
                         nbytes = 8
@@ -3089,6 +3528,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                         free(funcByRefsBuf)
                         free(constNamesBuf)
                         free(constValsBuf)
+                        LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                         Exit Function
                     End If
                 End If
@@ -3131,6 +3571,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
@@ -3147,6 +3588,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
             IrEmit(list, OP_LABEL, ctx.funcEndLab, 0)
@@ -3163,6 +3605,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 IrEmit(list, OP_LOAD_LOCAL, offs[pi], 0)
@@ -3198,6 +3641,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 nbytes = bound + 1
@@ -3214,6 +3658,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 nbytes = (bound + 1) * 8
@@ -3230,6 +3675,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 nbytes = (bound + 1) * 8
@@ -3248,6 +3694,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 tsizes = tt.typeSizes
@@ -3263,6 +3710,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
             ElseIf ty = TY_PTR_UDT Then
@@ -3278,6 +3726,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(funcByRefsBuf)
                     free(constNamesBuf)
                     free(constValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                     Exit Function
                 End If
                 nbytes = 8
@@ -3293,6 +3742,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
         End If
@@ -3319,6 +3769,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(funcByRefsBuf)
                 free(constNamesBuf)
                 free(constValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
                 Exit Function
             End If
         End If
@@ -3344,6 +3795,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     free(funcByRefsBuf)
     free(constNamesBuf)
     free(constValsBuf)
+    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
     AstToIr = 1
 End Function
 

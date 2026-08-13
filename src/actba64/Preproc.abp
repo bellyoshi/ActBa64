@@ -4,6 +4,16 @@
 
 Const PP_MAX_DEPTH = 16
 Const PP_LINE_MAX = 512
+Const PP_ONCE_MAX = 256
+Const PP_ONCE_PATH = 512
+
+' actba64 自身は大域変数を持たないため、include-once の記録と
+' #USEWINDOW の値は状態構造体で受け渡す。
+Type PpState
+    once As *Byte
+    onceCount As Long
+    useWindow As Long
+End Type
 
 Function PpToLower(c As Long) As Long
     If c >= 65 And c <= 90 Then
@@ -12,6 +22,76 @@ Function PpToLower(c As Long) As Long
         PpToLower = c
     End If
 End Function
+
+Function PpStateInit(st As *PpState) As Long
+    Dim buf As *Byte
+    PpStateInit = 0
+    buf = calloc(PP_ONCE_MAX * PP_ONCE_PATH)
+    If buf = NULL Then Exit Function
+    st.once = buf
+    st.onceCount = 0
+    st.useWindow = 0
+    PpStateInit = 1
+End Function
+
+Sub PpStateFree(st As *PpState)
+    If st.once <> NULL Then free(st.once)
+    st.once = NULL
+    st.onceCount = 0
+End Sub
+
+Sub PpOnceReset(st As *PpState)
+    st.onceCount = 0
+End Sub
+
+Function PpPathEq(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    PpPathEq = 0
+    i = 0
+    While a[i] <> 0 And b[i] <> 0
+        If PpToLower(a[i]) <> PpToLower(b[i]) Then Exit Function
+        i = i + 1
+    Wend
+    If a[i] <> b[i] Then Exit Function
+    PpPathEq = 1
+End Function
+
+Function PpOnceHas(st As *PpState, path As *Byte) As Long
+    Dim i As Long
+    Dim off As Long
+    Dim buf As *Byte
+    PpOnceHas = 0
+    buf = st.once
+    If buf = NULL Then Exit Function
+    i = 0
+    While i < st.onceCount
+        off = i * PP_ONCE_PATH
+        If PpPathEq(VarPtr(buf[off]), path) <> 0 Then
+            PpOnceHas = 1
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Sub PpOnceAdd(st As *PpState, path As *Byte)
+    Dim buf As *Byte
+    Dim dst As *Byte
+    Dim off As Long
+    Dim j As Long
+    buf = st.once
+    If buf = NULL Then Exit Sub
+    If st.onceCount >= PP_ONCE_MAX Then Exit Sub
+    off = st.onceCount * PP_ONCE_PATH
+    dst = VarPtr(buf[off])
+    j = 0
+    While path[j] <> 0 And j < PP_ONCE_PATH - 1
+        dst[j] = path[j]
+        j = j + 1
+    Wend
+    dst[j] = 0
+    st.onceCount = st.onceCount + 1
+End Sub
 
 Sub PpDirOf(path As *Byte, dst As *Byte)
     Dim i As Long
@@ -113,7 +193,7 @@ Function PpAppend(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *By
     PpAppend = 1
 End Function
 
-Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long) As Long
+Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long, st As *PpState) As Long
     Dim i As Long
     Dim start As Long
     Dim n As Long
@@ -155,13 +235,16 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
                 lstrcpy(VarPtr(full), VarPtr(dir))
                 lstrcat(VarPtr(full), VarPtr(inc))
             End If
-            child = LoadFile(VarPtr(full), childSize)
-            If child = NULL Then Exit Function
-            If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) = 0 Then
+            If PpOnceHas(st, VarPtr(full)) = 0 Then
+                child = LoadFile(VarPtr(full), childSize)
+                If child = NULL Then Exit Function
+                PpOnceAdd(st, VarPtr(full))
+                If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1, st) = 0 Then
+                    free(child)
+                    Exit Function
+                End If
                 free(child)
-                Exit Function
             End If
-            free(child)
         Else
             If n > 0 Then
                 If PpAppend(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
@@ -176,7 +259,7 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
     PpExpandInto = 1
 End Function
 
-Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte) As *Byte
+Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte, st As *PpState) As *Byte
     Dim dst As *Byte
     Dim dstLen As Long
     Dim dstCap As Long
@@ -188,11 +271,133 @@ Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte) As *Byt
     If dst = NULL Then Exit Function
     dstLen = 0
     dst[0] = 0
-    If PpExpandInto(dst, dstLen, dstCap, src, srcSize, srcPath, 0) = 0 Then
+    If PpExpandInto(dst, dstLen, dstCap, src, srcSize, srcPath, 0, st) = 0 Then
         free(dst)
         Exit Function
     End If
     ExpandIncludes = dst
+End Function
+
+Function PpFileExists(path As *Byte) As Long
+    Dim p As *Byte
+    Dim n As Long
+    PpFileExists = 0
+    p = LoadFile(path, n)
+    If p = NULL Then Exit Function
+    free(p)
+    PpFileExists = 1
+End Function
+
+' 実行ファイルのあるディレクトリ（末尾は区切り文字付き）
+Function PpToolDir(dst As *Byte) As Long
+    Dim buf(511) As Byte
+    Dim n As Long
+    PpToolDir = 0
+    dst[0] = 0
+    buf[0] = 0
+    n = GetModuleFileName(0, VarPtr(buf), 512)
+    If n <= 0 Then buf[0] = 0
+    If buf[0] = 0 Then
+        If GetCmd(0, VarPtr(buf)) = 0 Then Exit Function
+    End If
+    If buf[0] = 0 Then Exit Function
+    PpDirOf(VarPtr(buf), dst)
+    If dst[0] = 0 Then Exit Function
+    PpToolDir = 1
+End Function
+
+' ツール隣 / その親 / カレントの Include\default\default.idx
+Function PpFindDefaultIdx(dst As *Byte) As Long
+    Dim dir(511) As Byte
+    Dim rel(63) As Byte
+
+    PpFindDefaultIdx = 0
+    dst[0] = 0
+    lstrcpy(VarPtr(rel), "Include\default\default.idx")
+    If PpToolDir(VarPtr(dir)) <> 0 Then
+        lstrcpy(dst, VarPtr(dir))
+        lstrcat(dst, VarPtr(rel))
+        If PpFileExists(dst) <> 0 Then
+            PpFindDefaultIdx = 1
+            Exit Function
+        End If
+        lstrcpy(dst, VarPtr(dir))
+        lstrcat(dst, "..\")
+        lstrcat(dst, VarPtr(rel))
+        If PpFileExists(dst) <> 0 Then
+            PpFindDefaultIdx = 1
+            Exit Function
+        End If
+        lstrcpy(dst, VarPtr(dir))
+        lstrcat(dst, "..\..\")
+        lstrcat(dst, VarPtr(rel))
+        If PpFileExists(dst) <> 0 Then
+            PpFindDefaultIdx = 1
+            Exit Function
+        End If
+    End If
+    lstrcpy(dst, VarPtr(rel))
+    If PpFileExists(dst) <> 0 Then
+        PpFindDefaultIdx = 1
+        Exit Function
+    End If
+    dst[0] = 0
+End Function
+
+Function PpDupText(src As *Byte) As *Byte
+    Dim n As Long
+    Dim dst As *Byte
+    PpDupText = NULL
+    n = lstrlen(src)
+    dst = calloc(n + 1)
+    If dst = NULL Then Exit Function
+    If n > 0 Then memcpy(dst, src, n)
+    dst[n] = 0
+    PpDupText = dst
+End Function
+
+' ソースに #include が無くても Include\default を先頭へ展開する。
+' 見つからない場合は警告だけ出して元のソースをそのまま使う。
+Function PpPrependDefaults(src As *Byte, st As *PpState) As *Byte
+    Dim idxPath(511) As Byte
+    Dim idxSrc As *Byte
+    Dim idxSize As Long
+    Dim head As *Byte
+    Dim dst As *Byte
+    Dim headLen As Long
+    Dim srcLen As Long
+
+    PpPrependDefaults = NULL
+    If PpFindDefaultIdx(VarPtr(idxPath)) = 0 Then
+        Print "warning: not found: Include\default\default.idx"
+        PpPrependDefaults = PpDupText(src)
+        Exit Function
+    End If
+    idxSrc = LoadFile(VarPtr(idxPath), idxSize)
+    If idxSrc = NULL Then
+        Print "warning: cannot open: " + MakeStr(VarPtr(idxPath))
+        PpPrependDefaults = PpDupText(src)
+        Exit Function
+    End If
+    head = ExpandIncludes(idxSrc, idxSize, VarPtr(idxPath), st)
+    free(idxSrc)
+    If head = NULL Then
+        Print "warning: preprocess failed: " + MakeStr(VarPtr(idxPath))
+        PpPrependDefaults = PpDupText(src)
+        Exit Function
+    End If
+    headLen = lstrlen(head)
+    srcLen = lstrlen(src)
+    dst = calloc(headLen + srcLen + 1)
+    If dst = NULL Then
+        free(head)
+        Exit Function
+    End If
+    If headLen > 0 Then memcpy(dst, head, headLen)
+    If srcLen > 0 Then memcpy(VarPtr(dst[headLen]), src, srcLen)
+    dst[headLen + srcLen] = 0
+    free(head)
+    PpPrependDefaults = dst
 End Function
 
 Const PJ_MAX_SOURCES = 16
@@ -243,6 +448,60 @@ Function PpLineIsSourceHeader(line As *Byte, n As Long) As Long
     PpLineIsSourceHeader = 1
 End Function
 
+' #USEWINDOW=1 / #usewindow=0 （#SOURCE 節の外も含め全行を対象）
+Function PpLineUseWindow(line As *Byte, n As Long, ByRef valOut As Long) As Long
+    Dim i As Long
+    Dim k As Long
+    Dim c As Long
+    Dim word(15) As Byte
+    Dim v As Long
+    Dim got As Long
+
+    PpLineUseWindow = 0
+    i = 0
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i >= n Then Exit Function
+    If line[i] <> 35 Then Exit Function
+    i = i + 1
+    lstrcpy(VarPtr(word), "usewindow")
+    k = 0
+    While word[k] <> 0
+        If i + k >= n Then Exit Function
+        If PpToLower(line[i + k]) <> word[k] Then Exit Function
+        k = k + 1
+    Wend
+    i = i + k
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i >= n Then Exit Function
+    If line[i] <> 61 Then Exit Function
+    i = i + 1
+    v = 0
+    got = 0
+    While i < n
+        c = line[i]
+        If c >= 48 And c <= 57 Then
+            v = v * 10 + (c - 48)
+            got = 1
+        ElseIf c = 32 Or c = 9 Then
+            If got <> 0 Then Exit While
+        Else
+            Exit While
+        End If
+        i = i + 1
+    Wend
+    If got = 0 Then Exit Function
+    valOut = v
+    PpLineUseWindow = 1
+End Function
+
 Function PpTrimCopy(line As *Byte, n As Long, dst As *Byte, dstMax As Long) As Long
     Dim i As Long
     Dim j As Long
@@ -273,7 +532,7 @@ Function PpTrimCopy(line As *Byte, n As Long, dst As *Byte, dstMax As Long) As L
     PpTrimCopy = j
 End Function
 
-Function CombinePjSources(pjPath As *Byte) As *Byte
+Function CombinePjSources(pjPath As *Byte, st As *PpState) As *Byte
     Dim pj As *Byte
     Dim pjSize As Long
     Dim i As Long
@@ -295,8 +554,11 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
     Dim nSrc As Long
     Dim hdr(63) As Byte
     Dim j As Long
+    Dim uwVal As Long
 
     CombinePjSources = NULL
+    PpOnceReset(st)
+    st.useWindow = 0
     pj = LoadFile(pjPath, pjSize)
     If pj = NULL Then Exit Function
     PpDirOf(pjPath, VarPtr(dir))
@@ -329,6 +591,10 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
         Wend
         line[n] = 0
 
+        If PpLineUseWindow(VarPtr(line), n, uwVal) <> 0 Then
+            st.useWindow = uwVal
+        End If
+
         If PpLineIsSourceHeader(VarPtr(line), n) <> 0 Then
             inSource = 1
         ElseIf inSource <> 0 Then
@@ -354,58 +620,61 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
                         lstrcpy(VarPtr(full), VarPtr(dir))
                         lstrcat(VarPtr(full), VarPtr(name))
                     End If
-                    src = LoadFile(VarPtr(full), srcSize)
-                    If src = NULL Then
-                        free(pj)
-                        free(dst)
-                        Exit Function
-                    End If
-                    expanded = ExpandIncludes(src, srcSize, VarPtr(full))
-                    free(src)
-                    If expanded = NULL Then
-                        free(pj)
-                        free(dst)
-                        Exit Function
-                    End If
-                    lstrcpy(VarPtr(hdr), "' ---- ")
-                    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then
+                    If PpOnceHas(st, VarPtr(full)) = 0 Then
+                        src = LoadFile(VarPtr(full), srcSize)
+                        If src = NULL Then
+                            free(pj)
+                            free(dst)
+                            Exit Function
+                        End If
+                        PpOnceAdd(st, VarPtr(full))
+                        expanded = ExpandIncludes(src, srcSize, VarPtr(full), st)
+                        free(src)
+                        If expanded = NULL Then
+                            free(pj)
+                            free(dst)
+                            Exit Function
+                        End If
+                        lstrcpy(VarPtr(hdr), "' ---- ")
+                        If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then
+                            free(expanded)
+                            free(pj)
+                            free(dst)
+                            Exit Function
+                        End If
+                        If PpAppend(dst, dstLen, dstCap, VarPtr(name), lstrlen(VarPtr(name))) = 0 Then
+                            free(expanded)
+                            free(pj)
+                            free(dst)
+                            Exit Function
+                        End If
+                        lstrcpy(VarPtr(hdr), " ----")
+                        hdr[5] = 13
+                        hdr[6] = 10
+                        hdr[7] = 0
+                        If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then
+                            free(expanded)
+                            free(pj)
+                            free(dst)
+                            Exit Function
+                        End If
+                        expLen = lstrlen(expanded)
+                        If PpAppend(dst, dstLen, dstCap, expanded, expLen) = 0 Then
+                            free(expanded)
+                            free(pj)
+                            free(dst)
+                            Exit Function
+                        End If
+                        line[0] = 13
+                        line[1] = 10
+                        If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then
+                            free(expanded)
+                            free(pj)
+                            free(dst)
+                            Exit Function
+                        End If
                         free(expanded)
-                        free(pj)
-                        free(dst)
-                        Exit Function
                     End If
-                    If PpAppend(dst, dstLen, dstCap, VarPtr(name), lstrlen(VarPtr(name))) = 0 Then
-                        free(expanded)
-                        free(pj)
-                        free(dst)
-                        Exit Function
-                    End If
-                    lstrcpy(VarPtr(hdr), " ----")
-                    hdr[5] = 13
-                    hdr[6] = 10
-                    hdr[7] = 0
-                    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then
-                        free(expanded)
-                        free(pj)
-                        free(dst)
-                        Exit Function
-                    End If
-                    expLen = lstrlen(expanded)
-                    If PpAppend(dst, dstLen, dstCap, expanded, expLen) = 0 Then
-                        free(expanded)
-                        free(pj)
-                        free(dst)
-                        Exit Function
-                    End If
-                    line[0] = 13
-                    line[1] = 10
-                    If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then
-                        free(expanded)
-                        free(pj)
-                        free(dst)
-                        Exit Function
-                    End If
-                    free(expanded)
                     nSrc = nSrc + 1
                 End If
             End If
