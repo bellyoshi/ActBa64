@@ -17,6 +17,7 @@ End Type
 Dim g_textBuf As TextBuffer
 Dim g_lineOff As LineOffsetTable
 Dim g_strComp As String
+Dim g_selAnchor As Long
 
 Function IsSjisLeadByte(ByVal b As Long) As Long
     If (b >= &H81 And b <= &H9F) Or (b >= &HE0 And b <= &HFC) Then
@@ -249,6 +250,102 @@ Function TextBuf_CursorLine() As Long
     TextBuf_CursorLine = TextBuf_GetLineAtIndex(g_textBuf.gap_start)
 End Function
 
+Function TextBuf_CursorIndex() As Long
+    TextBuf_EnsureInit()
+    TextBuf_CursorIndex = g_textBuf.gap_start
+End Function
+
+Sub TextBuf_ClearSelection()
+    g_selAnchor = -1
+End Sub
+
+Function TextBuf_HasSelection() As Long
+    TextBuf_HasSelection = 0
+    TextBuf_EnsureInit()
+    If g_selAnchor < 0 Then Exit Function
+    If g_selAnchor = g_textBuf.gap_start Then Exit Function
+    TextBuf_HasSelection = 1
+End Function
+
+Function TextBuf_SelStart() As Long
+    Dim a As Long
+    Dim b As Long
+    TextBuf_EnsureInit()
+    a = g_selAnchor
+    b = g_textBuf.gap_start
+    If a < 0 Then a = b
+    If a < b Then
+        TextBuf_SelStart = a
+    Else
+        TextBuf_SelStart = b
+    End If
+End Function
+
+Function TextBuf_SelEnd() As Long
+    Dim a As Long
+    Dim b As Long
+    TextBuf_EnsureInit()
+    a = g_selAnchor
+    b = g_textBuf.gap_start
+    If a < 0 Then a = b
+    If a > b Then
+        TextBuf_SelEnd = a
+    Else
+        TextBuf_SelEnd = b
+    End If
+End Function
+
+Sub TextBuf_SelectAll()
+    TextBuf_EnsureInit()
+    g_selAnchor = 0
+    TextBuf_MoveCursorTo(TextBuf_Len())
+    TextBuf_SyncPreferredCol()
+End Sub
+
+Function TextBuf_GetSelected$() As String
+    Dim s As String
+    Dim a As Long
+    Dim b As Long
+    Dim n As Long
+
+    TextBuf_GetSelected$ = ""
+    If TextBuf_HasSelection() = 0 Then Exit Function
+    s = TextBuf_GetConfirmed$()
+    a = TextBuf_SelStart()
+    b = TextBuf_SelEnd()
+    n = Len(s)
+    If a < 0 Then a = 0
+    If b > n Then b = n
+    If b <= a Then Exit Function
+    TextBuf_GetSelected$ = Mid$(s, a + 1, b - a)
+End Function
+
+Sub TextBuf_DeleteSelection()
+    Dim s As String
+    Dim a As Long
+    Dim b As Long
+    Dim n As Long
+    Dim leftS As String
+    Dim rightS As String
+
+    If TextBuf_HasSelection() = 0 Then Exit Sub
+    a = TextBuf_SelStart()
+    b = TextBuf_SelEnd()
+    s = TextBuf_GetConfirmed$()
+    n = Len(s)
+    leftS = ""
+    rightS = ""
+    If a > 0 Then leftS = Left$(s, a)
+    If b < n Then rightS = Mid$(s, b + 1)
+    EditorUndo_EndCoalesce()
+    EditorUndo_BeforeEdit()
+    TextBuf_SetText(leftS + rightS)
+    TextBuf_MoveCursorTo(a)
+    TextBuf_SyncPreferredCol()
+    g_selAnchor = -1
+    EditorUndo_EndCoalesce()
+End Sub
+
 Dim g_preferredCol As Long
 
 Sub TextBuf_SyncPreferredCol()
@@ -315,6 +412,7 @@ Sub TextBuf_MoveCursorUp()
     Dim lineNo As Long
 
     TextBuf_EnsureInit()
+    TextBuf_ClearSelection()
     lineNo = TextBuf_CursorLine()
     If lineNo <= 1 Then
         TextBuf_MoveCursorTo(TextBuf_GetLineStart(1))
@@ -328,6 +426,7 @@ Sub TextBuf_MoveCursorDown()
     Dim lineCount As Long
 
     TextBuf_EnsureInit()
+    TextBuf_ClearSelection()
     lineNo = TextBuf_CursorLine()
     lineCount = TextBuf_LineCount()
     If lineNo >= lineCount Then
@@ -374,6 +473,7 @@ Sub InitTextBuffer()
     g_textBuf.buffer = malloc(g_textBuf.capacity)
     g_textBuf.gap_start = 0
     g_textBuf.gap_end = g_textBuf.capacity
+    g_selAnchor = -1
     LineOff_Init()
 End Sub
 
@@ -430,6 +530,9 @@ Sub TextBuf_InsertChar(ByVal c As Long)
     Dim bp As *Byte
 
     TextBuf_EnsureInit()
+    If TextBuf_HasSelection() <> 0 Then
+        TextBuf_DeleteSelection()
+    End If
     EditorUndo_BeforeEdit()
 
     If g_textBuf.gap_start = g_textBuf.gap_end Then
@@ -446,6 +549,23 @@ Sub TextBuf_InsertChar(ByVal c As Long)
     If g_undoSuppress = 0 Then EditorDoc_MarkDirty()
 End Sub
 
+Sub TextBuf_DeleteForward()
+    Dim n As Long
+
+    TextBuf_EnsureInit()
+    If TextBuf_HasSelection() <> 0 Then
+        TextBuf_DeleteSelection()
+        Exit Sub
+    End If
+    n = TextBuf_NextCharBytes()
+    If n <= 0 Then Exit Sub
+    EditorUndo_BeforeEdit()
+    g_textBuf.gap_end = g_textBuf.gap_end + n
+    TextBuf_RebuildLineOffsets()
+    TextBuf_SyncPreferredCol()
+    If g_undoSuppress = 0 Then EditorDoc_MarkDirty()
+End Sub
+
 Sub TextBuf_Delete()
     Dim i As Long
     Dim lastStart As Long
@@ -454,6 +574,10 @@ Sub TextBuf_Delete()
     Dim bp As *Byte
 
     TextBuf_EnsureInit()
+    If TextBuf_HasSelection() <> 0 Then
+        TextBuf_DeleteSelection()
+        Exit Sub
+    End If
     If g_textBuf.gap_start <= 0 Then Exit Sub
     EditorUndo_BeforeEdit()
 
@@ -558,6 +682,7 @@ Sub TextBuf_MoveCursorLeft()
     Dim n As Long
 
     TextBuf_EnsureInit()
+    TextBuf_ClearSelection()
     n = TextBuf_PrevCharBytes()
     If n <= 0 Then Exit Sub
     TextBuf_MoveCursorTo(g_textBuf.gap_start - n)
@@ -568,6 +693,7 @@ Sub TextBuf_MoveCursorRight()
     Dim n As Long
 
     TextBuf_EnsureInit()
+    TextBuf_ClearSelection()
     n = TextBuf_NextCharBytes()
     If n <= 0 Then Exit Sub
     TextBuf_MoveCursorTo(g_textBuf.gap_start + n)
@@ -600,6 +726,7 @@ Sub TextBuf_Clear()
     g_textBuf.gap_start = 0
     g_textBuf.gap_end = g_textBuf.capacity
     g_strComp = ""
+    g_selAnchor = -1
     LineOff_Init()
     g_preferredCol = 0
 End Sub
