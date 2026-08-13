@@ -9,6 +9,8 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     Dim codeMem As *Byte
     Dim cb As CodeBuffer
     Dim textVirt As DWord
+    Dim dataVirt As DWord
+    Dim dataRva As DWord
     Dim idataRva As DWord
 
     CompileIrToPe = 0
@@ -39,10 +41,13 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     cb.buf = codeMem
     cb.capacity = 1048576
 
+    dataVirt = AlignUp(list.globSize, SECTION_ALIGN)
+    If dataVirt < SECTION_ALIGN Then dataVirt = SECTION_ALIGN
+
     ' 1st pass: measure .text size (RIP imm は長さに影響しない)
     IbFinalize(builder, IDATA_RVA, idataBuf, idataSize)
     cb.size = 0
-    IrEmitCode(list, VarPtr(cb), builder)
+    IrEmitCode(list, VarPtr(cb), builder, TEXT_RVA + SECTION_ALIGN)
     If cb.size >= cb.capacity Then
         Print "error: code too large"
         free(codeMem)
@@ -52,12 +57,13 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     End If
 
     textVirt = AlignUp(cb.size, SECTION_ALIGN)
-    idataRva = TEXT_RVA + textVirt
+    dataRva = TEXT_RVA + textVirt
+    idataRva = dataRva + dataVirt
 
-    ' 2nd pass: idata を .text 直後に置き直し、正しい RIP で再 emit
+    ' 2nd pass: .data を .text 直後、.idata をその直後に置き直し
     IbFinalize(builder, idataRva, idataBuf, idataSize)
     cb.size = 0
-    IrEmitCode(list, VarPtr(cb), builder)
+    IrEmitCode(list, VarPtr(cb), builder, dataRva)
     If cb.size >= cb.capacity Then
         Print "error: code too large"
         free(codeMem)
@@ -73,7 +79,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
         Exit Function
     End If
 
-    If WritePe64(outPath, codeMem, cb.size, idataBuf, idataSize, builder, subsystem) <> 0 Then
+    If WritePe64(outPath, codeMem, cb.size, list.globSize, idataBuf, idataSize, builder, subsystem) <> 0 Then
         CompileIrToPe = 1
     Else
         Print "error: cannot write: " + MakeStr(outPath)
