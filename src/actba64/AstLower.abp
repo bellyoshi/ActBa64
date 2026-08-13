@@ -21,6 +21,12 @@ Type LowerCtx
     typeIdxs As *Long
     byRefs As *Long
     frameUsed As Long
+    gNames As *Byte
+    gOffs As *Long
+    gTypes As *Long
+    gTypeIdxs As *Long
+    gCount As Long
+    gSize As Long
     retName As *Byte
     inFunc As Long
     funcNames As *Byte
@@ -134,6 +140,135 @@ Function LowAddSym(ctx As *LowerCtx, name As *Byte, ty As Long, nbytes As Long, 
     ctx.symCount = i + 1
     LowAddSym = i
 End Function
+
+Function LowFindGlob(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindGlob = -1
+    names = ctx.gNames
+    If names = NULL Then Exit Function
+    i = 0
+    While i < ctx.gCount
+        off = i * SYM_NAME_LEN
+        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+            LowFindGlob = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowAddGlob(ctx As *LowerCtx, name As *Byte, ty As Long, nbytes As Long, typeIdx As Long) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim offs As *Long
+    Dim types As *Long
+    Dim typeIdxs As *Long
+    Dim j As Long
+    Dim off As Long
+    Dim sz As Long
+
+    LowAddGlob = -1
+    i = LowFindGlob(ctx, name)
+    If i >= 0 Then
+        LowAddGlob = i
+        Exit Function
+    End If
+    If ctx.gCount >= SYM_MAX Then
+        Print "error: too many globals (max " + Str$(SYM_MAX) + ")"
+        ctx.err = 1
+        Exit Function
+    End If
+    i = ctx.gCount
+    names = ctx.gNames
+    offs = ctx.gOffs
+    types = ctx.gTypes
+    typeIdxs = ctx.gTypeIdxs
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    sz = nbytes
+    If sz < 8 Then sz = 8
+    sz = (sz + 7) And (0 - 8)
+    offs[i] = ctx.gSize
+    ctx.gSize = ctx.gSize + sz
+    types[i] = ty
+    typeIdxs[i] = typeIdx
+    ctx.gCount = i + 1
+    LowAddGlob = i
+End Function
+
+' Resolve name: locals first, then module globals. isGlob=1 if global.
+' Out-params via pointers (avoid many ByRef for older hosts).
+Function LowLookupVar(ctx As *LowerCtx, name As *Byte, outOff As *Long, outTy As *Long, outTypeIdx As *Long, outByRef As *Long, outIsGlob As *Long) As Long
+    Dim si As Long
+    Dim offs As *Long
+    Dim types As *Long
+    Dim typeIdxs As *Long
+    Dim byRefs As *Long
+
+    LowLookupVar = 0
+    outIsGlob[0] = 0
+    outByRef[0] = 0
+    si = LowFindSym(ctx, name)
+    If si >= 0 Then
+        offs = ctx.offs
+        types = ctx.types
+        typeIdxs = ctx.typeIdxs
+        byRefs = ctx.byRefs
+        outOff[0] = offs[si]
+        outTy[0] = types[si]
+        outTypeIdx[0] = typeIdxs[si]
+        outByRef[0] = byRefs[si]
+        LowLookupVar = 1
+        Exit Function
+    End If
+    si = LowFindGlob(ctx, name)
+    If si >= 0 Then
+        offs = ctx.gOffs
+        types = ctx.gTypes
+        typeIdxs = ctx.gTypeIdxs
+        outOff[0] = offs[si]
+        outTy[0] = types[si]
+        outTypeIdx[0] = typeIdxs[si]
+        outByRef[0] = 0
+        outIsGlob[0] = 1
+        LowLookupVar = 1
+    End If
+End Function
+
+Sub LowEmitLeaOff(list As *IrList, off As Long, isGlob As Long)
+    If isGlob <> 0 Then
+        IrEmit(list, 77, off, 0)
+    Else
+        IrEmit(list, OP_LEA_LOCAL, off, 0)
+    End If
+End Sub
+
+Sub LowEmitLoadOff(list As *IrList, off As Long, isGlob As Long)
+    If isGlob <> 0 Then
+        IrEmit(list, 77, off, 0)
+        IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    Else
+        IrEmit(list, OP_LOAD_LOCAL, off, 0)
+    End If
+End Sub
+
+Sub LowEmitStoreOff(list As *IrList, off As Long, isGlob As Long)
+    If isGlob <> 0 Then
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, 77, off, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+    Else
+        IrEmit(list, OP_STORE_LOCAL, off, 0)
+    End If
+End Sub
 
 Function LowFindConst(ctx As *LowerCtx, name As *Byte) As Long
     Dim i As Long
@@ -803,14 +938,17 @@ Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim k As Long
     Dim si As Long
     Dim name(63) As Byte
-    Dim types As *Long
     Dim bi As Long
+    Dim off As Long
+    Dim ty As Long
+    Dim typeIdx As Long
+    Dim byRef As Long
+    Dim isGlob As Long
 
     LowIsStringExpr = 0
     If idx < 0 Then Exit Function
     ast = ctx.ast
     nodes = ast.nodes
-    types = ctx.types
     k = nodes[idx].kind
     If k = AST_STRING Then
         LowIsStringExpr = 1
@@ -851,17 +989,15 @@ Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
             LowIsStringExpr = 1
             Exit Function
         End If
-        si = LowFindSym(ctx, VarPtr(name))
-        If si >= 0 Then
-            If types[si] = TY_STRING Then LowIsStringExpr = 1
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(off), VarPtr(ty), VarPtr(typeIdx), VarPtr(byRef), VarPtr(isGlob)) <> 0 Then
+            If ty = TY_STRING Then LowIsStringExpr = 1
         End If
         Exit Function
     End If
     If k = AST_CALL Then
         AstCopyStr(ast, idx, VarPtr(name))
-        si = LowFindSym(ctx, VarPtr(name))
-        If si >= 0 Then
-            If types[si] = TY_STRING_ARR Then
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(off), VarPtr(ty), VarPtr(typeIdx), VarPtr(byRef), VarPtr(isGlob)) <> 0 Then
+            If ty = TY_STRING_ARR Then
                 If nodes[idx].num = 1 Then LowIsStringExpr = 1
             End If
         Else
@@ -1404,6 +1540,8 @@ Sub LowLoadSized(list As *IrList, sz As Long)
         IrEmit(list, OP_LOADZX_WORD_RAX, 0, 0)
     ElseIf sz = 4 Then
         IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    ElseIf sz = 8 Then
+        IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
     Else
         IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
     End If
@@ -1416,6 +1554,8 @@ Sub LowStoreSized(list As *IrList, sz As Long)
         IrEmit(list, OP_STORE_WORD_RAX_CX, 0, 0)
     ElseIf sz = 4 Then
         IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+    ElseIf sz = 8 Then
+        IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
     Else
         IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
     End If
@@ -1430,13 +1570,16 @@ Function LowMemberFieldType(ctx As *LowerCtx, idx As Long) As Long
     Dim base As Long
     Dim name(63) As Byte
     Dim fname(63) As Byte
-    Dim si As Long
     Dim ti As Long
-    Dim typeIdxs As *Long
     Dim foff As Long
     Dim fsz As Long
     Dim fcnt As Long
     Dim fieldTy As Long
+    Dim off As Long
+    Dim ty As Long
+    Dim typeIdx As Long
+    Dim byRef As Long
+    Dim isGlob As Long
 
     LowMemberFieldType = -1
     If idx < 0 Then Exit Function
@@ -1444,16 +1587,14 @@ Function LowMemberFieldType(ctx As *LowerCtx, idx As Long) As Long
     nodes = ast.nodes
     If nodes[idx].kind <> AST_MEMBER Then Exit Function
     tt = ast.types
-    typeIdxs = ctx.typeIdxs
     base = nodes[idx].left
     AstCopyStr(ast, idx, VarPtr(fname))
     If nodes[base].kind = AST_MEMBER Then
         ti = LowMemberFieldType(ctx, base)
     ElseIf nodes[base].kind = AST_VAR Then
         AstCopyStr(ast, base, VarPtr(name))
-        si = LowFindSym(ctx, VarPtr(name))
-        If si < 0 Then Exit Function
-        ti = typeIdxs[si]
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(off), VarPtr(ty), VarPtr(typeIdx), VarPtr(byRef), VarPtr(isGlob)) = 0 Then Exit Function
+        ti = typeIdx
     Else
         Exit Function
     End If
@@ -1468,11 +1609,6 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
     Dim list As *IrList
     Dim name(63) As Byte
     Dim fname(63) As Byte
-    Dim si As Long
-    Dim offs As *Long
-    Dim types As *Long
-    Dim typeIdxs As *Long
-    Dim byRefs As *Long
     Dim base As Long
     Dim k As Long
     Dim nArgs As Long
@@ -1484,6 +1620,11 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
     Dim esz As Long
     Dim tsizes As *Long
     Dim ix As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
 
     LowAddr = 0
     If idx < 0 Then
@@ -1494,23 +1635,18 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
     list = ctx.list
     nodes = ast.nodes
     k = nodes[idx].kind
-    offs = ctx.offs
-    types = ctx.types
-    typeIdxs = ctx.typeIdxs
     tt = ast.types
 
     If k = AST_VAR Then
         AstCopyStr(ast, idx, VarPtr(name))
-        si = LowFindSym(ctx, VarPtr(name))
-        If si < 0 Then
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
             ctx.err = 1
             Exit Function
         End If
-        byRefs = ctx.byRefs
-        If byRefs[si] <> 0 Then
-            IrEmit(list, OP_LOAD_LOCAL, offs[si], 0)
+        If vByRef <> 0 Then
+            LowEmitLoadOff(list, vOff, vGlob)
         Else
-            IrEmit(list, OP_LEA_LOCAL, offs[si], 0)
+            LowEmitLeaOff(list, vOff, vGlob)
         End If
         LowAddr = 1
     ElseIf k = AST_MEMBER Then
@@ -1527,26 +1663,24 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
         ElseIf nodes[base].kind = AST_INDEX Then
             If LowAddr(ctx, base) = 0 Then Exit Function
             AstCopyStr(ast, nodes[base].left, VarPtr(name))
-            si = LowFindSym(ctx, VarPtr(name))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            ti = typeIdxs[si]
+            ti = vTypeIdx
         ElseIf nodes[base].kind = AST_VAR Then
             AstCopyStr(ast, base, VarPtr(name))
-            si = LowFindSym(ctx, VarPtr(name))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            ti = typeIdxs[si]
+            ti = vTypeIdx
             If nodes[idx].num <> 0 Then
-                IrEmit(list, OP_LOAD_LOCAL, offs[si], 0)
-            ElseIf types[si] = TY_PTR_UDT Then
-                IrEmit(list, OP_LOAD_LOCAL, offs[si], 0)
+                LowEmitLoadOff(list, vOff, vGlob)
+            ElseIf vTy = TY_PTR_UDT Then
+                LowEmitLoadOff(list, vOff, vGlob)
             Else
-                IrEmit(list, OP_LEA_LOCAL, offs[si], 0)
+                LowEmitLeaOff(list, vOff, vGlob)
             End If
         Else
             ctx.err = 1
@@ -1568,14 +1702,13 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
                 Exit Function
             End If
             AstCopyStr(ast, idx, VarPtr(name))
-            si = LowFindSym(ctx, VarPtr(name))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            If types[si] <> TY_BYTE_ARR Then
-                If types[si] <> TY_LONG_ARR Then
-                    If types[si] <> TY_STRING_ARR Then
+            If vTy <> TY_BYTE_ARR Then
+                If vTy <> TY_LONG_ARR Then
+                    If vTy <> TY_STRING_ARR Then
                         ctx.err = 1
                         Exit Function
                     End If
@@ -1588,9 +1721,9 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
             End If
             If LowExpr(ctx, ix) = 0 Then Exit Function
             IrEmit(list, OP_PUSH_RAX, 0, 0)
-            IrEmit(list, OP_LEA_LOCAL, offs[si], 0)
+            LowEmitLeaOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
-            If types[si] = TY_LONG_ARR Or types[si] = TY_STRING_ARR Then
+            If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
                 IrEmit(list, OP_SHL_ECX_3, 0, 0)
             End If
             IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
@@ -1609,12 +1742,11 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
                 ctx.err = 1
                 Exit Function
             End If
-            si = LowFindSym(ctx, VarPtr(name))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            ti = typeIdxs[si]
+            ti = vTypeIdx
             If TyFindField(tt, ti, VarPtr(fname), foff, fsz, fcnt) = 0 Then
                 ctx.err = 1
                 Exit Function
@@ -1650,14 +1782,13 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
             Exit Function
         End If
         AstCopyStr(ast, base, VarPtr(name))
-        si = LowFindSym(ctx, VarPtr(name))
-        If si < 0 Then
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
             ctx.err = 1
             Exit Function
         End If
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-        If types[si] = TY_PTR_UDT Then
-            ti = typeIdxs[si]
+        If vTy = TY_PTR_UDT Then
+            ti = vTypeIdx
             tsizes = tt.typeSizes
             esz = tsizes[ti]
             If esz <= 0 Then
@@ -1667,34 +1798,34 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_ECX, esz, 0)
             IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
             IrEmit(list, OP_PUSH_RAX, 0, 0)
-            IrEmit(list, OP_LOAD_LOCAL, offs[si], 0)
+            LowEmitLoadOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
             IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
             LowAddr = 1
             Exit Function
         End If
-        If types[si] = TY_PTR_LONG Then
+        If vTy = TY_PTR_LONG Then
             IrEmit(list, OP_MOV_ECX, 4, 0)
             IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
             IrEmit(list, OP_PUSH_RAX, 0, 0)
-            IrEmit(list, OP_LOAD_LOCAL, offs[si], 0)
+            LowEmitLoadOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
             IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
             LowAddr = 1
             Exit Function
         End If
         IrEmit(list, OP_PUSH_RAX, 0, 0)
-        If types[si] = TY_BYTE_ARR Then
-            IrEmit(list, OP_LEA_LOCAL, offs[si], 0)
-        ElseIf types[si] = TY_LONG_ARR Or types[si] = TY_STRING_ARR Then
-            IrEmit(list, OP_LEA_LOCAL, offs[si], 0)
+        If vTy = TY_BYTE_ARR Then
+            LowEmitLeaOff(list, vOff, vGlob)
+        ElseIf vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
+            LowEmitLeaOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
             IrEmit(list, OP_SHL_ECX_3, 0, 0)
             IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
             LowAddr = 1
             Exit Function
-        ElseIf types[si] = TY_PTR_BYTE Then
-            IrEmit(list, OP_LOAD_LOCAL, offs[si], 0)
+        ElseIf vTy = TY_PTR_BYTE Then
+            LowEmitLoadOff(list, vOff, vGlob)
         Else
             ctx.err = 1
             Exit Function
@@ -1712,27 +1843,28 @@ Function LowExprArg(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(63) As Byte
-    Dim si As Long
-    Dim types As *Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
 
     LowExprArg = 0
     If idx < 0 Then Exit Function
     ast = ctx.ast
     nodes = ast.nodes
-    types = ctx.types
     If nodes[idx].kind = AST_VAR Then
         AstCopyStr(ast, idx, VarPtr(name))
-        si = LowFindSym(ctx, VarPtr(name))
-        If si >= 0 Then
-            If types[si] = TY_BYTE_ARR Then
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_BYTE_ARR Then
                 LowExprArg = LowAddr(ctx, idx)
                 Exit Function
             End If
-            If types[si] = TY_LONG_ARR Then
+            If vTy = TY_LONG_ARR Then
                 LowExprArg = LowAddr(ctx, idx)
                 Exit Function
             End If
-            If types[si] = TY_STRING_ARR Then
+            If vTy = TY_STRING_ARR Then
                 LowExprArg = LowAddr(ctx, idx)
                 Exit Function
             End If
@@ -1746,8 +1878,11 @@ Function LowArgIsUdtVar(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(63) As Byte
-    Dim si As Long
-    Dim types As *Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
 
     LowArgIsUdtVar = 0
     If idx < 0 Then Exit Function
@@ -1755,10 +1890,8 @@ Function LowArgIsUdtVar(ctx As *LowerCtx, idx As Long) As Long
     nodes = ast.nodes
     If nodes[idx].kind <> AST_VAR Then Exit Function
     AstCopyStr(ast, idx, VarPtr(name))
-    si = LowFindSym(ctx, VarPtr(name))
-    If si < 0 Then Exit Function
-    types = ctx.types
-    If types[si] = TY_UDT Then LowArgIsUdtVar = 1
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy = TY_UDT Then LowArgIsUdtVar = 1
 End Function
 
 Function LowUseArgAddr(ctx As *LowerCtx, idx As Long, byBits As Long, bit As Long, isApi As Long) As Long
@@ -1820,6 +1953,11 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim useAddr As Long
     Dim labA As Long
     Dim labB As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
 
     LowExpr = 0
     If idx < 0 Then
@@ -1869,15 +2007,13 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             LowExpr = 1
             Exit Function
         End If
-        si = LowFindSym(ctx, VarPtr(name))
-        If si < 0 Then
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
             Print "error: undefined variable '" + MakeStr(VarPtr(name)) + "'"
             ctx.err = 1
             Exit Function
         End If
-        byRefs = ctx.byRefs
-        IrEmit(list, OP_LOAD_LOCAL, offs[si], 0)
-        If byRefs[si] <> 0 Then
+        LowEmitLoadOff(list, vOff, vGlob)
+        If vByRef <> 0 Then
             IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
         End If
         LowExpr = 1
@@ -1893,12 +2029,11 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             ctx.err = 1
             Exit Function
         End If
-        si = LowFindSym(ctx, VarPtr(buf))
-        If si < 0 Then
+        If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
             ctx.err = 1
             Exit Function
         End If
-        ti = typeIdxs[si]
+        ti = vTypeIdx
         If TyFindField(tt, ti, VarPtr(name), foff, fsz, fcnt) = 0 Then
             ctx.err = 1
             Exit Function
@@ -1919,12 +2054,11 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 ctx.err = 1
                 Exit Function
             End If
-            si = LowFindSym(ctx, VarPtr(buf))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            ti = typeIdxs[si]
+            ti = vTypeIdx
             If TyFindField(tt, ti, VarPtr(name), foff, fsz, fcnt) = 0 Then
                 ctx.err = 1
                 Exit Function
@@ -1941,11 +2075,10 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         Else
             If LowAddr(ctx, idx) = 0 Then Exit Function
             AstCopyStr(ast, base, VarPtr(buf))
-            si = LowFindSym(ctx, VarPtr(buf))
-            If si >= 0 Then
-                If types[si] = TY_PTR_LONG Or types[si] = TY_LONG_ARR Then
+            If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_PTR_LONG Or vTy = TY_LONG_ARR Then
                     LowLoadSized(list, 4)
-                ElseIf types[si] = TY_STRING_ARR Then
+                ElseIf vTy = TY_STRING_ARR Then
                     LowLoadSized(list, 8)
                 Else
                     IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
@@ -1961,8 +2094,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             sz = TySizeOfName(tt, VarPtr(name))
             If sz <= 0 Then
                 ' also allow SizeOf(var)
-                si = LowFindSym(ctx, VarPtr(name))
-                If si < 0 Then
+                If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                     ctx.err = 1
                     Exit Function
                 End If
@@ -2011,10 +2143,9 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             ' Len(UDT var) => SizeOf(type); else string Len via lstrlenA
             If nodes[nodes[idx].left].kind = AST_VAR Then
                 AstCopyStr(ast, nodes[idx].left, VarPtr(name))
-                si = LowFindSym(ctx, VarPtr(name))
-                If si >= 0 Then
-                    If types[si] = TY_UDT Then
-                        ti = typeIdxs[si]
+                If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                    If vTy = TY_UDT Then
+                        ti = vTypeIdx
                         If ti >= 0 Then
                             tsizes = tt.typeSizes
                             sz = tsizes[ti]
@@ -2357,24 +2488,25 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             LowExpr = 1
             Exit Function
         End If
-        si = LowFindSym(ctx, VarPtr(name))
-        If si >= 0 And types[si] = TY_BYTE_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
-            LowExpr = 1
-            Exit Function
-        End If
-        If si >= 0 And types[si] = TY_LONG_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
-            LowExpr = 1
-            Exit Function
-        End If
-        If si >= 0 And types[si] = TY_STRING_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
-            LowExpr = 1
-            Exit Function
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_BYTE_ARR And nodes[idx].num = 1 Then
+                If LowAddr(ctx, idx) = 0 Then Exit Function
+                IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+                LowExpr = 1
+                Exit Function
+            End If
+            If vTy = TY_LONG_ARR And nodes[idx].num = 1 Then
+                If LowAddr(ctx, idx) = 0 Then Exit Function
+                IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+                LowExpr = 1
+                Exit Function
+            End If
+            If vTy = TY_STRING_ARR And nodes[idx].num = 1 Then
+                If LowAddr(ctx, idx) = 0 Then Exit Function
+                IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+                LowExpr = 1
+                Exit Function
+            End If
         End If
         lab = LowFindFunc(ctx, VarPtr(name))
         isApi = 0
@@ -2825,6 +2957,11 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
     Dim labSub As Long
     Dim labDone As Long
     Dim sApi(31) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
 
     LowStmt = 0
     If idx < 0 Then
@@ -2841,13 +2978,11 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         If nodes[idx].right >= 0 Then
             If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
             AstCopyStr(ast, idx, VarPtr(name))
-            si = LowFindSym(ctx, VarPtr(name))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            offs = ctx.offs
-            IrEmit(ctx.list, OP_STORE_LOCAL, offs[si], 0)
+            LowEmitStoreOff(ctx.list, vOff, vGlob)
         End If
         LowStmt = 1
     ElseIf k = AST_CONST Then
@@ -2864,10 +2999,8 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(ctx.list, OP_POP_RCX, 0, 0)
             If leftK = AST_CALL Then
                 AstCopyStr(ast, leftIdx, VarPtr(name))
-                si = LowFindSym(ctx, VarPtr(name))
-                If si >= 0 Then
-                    types = ctx.types
-                    If types[si] = TY_LONG_ARR Or types[si] = TY_STRING_ARR Then
+                If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                    If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
                         IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
                     Else
                         IrEmit(ctx.list, OP_STORE_BYTE_RAX_CL, 0, 0)
@@ -2888,12 +3021,11 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                         ctx.err = 1
                         Exit Function
                     End If
-                    si = LowFindSym(ctx, VarPtr(name))
-                    If si < 0 Then
+                    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                         ctx.err = 1
                         Exit Function
                     End If
-                    ti = typeIdxs[si]
+                    ti = vTypeIdx
                     If TyFindField(tt, ti, VarPtr(fname), foff, fsz, fcnt) = 0 Then
                         ctx.err = 1
                         Exit Function
@@ -2908,12 +3040,10 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                     End If
                 Else
                     AstCopyStr(ast, base, VarPtr(name))
-                    si = LowFindSym(ctx, VarPtr(name))
-                    If si >= 0 Then
-                        types = ctx.types
-                        If types[si] = TY_LONG_ARR Or types[si] = TY_STRING_ARR Then
+                    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                        If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
                             IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
-                        ElseIf types[si] = TY_PTR_LONG Then
+                        ElseIf vTy = TY_PTR_LONG Then
                             LowStoreSized(ctx.list, 4)
                         Else
                             IrEmit(ctx.list, OP_STORE_BYTE_RAX_CL, 0, 0)
@@ -2939,12 +3069,11 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                 ctx.err = 1
                 Exit Function
             End If
-            si = LowFindSym(ctx, VarPtr(name))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            ti = typeIdxs[si]
+            ti = vTypeIdx
             If TyFindField(tt, ti, VarPtr(fname), foff, fsz, fcnt) = 0 Then
                 ctx.err = 1
                 Exit Function
@@ -2954,20 +3083,17 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         ElseIf leftK = AST_VAR Then
             If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
             AstCopyStr(ast, nodes[idx].left, VarPtr(name))
-            si = LowFindSym(ctx, VarPtr(name))
-            If si < 0 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
                 ctx.err = 1
                 Exit Function
             End If
-            offs = ctx.offs
-            byRefs = ctx.byRefs
-            If byRefs[si] <> 0 Then
+            If vByRef <> 0 Then
                 IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
-                IrEmit(ctx.list, OP_LOAD_LOCAL, offs[si], 0)
+                LowEmitLoadOff(ctx.list, vOff, vGlob)
                 IrEmit(ctx.list, OP_POP_RCX, 0, 0)
                 IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
             Else
-                IrEmit(ctx.list, OP_STORE_LOCAL, offs[si], 0)
+                LowEmitStoreOff(ctx.list, vOff, vGlob)
             End If
             LowStmt = 1
         Else
@@ -3092,28 +3218,27 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
     ElseIf k = AST_PRINT Then
         lab = LowEnsureRtPrint(ctx)
         AstCopyStr(ctx.ast, nodes[idx].left, VarPtr(name))
-        si = -1
+        vTy = -1
         If nodes[idx].left >= 0 Then
             If nodes[nodes[idx].left].kind = AST_VAR Then
-                si = LowFindSym(ctx, VarPtr(name))
+                If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+                    vTy = -1
+                End If
             End If
         End If
-        If si >= 0 Then
-            types = ctx.types
-            If types[si] = TY_BYTE_ARR Then
-                If LowExprArg(ctx, nodes[idx].left) = 0 Then Exit Function
-                IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
-                IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
-                LowStmt = 1
-                Exit Function
-            End If
-            If types[si] = TY_PTR_BYTE Then
-                If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-                IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
-                IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
-                LowStmt = 1
-                Exit Function
-            End If
+        If vTy = TY_BYTE_ARR Then
+            If LowExprArg(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
+            IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+            LowStmt = 1
+            Exit Function
+        End If
+        If vTy = TY_PTR_BYTE Then
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
+            IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+            LowStmt = 1
+            Exit Function
         End If
         If LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
             labStr = LowEnsureRtStr(ctx)
@@ -3137,27 +3262,23 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             Exit Function
         End If
         AstCopyStr(ast, nodes[idx].left, VarPtr(name))
-        si = LowFindSym(ctx, VarPtr(name))
-        If si < 0 Then
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
             ctx.err = 1
             Exit Function
         End If
-        types = ctx.types
-        If types[si] <> TY_STRING Then
+        If vTy <> TY_STRING Then
             ctx.err = 1
             Exit Function
         End If
         lab = LowEnsureRtInput(ctx)
         IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
-        offs = ctx.offs
-        byRefs = ctx.byRefs
-        If byRefs[si] <> 0 Then
+        If vByRef <> 0 Then
             IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
-            IrEmit(ctx.list, OP_LOAD_LOCAL, offs[si], 0)
+            LowEmitLoadOff(ctx.list, vOff, vGlob)
             IrEmit(ctx.list, OP_POP_RCX, 0, 0)
             IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
         Else
-            IrEmit(ctx.list, OP_STORE_LOCAL, offs[si], 0)
+            LowEmitStoreOff(ctx.list, vOff, vGlob)
         End If
         LowStmt = 1
     ElseIf k = AST_IF Then
@@ -3197,19 +3318,17 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         ' left=var, right=from, extra=to, num=body
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
         AstCopyStr(ast, nodes[idx].left, VarPtr(name))
-        si = LowFindSym(ctx, VarPtr(name))
-        If si < 0 Then
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
             ctx.err = 1
             Exit Function
         End If
-        offs = ctx.offs
-        IrEmit(ctx.list, OP_STORE_LOCAL, offs[si], 0)
+        LowEmitStoreOff(ctx.list, vOff, vGlob)
         labTop = LowNewLab(ctx)
         labEnd = LowNewLab(ctx)
         saveFor = ctx.forEndLab
         ctx.forEndLab = labEnd
         IrEmit(ctx.list, OP_LABEL, labTop, 0)
-        IrEmit(ctx.list, OP_LOAD_LOCAL, offs[si], 0)
+        LowEmitLoadOff(ctx.list, vOff, vGlob)
         IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
         If LowExpr(ctx, nodes[idx].extra) = 0 Then Exit Function
         IrEmit(ctx.list, OP_POP_RCX, 0, 0)
@@ -3218,7 +3337,14 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(ctx.list, OP_JG, labEnd, 0)
         body = nodes[idx].num
         If LowStmtList(ctx, body) = 0 Then Exit Function
-        IrEmit(ctx.list, OP_INC_LOCAL, offs[si], 0)
+        If vGlob <> 0 Then
+            LowEmitLoadOff(ctx.list, vOff, vGlob)
+            IrEmit(ctx.list, OP_MOV_ECX, 1, 0)
+            IrEmit(ctx.list, OP_ADD_EAX_ECX, 0, 0)
+            LowEmitStoreOff(ctx.list, vOff, vGlob)
+        Else
+            IrEmit(ctx.list, OP_INC_LOCAL, vOff, 0)
+        End If
         IrEmit(ctx.list, OP_JMP, labTop, 0)
         IrEmit(ctx.list, OP_LABEL, labEnd, 0)
         ctx.forEndLab = saveFor
@@ -3256,6 +3382,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     Dim typesBuf As *Long
     Dim typeIdxsBuf As *Long
     Dim byRefsBuf As *Long
+    Dim gNamesBuf As *Byte
+    Dim gOffsBuf As *Long
+    Dim gTypesBuf As *Long
+    Dim gTypeIdxsBuf As *Long
     Dim funcNamesBuf As *Byte
     Dim funcLabsBuf As *Long
     Dim funcByRefsBuf As *Long
@@ -3304,6 +3434,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     typesBuf = calloc(SizeOf(Long) * SYM_MAX)
     typeIdxsBuf = calloc(SizeOf(Long) * SYM_MAX)
     byRefsBuf = calloc(SizeOf(Long) * SYM_MAX)
+    gNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
+    gOffsBuf = calloc(SizeOf(Long) * SYM_MAX)
+    gTypesBuf = calloc(SizeOf(Long) * SYM_MAX)
+    gTypeIdxsBuf = calloc(SizeOf(Long) * SYM_MAX)
     funcNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
     funcLabsBuf = calloc(SizeOf(Long) * SYM_MAX)
     funcByRefsBuf = calloc(SizeOf(Long) * SYM_MAX)
@@ -3315,13 +3449,17 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     declApiNamesBuf = calloc(SYM_MAX * SYM_NAME_LEN)
     declDllsBuf = calloc(SizeOf(Long) * SYM_MAX)
     declByRefsBuf = calloc(SizeOf(Long) * SYM_MAX)
-    If namesBuf = NULL Or offsBuf = NULL Or typesBuf = NULL Or typeIdxsBuf = NULL Or byRefsBuf = NULL Or funcNamesBuf = NULL Or funcLabsBuf = NULL Or funcByRefsBuf = NULL Or constNamesBuf = NULL Or constValsBuf = NULL Or constStrNamesBuf = NULL Or constStrValsBuf = NULL Or declNamesBuf = NULL Or declApiNamesBuf = NULL Or declDllsBuf = NULL Or declByRefsBuf = NULL Then
+    If namesBuf = NULL Or offsBuf = NULL Or typesBuf = NULL Or typeIdxsBuf = NULL Or byRefsBuf = NULL Or gNamesBuf = NULL Or gOffsBuf = NULL Or gTypesBuf = NULL Or gTypeIdxsBuf = NULL Or funcNamesBuf = NULL Or funcLabsBuf = NULL Or funcByRefsBuf = NULL Or constNamesBuf = NULL Or constValsBuf = NULL Or constStrNamesBuf = NULL Or constStrValsBuf = NULL Or declNamesBuf = NULL Or declApiNamesBuf = NULL Or declDllsBuf = NULL Or declByRefsBuf = NULL Then
         LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
         If namesBuf <> NULL Then free(namesBuf)
         If offsBuf <> NULL Then free(offsBuf)
         If typesBuf <> NULL Then free(typesBuf)
         If typeIdxsBuf <> NULL Then free(typeIdxsBuf)
         If byRefsBuf <> NULL Then free(byRefsBuf)
+        If gNamesBuf <> NULL Then free(gNamesBuf)
+        If gOffsBuf <> NULL Then free(gOffsBuf)
+        If gTypesBuf <> NULL Then free(gTypesBuf)
+        If gTypeIdxsBuf <> NULL Then free(gTypeIdxsBuf)
         If funcNamesBuf <> NULL Then free(funcNamesBuf)
         If funcLabsBuf <> NULL Then free(funcLabsBuf)
         If funcByRefsBuf <> NULL Then free(funcByRefsBuf)
@@ -3343,6 +3481,12 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     ctx.typeIdxs = typeIdxsBuf
     ctx.byRefs = byRefsBuf
     ctx.frameUsed = 0
+    ctx.gNames = gNamesBuf
+    ctx.gOffs = gOffsBuf
+    ctx.gTypes = gTypesBuf
+    ctx.gTypeIdxs = gTypeIdxsBuf
+    ctx.gCount = 0
+    ctx.gSize = 0
     ctx.retName = VarPtr(retBuf)
     ctx.inFunc = 0
     ctx.funcNames = funcNamesBuf
@@ -3370,6 +3514,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     ctx.rtPrintLab = -1
     ctx.rtInputLab = -1
     retBuf[0] = 0
+    list.globSize = 0
 
     nPrint = 0
     stmt = nodes[prog].left
@@ -3403,6 +3548,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(typesBuf)
                 free(typeIdxsBuf)
                 free(byRefsBuf)
+                free(gNamesBuf)
+                free(gOffsBuf)
+                free(gTypesBuf)
+                free(gTypeIdxsBuf)
                 free(funcNamesBuf)
                 free(funcLabsBuf)
                 free(funcByRefsBuf)
@@ -3429,6 +3578,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(typesBuf)
                 free(typeIdxsBuf)
                 free(byRefsBuf)
+                free(gNamesBuf)
+                free(gOffsBuf)
+                free(gTypesBuf)
+                free(gTypeIdxsBuf)
                 free(funcNamesBuf)
                 free(funcLabsBuf)
                 free(funcByRefsBuf)
@@ -3459,6 +3612,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(typesBuf)
                     free(typeIdxsBuf)
                     free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
                     free(funcNamesBuf)
                     free(funcLabsBuf)
                     free(funcByRefsBuf)
@@ -3476,6 +3633,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(typesBuf)
                     free(typeIdxsBuf)
                     free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
                     free(funcNamesBuf)
                     free(funcLabsBuf)
                     free(funcByRefsBuf)
@@ -3513,6 +3674,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(typesBuf)
                 free(typeIdxsBuf)
                 free(byRefsBuf)
+                free(gNamesBuf)
+                free(gOffsBuf)
+                free(gTypesBuf)
+                free(gTypeIdxsBuf)
                 free(funcNamesBuf)
                 free(funcLabsBuf)
                 free(funcByRefsBuf)
@@ -3527,6 +3692,178 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
         End If
         stmt = nodes[stmt].nxt
     Wend
+
+    ' module-level Dim -> globals (before any function emit)
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_DIM Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            ty = nodes[stmt].num
+            nbytes = 8
+            ti = -1
+            If ty = TY_BYTE_ARR Then
+                bound = LowBoundVal(VarPtr(ctx), nodes[stmt].left)
+                If bound < 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
+                nbytes = bound + 1
+            ElseIf ty = TY_LONG_ARR Then
+                bound = LowBoundVal(VarPtr(ctx), nodes[stmt].left)
+                If bound < 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
+                nbytes = (bound + 1) * 8
+            ElseIf ty = TY_STRING_ARR Then
+                bound = LowBoundVal(VarPtr(ctx), nodes[stmt].left)
+                If bound < 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
+                nbytes = (bound + 1) * 8
+            ElseIf ty = TY_BYTE Then
+                nbytes = 1
+            ElseIf ty = TY_UDT Then
+                ti = nodes[stmt].extra
+                If ti < 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
+                tsizes = tt.typeSizes
+                nbytes = tsizes[ti]
+                If nbytes <= 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
+            ElseIf ty = TY_PTR_UDT Then
+                ti = nodes[stmt].extra
+                If ti < 0 Then
+                    free(namesBuf)
+                    free(offsBuf)
+                    free(typesBuf)
+                    free(typeIdxsBuf)
+                    free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
+                    free(funcNamesBuf)
+                    free(funcLabsBuf)
+                    free(funcByRefsBuf)
+                    free(constNamesBuf)
+                    free(constValsBuf)
+                    free(constStrNamesBuf)
+                    free(constStrValsBuf)
+                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                    Exit Function
+                End If
+                nbytes = 8
+            End If
+            If LowAddGlob(VarPtr(ctx), VarPtr(nm), ty, nbytes, ti) < 0 Then
+                free(namesBuf)
+                free(offsBuf)
+                free(typesBuf)
+                free(typeIdxsBuf)
+                free(byRefsBuf)
+                free(gNamesBuf)
+                free(gOffsBuf)
+                free(gTypesBuf)
+                free(gTypeIdxsBuf)
+                free(funcNamesBuf)
+                free(funcLabsBuf)
+                free(funcByRefsBuf)
+                free(constNamesBuf)
+                free(constValsBuf)
+                free(constStrNamesBuf)
+                free(constStrValsBuf)
+                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
+                Exit Function
+            End If
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+    list.globSize = ctx.gSize
 
     labMain = LowNewLab(VarPtr(ctx))
     IrEmit(list, OP_JMP, labMain, 0)
@@ -3562,6 +3899,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(typesBuf)
                     free(typeIdxsBuf)
                     free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
                     free(funcNamesBuf)
                     free(funcLabsBuf)
                     free(funcByRefsBuf)
@@ -3583,6 +3924,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(typesBuf)
                     free(typeIdxsBuf)
                     free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
                     free(funcNamesBuf)
                     free(funcLabsBuf)
                     free(funcByRefsBuf)
@@ -3611,6 +3956,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(typesBuf)
                             free(typeIdxsBuf)
                             free(byRefsBuf)
+                            free(gNamesBuf)
+                            free(gOffsBuf)
+                            free(gTypesBuf)
+                            free(gTypeIdxsBuf)
                             free(funcNamesBuf)
                             free(funcLabsBuf)
                             free(funcByRefsBuf)
@@ -3630,6 +3979,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(typesBuf)
                             free(typeIdxsBuf)
                             free(byRefsBuf)
+                            free(gNamesBuf)
+                            free(gOffsBuf)
+                            free(gTypesBuf)
+                            free(gTypeIdxsBuf)
                             free(funcNamesBuf)
                             free(funcLabsBuf)
                             free(funcByRefsBuf)
@@ -3649,6 +4002,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(typesBuf)
                             free(typeIdxsBuf)
                             free(byRefsBuf)
+                            free(gNamesBuf)
+                            free(gOffsBuf)
+                            free(gTypesBuf)
+                            free(gTypeIdxsBuf)
                             free(funcNamesBuf)
                             free(funcLabsBuf)
                             free(funcByRefsBuf)
@@ -3668,6 +4025,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(typesBuf)
                             free(typeIdxsBuf)
                             free(byRefsBuf)
+                            free(gNamesBuf)
+                            free(gOffsBuf)
+                            free(gTypesBuf)
+                            free(gTypeIdxsBuf)
                             free(funcNamesBuf)
                             free(funcLabsBuf)
                             free(funcByRefsBuf)
@@ -3686,6 +4047,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(typesBuf)
                             free(typeIdxsBuf)
                             free(byRefsBuf)
+                            free(gNamesBuf)
+                            free(gOffsBuf)
+                            free(gTypesBuf)
+                            free(gTypeIdxsBuf)
                             free(funcNamesBuf)
                             free(funcLabsBuf)
                             free(funcByRefsBuf)
@@ -3704,6 +4069,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                             free(typesBuf)
                             free(typeIdxsBuf)
                             free(byRefsBuf)
+                            free(gNamesBuf)
+                            free(gOffsBuf)
+                            free(gTypesBuf)
+                            free(gTypeIdxsBuf)
                             free(funcNamesBuf)
                             free(funcLabsBuf)
                             free(funcByRefsBuf)
@@ -3722,6 +4091,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                         free(typesBuf)
                         free(typeIdxsBuf)
                         free(byRefsBuf)
+                        free(gNamesBuf)
+                        free(gOffsBuf)
+                        free(gTypesBuf)
+                        free(gTypeIdxsBuf)
                         free(funcNamesBuf)
                         free(funcLabsBuf)
                         free(funcByRefsBuf)
@@ -3767,6 +4140,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(typesBuf)
                     free(typeIdxsBuf)
                     free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
                     free(funcNamesBuf)
                     free(funcLabsBuf)
                     free(funcByRefsBuf)
@@ -3786,6 +4163,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(typesBuf)
                 free(typeIdxsBuf)
                 free(byRefsBuf)
+                free(gNamesBuf)
+                free(gOffsBuf)
+                free(gTypesBuf)
+                free(gTypeIdxsBuf)
                 free(funcNamesBuf)
                 free(funcLabsBuf)
                 free(funcByRefsBuf)
@@ -3805,6 +4186,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     free(typesBuf)
                     free(typeIdxsBuf)
                     free(byRefsBuf)
+                    free(gNamesBuf)
+                    free(gOffsBuf)
+                    free(gTypesBuf)
+                    free(gTypeIdxsBuf)
                     free(funcNamesBuf)
                     free(funcLabsBuf)
                     free(funcByRefsBuf)
@@ -3825,153 +4210,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
         stmt = nodes[stmt].nxt
     Wend
 
-    ' main dims
+    ' main: module Dims are globals; frame only needs temps
     ctx.symCount = 0
     ctx.frameUsed = 0
-    stmt = nodes[prog].left
-    While stmt >= 0
-        If nodes[stmt].kind = AST_DIM Then
-            AstCopyStr(ast, stmt, VarPtr(nm))
-            ty = nodes[stmt].num
-            nbytes = 8
-            ti = -1
-            If ty = TY_BYTE_ARR Then
-                bound = LowBoundVal(VarPtr(ctx), nodes[stmt].left)
-                If bound < 0 Then
-                    free(namesBuf)
-                    free(offsBuf)
-                    free(typesBuf)
-                    free(typeIdxsBuf)
-                    free(byRefsBuf)
-                    free(funcNamesBuf)
-                    free(funcLabsBuf)
-                    free(funcByRefsBuf)
-                    free(constNamesBuf)
-                    free(constValsBuf)
-                    free(constStrNamesBuf)
-                    free(constStrValsBuf)
-                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                    Exit Function
-                End If
-                nbytes = bound + 1
-            ElseIf ty = TY_LONG_ARR Then
-                bound = LowBoundVal(VarPtr(ctx), nodes[stmt].left)
-                If bound < 0 Then
-                    free(namesBuf)
-                    free(offsBuf)
-                    free(typesBuf)
-                    free(typeIdxsBuf)
-                    free(byRefsBuf)
-                    free(funcNamesBuf)
-                    free(funcLabsBuf)
-                    free(funcByRefsBuf)
-                    free(constNamesBuf)
-                    free(constValsBuf)
-                    free(constStrNamesBuf)
-                    free(constStrValsBuf)
-                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                    Exit Function
-                End If
-                nbytes = (bound + 1) * 8
-            ElseIf ty = TY_STRING_ARR Then
-                bound = LowBoundVal(VarPtr(ctx), nodes[stmt].left)
-                If bound < 0 Then
-                    free(namesBuf)
-                    free(offsBuf)
-                    free(typesBuf)
-                    free(typeIdxsBuf)
-                    free(byRefsBuf)
-                    free(funcNamesBuf)
-                    free(funcLabsBuf)
-                    free(funcByRefsBuf)
-                    free(constNamesBuf)
-                    free(constValsBuf)
-                    free(constStrNamesBuf)
-                    free(constStrValsBuf)
-                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                    Exit Function
-                End If
-                nbytes = (bound + 1) * 8
-            ElseIf ty = TY_BYTE Then
-                nbytes = 1
-            ElseIf ty = TY_UDT Then
-                ti = nodes[stmt].extra
-                If ti < 0 Then
-                    free(namesBuf)
-                    free(offsBuf)
-                    free(typesBuf)
-                    free(typeIdxsBuf)
-                    free(byRefsBuf)
-                    free(funcNamesBuf)
-                    free(funcLabsBuf)
-                    free(funcByRefsBuf)
-                    free(constNamesBuf)
-                    free(constValsBuf)
-                    free(constStrNamesBuf)
-                    free(constStrValsBuf)
-                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                    Exit Function
-                End If
-                tsizes = tt.typeSizes
-                nbytes = tsizes[ti]
-                If nbytes <= 0 Then
-                    free(namesBuf)
-                    free(offsBuf)
-                    free(typesBuf)
-                    free(typeIdxsBuf)
-                    free(byRefsBuf)
-                    free(funcNamesBuf)
-                    free(funcLabsBuf)
-                    free(funcByRefsBuf)
-                    free(constNamesBuf)
-                    free(constValsBuf)
-                    free(constStrNamesBuf)
-                    free(constStrValsBuf)
-                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                    Exit Function
-                End If
-            ElseIf ty = TY_PTR_UDT Then
-                ti = nodes[stmt].extra
-                If ti < 0 Then
-                    free(namesBuf)
-                    free(offsBuf)
-                    free(typesBuf)
-                    free(typeIdxsBuf)
-                    free(byRefsBuf)
-                    free(funcNamesBuf)
-                    free(funcLabsBuf)
-                    free(funcByRefsBuf)
-                    free(constNamesBuf)
-                    free(constValsBuf)
-                    free(constStrNamesBuf)
-                    free(constStrValsBuf)
-                    LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                    Exit Function
-                End If
-                nbytes = 8
-            End If
-            If LowAddSym(VarPtr(ctx), VarPtr(nm), ty, nbytes, ti, 0) < 0 Then
-                free(namesBuf)
-                free(offsBuf)
-                free(typesBuf)
-                free(typeIdxsBuf)
-                free(byRefsBuf)
-                free(funcNamesBuf)
-                free(funcLabsBuf)
-                free(funcByRefsBuf)
-                free(constNamesBuf)
-                free(constValsBuf)
-                free(constStrNamesBuf)
-                free(constStrValsBuf)
-                LowFreeDecl4(declNamesBuf, declApiNamesBuf, declDllsBuf, declByRefsBuf)
-                Exit Function
-            End If
-        End If
-        stmt = nodes[stmt].nxt
-    Wend
-
-    frame = LowAlign16(ctx.frameUsed + &H28)
-    If frame < &H28 Then frame = &H28
+    frame = &H28
 
     IrEmit(list, OP_LABEL, labMain, 0)
     IrEmit(list, OP_ENTER, frame, 0)
@@ -3985,6 +4227,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 free(typesBuf)
                 free(typeIdxsBuf)
                 free(byRefsBuf)
+                free(gNamesBuf)
+                free(gOffsBuf)
+                free(gTypesBuf)
+                free(gTypeIdxsBuf)
                 free(funcNamesBuf)
                 free(funcLabsBuf)
                 free(funcByRefsBuf)
@@ -4013,6 +4259,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     free(typesBuf)
     free(typeIdxsBuf)
     free(byRefsBuf)
+    free(gNamesBuf)
+    free(gOffsBuf)
+    free(gTypesBuf)
+    free(gTypeIdxsBuf)
     free(funcNamesBuf)
     free(funcLabsBuf)
     free(funcByRefsBuf)

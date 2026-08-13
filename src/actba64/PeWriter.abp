@@ -1,14 +1,18 @@
 ' ===================================================
-'  PeWriter - pack .text + .idata into PE32+ GUI EXE
+'  PeWriter - pack .text + .idata + .data(BSS) into PE32+ EXE
+'  Layout: .text, .idata (same as before), then .data for globals
 ' ===================================================
 
-Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder, subsystem As Long) As Long
+Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder, subsystem As Long) As Long
     Dim outBuf As *Byte
     Dim outSize As Long
     Dim textRaw As DWord
     Dim textVirt As DWord
+    Dim dataVirt As DWord
+    Dim dataRva As DWord
     Dim idataRaw As DWord
     Dim idataVirt As DWord
+    Dim idataRva As DWord
     Dim sizeImage As DWord
     Dim optOff As DWord
     Dim sectOff As DWord
@@ -18,12 +22,17 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBu
 
     textVirt = AlignUp(codeSize, SECTION_ALIGN)
     textRaw = AlignUp(codeSize, FILE_ALIGN)
+    idataRva = TEXT_RVA + textVirt
     idataVirt = AlignUp(idataSize, SECTION_ALIGN)
     If idataVirt < SECTION_ALIGN Then idataVirt = SECTION_ALIGN
     idataRaw = AlignUp(idataSize, FILE_ALIGN)
     If idataRaw < FILE_ALIGN Then idataRaw = FILE_ALIGN
+    dataVirt = AlignUp(globSize, SECTION_ALIGN)
+    If dataVirt < SECTION_ALIGN Then dataVirt = SECTION_ALIGN
+    dataRva = idataRva + idataVirt
 
-    sizeImage = TEXT_RVA + textVirt + idataVirt
+    sizeImage = TEXT_RVA + textVirt + idataVirt + dataVirt
+    ' .data is BSS (no file bytes)
     outSize = SIZEOF_HEADERS + textRaw + idataRaw
 
     outBuf = calloc(outSize)
@@ -36,13 +45,15 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBu
 
     PutDword(outBuf, E_LFANEW, IMAGE_NT_SIGNATURE)
     PutWord(outBuf, E_LFANEW + 4, IMAGE_FILE_MACHINE_AMD64)
-    PutWord(outBuf, E_LFANEW + 6, 2)
+    PutWord(outBuf, E_LFANEW + 6, 3)
     PutWord(outBuf, E_LFANEW + 20, SIZEOF_OPTIONAL_HEADER64)
     PutWord(outBuf, E_LFANEW + 22, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_LARGE_ADDRESS_AWARE)
 
     optOff = E_LFANEW + 24
     PutWord(outBuf, optOff + 0, IMAGE_NT_OPTIONAL_HDR64_MAGIC)
     PutDword(outBuf, optOff + 4, textRaw)
+    PutDword(outBuf, optOff + 8, idataRaw)
+    PutDword(outBuf, optOff + 12, dataVirt)
     PutDword(outBuf, optOff + 16, TEXT_RVA)
     PutDword(outBuf, optOff + 20, TEXT_RVA)
     PutDword(outBuf, optOff + 24, IMAGE_BASE_LOW)
@@ -83,6 +94,14 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBu
     PutDword(outBuf, sectOff + 20, SIZEOF_HEADERS + textRaw)
     PutDword(outBuf, sectOff + 36, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
 
+    sectOff = sectOff + 40
+    lstrcpy(VarPtr(outBuf[sectOff]), ".data")
+    PutDword(outBuf, sectOff + 8, dataVirt)
+    PutDword(outBuf, sectOff + 12, dataRva)
+    PutDword(outBuf, sectOff + 16, 0)
+    PutDword(outBuf, sectOff + 20, 0)
+    PutDword(outBuf, sectOff + 36, &H80 Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
+
     memcpy(VarPtr(outBuf[SIZEOF_HEADERS]), codeBuf, codeSize)
     idOff = SIZEOF_HEADERS + textRaw
     memcpy(VarPtr(outBuf[idOff]), idataBuf, idataSize)
@@ -92,6 +111,6 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBu
     WritePe64 = 1
 End Function
 
-Function WritePe64Gui(outPath As *Byte, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder) As Long
-    WritePe64Gui = WritePe64(outPath, codeBuf, codeSize, idataBuf, idataSize, builder, IMAGE_SUBSYSTEM_WINDOWS_GUI)
+Function WritePe64Gui(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder) As Long
+    WritePe64Gui = WritePe64(outPath, codeBuf, codeSize, globSize, idataBuf, idataSize, builder, IMAGE_SUBSYSTEM_WINDOWS_GUI)
 End Function
