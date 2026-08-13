@@ -1,8 +1,14 @@
 Declare Function EditorBuild_CreateProcess Lib "kernel32" Alias "CreateProcessA" (ByVal lpApplicationName As Long, ByVal lpCommandLine As *Byte, ByVal lpProcessAttributes As Long, ByVal lpThreadAttributes As Long, ByVal bInheritHandles As Long, ByVal dwCreationFlags As DWord, ByVal lpEnvironment As Long, ByVal lpCurrentDirectory As Long, ByRef lpStartupInfo As STARTUPINFO, ByRef lpProcessInformation As PROCESS_INFORMATION) As Long
 Declare Function EditorBuild_CreatePipe Lib "kernel32" Alias "CreatePipe" (ByRef hReadPipe As HANDLE, ByRef hWritePipe As HANDLE, ByRef lpPipeAttributes As SECURITY_ATTRIBUTES, ByVal nSize As Long) As Long
 Declare Function EditorBuild_SetHandleInformation Lib "kernel32" Alias "SetHandleInformation" (ByVal hObject As HANDLE, ByVal dwMask As DWord, ByVal dwFlags As DWord) As Long
+Declare Function AppendMenu Lib "user32.dll" Alias "AppendMenuA" (ByVal hMenu As HMENU, ByVal uFlags As Long, ByVal uIDNewItem As Long, ByVal lpNewItem As String) As Long
+Declare Function CheckMenuItem Lib "user32.dll" (ByVal hMenu As HMENU, ByVal uIDCheckItem As Long, ByVal uCheck As Long) As Long
 
 Const EDITORBUILD_HANDLE_FLAG_INHERIT = 1
+
+' 0 = 64bit (actba64, default) / 1 = 32bit (actba32)
+Dim g_buildTarget32 As Long
+Dim g_targetMenuReady As Long
 
 Function EditorBuild_ExeDir$() As String
     Dim buf As *Byte
@@ -35,15 +41,115 @@ Function EditorBuild_ExeDir$() As String
     free(buf)
 End Function
 
-Function EditorBuild_ActBa64Path$() As String
+Function EditorBuild_TargetConfigPath$() As String
     Dim dir As String
     dir = EditorBuild_ExeDir$()
     If Len(dir) = 0 Then
-        EditorBuild_ActBa64Path$ = "actba64.exe"
+        EditorBuild_TargetConfigPath$ = "editor.target"
     Else
-        EditorBuild_ActBa64Path$ = dir + "actba64.exe"
+        EditorBuild_TargetConfigPath$ = dir + "editor.target"
     End If
 End Function
+
+Function EditorBuild_Is32BitTarget() As Long
+    EditorBuild_Is32BitTarget = g_buildTarget32
+End Function
+
+Function EditorBuild_TargetLabel$() As String
+    If g_buildTarget32 <> 0 Then
+        EditorBuild_TargetLabel$ = "32bit"
+    Else
+        EditorBuild_TargetLabel$ = "64bit"
+    End If
+End Function
+
+Function EditorBuild_CompilerName$() As String
+    If g_buildTarget32 <> 0 Then
+        EditorBuild_CompilerName$ = "actba32.exe"
+    Else
+        EditorBuild_CompilerName$ = "actba64.exe"
+    End If
+End Function
+
+Function EditorBuild_CompilerPath$() As String
+    Dim dir As String
+    dir = EditorBuild_ExeDir$()
+    If Len(dir) = 0 Then
+        EditorBuild_CompilerPath$ = EditorBuild_CompilerName$()
+    Else
+        EditorBuild_CompilerPath$ = dir + EditorBuild_CompilerName$()
+    End If
+End Function
+
+Function EditorBuild_ActBa64Path$() As String
+    EditorBuild_ActBa64Path$ = EditorBuild_CompilerPath$()
+End Function
+
+Sub EditorBuild_UpdateTargetMenu()
+    Dim f64 As Long
+    Dim f32 As Long
+    If g_targetMenuReady = 0 Then Exit Sub
+    f64 = MF_BYCOMMAND
+    f32 = MF_BYCOMMAND
+    If g_buildTarget32 = 0 Then
+        f64 = f64 Or MF_CHECKED
+    Else
+        f32 = f32 Or MF_CHECKED
+    End If
+    CheckMenuItem(hMenu_M_MAIN_2, IDM_TARGET64, f64)
+    CheckMenuItem(hMenu_M_MAIN_2, IDM_TARGET32, f32)
+End Sub
+
+Sub EditorBuild_LoadTarget()
+    Dim path As String
+    Dim s As String
+    Dim n As Long
+    Dim p As *Byte
+
+    g_buildTarget32 = 0
+    path = EditorBuild_TargetConfigPath$()
+    s = EditorDoc_LoadTextFile$(path)
+    n = Len(s)
+    If n <= 0 Then Exit Sub
+    p = StrPtr(s)
+    If p = 0 Then Exit Sub
+    If p[0] = 51 And p[1] = 50 Then
+        g_buildTarget32 = 1
+    End If
+End Sub
+
+Sub EditorBuild_SaveTarget()
+    Dim path As String
+    path = EditorBuild_TargetConfigPath$()
+    If g_buildTarget32 <> 0 Then
+        EditorDoc_WriteTextFile(path, "32")
+    Else
+        EditorDoc_WriteTextFile(path, "64")
+    End If
+End Sub
+
+Sub EditorBuild_SetTarget32(ByVal is32 As Long)
+    If is32 <> 0 Then
+        g_buildTarget32 = 1
+    Else
+        g_buildTarget32 = 0
+    End If
+    EditorBuild_SaveTarget()
+    EditorBuild_UpdateTargetMenu()
+    If hMainWnd <> 0 Then EditorDoc_UpdateTitle(hMainWnd)
+End Sub
+
+Sub EditorBuild_Init(hWnd As HWND)
+    EditorBuild_LoadTarget()
+    If g_targetMenuReady = 0 Then
+        AppendMenu(hMenu_M_MAIN_2, MF_SEPARATOR, 0, "")
+        AppendMenu(hMenu_M_MAIN_2, MF_STRING, IDM_TARGET64, "ターゲット 64bit (actba64)")
+        AppendMenu(hMenu_M_MAIN_2, MF_STRING, IDM_TARGET32, "ターゲット 32bit (actba32)")
+        g_targetMenuReady = 1
+    End If
+    EditorBuild_UpdateTargetMenu()
+    If hWnd <> 0 Then EditorDoc_UpdateTitle(hWnd)
+End Sub
 
 Function EditorBuild_ExePathFromDoc$() As String
     Dim exePath As String
@@ -181,21 +287,35 @@ End Function
 
 Function EditorBuild_DoCompile(hWnd As HWND) As Long
     Dim actba As String
+    Dim toolName As String
     Dim cmd As String
     Dim exitCode As Long
     Dim outText As String
     Dim msg As String
+    Dim attr As Long
 
     EditorBuild_DoCompile = 0
-    actba = EditorBuild_ActBa64Path$()
+    toolName = EditorBuild_CompilerName$()
+    actba = EditorBuild_CompilerPath$()
     If EditorDoc_EnsureSaved(hWnd) = 0 Then Exit Function
 
     MessageWnd_Open(hWnd)
-    MessageWnd_SetText("Compiling..." + Chr$(13) + Chr$(10))
+    MessageWnd_SetText("Compiling (" + EditorBuild_TargetLabel$() + ") with " + toolName + "..." + Chr$(13) + Chr$(10))
+
+    attr = GetFileAttributes(StrPtr(actba))
+    If attr = -1 Then
+        msg = "Failed to find " + toolName + " (place beside editor.exe"
+        If g_buildTarget32 <> 0 Then
+            msg = msg + " with abc.exe / abassembler.exe / ablinker.exe"
+        End If
+        msg = msg + ")." + Chr$(13) + Chr$(10)
+        MessageWnd_SetText(msg)
+        Exit Function
+    End If
 
     cmd = EditorBuild_QuoteArg$(actba) + " " + EditorBuild_CompileArgs$()
     If EditorBuild_RunCapture(cmd, outText, exitCode) = 0 Then
-        MessageWnd_SetText("Failed to launch actba64.exe (place beside editor.exe)." + Chr$(13) + Chr$(10))
+        MessageWnd_SetText("Failed to launch " + toolName + "." + Chr$(13) + Chr$(10))
         Exit Function
     End If
 
