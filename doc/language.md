@@ -382,5 +382,6 @@ ExitProcess(p.x + p.y)
 ## 関連
 
 - ビルド: [build.md](./build.md)
+- エディタ向け actba64 リファレンス: [src/projecteditor/help/actba64_ref.html](../src/projecteditor/help/actba64_ref.html)（ヘルプメニュー / F1）
 - actba32 自己ホスト・パイプライン詳細: [src/actba32/abc-spec.md](../src/actba32/abc-spec.md)
 - 回帰テスト: `src/actba64/test/`（`' Target: actba64`）、`src/actba32/test/`
