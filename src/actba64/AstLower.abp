@@ -40,6 +40,7 @@ Type LowerCtx
     declCount As Long
     doEndLab As Long
     whileEndLab As Long
+    forEndLab As Long
     funcEndLab As Long
     rtCatLab As Long
     rtMidLab As Long
@@ -105,6 +106,7 @@ Function LowAddSym(ctx As *LowerCtx, name As *Byte, ty As Long, nbytes As Long, 
         Exit Function
     End If
     If ctx.symCount >= SYM_MAX Then
+        Print "error: too many locals/syms (max " + Str$(SYM_MAX) + ")"
         ctx.err = 1
         Exit Function
     End If
@@ -163,6 +165,7 @@ Function LowAddConst(ctx As *LowerCtx, name As *Byte, v As Long) As Long
         Exit Function
     End If
     If ctx.constCount >= SYM_MAX Then
+        Print "error: too many consts (max " + Str$(SYM_MAX) + ")"
         ctx.err = 1
         Exit Function
     End If
@@ -212,6 +215,7 @@ Function LowAddStrConst(ctx As *LowerCtx, name As *Byte, s As *Byte) As Long
         Exit Function
     End If
     If ctx.constStrCount >= SYM_MAX Then
+        Print "error: too many string consts (max " + Str$(SYM_MAX) + ")"
         ctx.err = 1
         Exit Function
     End If
@@ -473,6 +477,7 @@ Function LowAddFunc(ctx As *LowerCtx, name As *Byte, lab As Long, byRefBits As L
 
     LowAddFunc = 0
     If ctx.funcCount >= SYM_MAX Then
+        Print "error: too many functions (max " + Str$(SYM_MAX) + ")"
         ctx.err = 1
         Exit Function
     End If
@@ -523,6 +528,7 @@ Function LowAddDecl(ctx As *LowerCtx, name As *Byte, api As *Byte, dllKind As Lo
 
     LowAddDecl = 0
     If ctx.declCount >= SYM_MAX Then
+        Print "error: too many Declare entries (max " + Str$(SYM_MAX) + ")"
         ctx.err = 1
         Exit Function
     End If
@@ -1416,6 +1422,46 @@ Sub LowStoreSized(list As *IrList, sz As Long)
 End Sub
 
 ' Address of lvalue -> rax
+' AST_MEMBER ノードが指すフィールドの UDT 型インデックス（ネスト解決用）
+Function LowMemberFieldType(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim tt As *TypeTable
+    Dim base As Long
+    Dim name(63) As Byte
+    Dim fname(63) As Byte
+    Dim si As Long
+    Dim ti As Long
+    Dim typeIdxs As *Long
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim fieldTy As Long
+
+    LowMemberFieldType = -1
+    If idx < 0 Then Exit Function
+    ast = ctx.ast
+    nodes = ast.nodes
+    If nodes[idx].kind <> AST_MEMBER Then Exit Function
+    tt = ast.types
+    typeIdxs = ctx.typeIdxs
+    base = nodes[idx].left
+    AstCopyStr(ast, idx, VarPtr(fname))
+    If nodes[base].kind = AST_MEMBER Then
+        ti = LowMemberFieldType(ctx, base)
+    ElseIf nodes[base].kind = AST_VAR Then
+        AstCopyStr(ast, base, VarPtr(name))
+        si = LowFindSym(ctx, VarPtr(name))
+        If si < 0 Then Exit Function
+        ti = typeIdxs[si]
+    Else
+        Exit Function
+    End If
+    If ti < 0 Then Exit Function
+    If TyFindFieldEx(tt, ti, VarPtr(fname), foff, fsz, fcnt, fieldTy) = 0 Then Exit Function
+    LowMemberFieldType = fieldTy
+End Function
+
 Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -1470,7 +1516,15 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
     ElseIf k = AST_MEMBER Then
         base = nodes[idx].left
         AstCopyStr(ast, idx, VarPtr(fname))
-        If nodes[base].kind = AST_INDEX Then
+        If nodes[base].kind = AST_MEMBER Then
+            ' nested: a.b.c — address of a.b then + offset(c)
+            If LowAddr(ctx, base) = 0 Then Exit Function
+            ti = LowMemberFieldType(ctx, base)
+            If ti < 0 Then
+                ctx.err = 1
+                Exit Function
+            End If
+        ElseIf nodes[base].kind = AST_INDEX Then
             If LowAddr(ctx, base) = 0 Then Exit Function
             AstCopyStr(ast, nodes[base].left, VarPtr(name))
             si = LowFindSym(ctx, VarPtr(name))
@@ -1817,6 +1871,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         End If
         si = LowFindSym(ctx, VarPtr(name))
         If si < 0 Then
+            Print "error: undefined variable '" + MakeStr(VarPtr(name)) + "'"
             ctx.err = 1
             Exit Function
         End If
@@ -2338,6 +2393,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 isApi = 1
             Else
                 If LowMapWinApi(VarPtr(name), dllKind, VarPtr(apiName)) = 0 Then
+                    Print "error: unknown API/call '" + MakeStr(VarPtr(name)) + "'"
                     ctx.err = 1
                     Exit Function
                 End If
@@ -2494,9 +2550,11 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_DIV_ECX, 0, 0)
             LowExpr = 1
         Else
+            Print "error: unsupported binop " + Str$(op)
             ctx.err = 1
         End If
     Else
+        Print "error: unsupported expr kind " + Str$(k)
         ctx.err = 1
     End If
 End Function
@@ -2755,6 +2813,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
     Dim ix As Long
     Dim saveDo As Long
     Dim saveWhile As Long
+    Dim saveFor As Long
     Dim byRefs As *Long
     Dim types As *Long
     Dim list As *IrList
@@ -3013,6 +3072,13 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         End If
         IrEmit(ctx.list, OP_JMP, ctx.whileEndLab, 0)
         LowStmt = 1
+    ElseIf k = AST_EXITFOR Then
+        If ctx.forEndLab < 0 Then
+            ctx.err = 1
+            Exit Function
+        End If
+        IrEmit(ctx.list, OP_JMP, ctx.forEndLab, 0)
+        LowStmt = 1
     ElseIf k = AST_EXITFUNC Then
         If ctx.funcEndLab < 0 Then
             ctx.err = 1
@@ -3140,6 +3206,8 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(ctx.list, OP_STORE_LOCAL, offs[si], 0)
         labTop = LowNewLab(ctx)
         labEnd = LowNewLab(ctx)
+        saveFor = ctx.forEndLab
+        ctx.forEndLab = labEnd
         IrEmit(ctx.list, OP_LABEL, labTop, 0)
         IrEmit(ctx.list, OP_LOAD_LOCAL, offs[si], 0)
         IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
@@ -3153,8 +3221,10 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(ctx.list, OP_INC_LOCAL, offs[si], 0)
         IrEmit(ctx.list, OP_JMP, labTop, 0)
         IrEmit(ctx.list, OP_LABEL, labEnd, 0)
+        ctx.forEndLab = saveFor
         LowStmt = 1
     Else
+        Print "error: unsupported statement kind " + Str$(k)
         ctx.err = 1
     End If
 End Function
@@ -3292,6 +3362,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     ctx.declCount = 0
     ctx.doEndLab = -1
     ctx.whileEndLab = -1
+    ctx.forEndLab = -1
     ctx.funcEndLab = -1
     ctx.rtCatLab = -1
     ctx.rtMidLab = -1
@@ -3326,6 +3397,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
             End If
             dllKind = LowDllKindFromLib(VarPtr(libBuf))
             If dllKind = 0 Then
+                Print "error: unknown Declare Lib '" + MakeStr(VarPtr(libBuf)) + "' for '" + MakeStr(VarPtr(nm)) + "'"
                 free(namesBuf)
                 free(offsBuf)
                 free(typesBuf)
@@ -3468,6 +3540,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
             ctx.inFunc = 1
             ctx.doEndLab = -1
             ctx.whileEndLab = -1
+            ctx.forEndLab = -1
             ctx.funcEndLab = -1
             nFlags = nodes[stmt].num
             If nFlags >= 256 Then
