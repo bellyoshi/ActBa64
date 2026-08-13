@@ -17,6 +17,7 @@ Type TypeTable
     fieldSizes As *Long
     fieldCounts As *Long
     fieldNext As *Long
+    fieldTypeIdxs As *Long
 End Type
 
 Function TyNameEq(a As *Byte, b As *Byte) As Long
@@ -49,6 +50,7 @@ Sub TyFree(t As *TypeTable)
     If t.fieldSizes <> NULL Then free(t.fieldSizes)
     If t.fieldCounts <> NULL Then free(t.fieldCounts)
     If t.fieldNext <> NULL Then free(t.fieldNext)
+    If t.fieldTypeIdxs <> NULL Then free(t.fieldTypeIdxs)
     free(t)
 End Sub
 
@@ -65,7 +67,8 @@ Function TyCreate() As *TypeTable
     t.fieldSizes = calloc(SizeOf(Long) * TYMAX_FIELDS)
     t.fieldCounts = calloc(SizeOf(Long) * TYMAX_FIELDS)
     t.fieldNext = calloc(SizeOf(Long) * TYMAX_FIELDS)
-    If t.typeNames = NULL Or t.typeSizes = NULL Or t.typeFirst = NULL Or t.fieldNames = NULL Or t.fieldOffs = NULL Or t.fieldSizes = NULL Or t.fieldCounts = NULL Or t.fieldNext = NULL Then
+    t.fieldTypeIdxs = calloc(SizeOf(Long) * TYMAX_FIELDS)
+    If t.typeNames = NULL Or t.typeSizes = NULL Or t.typeFirst = NULL Or t.fieldNames = NULL Or t.fieldOffs = NULL Or t.fieldSizes = NULL Or t.fieldCounts = NULL Or t.fieldNext = NULL Or t.fieldTypeIdxs = NULL Then
         TyFree(t)
         Exit Function
     End If
@@ -176,7 +179,7 @@ Function TyAdd(t As *TypeTable, name As *Byte) As Long
     TyAdd = i
 End Function
 
-Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As Long, count As Long) As Long
+Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As Long, count As Long, fieldTy As Long) As Long
     Dim fi As Long
     Dim names As *Byte
     Dim offs As *Long
@@ -184,6 +187,7 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     Dim counts As *Long
     Dim nexts As *Long
     Dim firsts As *Long
+    Dim tys As *Long
     Dim tsizes As *Long
     Dim j As Long
     Dim off As Long
@@ -216,6 +220,7 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     counts = t.fieldCounts
     nexts = t.fieldNext
     firsts = t.typeFirst
+    tys = t.fieldTypeIdxs
 
     j = 0
     cur = fi * TYNAME_LEN
@@ -227,6 +232,7 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     offs[fi] = off
     sizes[fi] = elemSize
     counts[fi] = count
+    tys[fi] = fieldTy
     nexts[fi] = -1
 
     If firsts[typeIdx] < 0 Then
@@ -274,6 +280,46 @@ Function TyFindField(t As *TypeTable, typeIdx As Long, name As *Byte, ByRef outO
             outSize = sizes[fi]
             outCount = counts[fi]
             TyFindField = 1
+            Exit Function
+        End If
+        fi = nexts[fi]
+    Wend
+End Function
+
+Function TyFindFieldEx(t As *TypeTable, typeIdx As Long, name As *Byte, ByRef outOff As Long, ByRef outSize As Long, ByRef outCount As Long, ByRef outFieldTy As Long) As Long
+    Dim fi As Long
+    Dim names As *Byte
+    Dim offs As *Long
+    Dim sizes As *Long
+    Dim counts As *Long
+    Dim nexts As *Long
+    Dim firsts As *Long
+    Dim tys As *Long
+    Dim cur As Long
+
+    TyFindFieldEx = 0
+    outOff = 0
+    outSize = 0
+    outCount = 0
+    outFieldTy = -1
+    If t = NULL Then Exit Function
+    If typeIdx < 0 Or typeIdx >= t.nTypes Then Exit Function
+    names = t.fieldNames
+    offs = t.fieldOffs
+    sizes = t.fieldSizes
+    counts = t.fieldCounts
+    nexts = t.fieldNext
+    firsts = t.typeFirst
+    tys = t.fieldTypeIdxs
+    fi = firsts[typeIdx]
+    While fi >= 0
+        cur = fi * TYNAME_LEN
+        If TyNameEq(VarPtr(names[cur]), name) <> 0 Then
+            outOff = offs[fi]
+            outSize = sizes[fi]
+            outCount = counts[fi]
+            outFieldTy = tys[fi]
+            TyFindFieldEx = 1
             Exit Function
         End If
         fi = nexts[fi]

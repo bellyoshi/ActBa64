@@ -413,7 +413,8 @@ Function ParseFactor(p As *Parser) As Long
     End If
     If ParseTokKind(p) = TK_LPAREN Then
         p.pos = p.pos + 1
-        e = ParseExpr(p)
+        ' 比較を含む (a = 1) とビット And の (x And m) <> 0 の両方を通す
+        e = ParseCond(p)
         If e < 0 Then Exit Function
         If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
         ParseFactor = e
@@ -945,11 +946,14 @@ Function ParseCmp(p As *Parser) As Long
     Dim op As Long
 
     ParseCmp = -1
+    ' ParseAddExpr + Factor の括弧内 ParseExpr で
+    ' (lParam And GCS) <> 0 と a < b And c = d の両方を通す
     left = ParseAddExpr(p)
     If left < 0 Then Exit Function
     op = ParseCmpOp(p)
     If op = 0 Then
-        p.err = 1
+        ' 比較演算子なし → 式そのものを条件として使う（If x Then）
+        ParseCmp = left
         Exit Function
     End If
     p.pos = p.pos + 1
@@ -974,28 +978,16 @@ Function ParseCondAnd(p As *Parser) As Long
     Dim kAnd(7) As Byte
 
     ParseCondAnd = -1
-    If ParseTokKind(p) = TK_LPAREN Then
-        p.pos = p.pos + 1
-        left = ParseCond(p)
-        If left < 0 Then Exit Function
-        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
-    Else
-        left = ParseCmp(p)
-        If left < 0 Then Exit Function
-    End If
+    ' 括弧は ParseCmp → ParseExpr → Factor 側で処理する
+    ' （(lParam And GCS) <> 0 を通すため、ここで Cond を再帰しない）
+    left = ParseCmp(p)
+    If left < 0 Then Exit Function
     lstrcpy(VarPtr(kAnd), "and")
     ast = p.ast
     While ParseIdentIs(p, VarPtr(kAnd)) <> 0
         p.pos = p.pos + 1
-        If ParseTokKind(p) = TK_LPAREN Then
-            p.pos = p.pos + 1
-            right = ParseCond(p)
-            If right < 0 Then Exit Function
-            If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
-        Else
-            right = ParseCmp(p)
-            If right < 0 Then Exit Function
-        End If
+        right = ParseCmp(p)
+        If right < 0 Then Exit Function
         n = AstAddNode(ast, AST_BINOP)
         If n < 0 Then Exit Function
         nodes = ast.nodes
@@ -1488,67 +1480,48 @@ Function ParseAssignStmt(p As *Parser) As Long
     ParseAssignStmt = -1
     If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
     ast = p.ast
-    If ParseTokKind(p) = TK_DOT Then
+    If ParseTokKind(p) = TK_DOT Or ParseTokKind(p) = TK_ARROW Then
         nVar = AstAddNode(ast, AST_VAR)
         If nVar < 0 Then Exit Function
         AstSetStr(ast, nVar, VarPtr(name))
-        p.pos = p.pos + 1
-        If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-        nIdx = AstAddNode(ast, AST_MEMBER)
-        If nIdx < 0 Then Exit Function
-        AstSetStr(ast, nIdx, VarPtr(name))
-        nodes = ast.nodes
-        nodes[nIdx].left = nVar
-        nodes[nIdx].num = 0
-        If ParseTokKind(p) = TK_LBRACK Then
-            p.pos = p.pos + 1
-            ix = ParseExpr(p)
-            If ix < 0 Then Exit Function
-            If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
-            nCall = AstAddNode(ast, AST_INDEX)
-            If nCall < 0 Then Exit Function
-            nodes = ast.nodes
-            nodes[nCall].left = nIdx
-            nodes[nCall].right = ix
-            nodes[nCall].num = 1
-            nIdx = nCall
-        End If
-        If ParseExpect(p, TK_EQ) = 0 Then Exit Function
-        e = ParseExpr(p)
-        If e < 0 Then Exit Function
-        nAsg = AstAddNode(ast, AST_ASSIGN)
-        If nAsg < 0 Then Exit Function
-        nodes = ast.nodes
-        nodes[nAsg].left = nIdx
-        nodes[nAsg].right = e
-        ParseAssignStmt = nAsg
-        Exit Function
-    End If
-    If ParseTokKind(p) = TK_ARROW Then
-        nVar = AstAddNode(ast, AST_VAR)
-        If nVar < 0 Then Exit Function
-        AstSetStr(ast, nVar, VarPtr(name))
-        p.pos = p.pos + 1
-        If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-        nIdx = AstAddNode(ast, AST_MEMBER)
-        If nIdx < 0 Then Exit Function
-        AstSetStr(ast, nIdx, VarPtr(name))
-        nodes = ast.nodes
-        nodes[nIdx].left = nVar
-        nodes[nIdx].num = 1
-        If ParseTokKind(p) = TK_LBRACK Then
-            p.pos = p.pos + 1
-            ix = ParseExpr(p)
-            If ix < 0 Then Exit Function
-            If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
-            nCall = AstAddNode(ast, AST_INDEX)
-            If nCall < 0 Then Exit Function
-            nodes = ast.nodes
-            nodes[nCall].left = nIdx
-            nodes[nCall].right = ix
-            nodes[nCall].num = 1
-            nIdx = nCall
-        End If
+        nIdx = nVar
+        Do
+            If ParseTokKind(p) = TK_DOT Then
+                p.pos = p.pos + 1
+                If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+                nCall = AstAddNode(ast, AST_MEMBER)
+                If nCall < 0 Then Exit Function
+                AstSetStr(ast, nCall, VarPtr(name))
+                nodes = ast.nodes
+                nodes[nCall].left = nIdx
+                nodes[nCall].num = 0
+                nIdx = nCall
+            ElseIf ParseTokKind(p) = TK_ARROW Then
+                p.pos = p.pos + 1
+                If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+                nCall = AstAddNode(ast, AST_MEMBER)
+                If nCall < 0 Then Exit Function
+                AstSetStr(ast, nCall, VarPtr(name))
+                nodes = ast.nodes
+                nodes[nCall].left = nIdx
+                nodes[nCall].num = 1
+                nIdx = nCall
+            ElseIf ParseTokKind(p) = TK_LBRACK Then
+                p.pos = p.pos + 1
+                ix = ParseExpr(p)
+                If ix < 0 Then Exit Function
+                If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
+                nCall = AstAddNode(ast, AST_INDEX)
+                If nCall < 0 Then Exit Function
+                nodes = ast.nodes
+                nodes[nCall].left = nIdx
+                nodes[nCall].right = ix
+                nodes[nCall].num = 1
+                nIdx = nCall
+            Else
+                Exit Do
+            End If
+        Loop
         If ParseExpect(p, TK_EQ) = 0 Then Exit Function
         e = ParseExpr(p)
         If e < 0 Then Exit Function
@@ -1726,6 +1699,7 @@ Function ParseTypeStmt(p As *Parser) As Long
     Dim count As Long
     Dim sz As Long
     Dim nType As Long
+    Dim fieldTy As Long
 
     ParseTypeStmt = -1
     p.pos = p.pos + 1
@@ -1770,6 +1744,7 @@ Function ParseTypeStmt(p As *Parser) As Long
             Exit Function
         End If
         p.pos = p.pos + 1
+        fieldTy = -1
         If ParseTokKind(p) = TK_STAR Then
             p.pos = p.pos + 1
             If ParseCopyIdent(p, VarPtr(tname)) = 0 Then
@@ -1787,8 +1762,9 @@ Function ParseTypeStmt(p As *Parser) As Long
                 p.err = 1
                 Exit Function
             End If
+            fieldTy = TyFind(types, VarPtr(tname))
         End If
-        If TyAddField(types, ti, VarPtr(fname), sz, count) = 0 Then
+        If TyAddField(types, ti, VarPtr(fname), sz, count, fieldTy) = 0 Then
             p.err = 1
             Exit Function
         End If
@@ -1861,6 +1837,7 @@ Function ParseExitKwStmt(p As *Parser) As Long
     Dim kFun(15) As Byte
     Dim kSub(7) As Byte
     Dim kWhile(15) As Byte
+    Dim kFor(7) As Byte
 
     ParseExitKwStmt = -1
     p.pos = p.pos + 1
@@ -1868,6 +1845,7 @@ Function ParseExitKwStmt(p As *Parser) As Long
     lstrcpy(VarPtr(kFun), "function")
     lstrcpy(VarPtr(kSub), "sub")
     lstrcpy(VarPtr(kWhile), "while")
+    lstrcpy(VarPtr(kFor), "for")
     If ParseIdentIs(p, VarPtr(kDo)) <> 0 Then
         p.pos = p.pos + 1
         ast = p.ast
@@ -1880,6 +1858,14 @@ Function ParseExitKwStmt(p As *Parser) As Long
         p.pos = p.pos + 1
         ast = p.ast
         n = AstAddNode(ast, AST_EXITWHILE)
+        If n < 0 Then Exit Function
+        ParseExitKwStmt = n
+        Exit Function
+    End If
+    If ParseIdentIs(p, VarPtr(kFor)) <> 0 Then
+        p.pos = p.pos + 1
+        ast = p.ast
+        n = AstAddNode(ast, AST_EXITFOR)
         If n < 0 Then Exit Function
         ParseExitKwStmt = n
         Exit Function
