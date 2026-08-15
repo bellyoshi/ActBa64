@@ -190,6 +190,150 @@ Function PpAppend(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *By
     PpAppend = 1
 End Function
 
+Function PpEmitFileMark(dst As *Byte, ByRef dstLen As Long, dstCap As Long, path As *Byte) As Long
+    Dim hdr(15) As Byte
+    Dim tail(7) As Byte
+    PpEmitFileMark = 0
+    lstrcpy(VarPtr(hdr), "' ---- ")
+    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then Exit Function
+    If PpAppend(dst, dstLen, dstCap, path, lstrlen(path)) = 0 Then Exit Function
+    lstrcpy(VarPtr(tail), " ----")
+    tail[5] = 13
+    tail[6] = 10
+    tail[7] = 0
+    If PpAppend(dst, dstLen, dstCap, VarPtr(tail), 7) = 0 Then Exit Function
+    PpEmitFileMark = 1
+End Function
+
+Function PpEmitFileEnd(dst As *Byte, ByRef dstLen As Long, dstCap As Long) As Long
+    Dim s(23) As Byte
+    PpEmitFileEnd = 0
+    lstrcpy(VarPtr(s), "' ---- end ----")
+    If PpAppend(dst, dstLen, dstCap, VarPtr(s), 15) = 0 Then Exit Function
+    s[0] = 13
+    s[1] = 10
+    If PpAppend(dst, dstLen, dstCap, VarPtr(s), 2) = 0 Then Exit Function
+    PpEmitFileEnd = 1
+End Function
+
+Function PpNameIsEnd(name As *Byte) As Long
+    PpNameIsEnd = 0
+    If name = 0 Then Exit Function
+    If PpToLower(name[0]) <> 101 Then Exit Function
+    If PpToLower(name[1]) <> 110 Then Exit Function
+    If PpToLower(name[2]) <> 100 Then Exit Function
+    If name[3] <> 0 Then Exit Function
+    PpNameIsEnd = 1
+End Function
+
+Function PpLineIsFileMark(line As *Byte, n As Long, nameOut As *Byte, nameMax As Long) As Long
+    Dim i As Long
+    Dim nameLen As Long
+    PpLineIsFileMark = 0
+    nameOut[0] = 0
+    i = 0
+    While i < n
+        If line[i] <> 32 And line[i] <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i + 7 > n Then Exit Function
+    If line[i] <> 39 Then Exit Function
+    If line[i + 1] <> 32 Then Exit Function
+    If line[i + 2] <> 45 Then Exit Function
+    If line[i + 3] <> 45 Then Exit Function
+    If line[i + 4] <> 45 Then Exit Function
+    If line[i + 5] <> 45 Then Exit Function
+    If line[i + 6] <> 32 Then Exit Function
+    i = i + 7
+    nameLen = 0
+    While i < n
+        If i + 5 <= n Then
+            If line[i] = 32 And line[i + 1] = 45 And line[i + 2] = 45 And line[i + 3] = 45 And line[i + 4] = 45 Then
+                Exit While
+            End If
+        End If
+        If nameLen < nameMax - 1 Then
+            nameOut[nameLen] = line[i]
+            nameLen = nameLen + 1
+        End If
+        i = i + 1
+    Wend
+    nameOut[nameLen] = 0
+    If nameLen <= 0 Then Exit Function
+    PpLineIsFileMark = 1
+End Function
+
+Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) As String
+    Dim i As Long
+    Dim start As Long
+    Dim n As Long
+    Dim cur As Long
+    Dim c As Long
+    Dim sp As Long
+    Dim off As Long
+    Dim name(259) As Byte
+    Dim names(4159) As Byte
+    Dim locs(15) As Long
+    Dim k As Long
+
+    PpMapSrcName$ = ""
+    localLine = combLine
+    If src = 0 Then Exit Function
+    If combLine <= 0 Then combLine = 1
+    i = 0
+    cur = 1
+    sp = 0
+    While src[i] <> 0
+        start = i
+        While src[i] <> 0
+            c = src[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        n = i - start
+        If PpLineIsFileMark(VarPtr(src[start]), n, VarPtr(name), 260) <> 0 Then
+            If PpNameIsEnd(VarPtr(name)) <> 0 Then
+                If sp > 0 Then sp = sp - 1
+            Else
+                If sp < 16 Then
+                    off = sp * 260
+                    k = 0
+                    While name[k] <> 0 And k < 259
+                        names[off + k] = name[k]
+                        k = k + 1
+                    Wend
+                    names[off + k] = 0
+                    locs[sp] = 0
+                    sp = sp + 1
+                End If
+            End If
+        Else
+            If sp > 0 Then locs[sp - 1] = locs[sp - 1] + 1
+        End If
+        If cur >= combLine Then Exit While
+        If src[i] = 13 Then i = i + 1
+        If src[i] = 10 Then i = i + 1
+        cur = cur + 1
+    Wend
+    If sp > 0 Then
+        off = (sp - 1) * 260
+        localLine = locs[sp - 1]
+        If localLine < 1 Then localLine = 1
+        PpMapSrcName$ = MakeStr(VarPtr(names[off]))
+    End If
+End Function
+
+Function PpErrLoc$(src As *Byte, combLine As Long) As String
+    Dim file As String
+    Dim localLine As Long
+    file = PpMapSrcName$(src, combLine, localLine)
+    If Len(file) > 0 Then
+        PpErrLoc$ = file + "(" + Str$(localLine) + ")"
+    Else
+        PpErrLoc$ = "line " + Str$(combLine)
+    End If
+End Function
+
 Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long) As Long
     Dim i As Long
     Dim start As Long
@@ -205,6 +349,7 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
 
     PpExpandInto = 0
     If depth >= PP_MAX_DEPTH Then Exit Function
+    If PpEmitFileMark(dst, dstLen, dstCap, curFile) = 0 Then Exit Function
     i = 0
     While i < srcSize
         start = i
@@ -232,6 +377,12 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
                 lstrcpy(VarPtr(full), VarPtr(dir))
                 lstrcat(VarPtr(full), VarPtr(inc))
             End If
+            If n > 0 Then
+                If PpAppend(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
+            End If
+            line[0] = 13
+            line[1] = 10
+            If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
             If PpOnceHas(VarPtr(full)) = 0 Then
                 child = LoadFile(VarPtr(full), childSize)
                 If child = NULL Then Exit Function
@@ -253,6 +404,7 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
         If i < srcSize And src[i] = 13 Then i = i + 1
         If i < srcSize And src[i] = 10 Then i = i + 1
     Wend
+    If PpEmitFileEnd(dst, dstLen, dstCap) = 0 Then Exit Function
     PpExpandInto = 1
 End Function
 
