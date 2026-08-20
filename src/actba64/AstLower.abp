@@ -425,6 +425,7 @@ Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
     Dim op As Long
     Dim leftIdx As Long
     Dim rightIdx As Long
+    Dim acc As Long
 
     LowBoundVal = -1
     If idx < 0 Then Exit Function
@@ -457,9 +458,42 @@ Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
             LowBoundVal = lv Or rv
         ElseIf op = BOP_AND Then
             LowBoundVal = lv And rv
-        ElseIf op = BOP_IDIV Then
+        ElseIf op = BOP_IDIV Or op = BOP_DIV Then
             If rv <> 0 Then
                 LowBoundVal = lv \ rv
+            End If
+        ElseIf op = BOP_MOD Then
+            If rv <> 0 Then
+                LowBoundVal = lv - (lv \ rv) * rv
+            End If
+        ElseIf op = BOP_XOR Then
+            LowBoundVal = (lv Or rv) - (lv And rv)
+        ElseIf op = BOP_SHL Then
+            If rv >= 0 And rv < 32 Then
+                acc = lv
+                While rv > 0
+                    acc = acc * 2
+                    rv = rv - 1
+                Wend
+                LowBoundVal = acc
+            End If
+        ElseIf op = BOP_SHR Then
+            If rv >= 0 And rv < 32 Then
+                acc = lv
+                While rv > 0
+                    acc = acc \ 2
+                    rv = rv - 1
+                Wend
+                LowBoundVal = acc
+            End If
+        ElseIf op = BOP_POW Then
+            If rv >= 0 Then
+                acc = 1
+                While rv > 0
+                    acc = acc * lv
+                    rv = rv - 1
+                Wend
+                LowBoundVal = acc
             End If
         End If
     End If
@@ -2785,6 +2819,10 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(list, OP_NEG_EAX, 0, 0)
             LowExpr = 1
+        ElseIf nodes[idx].num = UOP_NOT Then
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_NOT_EAX, 0, 0)
+            LowExpr = 1
         Else
             ctx.err = 1
         End If
@@ -2803,7 +2841,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 Exit Function
             End If
         End If
-        If op = BOP_ADD Or op = BOP_MUL Or op = BOP_AND Or op = BOP_OR Or op = BOP_SUB Then
+        If op = BOP_ADD Or op = BOP_MUL Or op = BOP_AND Or op = BOP_OR Or op = BOP_SUB Or op = BOP_XOR Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(list, OP_PUSH_RAX, 0, 0)
             If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
@@ -2818,11 +2856,13 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
             ElseIf op = BOP_AND Then
                 IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+            ElseIf op = BOP_XOR Then
+                IrEmit(list, OP_XOR_EAX_ECX, 0, 0)
             Else
                 IrEmit(list, OP_OR_EAX_ECX, 0, 0)
             End If
             LowExpr = 1
-        ElseIf op = BOP_IDIV Then
+        ElseIf op = BOP_IDIV Or op = BOP_DIV Then
             ' eax = left, ecx = right, edx = 0 → div ecx
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(list, OP_PUSH_RAX, 0, 0)
@@ -2831,6 +2871,72 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_POP_RAX, 0, 0)
             IrEmit(list, OP_XOR_EDX, 0, 0)
             IrEmit(list, OP_DIV_ECX, 0, 0)
+            LowExpr = 1
+        ElseIf op = BOP_MOD Then
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_XOR_EDX, 0, 0)
+            IrEmit(list, OP_DIV_ECX, 0, 0)
+            IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
+            LowExpr = 1
+        ElseIf op = BOP_SHL Or op = BOP_SHR Then
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            If op = BOP_SHL Then
+                IrEmit(list, OP_SHL_EAX_CL, 0, 0)
+            Else
+                IrEmit(list, OP_SAR_EAX_CL, 0, 0)
+            End If
+            LowExpr = 1
+        ElseIf op = BOP_POW Then
+            ' eax = left ^ right（非負指数の整数累乗）
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_MOV_EDX_EAX, 0, 0)
+            IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+            lab = LowNewLab(ctx)
+            labB = LowNewLab(ctx)
+            IrEmit(list, OP_LABEL, lab, 0)
+            IrEmit(list, OP_TEST_ECX, 0, 0)
+            IrEmit(list, OP_JZ, labB, 0)
+            IrEmit(list, OP_IMUL_EAX_EDX, 0, 0)
+            IrEmit(list, OP_DEC_ECX, 0, 0)
+            IrEmit(list, OP_JMP, lab, 0)
+            IrEmit(list, OP_LABEL, labB, 0)
+            LowExpr = 1
+        ElseIf op = BOP_EQ Or op = BOP_NE Or op = BOP_LT Or op = BOP_LE Or op = BOP_GT Or op = BOP_GE Then
+            ' 関係演算の値: 真=-1 / 偽=0
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+            IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+            labB = LowNewLab(ctx)
+            If op = BOP_EQ Then
+                IrEmit(list, OP_JNE, labB, 0)
+            ElseIf op = BOP_NE Then
+                IrEmit(list, OP_JE, labB, 0)
+            ElseIf op = BOP_LT Then
+                IrEmit(list, OP_JGE, labB, 0)
+            ElseIf op = BOP_LE Then
+                IrEmit(list, OP_JG, labB, 0)
+            ElseIf op = BOP_GT Then
+                IrEmit(list, OP_JLE, labB, 0)
+            Else
+                IrEmit(list, OP_JL, labB, 0)
+            End If
+            IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
+            IrEmit(list, OP_LABEL, labB, 0)
             LowExpr = 1
         Else
             Print "error: unsupported binop " + Str$(op)
@@ -3013,8 +3119,18 @@ Function LowJumpIfFalse(ctx As *LowerCtx, idx As Long, lab As Long) As Long
     LowJumpIfFalse = 0
     ast = ctx.ast
     nodes = ast.nodes
+    If nodes[idx].kind = AST_UNARY Then
+        If nodes[idx].num = UOP_NOT Then
+            If LowJumpIfTrue(ctx, nodes[idx].left, lab) = 0 Then Exit Function
+            LowJumpIfFalse = 1
+            Exit Function
+        End If
+    End If
     If nodes[idx].kind <> AST_BINOP Then
-        ctx.err = 1
+        If LowExpr(ctx, idx) = 0 Then Exit Function
+        IrEmit(ctx.list, OP_TEST_EAX, 0, 0)
+        IrEmit(ctx.list, OP_JZ, lab, 0)
+        LowJumpIfFalse = 1
         Exit Function
     End If
     op = nodes[idx].num
@@ -3028,10 +3144,15 @@ Function LowJumpIfFalse(ctx As *LowerCtx, idx As Long, lab As Long) As Long
         If LowJumpIfFalse(ctx, nodes[idx].right, lab) = 0 Then Exit Function
         IrEmit(ctx.list, OP_LABEL, labSkip, 0)
         LowJumpIfFalse = 1
-    Else
+    ElseIf op = BOP_EQ Or op = BOP_NE Or op = BOP_LT Or op = BOP_LE Or op = BOP_GT Or op = BOP_GE Then
         jcc = LowCmpFalseJcc(ctx, idx)
         If jcc = 0 Then Exit Function
         IrEmit(ctx.list, jcc, lab, 0)
+        LowJumpIfFalse = 1
+    Else
+        If LowExpr(ctx, idx) = 0 Then Exit Function
+        IrEmit(ctx.list, OP_TEST_EAX, 0, 0)
+        IrEmit(ctx.list, OP_JZ, lab, 0)
         LowJumpIfFalse = 1
     End If
 End Function
@@ -3047,8 +3168,18 @@ Function LowJumpIfTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
     LowJumpIfTrue = 0
     ast = ctx.ast
     nodes = ast.nodes
+    If nodes[idx].kind = AST_UNARY Then
+        If nodes[idx].num = UOP_NOT Then
+            If LowJumpIfFalse(ctx, nodes[idx].left, lab) = 0 Then Exit Function
+            LowJumpIfTrue = 1
+            Exit Function
+        End If
+    End If
     If nodes[idx].kind <> AST_BINOP Then
-        ctx.err = 1
+        If LowExpr(ctx, idx) = 0 Then Exit Function
+        IrEmit(ctx.list, OP_TEST_EAX, 0, 0)
+        IrEmit(ctx.list, OP_JNZ, lab, 0)
+        LowJumpIfTrue = 1
         Exit Function
     End If
     op = nodes[idx].num
@@ -3062,7 +3193,7 @@ Function LowJumpIfTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
         If LowJumpIfTrue(ctx, nodes[idx].right, lab) = 0 Then Exit Function
         IrEmit(ctx.list, OP_LABEL, labSkip, 0)
         LowJumpIfTrue = 1
-    Else
+    ElseIf op = BOP_EQ Or op = BOP_NE Or op = BOP_LT Or op = BOP_LE Or op = BOP_GT Or op = BOP_GE Then
         jcc = LowCmpFalseJcc(ctx, idx)
         If jcc = 0 Then Exit Function
         jTrue = LowCmpTrueJcc(jcc)
@@ -3071,6 +3202,11 @@ Function LowJumpIfTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
             Exit Function
         End If
         IrEmit(ctx.list, jTrue, lab, 0)
+        LowJumpIfTrue = 1
+    Else
+        If LowExpr(ctx, idx) = 0 Then Exit Function
+        IrEmit(ctx.list, OP_TEST_EAX, 0, 0)
+        IrEmit(ctx.list, OP_JNZ, lab, 0)
         LowJumpIfTrue = 1
     End If
 End Function
