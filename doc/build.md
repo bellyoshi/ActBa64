@@ -7,6 +7,8 @@ ActBa64 は 2 段のブートストラップです。
 
 前提 OS: Windows（PowerShell）
 
+リポジトリ根の `.\build.ps1` が、上記 2 段に加えて ProjectEditor を組み、`release\` へ配布一式をコピーする。
+
 ---
 
 ## 1. actba32（ホスト）
@@ -131,7 +133,40 @@ actba64 <src.abp|.pj> -o <out.exe>
 
 ---
 
-## 3. よくある失敗
+## 3. リリース一式（`release\`）
+
+リポジトリ根で実行する。
+
+```powershell
+.\build.ps1                 # actba32 → actba64 → ProjectEditor → release\
+.\build.ps1 -SkipSelfHost   # 既存 stage2 を使い、エディタ再コンパイルとコピーのみ
+.\build.ps1 -SkipCompare    # 子スクリプトの SHA256 比較をスキップ
+```
+
+出力（毎回作り直し）:
+
+| パス | 内容 |
+|---|---|
+| `release\ProjectEditor.exe` | エディタ（actba64 でコンパイルした 64bit GUI） |
+| `release\actba64.exe` | 64bit コンパイラ |
+| `release\actba32.exe` | 32bit コンパイラ |
+| `release\abc.exe` / `abassembler.exe` / `ablinker.exe` | actba32 が同ディレクトリから呼ぶツール |
+| `release\Include\` | `src\actba64\Include` のコピー（exe 隣参照） |
+| `release\help\` | F1 用（`actba64_ref.html`） |
+
+`Include` は 64bit（`VoidPtr` 8 バイト）ヘッダ 1 本。同じフォルダの `actba32.exe` もこれを読むため、32bit 向け Win32 構造体サイズは合わない場合がある。
+
+前提:
+
+- 初回（`-SkipSelfHost` なし）は `src\actba32\bin\stage0\` にツール 4 本があること
+- `src\projecteditor\Callback.wbp` と `MakeWindow.wbp` があること（RAD 生成。リポジトリ未収録ならコンパイルできない）
+- `release\ProjectEditor.exe` を起動したままだと上書きに失敗することがある。閉じて再実行する
+
+`release\` は `.gitignore` 対象（`bin\` と同様）。
+
+---
+
+## 4. よくある失敗
 
 | 症状 | 対処 |
 |---|---|
@@ -140,3 +175,5 @@ actba64 <src.abp|.pj> -o <out.exe>
 | `actba32 not found` / 子ツール not found | `actba32` と同じディレクトリに `abc` / `abassembler` / `ablinker` があるか確認 |
 | stage2 vs stage3 が DIFF | ソース変更直後など。意図どおりなら `-SkipCompare` で継続し、原因を別途調査 |
 | テストで `linker not found` | 先に `.\build.ps1`（または `-Rebuild`）を実行する |
+| `ProjectEditor RAD file missing` | `Callback.wbp` / `MakeWindow.wbp` を `src\projecteditor\` に置く |
+| `copy failed ... release\ProjectEditor.exe` | `release\ProjectEditor.exe` を終了してから再実行 |
