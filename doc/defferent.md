@@ -29,7 +29,7 @@
   - N88BASIC に近い `LINE` / `CIRCLE` と 640×480 黒窓を有効化する互換モード。
   - `#prompt` は ActiveBasic 互換の完全別名（`#n88basic` と全く同じ）。
   - 「対話的に 1 行ずつ入力して即時実行する REPL」ではない。
-  - **actba64** は文の構文をパースし、GUI 窓と `End` 時のメッセージループを自動で付ける。
+  - **actba64** は文の構文をパースし、GUI 窓と `End` 時のメッセージループを自動で付ける。`LINE` / `CIRCLE` / `LOCATE` / `PAINT`、および `Print`（数値は `Str$` 相当）に対応。
   - **actba32** はライブラリ（`n88graph.abp`）を挿入するのみ。`Line(...)` / `Circle(...)` 呼び出しと `N88_Run()` は手動。
   - 詳細は [language.md §1.6](./language.md#16-n88basic-モード)。
 

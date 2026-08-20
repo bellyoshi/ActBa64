@@ -131,11 +131,12 @@ CIRCLE ,r[,...]                       ' 中心は LP
 N88 `LOCATE` / `PAINT`:
 
 ```text
-LOCATE x, y                 ' または Locate(x, y) — 文字座標（桁 x, 行 y）
+LOCATE x, y                 ' または Locate(x, y) — 桁 x, 行 y（0 始まり。本家 N88 の 行,桁 1 始まりとは異なる）
 PAINT (x, y), color1 [, color2]
 ```
 
-- `LOCATE` 後の `Print` は窓上の文字位置へ描画（次行へ進む）
+- `LOCATE` 後の `Print` は窓上の文字位置へ描画（`;` なしなら次行へ）
+- 数値の `Print` は `Str$` 相当で文字列化してから描画
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
 
 色番号（0..7、N88 8 色）:
@@ -339,7 +340,7 @@ ExitProcess(式)
 | `Print` | ○ | ○ |
 | `Input` | ○（**String のみ**） | ○（String / 数値） |
 | `Sleep(ms)` | ○（メッセージポンプ付き・default） | ○（同上・default） |
-| `LINE` / `CIRCLE`（N88 文） | ○（`#n88basic`） | ✕（関数呼び出しのみ） |
+| `LINE` / `CIRCLE` / `LOCATE` / `PAINT`（N88 文） | ○（`#n88basic`） | ✕（関数呼び出しのみ） |
 | `MsgBox` | ✕ | ○（ランタイム／API） |
 
 ---
@@ -441,10 +442,9 @@ actba32 の方がランタイムが広い（`Hex$` / `Val` / `InStr` 等）。ac
 Print Sin(MATH_HPI)   ' ≒ 1000
 Print Cos(0)          ' = 1000
 Print SinDeg(30)      ' ≒ 500
-Print MathMul(1500, 2000)  ' 3000（1.5 * 2.0）
 ```
 
-主な関数: `MathDiv` / `MathMul` / `MathMod` / `Abs` / `Sgn` / `Min` / `Max` / `Sqr` /
+主な関数: `MathDiv` / `MathMod` / `Abs` / `Sgn` / `Min` / `Max` / `Sqr` /
 `Sin` / `Cos` / `Tan` / `SinDeg` / `CosDeg` / `Atn` / `Exp` /
 `DegToRad` / `RadToDeg`
 
