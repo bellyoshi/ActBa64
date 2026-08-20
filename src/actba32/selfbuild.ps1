@@ -63,6 +63,22 @@ function Ensure-Dir([string]$dir) {
     }
 }
 
+function Sync-StageInclude([string]$stage) {
+    $shared = Join-Path $Root "..\Include"
+    $stageDir = Get-StageDir $stage
+    $incDst = Join-Path $stageDir "Include"
+    if (-not (Test-Path -LiteralPath $shared)) {
+        Write-Error "shared Include not found: $shared"
+        exit 2
+    }
+    Ensure-Dir $stageDir
+    if (Test-Path -LiteralPath $incDst) {
+        Remove-Item -LiteralPath $incDst -Recurse -Force
+    }
+    Write-Host "=== copy src\Include -> bin\$stage\Include ==="
+    Copy-Item -LiteralPath $shared -Destination $incDst -Recurse
+}
+
 function Invoke-OneTool([string]$driverAbpc, [string]$pj, [string]$relOut, [string]$outPath) {
     $beforeTime = [datetime]::MinValue
     $beforeLen = -1
@@ -83,9 +99,15 @@ function Invoke-OneTool([string]$driverAbpc, [string]$pj, [string]$relOut, [stri
 
     $joined = [string]::Join("`n", @($log))
     $okLine = $joined -match "(?i)OK:.*->"
-    $failHint = $joined -match "(?i)abc fail|asm fail|link fail|cannot |not found:|error:"
+    $failHint = $joined -match "(?im)^(?:error:|.*\b(?:abc fail|asm fail|link fail|cannot )).*"
 
     if ($code -ne 0 -or $failHint -or -not (Test-Path -LiteralPath $outPath)) {
+        if ($joined -match "(?i)too many Const \(max 256\)") {
+            Write-Host ""
+            Write-Host "stage0\abc.exe is too old (Const limit: 256)." -ForegroundColor Yellow
+            Write-Host "Open abc.pj with ActiveBasic 4.20 and rebuild bin\stage0\abc.exe,"
+            Write-Host "then run selfbuild.ps1 again. Other stage0 tools do not need rebuilding."
+        }
         Write-Error "build failed: $pj -> $relOut exit=$code"
         exit 1
     }
@@ -105,6 +127,7 @@ function Invoke-StageBuild([string]$driverStage, [string]$outStage) {
     $driver = Join-Path $driverDir "actba32.exe"
     $outDir = Get-StageDir $outStage
     Ensure-Dir $outDir
+    Sync-StageInclude $driverStage
 
     if (-not (Test-Path -LiteralPath $driver)) {
         Write-Error "driver not found: $driver"

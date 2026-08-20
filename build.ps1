@@ -26,7 +26,7 @@ $ReleaseDir = Join-Path $Root "release"
 $Actba32Stage2 = Join-Path $Actba32Dir "bin\stage2"
 $Actba64Stage2 = Join-Path $Actba64Dir "bin\stage2"
 $Actba64Exe = Join-Path $Actba64Stage2 "actba64.exe"
-$IncludeSrc = Join-Path $Actba64Dir "Include"
+$IncludeSrc = Join-Path $Root "src\Include"
 $HelpSrc = Join-Path $EditorDir "help"
 $EditorPj = Join-Path $EditorDir "ProjectEditor.pj"
 

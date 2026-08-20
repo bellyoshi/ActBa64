@@ -8,7 +8,6 @@
 actba32/
 │
 ├── *.abp / *.pj / *.idx     # ツールソース（actba32 / abc / abassembler / ablinker）
-├── Include/                 # 標準ヘッダ
 ├── test/                    # 回帰テスト
 │
 ├── bin/                     # 出力先のルート
@@ -34,7 +33,7 @@ CLI の `-o` は `.pj` の out より優先する。未指定時は `.pj` の ou
 3. IDE からビルドする（`actba32` / `abc` / `abassembler` / `ablinker`）
 
 `actba32` は **自分と同じディレクトリ** にある `abc` / `abassembler` / `ablinker` を呼ぶ。  
-stage0 にはツール 4 本を揃える。
+stage0 にはツール 4 本を揃える。標準ヘッダはリポジトリの `src/Include`（`selfbuild.ps1` が `bin\stage0\Include` へコピーする）。
 
 ## セルフホスト（stage1 / stage2）
 

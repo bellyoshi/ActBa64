@@ -11,6 +11,7 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 
 | パス | 内容 |
 |---|---|
+| `src/Include` | 標準ヘッダ（actba32 / actba64 / エディタ共通） |
 | `src/actba32` | 32bit ツールチェーン（`actba32` / `abc` / `abassembler` / `ablinker`）の自己ホスト |
 | `src/actba64` | 64bit コンパイラ（actba32 からブートストラップ） |
 | `src/projecteditor` | エディタ |
