@@ -7,7 +7,7 @@ ActBa64 は 2 段のブートストラップです。
 
 前提 OS: Windows（PowerShell）
 
-リポジトリ根の `.\build.ps1` が、上記 2 段に加えて ProjectEditor を組み、`release\` へ配布一式をコピーする。
+リポジトリ根の `.\build.ps1` が、上記 2 段に加えて ProjectEditor を組み、`release\` へ配布一式をコピーする。標準ヘッダは [`src/Include`](../src/Include) の 1 本。
 
 ---
 
@@ -27,6 +27,8 @@ ActiveBasic 4.20（ab420）で次の `.pj` をビルドし、`bin\stage0\` に�
 | `actba32.pj` | `bin\stage0\actba32.exe` |
 
 `actba32` は **同じディレクトリ** の `abc` / `abassembler` / `ablinker` を呼ぶため、4 本そろえること。
+
+`selfbuild.ps1` 開始時に [`src/Include`](../src/Include) を `bin\stage0\Include` へコピーする（古い stage0 は exe 隣の Include しか見ないため）。
 
 `.pj` の `#OUTPUT_RELEASE` は `bin\stage0\` 向け。CLI の `-o` があればそちらの方が優先される。
 
@@ -151,10 +153,9 @@ actba64 <src.abp|.pj> -o <out.exe>
 | `release\actba64.exe` | 64bit コンパイラ |
 | `release\actba32.exe` | 32bit コンパイラ |
 | `release\abc.exe` / `abassembler.exe` / `ablinker.exe` | actba32 が同ディレクトリから呼ぶツール |
-| `release\Include\` | `src\actba64\Include` のコピー（exe 隣参照） |
-| `release\help\` | F1 用（`actba64_ref.html`） |
+| `release\Include\` | `src\Include` のコピー（exe 隣、またはコンパイラが親ディレクトリも探索） |
 
-`Include` は 64bit（`VoidPtr` 8 バイト）ヘッダ 1 本。同じフォルダの `actba32.exe` もこれを読むため、32bit 向け Win32 構造体サイズは合わない場合がある。
+`Include` の正本は [`src/Include`](../src/Include) のみ。`VoidPtr` は `*Byte`（ポインタ幅はコンパイラ依存: actba64 は 8 バイト、actba32 は 4 バイト）。
 
 前提:
 

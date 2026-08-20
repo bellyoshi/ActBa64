@@ -2073,6 +2073,17 @@ Function LowArgIsUdtVar(ctx As *LowerCtx, idx As Long) As Long
     If vTy = TY_UDT Then LowArgIsUdtVar = 1
 End Function
 
+Function LowCallUseAddr(ctx As *LowerCtx, argNode As Long, byBits As Long, bit As Long, isApi As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowCallUseAddr = 0
+    If argNode < 0 Then Exit Function
+    ast = ctx.ast
+    nodes = ast.nodes
+    If nodes[argNode].num <> 0 Then Exit Function
+    LowCallUseAddr = LowUseArgAddr(ctx, nodes[argNode].left, byBits, bit, isApi)
+End Function
+
 Function LowUseArgAddr(ctx As *LowerCtx, idx As Long, byBits As Long, bit As Long, isApi As Long) As Long
     Dim v As Long
     LowUseArgAddr = 0
@@ -2385,6 +2396,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             AstCopyStr(ast, idx, VarPtr(name))
             lab = LowFindFunc(ctx, VarPtr(name))
             If lab < 0 Then
+                Print "error: AddressOf unknown function '" + MakeStr(VarPtr(name)) + "'"
                 ctx.err = 1
                 Exit Function
             End If
@@ -2639,6 +2651,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_AND_EAX_ECX, 0, 0)
             LowExpr = 1
         Else
+            Print "error: unsupported builtin " + Str$(nodes[idx].num)
             ctx.err = 1
         End If
     ElseIf k = AST_CALL Then
@@ -2887,6 +2900,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         End If
         nArgs = nodes[idx].num
         If nArgs > 16 Then
+            Print "error: too many call args (" + Str$(nArgs) + ") '" + MakeStr(VarPtr(name)) + "'"
             ctx.err = 1
             Exit Function
         End If
@@ -2913,6 +2927,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         End If
         stk = (stk + 15) And (0 - 16)
         If stk > 120 Then
+            Print "error: call stack too large (" + Str$(stk) + ") '" + MakeStr(VarPtr(name)) + "'"
             ctx.err = 1
             Exit Function
         End If
@@ -2926,7 +2941,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 bbit = bbit * 2
                 j = j + 1
             Wend
-            useAddr = LowUseArgAddr(ctx, nodes[args[argi]].left, byBits, bbit, isApi)
+            useAddr = LowCallUseAddr(ctx, args[argi], byBits, bbit, isApi)
             If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[argi]].left) = 0 Then Exit Function
             Else
@@ -2937,7 +2952,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         Wend
         ' register args 3,2,1,0
         If nArgs >= 4 Then
-            useAddr = LowUseArgAddr(ctx, nodes[args[3]].left, byBits, 8, isApi)
+            useAddr = LowCallUseAddr(ctx, args[3], byBits, 8, isApi)
             If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[3]].left) = 0 Then Exit Function
             Else
@@ -2946,7 +2961,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_R9_RAX, 0, 0)
         End If
         If nArgs >= 3 Then
-            useAddr = LowUseArgAddr(ctx, nodes[args[2]].left, byBits, 4, isApi)
+            useAddr = LowCallUseAddr(ctx, args[2], byBits, 4, isApi)
             If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[2]].left) = 0 Then Exit Function
             Else
@@ -2955,7 +2970,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_R8_RAX, 0, 0)
         End If
         If nArgs >= 2 Then
-            useAddr = LowUseArgAddr(ctx, nodes[args[1]].left, byBits, 2, isApi)
+            useAddr = LowCallUseAddr(ctx, args[1], byBits, 2, isApi)
             If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[1]].left) = 0 Then Exit Function
             Else
@@ -2964,7 +2979,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
         End If
         If nArgs >= 1 Then
-            useAddr = LowUseArgAddr(ctx, nodes[args[0]].left, byBits, 1, isApi)
+            useAddr = LowCallUseAddr(ctx, args[0], byBits, 1, isApi)
             If useAddr <> 0 Then
                 If LowAddr(ctx, nodes[args[0]].left) = 0 Then Exit Function
             Else
@@ -3581,6 +3596,8 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(ctx.list, OP_POP_RCX, 0, 0)
             fsz = LowMemberFieldSize(ctx, leftIdx)
             If fsz <= 0 Then
+                AstCopyStr(ast, leftIdx, VarPtr(name))
+                Print "error: bad member field '" + MakeStr(VarPtr(name)) + "'"
                 ctx.err = 1
                 Exit Function
             End If
@@ -3590,6 +3607,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
             AstCopyStr(ast, nodes[idx].left, VarPtr(name))
             If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+                Print "error: assign to undefined '" + MakeStr(VarPtr(name)) + "'"
                 ctx.err = 1
                 Exit Function
             End If
@@ -3750,7 +3768,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         Else
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
         End If
-        If g_ppN88Basic <> 0 Then
+        If PpIsN88Basic() <> 0 Then
             lstrcpy(VarPtr(name), "N88_Print")
             If nodes[idx].num <> 0 Then
                 lstrcpy(VarPtr(name), "N88_PrintStay")
@@ -3939,19 +3957,31 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
         nbytes = 8
     ElseIf ty = TY_UDT Then
         ti = nodes[dimIdx].extra
-        If ti < 0 Then Exit Function
+        If ti < 0 Then
+            Print "error: Dim UDT missing type '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
         tsizes = tt.typeSizes
         nbytes = tsizes[ti]
-        If nbytes <= 0 Then Exit Function
+        If nbytes <= 0 Then
+            Print "error: Dim UDT size 0 '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
     ElseIf ty = TY_PTR_UDT Then
         ti = nodes[dimIdx].extra
         If ti < 0 Then Exit Function
         nbytes = 8
     End If
     If asGlob <> 0 Then
-        If LowAddGlob(ctx, VarPtr(nm), ty, nbytes, ti) < 0 Then Exit Function
+        If LowAddGlob(ctx, VarPtr(nm), ty, nbytes, ti) < 0 Then
+            Print "error: register global '" + MakeStr(VarPtr(nm)) + "' ty=" + Str$(ty)
+            Exit Function
+        End If
     Else
-        If LowAddSym(ctx, VarPtr(nm), ty, nbytes, ti, 0) < 0 Then Exit Function
+        If LowAddSym(ctx, VarPtr(nm), ty, nbytes, ti, 0) < 0 Then
+            Print "error: register local '" + MakeStr(VarPtr(nm)) + "' ty=" + Str$(ty)
+            Exit Function
+        End If
     End If
     LowRegisterDimNode = 1
 End Function
@@ -4324,6 +4354,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 IrEmit(list, OP_STORE_LOCAL, offs[pi], 0)
             End If
             If LowStmtList(VarPtr(ctx), nodes[stmt].right) = 0 Or ctx.err <> 0 Then
+                AstCopyStr(ast, stmt, VarPtr(nm))
+                Print "error: codegen in function '" + MakeStr(VarPtr(nm)) + "'"
                 LowFreeAstBufs()
                 Exit Function
             End If
@@ -4357,6 +4389,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     While stmt >= 0
         If nodes[stmt].kind <> AST_FUNC And nodes[stmt].kind <> AST_CONST And nodes[stmt].kind <> AST_TYPE Then
             If LowStmt(VarPtr(ctx), stmt) = 0 Or ctx.err <> 0 Then
+                Print "error: codegen in module stmt kind " + Str$(nodes[stmt].kind)
                 LowFreeAstBufs()
                 Exit Function
             End If

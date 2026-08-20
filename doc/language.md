@@ -55,7 +55,7 @@ Print a +_
 | `#include "path"` | ファイル挿入（深さ上限あり） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`）は **常時** 先頭へ挿入される。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -424,7 +424,7 @@ actba32 の方がランタイムが広い（`Hex$` / `Val` / `InStr` 等）。ac
 
 ### 7.2 自動 Include
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`）は **常時** 先頭へ挿入される（actba32 / actba64 共通）。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`）は **常時** 先頭へ挿入される（actba32 / actba64 共通）。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣、その親、カレントの `Include\` を順に探す。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
 | ディレクティブ | 挿入される idx |
