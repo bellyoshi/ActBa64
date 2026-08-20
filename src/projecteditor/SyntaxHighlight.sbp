@@ -79,6 +79,14 @@ Function Hl_IsKeyword(s As String) As Long
     If k = "sin" Or k = "cos" Or k = "tan" Or k = "abs" Or k = "sqr" Or k = "atn" Then Hl_IsKeyword = 1
 End Function
 
+Function Hl_IsDirective(s As String) As Long
+    Dim k As String
+    Hl_IsDirective = 0
+    k = Hl_Lower$(s)
+    If k = "#n88basic" Or k = "#prompt" Then Hl_IsDirective = 1
+    If k = "#console" Or k = "#strict" Or k = "#include" Or k = "#usewindow" Then Hl_IsDirective = 1
+End Function
+
 Function Hl_ColorOf(ByVal kind As Long) As Long
     If kind = HL_KEYWORD Then
         Hl_ColorOf = RGB(0, 0, 200)
@@ -112,9 +120,10 @@ Function Hl_MidBytes$(s As String, ByVal start1 As Long, ByVal n As Long) As Str
     free(out)
 End Function
 
-Sub Hl_Emit(hDC As HDC, ByRef x As Long, ByVal y As Long, seg As String, ByVal kind As Long)
+Sub Hl_Emit(hDC As HDC, ByRef x As Long, ByVal y As Long, seg As String, ByVal kind As Long, ByVal doDraw As Long)
     Dim sz As SIZE
     If Len(seg) <= 0 Then Exit Sub
+    If doDraw = 0 Then Exit Sub
     SetTextColor(hDC, Hl_ColorOf(kind))
     sz.cx = 0
     sz.cy = 0
@@ -123,10 +132,11 @@ Sub Hl_Emit(hDC As HDC, ByRef x As Long, ByVal y As Long, seg As String, ByVal k
     x = x + sz.cx
 End Sub
 
-Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String)
+Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String, ByRef inBlock As Long, ByVal doDraw As Long)
     Dim n As Long
     Dim i As Long
     Dim b As Long
+    Dim b2 As Long
     Dim startI As Long
     Dim word As String
     Dim seg As String
@@ -145,10 +155,71 @@ Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String)
         bp[0] = p[i]
         b = tmp And &HFF
 
-        If b = 39 Then
+        If inBlock <> 0 Then
+            startI = i
+            While i < n
+                bp[0] = p[i]
+                b = tmp And &HFF
+                If b = 42 And i + 1 < n Then
+                    bp[0] = p[i + 1]
+                    b2 = tmp And &HFF
+                    If b2 = 47 Then
+                        i = i + 2
+                        seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+                        Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
+                        inBlock = 0
+                        Exit While
+                    End If
+                End If
+                If IsSjisLeadByte(b) <> 0 And i + 1 < n Then
+                    i = i + 2
+                Else
+                    i = i + 1
+                End If
+            Wend
+            If inBlock <> 0 Then
+                seg = Hl_MidBytes$(lineStr, startI + 1, n - startI)
+                Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
+                i = n
+            End If
+
+        ElseIf b = 39 Then
             seg = Hl_MidBytes$(lineStr, i + 1, n - i)
-            Hl_Emit(hDC, x, y, seg, HL_COMMENT)
+            Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
             i = n
+
+        ElseIf b = 47 And i + 1 < n Then
+            bp[0] = p[i + 1]
+            b2 = tmp And &HFF
+            If b2 = 42 Then
+                startI = i
+                i = i + 2
+                inBlock = 1
+                While i < n
+                    bp[0] = p[i]
+                    b = tmp And &HFF
+                    If b = 42 And i + 1 < n Then
+                        bp[0] = p[i + 1]
+                        b2 = tmp And &HFF
+                        If b2 = 47 Then
+                            i = i + 2
+                            inBlock = 0
+                            Exit While
+                        End If
+                    End If
+                    If IsSjisLeadByte(b) <> 0 And i + 1 < n Then
+                        i = i + 2
+                    Else
+                        i = i + 1
+                    End If
+                Wend
+                seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+                Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
+            Else
+                seg = Hl_MidBytes$(lineStr, i + 1, 1)
+                Hl_Emit(hDC, x, y, seg, HL_NORMAL, doDraw)
+                i = i + 1
+            End If
 
         ElseIf b = 34 Then
             startI = i
@@ -167,7 +238,21 @@ Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String)
                 End If
             Wend
             seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-            Hl_Emit(hDC, x, y, seg, HL_STRING)
+            Hl_Emit(hDC, x, y, seg, HL_STRING, doDraw)
+
+        ElseIf b = 35 Then
+            startI = i
+            i = i + 1
+            While i < n
+                bp[0] = p[i]
+                b = tmp And &HFF
+                If Hl_IsAlnum(b) = 0 Then Exit While
+                i = i + 1
+            Wend
+            word = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+            kind = HL_NORMAL
+            If Hl_IsDirective(word) <> 0 Then kind = HL_KEYWORD
+            Hl_Emit(hDC, x, y, word, kind, doDraw)
 
         ElseIf Hl_IsAlpha(b) <> 0 Then
             startI = i
@@ -181,7 +266,7 @@ Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String)
             word = Hl_MidBytes$(lineStr, startI + 1, i - startI)
             kind = HL_NORMAL
             If Hl_IsKeyword(word) <> 0 Then kind = HL_KEYWORD
-            Hl_Emit(hDC, x, y, word, kind)
+            Hl_Emit(hDC, x, y, word, kind, doDraw)
 
         ElseIf Hl_IsDigit(b) <> 0 Or b = 38 Then
             startI = i
@@ -200,19 +285,19 @@ Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String)
                 i = i + 1
             Wend
             seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-            Hl_Emit(hDC, x, y, seg, HL_NUMBER)
+            Hl_Emit(hDC, x, y, seg, HL_NUMBER, doDraw)
 
         ElseIf IsSjisLeadByte(b) <> 0 And i + 1 < n Then
             seg = Hl_MidBytes$(lineStr, i + 1, 2)
-            Hl_Emit(hDC, x, y, seg, HL_NORMAL)
+            Hl_Emit(hDC, x, y, seg, HL_NORMAL, doDraw)
             i = i + 2
 
         Else
             seg = Hl_MidBytes$(lineStr, i + 1, 1)
-            Hl_Emit(hDC, x, y, seg, HL_NORMAL)
+            Hl_Emit(hDC, x, y, seg, HL_NORMAL, doDraw)
             i = i + 1
         End If
     Wend
 
-    SetTextColor(hDC, Hl_ColorOf(HL_NORMAL))
+    If doDraw <> 0 Then SetTextColor(hDC, Hl_ColorOf(HL_NORMAL))
 End Sub
