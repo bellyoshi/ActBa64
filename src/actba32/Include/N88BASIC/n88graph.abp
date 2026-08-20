@@ -1,0 +1,407 @@
+' N88BASIC graphics / 640x480 black window
+' Loaded via Include\N88BASIC\n88basic.idx when source has #n88basic / #N88BASIC
+'
+' LINE (x1,y1)-(x2,y2)[,color][,B|BF]
+' CIRCLE [(x,y)|STEP(x,y)],r[,color][,start][,end][,aspect][,F[,color2]]
+'   start/end: ラジアン（千分率。6.28 → 6280）。省略または start=end=0 で全周
+'   aspect: 垂直/水平（千分率。1.0 → 1000）。省略時 1000
+'   flags: 1=F  2=startNeg  4=endNeg  8=STEP  16=center=LP
+
+Const N88_WIDTH = 640
+Const N88_HEIGHT = 480
+Const N88_PS_SOLID = 0
+Const N88_BLACK_BRUSH = 4
+Const N88_NULL_BRUSH = 5
+Const N88_SRCCOPY = &H00CC0020
+Const N88_WS_OVERLAPPEDWINDOW = &H00CF0000
+Const N88_WS_VISIBLE = &H10000000
+Const N88_CW_USEDEFAULT = &H80000000
+Const N88_MODE_LINE = 0
+Const N88_MODE_BOX = 1
+Const N88_MODE_BOXFILL = 2
+Const N88_PI2_M = 6283
+
+Dim g_n88Hwnd As Long
+Dim g_n88MemDC As Long
+Dim g_n88Bmp As Long
+Dim g_n88OldBmp As Long
+Dim g_n88Ready As Long
+Dim g_n88LPx As Long
+Dim g_n88LPy As Long
+Dim g_n88Class(31) As Byte
+Dim g_n88Title(31) As Byte
+
+Function N88_Rgb(c As Long) As Long
+    Dim v As Long
+    v = c And 7
+    If v = 0 Then
+        N88_Rgb = 0
+    ElseIf v = 1 Then
+        N88_Rgb = &HFF0000
+    ElseIf v = 2 Then
+        N88_Rgb = &H0000FF
+    ElseIf v = 3 Then
+        N88_Rgb = &HFF00FF
+    ElseIf v = 4 Then
+        N88_Rgb = &H00FF00
+    ElseIf v = 5 Then
+        N88_Rgb = &HFFFF00
+    ElseIf v = 6 Then
+        N88_Rgb = &H00FFFF
+    Else
+        N88_Rgb = &HFFFFFF
+    End If
+End Function
+
+Function N88_WndProc(hWnd As Long, message As DWord, wParam As Long, lParam As Long) As Long
+    Dim ps As PAINTSTRUCT
+    Dim hdc As Long
+    Dim rc As RECT
+
+    If message = WM_PAINT Then
+        hdc = BeginPaint(hWnd, VarPtr(ps))
+        If g_n88MemDC <> 0 Then
+            BitBlt(hdc, 0, 0, N88_WIDTH, N88_HEIGHT, g_n88MemDC, 0, 0, N88_SRCCOPY)
+        Else
+            GetClientRect(hWnd, VarPtr(rc))
+            FillRect(hdc, VarPtr(rc), GetStockObject(N88_BLACK_BRUSH))
+        End If
+        EndPaint(hWnd, VarPtr(ps))
+        N88_WndProc = 0
+        Exit Function
+    End If
+    If message = WM_DESTROY Then
+        PostQuitMessage(0)
+        N88_WndProc = 0
+        Exit Function
+    End If
+    N88_WndProc = DefWindowProcA(hWnd, message, wParam, lParam)
+End Function
+
+Sub N88_ClearSurface(hdc As Long)
+    Dim rc As RECT
+    rc.left = 0
+    rc.top = 0
+    rc.right = N88_WIDTH
+    rc.bottom = N88_HEIGHT
+    FillRect(hdc, VarPtr(rc), GetStockObject(N88_BLACK_BRUSH))
+End Sub
+
+Sub N88_EnsureWindow()
+    Dim wc As WNDCLASSEX
+    Dim hInst As Long
+    Dim hdc As Long
+
+    If g_n88Ready <> 0 Then Exit Sub
+
+    lstrcpy(VarPtr(g_n88Class), "ActBa64N88Class")
+    lstrcpy(VarPtr(g_n88Title), "N88BASIC")
+    hInst = GetModuleHandleA(0)
+
+    FillMemory(VarPtr(wc), SizeOf(WNDCLASSEX), 0)
+    wc.cbSize = SizeOf(WNDCLASSEX)
+    wc.style = CS_HREDRAW Or CS_VREDRAW
+    wc.lpfnWndProc = AddressOf(N88_WndProc)
+    wc.hInstance = hInst
+    wc.hCursor = LoadCursorA(0, MAKEINTRESOURCE(IDC_ARROW))
+    wc.hbrBackground = GetStockObject(N88_BLACK_BRUSH)
+    wc.lpszClassName = VarPtr(g_n88Class)
+    RegisterClassExA(VarPtr(wc))
+
+    g_n88Hwnd = CreateWindowExA(0, VarPtr(g_n88Class), VarPtr(g_n88Title), N88_WS_OVERLAPPEDWINDOW Or N88_WS_VISIBLE, 100, 100, N88_WIDTH + 16, N88_HEIGHT + 39, 0, 0, hInst, 0)
+    If g_n88Hwnd = 0 Then Exit Sub
+
+    hdc = GetDC(g_n88Hwnd)
+    If hdc <> 0 Then
+        g_n88MemDC = CreateCompatibleDC(hdc)
+        g_n88Bmp = CreateCompatibleBitmap(hdc, N88_WIDTH, N88_HEIGHT)
+        If g_n88MemDC <> 0 And g_n88Bmp <> 0 Then
+            g_n88OldBmp = SelectObject(g_n88MemDC, g_n88Bmp)
+            N88_ClearSurface(g_n88MemDC)
+        End If
+        N88_ClearSurface(hdc)
+        ReleaseDC(g_n88Hwnd, hdc)
+    End If
+
+    g_n88LPx = 0
+    g_n88LPy = 0
+    ShowWindow(g_n88Hwnd, SW_SHOW)
+    UpdateWindow(g_n88Hwnd)
+    g_n88Ready = 1
+End Sub
+
+Sub N88_StrokeLine(hdc As Long, sx As Long, sy As Long, ex As Long, ey As Long, color As Long)
+    Dim pen As Long
+    Dim old As Long
+    If hdc = 0 Then Exit Sub
+    pen = CreatePen(N88_PS_SOLID, 2, N88_Rgb(color))
+    If pen = 0 Then Exit Sub
+    old = SelectObject(hdc, pen)
+    MoveToEx(hdc, sx, sy, 0)
+    LineTo(hdc, ex, ey)
+    SelectObject(hdc, old)
+    DeleteObject(pen)
+End Sub
+
+Sub N88_StrokeBox(hdc As Long, sx As Long, sy As Long, ex As Long, ey As Long, color As Long, fill As Long)
+    Dim pen As Long
+    Dim brush As Long
+    Dim oldPen As Long
+    Dim oldBrush As Long
+    Dim l As Long
+    Dim t As Long
+    Dim r As Long
+    Dim b As Long
+
+    If hdc = 0 Then Exit Sub
+    l = sx
+    t = sy
+    r = ex
+    b = ey
+    If l > r Then
+        l = ex
+        r = sx
+    End If
+    If t > b Then
+        t = ey
+        b = sy
+    End If
+
+    pen = CreatePen(N88_PS_SOLID, 2, N88_Rgb(color))
+    If pen = 0 Then Exit Sub
+    If fill <> 0 Then
+        brush = CreateSolidBrush(N88_Rgb(color))
+    Else
+        brush = GetStockObject(N88_NULL_BRUSH)
+    End If
+    oldPen = SelectObject(hdc, pen)
+    oldBrush = SelectObject(hdc, brush)
+    Rectangle(hdc, l, t, r + 1, b + 1)
+    SelectObject(hdc, oldBrush)
+    SelectObject(hdc, oldPen)
+    DeleteObject(pen)
+    If fill <> 0 Then
+        DeleteObject(brush)
+    End If
+End Sub
+
+' 整数除算・三角関数は Include\default\Math.abp（MathDiv / Sin / Cos）
+
+Sub N88_AspectRadii(r As Long, aspectM As Long, ByRef rx As Long, ByRef ry As Long)
+    Dim a As Long
+    a = aspectM
+    If a <= 0 Then a = 1000
+    If a = 1000 Then
+        rx = r
+        ry = r
+    ElseIf a < 1000 Then
+        rx = r
+        ry = MathDiv(r * a, 1000)
+        If ry < 1 Then ry = 1
+    Else
+        ry = r
+        rx = MathDiv(r * 1000, a)
+        If rx < 1 Then rx = 1
+    End If
+End Sub
+
+Sub N88_AngPoint(cx As Long, cy As Long, rx As Long, ry As Long, angM As Long, ByRef ox As Long, ByRef oy As Long)
+    Dim cs As Long
+    Dim sn As Long
+    cs = Cos(angM)
+    sn = Sin(angM)
+    ox = cx + MathDiv(rx * cs, MATH_ONE)
+    oy = cy - MathDiv(ry * sn, MATH_ONE)
+End Sub
+
+Function N88_IsFullEllipse(startM As Long, endM As Long) As Long
+    Dim d As Long
+    If startM = endM Then
+        N88_IsFullEllipse = 1
+        Exit Function
+    End If
+    d = endM - startM
+    If d < 0 Then d = 0 - d
+    If d >= N88_PI2_M - 2 Then
+        N88_IsFullEllipse = 1
+    Else
+        N88_IsFullEllipse = 0
+    End If
+End Function
+
+Sub N88_StrokeEllipseFull(hdc As Long, cx As Long, cy As Long, rx As Long, ry As Long, color As Long, fillColor As Long, fill As Long)
+    Dim pen As Long
+    Dim brush As Long
+    Dim oldPen As Long
+    Dim oldBrush As Long
+
+    If hdc = 0 Then Exit Sub
+    pen = CreatePen(N88_PS_SOLID, 2, N88_Rgb(color))
+    If pen = 0 Then Exit Sub
+    If fill <> 0 Then
+        brush = CreateSolidBrush(N88_Rgb(fillColor))
+    Else
+        brush = GetStockObject(N88_NULL_BRUSH)
+    End If
+    oldPen = SelectObject(hdc, pen)
+    oldBrush = SelectObject(hdc, brush)
+    Ellipse(hdc, cx - rx, cy - ry, cx + rx, cy + ry)
+    SelectObject(hdc, oldBrush)
+    SelectObject(hdc, oldPen)
+    DeleteObject(pen)
+    If fill <> 0 Then
+        DeleteObject(brush)
+    End If
+End Sub
+
+Sub N88_StrokeEllipseArc(hdc As Long, cx As Long, cy As Long, rx As Long, ry As Long, startM As Long, endM As Long, color As Long, fillColor As Long, fill As Long, startNeg As Long, endNeg As Long)
+    Dim pen As Long
+    Dim brush As Long
+    Dim oldPen As Long
+    Dim oldBrush As Long
+    Dim x0 As Long
+    Dim y0 As Long
+    Dim x1 As Long
+    Dim y1 As Long
+
+    If hdc = 0 Then Exit Sub
+    N88_AngPoint(cx, cy, rx, ry, startM, x0, y0)
+    N88_AngPoint(cx, cy, rx, ry, endM, x1, y1)
+
+    pen = CreatePen(N88_PS_SOLID, 2, N88_Rgb(color))
+    If pen = 0 Then Exit Sub
+    If fill <> 0 Then
+        brush = CreateSolidBrush(N88_Rgb(fillColor))
+    Else
+        brush = GetStockObject(N88_NULL_BRUSH)
+    End If
+    oldPen = SelectObject(hdc, pen)
+    oldBrush = SelectObject(hdc, brush)
+    If fill <> 0 Then
+        ' GDI は Y 下向き CCW ≒ 数学 CW なので、始点/終点を入れ替えて数学 CCW に合わせる
+        Pie(hdc, cx - rx, cy - ry, cx + rx, cy + ry, x1, y1, x0, y0)
+    Else
+        Arc(hdc, cx - rx, cy - ry, cx + rx, cy + ry, x1, y1, x0, y0)
+        If startNeg <> 0 Then
+            MoveToEx(hdc, cx, cy, 0)
+            LineTo(hdc, x0, y0)
+        End If
+        If endNeg <> 0 Then
+            MoveToEx(hdc, cx, cy, 0)
+            LineTo(hdc, x1, y1)
+        End If
+    End If
+    SelectObject(hdc, oldBrush)
+    SelectObject(hdc, oldPen)
+    DeleteObject(pen)
+    If fill <> 0 Then
+        DeleteObject(brush)
+    End If
+End Sub
+
+Sub N88_DrawCircleOn(hdc As Long, cx As Long, cy As Long, r As Long, color As Long, startM As Long, endM As Long, aspectM As Long, flags As Long, fillColor As Long)
+    Dim rx As Long
+    Dim ry As Long
+    Dim fill As Long
+    Dim startNeg As Long
+    Dim endNeg As Long
+
+    If hdc = 0 Then Exit Sub
+    fill = flags And 1
+    startNeg = 0
+    endNeg = 0
+    If (flags And 2) <> 0 Then startNeg = 1
+    If (flags And 4) <> 0 Then endNeg = 1
+    N88_AspectRadii(r, aspectM, rx, ry)
+
+    If N88_IsFullEllipse(startM, endM) <> 0 Then
+        N88_StrokeEllipseFull(hdc, cx, cy, rx, ry, color, fillColor, fill)
+    Else
+        N88_StrokeEllipseArc(hdc, cx, cy, rx, ry, startM, endM, color, fillColor, fill, startNeg, endNeg)
+    End If
+End Sub
+
+Sub N88_DrawOnBoth(sx As Long, sy As Long, ex As Long, ey As Long, color As Long, mode As Long)
+    Dim hdc As Long
+    Dim fill As Long
+
+    If g_n88Hwnd = 0 Then Exit Sub
+    fill = 0
+    If mode = N88_MODE_BOXFILL Then fill = 1
+
+    If mode = N88_MODE_LINE Then
+        If g_n88MemDC <> 0 Then
+            N88_StrokeLine(g_n88MemDC, sx, sy, ex, ey, color)
+        End If
+        hdc = GetDC(g_n88Hwnd)
+        N88_StrokeLine(hdc, sx, sy, ex, ey, color)
+        ReleaseDC(g_n88Hwnd, hdc)
+    Else
+        If g_n88MemDC <> 0 Then
+            N88_StrokeBox(g_n88MemDC, sx, sy, ex, ey, color, fill)
+        End If
+        hdc = GetDC(g_n88Hwnd)
+        N88_StrokeBox(hdc, sx, sy, ex, ey, color, fill)
+        ReleaseDC(g_n88Hwnd, hdc)
+    End If
+End Sub
+
+Sub Line(sx As Long, sy As Long, ex As Long, ey As Long, color As Long, mode As Long)
+    N88_EnsureWindow()
+    N88_DrawOnBoth(sx, sy, ex, ey, color, mode)
+    g_n88LPx = ex
+    g_n88LPy = ey
+End Sub
+
+Sub LineCont(ex As Long, ey As Long, color As Long, mode As Long)
+    Line(g_n88LPx, g_n88LPy, ex, ey, color, mode)
+End Sub
+
+' CIRCLE → Circle(cx,cy,r,color,startM,endM,aspectM,flags,fillColor)
+Sub Circle(cx As Long, cy As Long, r As Long, color As Long, startM As Long, endM As Long, aspectM As Long, flags As Long, fillColor As Long)
+    Dim hdc As Long
+    Dim x As Long
+    Dim y As Long
+
+    N88_EnsureWindow()
+    If g_n88Hwnd = 0 Then Exit Sub
+
+    x = cx
+    y = cy
+    If (flags And 16) <> 0 Then
+        x = g_n88LPx
+        y = g_n88LPy
+    ElseIf (flags And 8) <> 0 Then
+        x = g_n88LPx + cx
+        y = g_n88LPy + cy
+    End If
+
+    If g_n88MemDC <> 0 Then
+        N88_DrawCircleOn(g_n88MemDC, x, y, r, color, startM, endM, aspectM, flags, fillColor)
+    End If
+    hdc = GetDC(g_n88Hwnd)
+    N88_DrawCircleOn(hdc, x, y, r, color, startM, endM, aspectM, flags, fillColor)
+    ReleaseDC(g_n88Hwnd, hdc)
+
+    g_n88LPx = x
+    g_n88LPy = y
+End Sub
+
+Sub N88_Run()
+    Dim msg As MSG
+    Dim r As Long
+
+    N88_EnsureWindow()
+    Do
+        r = GetMessageA(VarPtr(msg), 0, 0, 0)
+        If r = 0 Then Exit Do
+        If r = -1 Then Exit Do
+        TranslateMessage(VarPtr(msg))
+        DispatchMessageA(VarPtr(msg))
+    Loop
+End Sub
+
+Sub N88_End()
+    N88_Run()
+    ExitProcess(0)
+End Sub

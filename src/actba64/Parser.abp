@@ -8,6 +8,7 @@ Type Parser
     ast As *Ast
     pos As Long
     err As Long
+    n88Mode As Long
 End Type
 
 Function ParseToLower(c As Long) As Long
@@ -1203,8 +1204,12 @@ End Function
 
 Function ParseEndStmt(p As *Parser) As Long
     Dim ast As *Ast
+    Dim nodes As *AstNode
     Dim nEnd As Long
+    Dim nCall As Long
     Dim kType(7) As Byte
+    Dim name(15) As Byte
+
     ParseEndStmt = -1
     p.pos = p.pos + 1
     lstrcpy(VarPtr(kType), "type")
@@ -1213,9 +1218,525 @@ Function ParseEndStmt(p As *Parser) As Long
         Exit Function
     End If
     ast = p.ast
+    If p.n88Mode <> 0 Then
+        ' End → N88_End()（窓を表示して閉じるまで待つ）
+        lstrcpy(VarPtr(name), "N88_End")
+        nCall = AstAddNode(ast, AST_CALL)
+        If nCall < 0 Then Exit Function
+        AstSetStr(ast, nCall, VarPtr(name))
+        nodes = ast.nodes
+        nodes[nCall].left = -1
+        nodes[nCall].right = -1
+        nodes[nCall].num = 0
+        ParseEndStmt = nCall
+        Exit Function
+    End If
     nEnd = AstAddNode(ast, AST_END)
     If nEnd < 0 Then Exit Function
     ParseEndStmt = nEnd
+End Function
+
+' 引数ノードを1つ追加してリスト末尾へつなぐ
+Function ParseLinkArg(ast As *Ast, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long, e As Long) As Long
+    Dim nodes As *AstNode
+    Dim arg1 As Long
+    ParseLinkArg = 0
+    arg1 = AstAddNode(ast, AST_ARG)
+    If arg1 < 0 Then Exit Function
+    nodes = ast.nodes
+    nodes[arg1].left = e
+    nodes[arg1].nxt = -1
+    If arg0 < 0 Then
+        arg0 = arg1
+    Else
+        nodes[nPrev].nxt = arg1
+    End If
+    nPrev = arg1
+    nArgs = nArgs + 1
+    ParseLinkArg = 1
+End Function
+
+Function ParseMakeNum(ast As *Ast, v As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    ParseMakeNum = -1
+    n = AstAddNode(ast, AST_NUM)
+    If n < 0 Then Exit Function
+    nodes = ast.nodes
+    nodes[n].num = v
+    ParseMakeNum = n
+End Function
+
+' B / BF → mode 1 / 2。該当しなければ 0
+Function ParseN88BoxMode(p As *Parser) As Long
+    Dim kB(3) As Byte
+    Dim kBf(3) As Byte
+    ParseN88BoxMode = 0
+    lstrcpy(VarPtr(kBf), "bf")
+    If ParseIdentIs(p, VarPtr(kBf)) <> 0 Then
+        p.pos = p.pos + 1
+        ParseN88BoxMode = 2
+        Exit Function
+    End If
+    lstrcpy(VarPtr(kB), "b")
+    If ParseIdentIs(p, VarPtr(kB)) <> 0 Then
+        p.pos = p.pos + 1
+        ParseN88BoxMode = 1
+    End If
+End Function
+
+' LINE [(x1,y1)]-(x2,y2)[,color][,B|BF]
+' → Line(sx,sy,ex,ey,color,mode) または LineCont(ex,ey,color,mode)
+Function ParseN88LineStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(15) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim e3 As Long
+    Dim e4 As Long
+    Dim e5 As Long
+    Dim e6 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+    Dim useLp As Long
+    Dim mode As Long
+    Dim m As Long
+
+    ParseN88LineStmt = -1
+    p.pos = p.pos + 1
+    useLp = 0
+    e1 = -1
+    e2 = -1
+    e5 = -1
+    mode = 0
+
+    If ParseTokKind(p) = TK_MINUS Then
+        useLp = 1
+        p.pos = p.pos + 1
+    Else
+        If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+        e2 = ParseExpr(p)
+        If e2 < 0 Then Exit Function
+        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+        If ParseExpect(p, TK_MINUS) = 0 Then Exit Function
+    End If
+
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    e3 = ParseExpr(p)
+    If e3 < 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e4 = ParseExpr(p)
+    If e4 < 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+
+    ' [,color][,B|BF]
+    If ParseTokKind(p) = TK_COMMA Then
+        p.pos = p.pos + 1
+        m = ParseN88BoxMode(p)
+        If m <> 0 Then
+            mode = m
+        ElseIf ParseTokKind(p) = TK_COMMA Then
+            ' color 省略: ,,B
+            p.pos = p.pos + 1
+            mode = ParseN88BoxMode(p)
+            If mode = 0 Then
+                p.err = 1
+                Exit Function
+            End If
+        Else
+            e5 = ParseExpr(p)
+            If e5 < 0 Then Exit Function
+            If ParseTokKind(p) = TK_COMMA Then
+                p.pos = p.pos + 1
+                mode = ParseN88BoxMode(p)
+                If mode = 0 Then
+                    p.err = 1
+                    Exit Function
+                End If
+            End If
+        End If
+    End If
+
+    ast = p.ast
+    If e5 < 0 Then
+        e5 = ParseMakeNum(ast, 7)
+        If e5 < 0 Then Exit Function
+    End If
+    e6 = ParseMakeNum(ast, mode)
+    If e6 < 0 Then Exit Function
+
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If useLp = 0 Then
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e6) = 0 Then Exit Function
+        lstrcpy(VarPtr(name), "Line")
+    Else
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e6) = 0 Then Exit Function
+        lstrcpy(VarPtr(name), "LineCont")
+    End If
+
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast.nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88LineStmt = nCall
+End Function
+
+' 千分率リテラル/整数 → milli。空なら 0 を返し ok=0
+' 負号があれば neg=1（絶対値を返す）
+Function ParseN88Milli(p As *Parser, ByRef outV As Long, ByRef neg As Long) As Long
+    Dim sign As Long
+    Dim v As Long
+
+    ParseN88Milli = 0
+    outV = 0
+    neg = 0
+    sign = 1
+    If ParseTokKind(p) = TK_MINUS Then
+        sign = -1
+        neg = 1
+        p.pos = p.pos + 1
+    End If
+    If ParseTokKind(p) = TK_FLOAT Then
+        v = ParseTokNum(p)
+        p.pos = p.pos + 1
+        outV = v
+        If sign < 0 Then
+            ' 値は絶対値で保持
+        End If
+        ParseN88Milli = 1
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_NUMBER Then
+        v = ParseTokNum(p)
+        p.pos = p.pos + 1
+        outV = v * 1000
+        ParseN88Milli = 1
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_IDENT Or ParseTokKind(p) = TK_LPAREN Then
+        ' 式（整数）。角度/比率は整数ラジアン×1000 とみなす
+        v = ParseExpr(p)
+        If v < 0 Then
+            ParseN88Milli = -1
+            Exit Function
+        End If
+        ' 実行時値は式のまま渡せず AST 化が必要 → ここでは非対応、エラー
+        p.err = 1
+        ParseN88Milli = -1
+        Exit Function
+    End If
+    ' 空スロット
+    If sign < 0 Then
+        p.err = 1
+        ParseN88Milli = -1
+    End If
+End Function
+
+' CIRCLE [[(x,y)]|[STEP(x,y)]] ,r [,color][,start][,end][,aspect][,F[,color2]]
+' → Circle(cx,cy,r,color,startM,endM,aspectM,flags)
+' flags: 1=F  2=startNeg  4=endNeg  8=STEP  16=center=LP
+Function ParseN88CircleStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(7) As Byte
+    Dim kStep(7) As Byte
+    Dim kF(3) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim e3 As Long
+    Dim e4 As Long
+    Dim e5 As Long
+    Dim e6 As Long
+    Dim e7 As Long
+    Dim e8 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+    Dim flags As Long
+    Dim slot As Long
+    Dim color As Long
+    Dim startM As Long
+    Dim endM As Long
+    Dim aspectM As Long
+    Dim color2 As Long
+    Dim mv As Long
+    Dim neg As Long
+    Dim r As Long
+    Dim hasStart As Long
+    Dim hasEnd As Long
+
+    ParseN88CircleStmt = -1
+    p.pos = p.pos + 1
+    flags = 0
+    e1 = -1
+    e2 = -1
+    color = -1
+    startM = 0
+    endM = 6283
+    aspectM = 1000
+    color2 = -1
+    hasStart = 0
+    hasEnd = 0
+
+    lstrcpy(VarPtr(kStep), "step")
+    lstrcpy(VarPtr(kF), "f")
+
+    If ParseIdentIs(p, VarPtr(kStep)) <> 0 Then
+        p.pos = p.pos + 1
+        flags = flags Or 8
+        If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+        e2 = ParseExpr(p)
+        If e2 < 0 Then Exit Function
+        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    ElseIf ParseTokKind(p) = TK_LPAREN Then
+        p.pos = p.pos + 1
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+        e2 = ParseExpr(p)
+        If e2 < 0 Then Exit Function
+        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    Else
+        ' 中心省略 → LP
+        flags = flags Or 16
+        e1 = ParseMakeNum(p.ast, 0)
+        e2 = ParseMakeNum(p.ast, 0)
+        If e1 < 0 Or e2 < 0 Then Exit Function
+    End If
+
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e3 = ParseExpr(p)
+    If e3 < 0 Then Exit Function
+
+    ' [,color][,start][,end][,aspect][,F[,color2]]
+    slot = 0
+    Do
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p.pos = p.pos + 1
+        If ParseIdentIs(p, VarPtr(kF)) <> 0 Then
+            p.pos = p.pos + 1
+            flags = flags Or 1
+            If ParseTokKind(p) = TK_COMMA Then
+                p.pos = p.pos + 1
+                If ParseTokKind(p) = TK_STRING Then
+                    ' タイルストリングは未対応（読み飛ばし）
+                    p.pos = p.pos + 1
+                ElseIf ParseTokKind(p) = TK_COMMA Or ParseIdentIs(p, VarPtr(kF)) <> 0 Then
+                    ' 空
+                ElseIf ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_IDENT Then
+                    color2 = ParseExpr(p)
+                    If color2 < 0 Then Exit Function
+                End If
+            End If
+            Exit Do
+        End If
+
+        ' 空スロット（次もカンマ、または文末）
+        If ParseTokKind(p) = TK_COMMA Then
+            slot = slot + 1
+        ElseIf slot = 0 Then
+            If ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_IDENT Then
+                color = ParseExpr(p)
+                If color < 0 Then Exit Function
+                slot = 1
+            Else
+                slot = slot + 1
+                Exit Do
+            End If
+        ElseIf ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_FLOAT Or ParseTokKind(p) = TK_MINUS Then
+            If slot = 1 Then
+                r = ParseN88Milli(p, mv, neg)
+                If r <= 0 Then
+                    p.err = 1
+                    Exit Function
+                End If
+                startM = mv
+                hasStart = 1
+                If neg <> 0 Then flags = flags Or 2
+                slot = 2
+            ElseIf slot = 2 Then
+                r = ParseN88Milli(p, mv, neg)
+                If r <= 0 Then
+                    p.err = 1
+                    Exit Function
+                End If
+                endM = mv
+                hasEnd = 1
+                If neg <> 0 Then flags = flags Or 4
+                slot = 3
+            ElseIf slot = 3 Then
+                r = ParseN88Milli(p, mv, neg)
+                If r <= 0 Then
+                    p.err = 1
+                    Exit Function
+                End If
+                aspectM = mv
+                If aspectM <= 0 Then aspectM = 1000
+                slot = 4
+            Else
+                p.err = 1
+                Exit Function
+            End If
+        Else
+            ' 文末の空カンマ
+            slot = slot + 1
+            Exit Do
+        End If
+    Loop
+
+    If hasStart = 0 And hasEnd = 0 Then
+        startM = 0
+        endM = 0
+    ElseIf hasStart <> 0 And hasEnd = 0 Then
+        endM = 6283
+    ElseIf hasStart = 0 And hasEnd <> 0 Then
+        startM = 0
+    End If
+
+    ast = p.ast
+    If color < 0 Then
+        e4 = ParseMakeNum(ast, 7)
+    Else
+        e4 = color
+    End If
+    If e4 < 0 Then Exit Function
+    If color2 < 0 Then
+        e8 = e4
+    Else
+        e8 = color2
+    End If
+    ' e8 を fillColor として渡すため、flags の上位に載せず引数を 9 個に
+    ' Circle(cx,cy,r,color,startM,endM,aspectM,flags,fillColor)
+    e5 = ParseMakeNum(ast, startM)
+    e6 = ParseMakeNum(ast, endM)
+    e7 = ParseMakeNum(ast, aspectM)
+    If e5 < 0 Or e6 < 0 Or e7 < 0 Then Exit Function
+    ' reuse: put flags in a new node; fill color as 9th
+    ' Actually we have e8 as fill color already. Need flags node.
+    ' Remap: e8=flags, need e9=fillColor - use ParseMakeNum for flags and keep fill as separate
+
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e6) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e7) = 0 Then Exit Function
+    e5 = ParseMakeNum(ast, flags)
+    If e5 < 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e8) = 0 Then Exit Function
+
+    lstrcpy(VarPtr(name), "Circle")
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast.nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88CircleStmt = nCall
+End Function
+
+Function ParseN88CircleOrAssign(p As *Parser) As Long
+    Dim save As Long
+    Dim ok As Long
+    Dim kStep(7) As Byte
+
+    ParseN88CircleOrAssign = -1
+    save = p.pos
+    ok = 0
+    p.pos = p.pos + 1
+    lstrcpy(VarPtr(kStep), "step")
+    If ParseIdentIs(p, VarPtr(kStep)) <> 0 Then
+        ok = 1
+    ElseIf ParseTokKind(p) = TK_COMMA Then
+        ok = 1
+    ElseIf ParseTokKind(p) = TK_LPAREN Then
+        p.pos = p.pos + 1
+        If ParseExpr(p) >= 0 Then
+            If ParseTokKind(p) = TK_COMMA Then
+                p.pos = p.pos + 1
+                If ParseExpr(p) >= 0 Then
+                    If ParseTokKind(p) = TK_RPAREN Then
+                        p.pos = p.pos + 1
+                        If ParseTokKind(p) = TK_COMMA Then
+                            ok = 1
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End If
+    p.pos = save
+    p.err = 0
+    If ok <> 0 Then
+        ParseN88CircleOrAssign = ParseN88CircleStmt(p)
+    Else
+        ParseN88CircleOrAssign = ParseAssignStmt(p)
+    End If
+End Function
+
+' n88: Line...-(...) または Line-(...) なら専用、否则は通常
+Function ParseN88LineOrAssign(p As *Parser) As Long
+    Dim save As Long
+    Dim ok As Long
+
+    ParseN88LineOrAssign = -1
+    save = p.pos
+    ok = 0
+    p.pos = p.pos + 1
+    If ParseTokKind(p) = TK_MINUS Then
+        ok = 1
+    ElseIf ParseTokKind(p) = TK_LPAREN Then
+        p.pos = p.pos + 1
+        If ParseExpr(p) >= 0 Then
+            If ParseTokKind(p) = TK_COMMA Then
+                p.pos = p.pos + 1
+                If ParseExpr(p) >= 0 Then
+                    If ParseTokKind(p) = TK_RPAREN Then
+                        p.pos = p.pos + 1
+                        If ParseTokKind(p) = TK_MINUS Then
+                            ok = 1
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End If
+    p.pos = save
+    p.err = 0
+    If ok <> 0 Then
+        ParseN88LineOrAssign = ParseN88LineStmt(p)
+    Else
+        ParseN88LineOrAssign = ParseAssignStmt(p)
+    End If
 End Function
 
 Function ParseDimOne(p As *Parser) As Long
@@ -1337,23 +1858,33 @@ Function ParseDimOne(p As *Parser) As Long
                             Else
                                 ty = TY_BYTE
                             End If
-                        ElseIf ParseEatLongAlias(p) <> 0 Then
-                            If bound >= 0 Then
-                                ty = TY_LONG_ARR
-                            Else
-                                ty = TY_LONG
-                            End If
                         Else
-                            If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
-                                p.err = 1
-                                Exit Function
+                            lstrcpy(VarPtr(kInt), "double")
+                            If ParseIdentIs(p, VarPtr(kInt)) <> 0 Then
+                                p.pos = p.pos + 1
+                                If bound >= 0 Then
+                                    ty = TY_DOUBLE_ARR
+                                Else
+                                    ty = TY_DOUBLE
+                                End If
+                            ElseIf ParseEatLongAlias(p) <> 0 Then
+                                If bound >= 0 Then
+                                    ty = TY_LONG_ARR
+                                Else
+                                    ty = TY_LONG
+                                End If
+                            Else
+                                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+                                    p.err = 1
+                                    Exit Function
+                                End If
+                                ti = TyFind(types, VarPtr(typeName))
+                                If ti < 0 Then
+                                    p.err = 1
+                                    Exit Function
+                                End If
+                                ty = TY_UDT
                             End If
-                            ti = TyFind(types, VarPtr(typeName))
-                            If ti < 0 Then
-                                p.err = 1
-                                Exit Function
-                            End If
-                            ty = TY_UDT
                         End If
                     End If
                 End If
@@ -1368,8 +1899,10 @@ Function ParseDimOne(p As *Parser) As Long
         If ty <> TY_BYTE_ARR Then
             If ty <> TY_LONG_ARR Then
                 If ty <> TY_STRING_ARR Then
-                    p.err = 1
-                    Exit Function
+                    If ty <> TY_DOUBLE_ARR Then
+                        p.err = 1
+                        Exit Function
+                    End If
                 End If
             End If
         End If
@@ -2189,19 +2722,25 @@ Function ParseSubStmt(p As *Parser) As Long
             ElseIf ParseIdentIs(p, VarPtr(kStr)) <> 0 Then
                 p.pos = p.pos + 1
                 pty = TY_STRING
-            ElseIf ParseEatLongAlias(p) <> 0 Then
-                pty = TY_LONG
             Else
-                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
-                    p.err = 1
-                    Exit Function
+                lstrcpy(VarPtr(typeName), "double")
+                If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+                    p.pos = p.pos + 1
+                    pty = TY_DOUBLE
+                ElseIf ParseEatLongAlias(p) <> 0 Then
+                    pty = TY_LONG
+                Else
+                    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+                        p.err = 1
+                        Exit Function
+                    End If
+                    pti = TyFind(types, VarPtr(typeName))
+                    If pti < 0 Then
+                        p.err = 1
+                        Exit Function
+                    End If
+                    pty = TY_UDT
                 End If
-                pti = TyFind(types, VarPtr(typeName))
-                If pti < 0 Then
-                    p.err = 1
-                    Exit Function
-                End If
-                pty = TY_UDT
             End If
             nParam = AstAddNode(ast, AST_VAR)
             If nParam < 0 Then Exit Function
@@ -2415,19 +2954,25 @@ Function ParseFuncStmt(p As *Parser) As Long
             ElseIf ParseIdentIs(p, VarPtr(kStr)) <> 0 Then
                 p.pos = p.pos + 1
                 pty = TY_STRING
-            ElseIf ParseEatLongAlias(p) <> 0 Then
-                pty = TY_LONG
             Else
-                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
-                    p.err = 1
-                    Exit Function
+                lstrcpy(VarPtr(typeName), "double")
+                If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+                    p.pos = p.pos + 1
+                    pty = TY_DOUBLE
+                ElseIf ParseEatLongAlias(p) <> 0 Then
+                    pty = TY_LONG
+                Else
+                    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+                        p.err = 1
+                        Exit Function
+                    End If
+                    pti = TyFind(types, VarPtr(typeName))
+                    If pti < 0 Then
+                        p.err = 1
+                        Exit Function
+                    End If
+                    pty = TY_UDT
                 End If
-                pti = TyFind(types, VarPtr(typeName))
-                If pti < 0 Then
-                    p.err = 1
-                    Exit Function
-                End If
-                pty = TY_UDT
             End If
             nParam = AstAddNode(ast, AST_VAR)
             If nParam < 0 Then Exit Function
@@ -2476,11 +3021,17 @@ Function ParseFuncStmt(p As *Parser) As Long
             End If
             retTy = TY_PTR_UDT
         End If
-    ElseIf ParseEatLongAlias(p) <> 0 Then
-        retTy = TY_LONG
     Else
-        p.err = 1
-        Exit Function
+        lstrcpy(VarPtr(typeName), "double")
+        If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+            p.pos = p.pos + 1
+            retTy = TY_DOUBLE
+        ElseIf ParseEatLongAlias(p) <> 0 Then
+            retTy = TY_LONG
+        Else
+            p.err = 1
+            Exit Function
+        End If
     End If
 
     empty[0] = 0
@@ -2623,16 +3174,22 @@ Function ParseDeclareStmt(p As *Parser) As Long
             ElseIf ParseIdentIs(p, VarPtr(kStr)) <> 0 Then
                 p.pos = p.pos + 1
                 pty = TY_STRING
-            ElseIf ParseEatLongAlias(p) <> 0 Then
-                pty = TY_LONG
             Else
-                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
-                pti = TyFind(types, VarPtr(typeName))
-                If pti < 0 Then
-                    p.err = 1
-                    Exit Function
+                lstrcpy(VarPtr(typeName), "double")
+                If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+                    p.pos = p.pos + 1
+                    pty = TY_DOUBLE
+                ElseIf ParseEatLongAlias(p) <> 0 Then
+                    pty = TY_LONG
+                Else
+                    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+                    pti = TyFind(types, VarPtr(typeName))
+                    If pti < 0 Then
+                        p.err = 1
+                        Exit Function
+                    End If
+                    pty = TY_UDT
                 End If
-                pty = TY_UDT
             End If
             nParam = AstAddNode(ast, AST_VAR)
             If nParam < 0 Then Exit Function
@@ -2670,10 +3227,15 @@ Function ParseDeclareStmt(p As *Parser) As Long
                 Else
                     If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
                 End If
-            ElseIf ParseEatLongAlias(p) <> 0 Then
-                pty = TY_LONG
             Else
-                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+                lstrcpy(VarPtr(typeName), "double")
+                If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+                    p.pos = p.pos + 1
+                ElseIf ParseEatLongAlias(p) <> 0 Then
+                    pty = TY_LONG
+                Else
+                    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+                End If
             End If
         End If
     End If
@@ -2770,6 +3332,18 @@ Function ParseStmt(p As *Parser) As Long
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         ParseStmt = ParseInputStmt(p)
         Exit Function
+    End If
+    If p.n88Mode <> 0 Then
+        lstrcpy(VarPtr(k), "line")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            ParseStmt = ParseN88LineOrAssign(p)
+            Exit Function
+        End If
+        lstrcpy(VarPtr(k), "circle")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            ParseStmt = ParseN88CircleOrAssign(p)
+            Exit Function
+        End If
     End If
     lstrcpy(VarPtr(k), "exitprocess")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
@@ -2926,6 +3500,7 @@ Function ParseSource(src As *Byte, ast As *Ast) As Long
     p.ast = ast
     p.pos = 0
     p.err = 0
+    p.n88Mode = g_ppN88Basic
     If ParseProgram(VarPtr(p)) < 0 Or p.err <> 0 Then
         line = ParseTokLine(VarPtr(p))
         If line <= 0 Then line = 1

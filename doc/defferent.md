@@ -23,20 +23,35 @@
   - ActiveBasic ver 5 はリリース候補版のまま開発が停止しており、64bit が正式機能として確立していない。
   - 本処理系では 64bit 環境でのコンパイルおよび実行を前提とした設計とし、64bit 対応を正式にサポートする。
 
-## 今後対応していくもの（現時点では未対応）
+### N88BASIC 風グラフィック（`#n88basic`）
 
-### `#prompt` モード / N88BASIC 風モード
+- **`#n88basic` / `#N88BASIC` / `#prompt`**
+  - N88BASIC に近い `LINE` / `CIRCLE` と 640×480 黒窓を有効化する互換モード。
+  - `#prompt` は ActiveBasic 互換の完全別名（`#n88basic` と全く同じ）。
+  - 「対話的に 1 行ずつ入力して即時実行する REPL」ではない。
+  - **actba64** は文の構文をパースし、GUI 窓と `End` 時のメッセージループを自動で付ける。
+  - **actba32** はライブラリ（`n88graph.abp`）を挿入するのみ。`Line(...)` / `Circle(...)` 呼び出しと `N88_Run()` は手動。
+  - 詳細は [language.md §1.6](./language.md#16-n88basic-モード)。
 
-- **`#prompt` = N88BASIC 風モード**
-  - `#prompt` は「N88BASIC 風モード」を有効にするためのディレクティブであり、N88BASIC に近い文法・挙動でコードを解釈する互換モードを指す。
-  - 「対話的に 1 行ずつコードを入力して即時実行する」という意味ではなく、**N88BASIC 互換の文法・動作モードの切り替えスイッチ**という位置づけ。
-- **対話的実行（REPL）は別機能候補**
-  - 対話的にコードを入力して評価する REPL 的な機能は、必要に応じて別途検討する。
-
-### `Declare DLL`
+### `Declare Lib`（actba64）
 
 - **外部 DLL 呼び出し**
-  - 外部 DLL の関数を宣言し、呼び出すための `Declare` 構文を将来的にサポートする予定。
+  - actba64 は `Declare Function|Sub ... Lib "dll" [Alias "..."]` で Win64 API を IAT に載せられる。
+  - actba32 は従来どおり名前解決＋IAT（`Declare` 構文は非対応）。
+
+### `Sleep` / `Math`（標準ライブラリ）
+
+- **`Sleep`**
+  - `Include\default\Sleep.abp` を常時挿入。待ち時間中もウインドウメッセージを処理する。
+  - actba64 / actba32 とも `Sleep(ms)`（手続き呼び出し）。
+- **`Math`**
+  - `Include\default\Math.abp` を常時挿入。千分率（`1.0 = 1000`）の固定小数点。`Sin` / `Cos` / `Sqr` など。
+
+## 今後対応していくもの（現時点では未対応）
+
+### 対話的実行（REPL）
+
+- 対話的にコードを入力して評価する REPL は、必要に応じて別途検討する。
 
 ### `Include` ライブラリの拡充
 
