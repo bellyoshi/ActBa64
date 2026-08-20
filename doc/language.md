@@ -31,7 +31,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 - 小数リテラル（N88 等）: `1.5` → 千分率 `1500`（`TK_FLOAT`）
 - 文字列リテラル: `"..."`（`""` で `"`）
 - 大小文字は区別しない
-- 文の区切りは改行（actba64 は `:` 連結なし。actba32 は `:` 可）
+- 文の区切りは改行。**actba64** は同一行の `:` 連結可（`a = 1: b = 2`）。actba32 も `:` 可
 
 行の継続:
 
@@ -99,7 +99,7 @@ actba32 <src.abp|.pj> [-o <out.exe>]
 | | actba64 | actba32 |
 |---|---|---|
 | ライブラリ挿入 | ○ | ○ |
-| `LINE` / `CIRCLE` 文の構文 | ○（パーサ） | ✕（`Line(...)` / `Circle(...)` 呼び出しのみ） |
+| `LINE` / `CIRCLE` / `LOCATE` / `PAINT` 文 | ○（パーサ） | ✕（関数呼び出しのみ） |
 | 640×480 黒窓 GUI | ○（自動） | 手動で `N88_Run()` |
 | `End` → 窓待ち | ○（`N88_End`） | ✕（通常の終了） |
 
@@ -127,6 +127,16 @@ CIRCLE ,r[,...]                       ' 中心は LP
 - `aspect` は 垂直半径/水平半径（省略時 1.0）
 - `F` で塗りつぶし（タイルストリングは未対応）
 - 実行後 LP は円の中心へ移動
+
+N88 `LOCATE` / `PAINT`:
+
+```text
+LOCATE x, y                 ' または Locate(x, y) — 文字座標（桁 x, 行 y）
+PAINT (x, y), color1 [, color2]
+```
+
+- `LOCATE` 後の `Print` は窓上の文字位置へ描画（次行へ進む）
+- `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
 
 色番号（0..7、N88 8 色）:
 
@@ -234,7 +244,43 @@ End Sub
 - **actba64** は `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT に載せる）
 - **actba32** の `Declare` は非対応（WinAPI は名前解決＋IAT）
 
-呼び出し規約: actba32 は **stdcall**、actba64 は **x64 Windows ABI**。
+### 3.3 Class（フェーズ1）
+
+```
+Class Counter
+    Public
+    value As Long
+
+    Sub Counter(v As Long)      ' コンストラクタ
+        value = v
+    End Sub
+
+    Sub ~Counter()               ' デストラクタ
+    End Sub
+
+    Sub Add(n As Long)
+        value = value + n
+    End Sub
+
+    Function GetValue() As Long
+        GetValue = value
+    End Function
+End Class
+
+Dim c As Counter(10)            ' 領域確保 + ctor 呼出
+c.Add(32)
+x = c.GetValue()
+```
+
+- `Class` / `End Class`。メンバ変数は `Type` と同様のオフセット配置
+- `Private` / `Public`（未指定は Private）。`Protected` は受理し Public 扱い
+- メソッドは暗黙の第1引数 `Me`（オブジェクトポインタ）。呼び出しは `obj.Method(args)`
+- コンストラクタ `Sub ClassName(...)` → `Dim obj As ClassName(args)` で自動呼出
+- デストラクタ `Sub ~ClassName()` → 局所は手続き末尾、モジュール大域は終了前に呼出
+- ctor/dtor 省略時は空の無引数版を暗黙生成
+- メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（`RCX=Me`）
+
+**未対応（フェーズ2以降）:** `Inherits` / `Virtual` / VTable / `New` / `Delete` / メンバ実体クラスの自動 ctor・dtor / アクセス制御の厳密検査
 
 ---
 
@@ -302,17 +348,26 @@ ExitProcess(式)
 
 ### 5.1 演算子
 
+優先順位（高い順）: `As` キャスト → `^` → 単項 `-` → `* / \ Mod` → `+ - &` → `<< >>` → 関係 → `Not` → `And` → `Or` → `Xor`。  
+`* / \` どうし、および `+ -` どうしは同優先で左から右へ評価。関係演算の値は真=`-1` / 偽=`0`。
+
 | 演算 | actba64 | actba32 |
 |---|---|---|
 | `+ - *`（整数） | ○ | ○ |
-| 文字列 `+`（連結） | ○ | ○ |
-| 単項 `-` | ○ | ○ |
-| `= <> < > <= >=` | ○ | ○ |
-| `And` / `Or` | ○（ビット。条件では短絡） | ○ |
-| `Xor` | ✕ | ○ |
-| `\`（整数除算） | ○ | ○ |
-| `&`（文字列連結） | ○ | ○ |
-| `/` `Mod` | ✕ | ○ |
+| 文字列 `+` / `&`（連結・同義） | ○ | ○ |
+| 単項 `-` / `Not` | ○ | ○ |
+| `= <> >< < > <= >=` | ○（値は -1/0。文字列は辞書順） | ○ |
+| `And` / `Or` / `Xor` | ○（ビット。条件の And/Or は短絡） | ○ |
+| `\` `/`（整数除算） | ○（Long では同義） | ○ |
+| `Mod` | ○ | ○ |
+| `<<` / `>>`（`>>` は符号付き） | ○ | ○ |
+| `^`（整数累乗） | ○ | ○ |
+| `expr As Type`（切捨てキャスト） | ○（String へ/からは不可） | ○ |
+| `+= -= *= /= \= <<= >>=` / `Mod=` `And=` `Or=` `Xor=` | ○ | ○ |
+| `++` / `--` | ○ | ○ |
+
+文字列の関係演算は辞書順（`lstrcmpA`）。長さが違い途中まで一致したら短い方が小さい。  
+`As` は例: `&H12345678 As Word` → `&H5678`。`#strict` 自体は未実装（警告なし）。
 
 ### 5.2 アドレス・サイズ・組込
 
@@ -427,13 +482,13 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 | 出力 | 32bit PE | 64bit PE32+ |
 | ポインタ / `String` / `HANDLE` | 4 バイト | 8 バイト |
 | `Long` | 4 | 4（LP64 ではない） |
-| 演算 | `Xor` `/` `\` `Mod` `&` | `\` と `&`。`Xor` `/` `Mod` なし |
+| 演算 | `Xor` `/` `\` `Mod` `&` `<<` `>>` `^` `Not` | 同左（整数。`/`=`\`） |
 | ループ | `Step`, `Do While/Until`, `Exit For` | `Exit For` 可。`Step` / `Do While` なし |
 | 標準ヘッダ | 自動 `Include\default` | 同じ（常時自動挿入） |
 | `Declare Lib` | ✕ | ○ |
 | N88 `LINE`/`CIRCLE` 文 | ライブラリのみ | 構文パース + GUI 窓 |
 | 文字列ランタイム | `_rt_*` が広い | 必要分をインライン／一部 API |
-| 文連結 `:` | ○ | ✕ |
+| 文連結 `:` | ○ | ○ |
 
 共通の実用コア: `#include` / `.pj`、自動 `Include\default`、`Dim`/`Const`/`Type`/`TypeDef`、  
 `If`/`Select`/`While`/`For`/`Do`、`Sub`/`Function`/`ByRef`、  
@@ -443,7 +498,7 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 
 ## 10. 非対応（意図的）
 
-- ActiveBasic 全互換、クラス / イベント / COM
+- ActiveBasic 全互換、イベント / COM（`Class` のフェーズ1は [§3.3](#33-classフェーズ1)。`Inherits` / `Virtual` / `New` は未対応）
 - 汎用の浮動小数点演算（`Double` / `Single` はサイズと格納枠のみ。`CIRCLE` の角度・比率リテラルは千分率）
 - `GoTo` / `With` / `ReDim`
 - `Declare`（**actba32**。actba64 は対応）

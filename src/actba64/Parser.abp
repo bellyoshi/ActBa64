@@ -101,6 +101,13 @@ Function ParseIdentIs(p As *Parser, name As *Byte) As Long
     ParseIdentIs = ParseIdentIsAt(p, p.pos, name)
 End Function
 
+' 文区切り `:`（同一行に複数文）
+Sub ParseSkipColons(p As *Parser)
+    While ParseTokKind(p) = TK_COLON
+        p.pos = p.pos + 1
+    Wend
+End Sub
+
 ' End / End Sub の衝突回避: stop は "End" + second（sub/function/if 等）の組のみ
 Function ParseStmtListUntilEndPair(p As *Parser, second As *Byte) As Long
     Dim nFirst As Long
@@ -117,6 +124,8 @@ Function ParseStmtListUntilEndPair(p As *Parser, second As *Byte) As Long
     lstrcpy(VarPtr(kEnd), "end")
 
     While ParseTokKind(p) <> TK_EOF
+        ParseSkipColons(p)
+        If ParseTokKind(p) = TK_EOF Then Exit While
         If ParseIdentIs(p, VarPtr(kEnd)) <> 0 Then
             If ParseIdentIsAt(p, p.pos + 1, second) <> 0 Then
                 ParseStmtListUntilEndPair = nFirst
@@ -1189,8 +1198,6 @@ Function ParsePower(p As *Parser) As Long
     ParsePower = -1
     left = ParseFactor(p)
     If left < 0 Then Exit Function
-    left = ParseApplyAs(p, left)
-    If left < 0 Then Exit Function
     If ParseTokKind(p) <> TK_CARET Then
         ParsePower = left
         Exit Function
@@ -1451,7 +1458,8 @@ Function ParseOrExpr(p As *Parser) As Long
     ParseOrExpr = left
 End Function
 
-Function ParseExpr(p As *Parser) As Long
+' 式（末尾の As キャストなし）。Dim 初期化など As が宣言に属する場合用
+Function ParseExprNoAs(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim left As Long
@@ -1459,7 +1467,7 @@ Function ParseExpr(p As *Parser) As Long
     Dim n As Long
     Dim kXor(7) As Byte
 
-    ParseExpr = -1
+    ParseExprNoAs = -1
     left = ParseOrExpr(p)
     If left < 0 Then Exit Function
     lstrcpy(VarPtr(kXor), "xor")
@@ -1476,7 +1484,16 @@ Function ParseExpr(p As *Parser) As Long
         nodes[n].right = right
         left = n
     Wend
-    ParseExpr = left
+    ParseExprNoAs = left
+End Function
+
+Function ParseExpr(p As *Parser) As Long
+    Dim e As Long
+
+    ParseExpr = -1
+    e = ParseExprNoAs(p)
+    If e < 0 Then Exit Function
+    ParseExpr = ParseApplyAs(p, e)
 End Function
 
 ' Parse expr then optional "As Type" cast (call args only)
@@ -1551,6 +1568,8 @@ Function ParseStmtListUntil(p As *Parser, stop1 As *Byte, stop2 As *Byte) As Lon
     nPrev = -1
 
     While ParseTokKind(p) <> TK_EOF
+        ParseSkipColons(p)
+        If ParseTokKind(p) = TK_EOF Then Exit While
         If ParseIdentIs(p, stop1) <> 0 Then
             ParseStmtListUntil = nFirst
             Exit Function
@@ -1591,6 +1610,8 @@ Function ParseStmtListUntil3(p As *Parser, stop1 As *Byte, stop2 As *Byte, stop3
     nPrev = -1
 
     While ParseTokKind(p) <> TK_EOF
+        ParseSkipColons(p)
+        If ParseTokKind(p) = TK_EOF Then Exit While
         If ParseIdentIs(p, stop1) <> 0 Then
             ParseStmtListUntil3 = nFirst
             Exit Function
@@ -1628,7 +1649,10 @@ Function ParsePrintStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nPrint As Long
+    Dim nCall As Long
     Dim e As Long
+    Dim arg0 As Long
+    Dim name(15) As Byte
 
     ParsePrintStmt = -1
     p.pos = p.pos + 1
@@ -1644,6 +1668,23 @@ Function ParsePrintStmt(p As *Parser) As Long
     If ParseTokKind(p) = TK_SEMI Then p.pos = p.pos + 1
 
     ast = p.ast
+    If p.n88Mode <> 0 Then
+        arg0 = AstAddNode(ast, AST_ARG)
+        If arg0 < 0 Then Exit Function
+        nodes = ast.nodes
+        nodes[arg0].left = e
+        lstrcpy(VarPtr(name), "N88_Print")
+        nCall = AstAddNode(ast, AST_CALL)
+        If nCall < 0 Then Exit Function
+        AstSetStr(ast, nCall, VarPtr(name))
+        nodes = ast.nodes
+        nodes[nCall].left = arg0
+        nodes[nCall].right = -1
+        nodes[nCall].num = 1
+        ParsePrintStmt = nCall
+        Exit Function
+    End If
+
     nPrint = AstAddNode(ast, AST_PRINT)
     If nPrint < 0 Then Exit Function
     nodes = ast.nodes
@@ -2230,6 +2271,109 @@ Function ParseN88LineOrAssign(p As *Parser) As Long
     End If
 End Function
 
+' LOCATE x,y | LOCATE(x,y) → Locate(x,y)
+Function ParseN88LocateStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(15) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+
+    ParseN88LocateStmt = -1
+    p.pos = p.pos + 1
+    If ParseTokKind(p) = TK_LPAREN Then
+        p.pos = p.pos + 1
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+        e2 = ParseExpr(p)
+        If e2 < 0 Then Exit Function
+        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    Else
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+        e2 = ParseExpr(p)
+        If e2 < 0 Then Exit Function
+    End If
+
+    ast = p.ast
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "Locate")
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast.nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88LocateStmt = nCall
+End Function
+
+' PAINT (x,y), color1 [, color2] → Paint(x,y,color1,color2)
+Function ParseN88PaintStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(15) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim e3 As Long
+    Dim e4 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+
+    ParseN88PaintStmt = -1
+    p.pos = p.pos + 1
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    e1 = ParseExpr(p)
+    If e1 < 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e2 = ParseExpr(p)
+    If e2 < 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e3 = ParseExpr(p)
+    If e3 < 0 Then Exit Function
+    e4 = -1
+    If ParseTokKind(p) = TK_COMMA Then
+        p.pos = p.pos + 1
+        e4 = ParseExpr(p)
+        If e4 < 0 Then Exit Function
+    End If
+
+    ast = p.ast
+    If e4 < 0 Then
+        e4 = e3
+    End If
+
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "Paint")
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast.nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88PaintStmt = nCall
+End Function
+
 Function ParseDimOne(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -2266,7 +2410,7 @@ Function ParseDimOne(p As *Parser) As Long
     End If
     If ParseTokKind(p) = TK_EQ Then
         p.pos = p.pos + 1
-        initE = ParseExpr(p)
+        initE = ParseExprNoAs(p)
         If initE < 0 Then Exit Function
     End If
     ty = -1
@@ -2439,7 +2583,7 @@ Function ParseDimOne(p As *Parser) As Long
             Exit Function
         End If
         p.pos = p.pos + 1
-        initE = ParseExpr(p)
+        initE = ParseExprNoAs(p)
         If initE < 0 Then Exit Function
     End If
 
@@ -4353,6 +4497,16 @@ Function ParseStmt(p As *Parser) As Long
             ParseStmt = ParseN88CircleOrAssign(p)
             Exit Function
         End If
+        lstrcpy(VarPtr(k), "locate")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            ParseStmt = ParseN88LocateStmt(p)
+            Exit Function
+        End If
+        lstrcpy(VarPtr(k), "paint")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            ParseStmt = ParseN88PaintStmt(p)
+            Exit Function
+        End If
     End If
     lstrcpy(VarPtr(k), "exitprocess")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
@@ -4461,6 +4615,8 @@ Function ParseProgram(p As *Parser) As Long
     nPrev = -1
 
     While ParseTokKind(p) <> TK_EOF
+        ParseSkipColons(p)
+        If ParseTokKind(p) = TK_EOF Then Exit While
         nStmt = ParseStmt(p)
         If nStmt < 0 Or p.err <> 0 Then Exit Function
         If nFirst < 0 Then
