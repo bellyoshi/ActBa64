@@ -1848,8 +1848,10 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
             If vTy <> TY_BYTE_ARR Then
                 If vTy <> TY_LONG_ARR Then
                     If vTy <> TY_STRING_ARR Then
-                        ctx.err = 1
-                        Exit Function
+                        If vTy <> TY_DOUBLE_ARR Then
+                            ctx.err = 1
+                            Exit Function
+                        End If
                     End If
                 End If
             End If
@@ -1862,7 +1864,7 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_PUSH_RAX, 0, 0)
             LowEmitLeaOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
-            If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
+            If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
                 IrEmit(list, OP_SHL_ECX_3, 0, 0)
             End If
             IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
@@ -1956,7 +1958,7 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(list, OP_PUSH_RAX, 0, 0)
         If vTy = TY_BYTE_ARR Then
             LowEmitLeaOff(list, vOff, vGlob)
-        ElseIf vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
+        ElseIf vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
             LowEmitLeaOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
             IrEmit(list, OP_SHL_ECX_3, 0, 0)
@@ -2000,6 +2002,10 @@ Function LowExprArg(ctx As *LowerCtx, idx As Long) As Long
                 Exit Function
             End If
             If vTy = TY_LONG_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_DOUBLE_ARR Then
                 LowExprArg = LowAddr(ctx, idx)
                 Exit Function
             End If
@@ -2640,6 +2646,12 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 LowExpr = 1
                 Exit Function
             End If
+            If vTy = TY_DOUBLE_ARR And nodes[idx].num = 1 Then
+                If LowAddr(ctx, idx) = 0 Then Exit Function
+                IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+                LowExpr = 1
+                Exit Function
+            End If
             If vTy = TY_STRING_ARR And nodes[idx].num = 1 Then
                 If LowAddr(ctx, idx) = 0 Then Exit Function
                 IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
@@ -3145,7 +3157,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             If leftK = AST_CALL Then
                 AstCopyStr(ast, leftIdx, VarPtr(name))
                 If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-                    If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
+                    If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
                         IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
                     Else
                         IrEmit(ctx.list, OP_STORE_BYTE_RAX_CL, 0, 0)
@@ -3186,7 +3198,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                 Else
                     AstCopyStr(ast, base, VarPtr(name))
                     If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-                        If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Then
+                        If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
                             IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
                         ElseIf vTy = TY_PTR_LONG Then
                             LowStoreSized(ctx.list, 4)
@@ -3536,12 +3548,18 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
         bound = LowBoundVal(ctx, nodes[dimIdx].left)
         If bound < 0 Then Exit Function
         nbytes = (bound + 1) * 8
+    ElseIf ty = TY_DOUBLE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 8
     ElseIf ty = TY_STRING_ARR Then
         bound = LowBoundVal(ctx, nodes[dimIdx].left)
         If bound < 0 Then Exit Function
         nbytes = (bound + 1) * 8
     ElseIf ty = TY_BYTE Then
         nbytes = 1
+    ElseIf ty = TY_DOUBLE Then
+        nbytes = 8
     ElseIf ty = TY_UDT Then
         ti = nodes[dimIdx].extra
         If ti < 0 Then Exit Function
@@ -3880,7 +3898,11 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
             Wend
             If retBuf[0] <> 0 Then
                 ty = nodes[stmt].extra
-                If ty <> TY_STRING Then ty = TY_LONG
+                If ty <> TY_STRING Then
+                    If ty <> TY_DOUBLE Then
+                        ty = TY_LONG
+                    End If
+                End If
                 If LowAddSym(VarPtr(ctx), VarPtr(retBuf), ty, 8, -1, 0) < 0 Then
                     LowFreeAstBufs()
                     Exit Function

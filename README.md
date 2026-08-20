@@ -20,6 +20,8 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 
 - [ビルド手順](doc/build.md)
 - [言語仕様](doc/language.md)
+- [ActiveBasic との相違](doc/defferent.md)
+- エディタ向けリファレンス: [src/projecteditor/help/actba64_ref.html](src/projecteditor/help/actba64_ref.html)（F1）
 
 ## ビルド
 
@@ -47,4 +49,9 @@ actba32 <src.abp|.pj> [-o <out.exe>]
 
 ```powershell
 .\bin\stage2\actba64.exe hello.abp -o hello.exe
+
+# N88BASIC 図形（640x480）
+.\bin\stage2\actba64.exe .\samples\n88_shapes.abp -o .\samples\n88_shapes.exe
 ```
+
+`#n88basic` で `LINE` / `CIRCLE` が使えます。`Sleep` と千分率の `Math`（`Sin` / `Cos` 等）は標準ヘッダから常時利用できます。詳細は [doc/language.md](doc/language.md)。

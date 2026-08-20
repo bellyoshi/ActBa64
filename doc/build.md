@@ -101,6 +101,13 @@ cd src\actba64
 actba64 <src.abp|.pj> -o <out.exe>
 ```
 
+サンプル（`src/actba64/samples/`）:
+
+```powershell
+.\bin\stage2\actba64.exe .\samples\n88_shapes.abp -o .\samples\n88_shapes.exe
+.\bin\stage2\actba64.exe .\samples\math_test.abp -o .\samples\math_test.exe
+```
+
 ### 2.3 回帰テスト
 
 `test\` 内の `' Target: actba64` 付き `.abp` / `.pj` をコンパイルして実行する。

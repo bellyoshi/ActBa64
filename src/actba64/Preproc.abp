@@ -7,10 +7,11 @@ Const PP_LINE_MAX = 512
 Const PP_ONCE_MAX = 256
 Const PP_ONCE_PATH = 512
 
-' include-once / #USEWINDOW (module Dims: stage0 Type field limit)
+' include-once / #USEWINDOW / #n88basic (module Dims: stage0 Type field limit)
 Dim g_ppOnce As *Byte
 Dim g_ppOnceCount As Long
 Dim g_ppUseWindow As Long
+Dim g_ppN88Basic As Long
 
 Function PpToLower(c As Long) As Long
     If c >= 65 And c <= 90 Then
@@ -28,6 +29,7 @@ Function PpStateInit() As Long
     g_ppOnce = buf
     g_ppOnceCount = 0
     g_ppUseWindow = 0
+    g_ppN88Basic = 0
     PpStateInit = 1
 End Function
 
@@ -455,42 +457,122 @@ Function PpToolDir(dst As *Byte) As Long
     PpToolDir = 1
 End Function
 
-' ツール隣 / その親 / カレントの Include\default\default.idx
-Function PpFindDefaultIdx(dst As *Byte) As Long
+' ツール隣 / その親 / カレントの Include\... 相対パスを解決
+Function PpFindRelIdx(rel As *Byte, dst As *Byte) As Long
     Dim dir(511) As Byte
-    Dim rel(63) As Byte
 
-    PpFindDefaultIdx = 0
+    PpFindRelIdx = 0
     dst[0] = 0
-    lstrcpy(VarPtr(rel), "Include\default\default.idx")
     If PpToolDir(VarPtr(dir)) <> 0 Then
         lstrcpy(dst, VarPtr(dir))
-        lstrcat(dst, VarPtr(rel))
+        lstrcat(dst, rel)
         If PpFileExists(dst) <> 0 Then
-            PpFindDefaultIdx = 1
+            PpFindRelIdx = 1
             Exit Function
         End If
         lstrcpy(dst, VarPtr(dir))
         lstrcat(dst, "..\")
-        lstrcat(dst, VarPtr(rel))
+        lstrcat(dst, rel)
         If PpFileExists(dst) <> 0 Then
-            PpFindDefaultIdx = 1
+            PpFindRelIdx = 1
             Exit Function
         End If
         lstrcpy(dst, VarPtr(dir))
         lstrcat(dst, "..\..\")
-        lstrcat(dst, VarPtr(rel))
+        lstrcat(dst, rel)
         If PpFileExists(dst) <> 0 Then
-            PpFindDefaultIdx = 1
+            PpFindRelIdx = 1
             Exit Function
         End If
     End If
-    lstrcpy(dst, VarPtr(rel))
+    lstrcpy(dst, rel)
     If PpFileExists(dst) <> 0 Then
-        PpFindDefaultIdx = 1
+        PpFindRelIdx = 1
         Exit Function
     End If
     dst[0] = 0
+End Function
+
+Function PpFindDefaultIdx(dst As *Byte) As Long
+    Dim rel(63) As Byte
+    lstrcpy(VarPtr(rel), "Include\default\default.idx")
+    PpFindDefaultIdx = PpFindRelIdx(VarPtr(rel), dst)
+End Function
+
+Function PpFindConsoleIdx(dst As *Byte) As Long
+    Dim rel(63) As Byte
+    lstrcpy(VarPtr(rel), "Include\console\console.idx")
+    PpFindConsoleIdx = PpFindRelIdx(VarPtr(rel), dst)
+End Function
+
+Function PpFindN88BasicIdx(dst As *Byte) As Long
+    Dim rel(63) As Byte
+    lstrcpy(VarPtr(rel), "Include\N88BASIC\n88basic.idx")
+    PpFindN88BasicIdx = PpFindRelIdx(VarPtr(rel), dst)
+End Function
+
+' 行頭（空白可）が #name か。name は小文字。続きは空白/終端/' のみ可
+Function PpLineIsHashDir(line As *Byte, n As Long, name As *Byte) As Long
+    Dim i As Long
+    Dim j As Long
+    Dim c As Long
+
+    PpLineIsHashDir = 0
+    i = 0
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i >= n Or line[i] <> 35 Then Exit Function
+    i = i + 1
+    j = 0
+    While name[j] <> 0
+        If i >= n Then Exit Function
+        If PpToLower(line[i]) <> name[j] Then Exit Function
+        i = i + 1
+        j = j + 1
+    Wend
+    If i < n Then
+        c = line[i]
+        If c <> 32 And c <> 9 And c <> 39 And c <> 13 And c <> 10 Then Exit Function
+    End If
+    PpLineIsHashDir = 1
+End Function
+
+Function PpSourceHasHashDir(src As *Byte, name As *Byte) As Long
+    Dim i As Long
+    Dim start As Long
+    Dim n As Long
+    Dim c As Long
+    Dim line(511) As Byte
+    Dim j As Long
+
+    PpSourceHasHashDir = 0
+    If src = NULL Then Exit Function
+    i = 0
+    While src[i] <> 0
+        start = i
+        While src[i] <> 0
+            c = src[i]
+            If c = 10 Or c = 13 Then Exit While
+            i = i + 1
+        Wend
+        n = i - start
+        If n >= PP_LINE_MAX Then n = PP_LINE_MAX - 1
+        j = 0
+        While j < n
+            line[j] = src[start + j]
+            j = j + 1
+        Wend
+        line[n] = 0
+        If PpLineIsHashDir(VarPtr(line), n, name) <> 0 Then
+            PpSourceHasHashDir = 1
+            Exit Function
+        End If
+        If src[i] = 13 Then i = i + 1
+        If src[i] = 10 Then i = i + 1
+    Wend
 End Function
 
 Function PpDupText(src As *Byte) As *Byte
@@ -505,48 +587,162 @@ Function PpDupText(src As *Byte) As *Byte
     PpDupText = dst
 End Function
 
-' ソースに #include が無くても Include\default を先頭へ展開する。
-' 見つからない場合は警告だけ出して元のソースをそのまま使う。
-Function PpPrependDefaults(src As *Byte) As *Byte
-    Dim idxPath(511) As Byte
+Function PpConcatText(a As *Byte, aLen As Long, b As *Byte, bLen As Long) As *Byte
+    Dim dst As *Byte
+    PpConcatText = NULL
+    dst = calloc(aLen + bLen + 1)
+    If dst = NULL Then Exit Function
+    If aLen > 0 And a <> NULL Then memcpy(dst, a, aLen)
+    If bLen > 0 And b <> NULL Then memcpy(VarPtr(dst[aLen]), b, bLen)
+    dst[aLen + bLen] = 0
+    PpConcatText = dst
+End Function
+
+' idx を ExpandIncludes して返す（失敗時は警告して空文字相当の "" を返す）
+Function PpLoadIdxExpanded(idxPath As *Byte) As *Byte
     Dim idxSrc As *Byte
     Dim idxSize As Long
+    Dim part As *Byte
+    Dim empty As *Byte
+
+    PpLoadIdxExpanded = NULL
+    idxSrc = LoadFile(idxPath, idxSize)
+    If idxSrc = NULL Then
+        Print "warning: cannot open: " + MakeStr(idxPath)
+        empty = calloc(1)
+        If empty <> NULL Then empty[0] = 0
+        PpLoadIdxExpanded = empty
+        Exit Function
+    End If
+    part = ExpandIncludes(idxSrc, idxSize, idxPath)
+    free(idxSrc)
+    If part = NULL Then
+        Print "warning: preprocess failed: " + MakeStr(idxPath)
+        empty = calloc(1)
+        If empty <> NULL Then empty[0] = 0
+        PpLoadIdxExpanded = empty
+        Exit Function
+    End If
+    PpLoadIdxExpanded = part
+End Function
+
+' Include\default を常時先頭へ。#console / #n88basic / #prompt なら各 idx も挿入。
+' #n88basic / #prompt 時は GUI サブシステムを有効化し、末尾に N88_Run() を付ける。
+Function PpPrependDefaults(src As *Byte) As *Byte
+    Dim idxPath(511) As Byte
     Dim head As *Byte
-    Dim dst As *Byte
+    Dim part As *Byte
+    Dim nxt As *Byte
+    Dim foot(31) As Byte
     Dim headLen As Long
+    Dim partLen As Long
     Dim srcLen As Long
+    Dim footLen As Long
+    Dim wantCon As Long
+    Dim wantN88 As Long
+    Dim kCon(15) As Byte
+    Dim kn88(15) As Byte
+    Dim kPrompt(15) As Byte
 
     PpPrependDefaults = NULL
+    lstrcpy(VarPtr(kCon), "console")
+    lstrcpy(VarPtr(kn88), "n88basic")
+    lstrcpy(VarPtr(kPrompt), "prompt")
+    wantCon = PpSourceHasHashDir(src, VarPtr(kCon))
+    wantN88 = PpSourceHasHashDir(src, VarPtr(kn88))
+    If wantN88 = 0 Then
+        wantN88 = PpSourceHasHashDir(src, VarPtr(kPrompt))
+    End If
+    g_ppN88Basic = wantN88
+    If wantN88 <> 0 Then
+        g_ppUseWindow = 1
+    End If
+
+    head = calloc(1)
+    If head = NULL Then Exit Function
+    head[0] = 0
+    headLen = 0
+
     If PpFindDefaultIdx(VarPtr(idxPath)) = 0 Then
         Print "warning: not found: Include\default\default.idx"
-        PpPrependDefaults = PpDupText(src)
-        Exit Function
-    End If
-    idxSrc = LoadFile(VarPtr(idxPath), idxSize)
-    If idxSrc = NULL Then
-        Print "warning: cannot open: " + MakeStr(VarPtr(idxPath))
-        PpPrependDefaults = PpDupText(src)
-        Exit Function
-    End If
-    head = ExpandIncludes(idxSrc, idxSize, VarPtr(idxPath))
-    free(idxSrc)
-    If head = NULL Then
-        Print "warning: preprocess failed: " + MakeStr(VarPtr(idxPath))
-        PpPrependDefaults = PpDupText(src)
-        Exit Function
-    End If
-    headLen = lstrlen(head)
-    srcLen = lstrlen(src)
-    dst = calloc(headLen + srcLen + 1)
-    If dst = NULL Then
+    Else
+        part = PpLoadIdxExpanded(VarPtr(idxPath))
+        If part = NULL Then
+            free(head)
+            Exit Function
+        End If
+        partLen = lstrlen(part)
+        nxt = PpConcatText(head, headLen, part, partLen)
         free(head)
-        Exit Function
+        free(part)
+        If nxt = NULL Then Exit Function
+        head = nxt
+        headLen = headLen + partLen
     End If
-    If headLen > 0 Then memcpy(dst, head, headLen)
-    If srcLen > 0 Then memcpy(VarPtr(dst[headLen]), src, srcLen)
-    dst[headLen + srcLen] = 0
+
+    If wantCon <> 0 Then
+        If PpFindConsoleIdx(VarPtr(idxPath)) = 0 Then
+            Print "warning: not found: Include\console\console.idx"
+        Else
+            part = PpLoadIdxExpanded(VarPtr(idxPath))
+            If part = NULL Then
+                free(head)
+                Exit Function
+            End If
+            partLen = lstrlen(part)
+            nxt = PpConcatText(head, headLen, part, partLen)
+            free(head)
+            free(part)
+            If nxt = NULL Then Exit Function
+            head = nxt
+            headLen = headLen + partLen
+        End If
+    End If
+
+    If wantN88 <> 0 Then
+        If PpFindN88BasicIdx(VarPtr(idxPath)) = 0 Then
+            Print "warning: not found: Include\N88BASIC\n88basic.idx"
+        Else
+            part = PpLoadIdxExpanded(VarPtr(idxPath))
+            If part = NULL Then
+                free(head)
+                Exit Function
+            End If
+            partLen = lstrlen(part)
+            nxt = PpConcatText(head, headLen, part, partLen)
+            free(head)
+            free(part)
+            If nxt = NULL Then Exit Function
+            head = nxt
+            headLen = headLen + partLen
+        End If
+    End If
+
+    srcLen = lstrlen(src)
+    nxt = PpConcatText(head, headLen, src, srcLen)
     free(head)
-    PpPrependDefaults = dst
+    If nxt = NULL Then Exit Function
+    head = nxt
+    headLen = headLen + srcLen
+
+    If wantN88 <> 0 Then
+        ' 末尾でメッセージループ（End なら N88_End が先に処理）
+        foot[0] = 13
+        foot[1] = 10
+        lstrcpy(VarPtr(foot[2]), "N88_Run()")
+        footLen = lstrlen(VarPtr(foot))
+        foot[footLen] = 13
+        footLen = footLen + 1
+        foot[footLen] = 10
+        footLen = footLen + 1
+        foot[footLen] = 0
+        nxt = PpConcatText(head, headLen, VarPtr(foot), footLen)
+        free(head)
+        If nxt = NULL Then Exit Function
+        head = nxt
+    End If
+
+    PpPrependDefaults = head
 End Function
 
 Const PJ_MAX_SOURCES = 16
