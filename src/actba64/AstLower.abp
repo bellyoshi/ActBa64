@@ -3722,31 +3722,27 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         LowEmitExitImm(ctx, 0)
         LowStmt = 1
     ElseIf k = AST_PRINT Then
-        lab = LowEnsureRtPrint(ctx)
-        AstCopyStr(ctx.ast, nodes[idx].left, VarPtr(name))
-        vTy = -1
-        If nodes[idx].left >= 0 Then
-            If nodes[nodes[idx].left].kind = AST_VAR Then
-                If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        If LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
+            If nodes[idx].left >= 0 Then
+                If nodes[nodes[idx].left].kind = AST_VAR Then
+                    AstCopyStr(ctx.ast, nodes[idx].left, VarPtr(name))
+                    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+                        vTy = -1
+                    End If
+                Else
                     vTy = -1
                 End If
+            Else
+                vTy = -1
             End If
+        Else
+            vTy = -1
         End If
         If vTy = TY_BYTE_ARR Then
             If LowExprArg(ctx, nodes[idx].left) = 0 Then Exit Function
-            IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
-            IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
-            LowStmt = 1
-            Exit Function
-        End If
-        If vTy = TY_PTR_BYTE Then
+        ElseIf vTy = TY_PTR_BYTE Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-            IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
-            IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
-            LowStmt = 1
-            Exit Function
-        End If
-        If LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
+        ElseIf LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
             labStr = LowEnsureRtStr(ctx)
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
@@ -3754,8 +3750,26 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         Else
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
         End If
-        IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
-        IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+        If g_ppN88Basic <> 0 Then
+            lstrcpy(VarPtr(name), "N88_Print")
+            If nodes[idx].num <> 0 Then
+                lstrcpy(VarPtr(name), "N88_PrintStay")
+            End If
+            lab = LowFindFunc(ctx, VarPtr(name))
+            If lab < 0 Then
+                Print "error: missing '" + MakeStr(VarPtr(name)) + "'"
+                ctx.err = 1
+                Exit Function
+            End If
+            IrEmit(ctx.list, OP_SUB_RSP, 32, 0)
+            IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
+            IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+            IrEmit(ctx.list, OP_ADD_RSP, 32, 0)
+        Else
+            lab = LowEnsureRtPrint(ctx)
+            IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
+            IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+        End If
         LowStmt = 1
     ElseIf k = AST_INPUT Then
         ' Input var$ ― String のみ（1行読み取り）
