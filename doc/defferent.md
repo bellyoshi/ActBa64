@@ -61,4 +61,5 @@
 ### `Class` 宣言
 
 - **オブジェクト指向機能の導入**
-  - オブジェクト指向設計を可能にするため、`Class` によるクラス宣言機能の追加を今後のロードマップに含めている。
+  - フェーズ1（メンバ・メソッド・ctor/dtor・`Dim As Class(args)`）は実装済み。詳細は [language.md §3.3](./language.md#33-classフェーズ1)。
+  - 今後: `Inherits` / `Virtual` / `New`/`Delete` など。

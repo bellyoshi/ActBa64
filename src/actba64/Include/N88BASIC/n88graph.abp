@@ -3,6 +3,8 @@
 '
 ' LINE (x1,y1)-(x2,y2)[,color][,B|BF]
 ' CIRCLE [(x,y)|STEP(x,y)],r[,color][,start][,end][,aspect][,F[,color2]]
+' LOCATE x,y | Locate(x,y)  — 文字座標（桁 x, 行 y）
+' PAINT (x,y), color1 [, color2]  — 塗りつぶし（境界色 color2、省略時 color1）
 '   start/end: ラジアン（千分率。6.28 → 6280）。省略または start=end=0 で全周
 '   aspect: 垂直/水平（千分率。1.0 → 1000）。省略時 1000
 '   flags: 1=F  2=startNeg  4=endNeg  8=STEP  16=center=LP
@@ -20,6 +22,10 @@ Const N88_MODE_LINE = 0
 Const N88_MODE_BOX = 1
 Const N88_MODE_BOXFILL = 2
 Const N88_PI2_M = 6283
+Const N88_CHAR_W = 8
+Const N88_CHAR_H = 16
+Const N88_FLOODFILLBORDER = 0
+Const N88_TRANSPARENT = 1
 
 Dim g_n88Hwnd As Long
 Dim g_n88MemDC As Long
@@ -28,6 +34,8 @@ Dim g_n88OldBmp As Long
 Dim g_n88Ready As Long
 Dim g_n88LPx As Long
 Dim g_n88LPy As Long
+Dim g_n88CurX As Long
+Dim g_n88CurY As Long
 Dim g_n88Class(31) As Byte
 Dim g_n88Title(31) As Byte
 
@@ -125,6 +133,8 @@ Sub N88_EnsureWindow()
 
     g_n88LPx = 0
     g_n88LPy = 0
+    g_n88CurX = 0
+    g_n88CurY = 0
     ShowWindow(g_n88Hwnd, SW_SHOW)
     UpdateWindow(g_n88Hwnd)
     g_n88Ready = 1
@@ -404,4 +414,71 @@ End Sub
 Sub N88_End()
     N88_Run()
     ExitProcess(0)
+End Sub
+
+Sub Locate(x As Long, y As Long)
+    N88_EnsureWindow()
+    g_n88CurX = x
+    g_n88CurY = y
+End Sub
+
+Sub N88_TextOutOn(hdc As Long, s As *Byte)
+    Dim px As Long
+    Dim py As Long
+    Dim n As Long
+    If hdc = 0 Then Exit Sub
+    If s = 0 Then Exit Sub
+    px = g_n88CurX * N88_CHAR_W
+    py = g_n88CurY * N88_CHAR_H
+    n = lstrlen(s)
+    SetBkMode(hdc, N88_TRANSPARENT)
+    SetTextColor(hdc, N88_Rgb(7))
+    TextOutA(hdc, px, py, s, n)
+End Sub
+
+' #n88basic 時の Print → 窓へ描画し、次行へ
+Sub N88_Print(s As *Byte)
+    Dim hdc As Long
+
+    N88_EnsureWindow()
+    If g_n88Hwnd = 0 Then Exit Sub
+    If g_n88MemDC <> 0 Then
+        N88_TextOutOn(g_n88MemDC, s)
+    End If
+    hdc = GetDC(g_n88Hwnd)
+    N88_TextOutOn(hdc, s)
+    ReleaseDC(g_n88Hwnd, hdc)
+    g_n88CurY = g_n88CurY + 1
+End Sub
+
+Sub N88_FloodOn(hdc As Long, x As Long, y As Long, fillRgb As Long, borderRgb As Long)
+    Dim brush As Long
+    Dim old As Long
+    If hdc = 0 Then Exit Sub
+    brush = CreateSolidBrush(fillRgb)
+    If brush = 0 Then Exit Sub
+    old = SelectObject(hdc, brush)
+    ExtFloodFill(hdc, x, y, borderRgb, N88_FLOODFILLBORDER)
+    SelectObject(hdc, old)
+    DeleteObject(brush)
+End Sub
+
+' PAINT (x,y), color1 [, color2] — color1=塗り, color2=境界（省略時 color1）
+Sub Paint(x As Long, y As Long, color1 As Long, color2 As Long)
+    Dim hdc As Long
+    Dim fr As Long
+    Dim br As Long
+
+    N88_EnsureWindow()
+    If g_n88Hwnd = 0 Then Exit Sub
+    fr = N88_Rgb(color1)
+    br = N88_Rgb(color2)
+    If g_n88MemDC <> 0 Then
+        N88_FloodOn(g_n88MemDC, x, y, fr, br)
+    End If
+    hdc = GetDC(g_n88Hwnd)
+    N88_FloodOn(hdc, x, y, fr, br)
+    ReleaseDC(g_n88Hwnd, hdc)
+    g_n88LPx = x
+    g_n88LPy = y
 End Sub
