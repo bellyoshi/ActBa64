@@ -13,6 +13,8 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 |---|---|
 | `src/actba32` | 32bit ツールチェーン（`actba32` / `abc` / `abassembler` / `ablinker`）の自己ホスト |
 | `src/actba64` | 64bit コンパイラ（actba32 からブートストラップ） |
+| `src/projecteditor` | エディタ |
+| `release/` | 配布一式（`build.ps1` が生成。git 管理外） |
 | `src/prototype*` | 開発途中の試作 |
 | `doc/` | ドキュメント |
 
@@ -26,6 +28,17 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 ## ビルド
 
 詳細は [doc/build.md](doc/build.md)。要約:
+
+```powershell
+# リリース一式（要: src\actba32\bin\stage0 に ab420 成果物）
+# → release\ に ProjectEditor.exe / actba64.exe / actba32.exe / Include / help
+.\build.ps1
+
+# 既存 stage2 だけ使い、エディタ再コンパイルとコピーのみ
+.\build.ps1 -SkipSelfHost
+```
+
+段階ごとの手動ビルド:
 
 ```powershell
 # 1) 32bit（要: bin\stage0 に ab420 成果物）
