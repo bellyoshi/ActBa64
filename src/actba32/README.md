@@ -1,6 +1,6 @@
 # actba32 — ツール配置とビルド方針
 
-ルートのビルド手順: [doc/build.md](../../doc/build.md)
+ルートのビルド手順: [docs/build.md](../../docs/build.md)
 
 ## ソースツリー
 

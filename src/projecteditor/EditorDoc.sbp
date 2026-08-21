@@ -1,5 +1,16 @@
 Dim g_docPath As String
 Dim g_docDirty As Long
+Dim g_docEncoding As Long
+
+Function EditorDoc_EncodingLabel$() As String
+    If g_docEncoding = ENC_UTF8_BOM Then
+        EditorDoc_EncodingLabel$ = "UTF-8 BOM"
+    ElseIf g_docEncoding = ENC_CP932 Then
+        EditorDoc_EncodingLabel$ = "Shift-JIS"
+    Else
+        EditorDoc_EncodingLabel$ = "UTF-8"
+    End If
+End Function
 
 Sub EditorDoc_UpdateTitle(hWnd As HWND)
     Dim title As String
@@ -8,7 +19,7 @@ Sub EditorDoc_UpdateTitle(hWnd As HWND)
     Else
         title = "editor - " + g_docPath
     End If
-    title = title + " [" + EditorBuild_TargetLabel$() + "]"
+    title = title + " [" + EditorBuild_TargetLabel$() + ", " + EditorDoc_EncodingLabel$() + "]"
     If g_docDirty <> 0 Then title = title + " *"
     SetWindowText(hWnd, title)
 End Sub
@@ -28,6 +39,7 @@ Function EditorDoc_LoadTextFile$(path As String) As String
     Dim fsiz As Long
     Dim nRead As DWord
     Dim p As *Byte
+    Dim encoding As Long
 
     EditorDoc_LoadTextFile$ = ""
     hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
@@ -45,12 +57,15 @@ Function EditorDoc_LoadTextFile$(path As String) As String
         Exit Function
     End If
 
+    nRead = 0
     If fsiz > 0 Then
         ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
     End If
     CloseHandle(hFile)
-    p[fsiz] = 0
-    EditorDoc_LoadTextFile$ = MakeStr(p)
+    p[nRead] = 0
+    encoding = Enc_Detect(p, nRead)
+    g_docEncoding = encoding
+    EditorDoc_LoadTextFile$ = Enc_BytesToUtf8$(p, nRead, encoding)
     free(p)
 End Function
 
@@ -58,22 +73,29 @@ Function EditorDoc_WriteTextFile(path As String, text As String) As Long
     Dim hFile As HANDLE
     Dim nWritten As DWord
     Dim n As Long
+    Dim bytes As *Byte
 
     EditorDoc_WriteTextFile = 0
-    n = Len(text)
+    bytes = Enc_EncodeText(text, g_docEncoding, n)
+    If bytes = 0 And n > 0 Then Exit Function
     hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    If hFile = INVALID_HANDLE_VALUE Then
+        If bytes <> 0 Then free(bytes)
+        Exit Function
+    End If
     If n > 0 Then
-        WriteFile(hFile, StrPtr(text), n, VarPtr(nWritten), ByVal NULL)
+        WriteFile(hFile, bytes, n, VarPtr(nWritten), ByVal NULL)
     Else
         nWritten = 0
     End If
     CloseHandle(hFile)
+    If bytes <> 0 Then free(bytes)
     If nWritten = n Then EditorDoc_WriteTextFile = 1
 End Function
 
 Sub EditorDoc_New(hWnd As HWND)
     g_docPath = ""
+    g_docEncoding = ENC_UTF8
     TextBuf_SetText("")
     EditorUndo_Reset()
     VirtualScroll_Init()
@@ -148,12 +170,14 @@ End Function
 
 Function EditorDoc_SaveAs(hWnd As HWND) As Long
     Dim path As String
+    Dim msg As String
 
     EditorDoc_SaveAs = 0
     path = EditorDoc_BrowseSave$(hWnd)
     If Len(path) = 0 Then Exit Function
     If EditorDoc_WriteTextFile(path, TextBuf_GetConfirmed$()) = 0 Then
-        MessageBox(hWnd, "Failed to save file.", "editor", MB_OK)
+        msg = UiText$(UI_SAVE_FAILED)
+        MessageBox(hWnd, msg, "editor", MB_OK)
         Exit Function
     End If
     g_docPath = path
@@ -163,13 +187,15 @@ Function EditorDoc_SaveAs(hWnd As HWND) As Long
 End Function
 
 Function EditorDoc_Save(hWnd As HWND) As Long
+    Dim msg As String
     EditorDoc_Save = 0
     If Len(g_docPath) = 0 Then
         EditorDoc_Save = EditorDoc_SaveAs(hWnd)
         Exit Function
     End If
     If EditorDoc_WriteTextFile(g_docPath, TextBuf_GetConfirmed$()) = 0 Then
-        MessageBox(hWnd, "Failed to save file.", "editor", MB_OK)
+        msg = UiText$(UI_SAVE_FAILED)
+        MessageBox(hWnd, msg, "editor", MB_OK)
         Exit Function
     End If
     EditorDoc_ClearDirty()

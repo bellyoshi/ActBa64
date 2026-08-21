@@ -56,6 +56,7 @@ Dim g_rtMidLab As Long
 Dim g_rtStrLab As Long
 Dim g_rtPrintLab As Long
 Dim g_rtInputLab As Long
+Dim g_rtValLab As Long
 ' AstToIr buffer pointers for error-path free (stage0 max 16 args)
 Dim g_fb0 As *Byte
 Dim g_fb1 As *Byte
@@ -1173,6 +1174,13 @@ Function LowEnsureRtInput(ctx As *LowerCtx) As Long
     LowEnsureRtInput = g_rtInputLab
 End Function
 
+Function LowEnsureRtVal(ctx As *LowerCtx) As Long
+    If g_rtValLab < 0 Then
+        g_rtValLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtVal = g_rtValLab
+End Function
+
 Sub LowEmitRtCatBody(ctx As *LowerCtx)
     Dim list As *IrList
     Dim sApi(15) As Byte
@@ -1653,6 +1661,119 @@ Sub LowEmitRtInputBody(ctx As *LowerCtx)
 
     IrEmit(list, OP_LABEL, labFail, 0)
     IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' Val(s) ― 先頭の空白と符号を処理し、十進整数を返す
+Sub LowEmitRtValBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labSpace As Long
+    Dim labSign As Long
+    Dim labPlus As Long
+    Dim labDigit As Long
+    Dim labEnd As Long
+    Dim labDone As Long
+
+    If g_rtValLab < 0 Then Exit Sub
+    list = ctx.list
+    labSpace = LowNewLab(ctx)
+    labSign = LowNewLab(ctx)
+    labPlus = LowNewLab(ctx)
+    labDigit = LowNewLab(ctx)
+    labEnd = LowNewLab(ctx)
+    labDone = LowNewLab(ctx)
+
+    ' locals: -8 ptr, -16 negative flag, -24 value
+    IrEmit(list, OP_LABEL, g_rtValLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+
+    ' 先頭の空白を読み飛ばす
+    IrEmit(list, OP_LABEL, labSpace, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labSign, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labSpace, 0)
+
+    ' 符号
+    IrEmit(list, OP_LABEL, labSign, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 45, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labPlus, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labDigit, 0)
+
+    IrEmit(list, OP_LABEL, labPlus, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 43, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labDigit, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+
+    ' value = value * 10 + digit
+    IrEmit(list, OP_LABEL, labDigit, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 48, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JL, labEnd, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 57, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JG, labEnd, 0)
+    IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -48, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_MOV_ECX, 10, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labDigit, 0)
+
+    IrEmit(list, OP_LABEL, labEnd, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_NEG_EAX, 0, 0)
+    IrEmit(list, OP_JMP, labDone, 0)
+
+    IrEmit(list, OP_LABEL, labDone, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
 End Sub
 
@@ -3790,7 +3911,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         End If
         LowStmt = 1
     ElseIf k = AST_INPUT Then
-        ' Input var$ ― String のみ（1行読み取り）
+        ' Input var ― String はそのまま、数値型は十進整数へ変換
         If nodes[idx].left < 0 Then
             ctx.err = 1
             Exit Function
@@ -3804,12 +3925,18 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             ctx.err = 1
             Exit Function
         End If
-        If vTy <> TY_STRING Then
+        If vTy <> TY_STRING And vTy <> TY_LONG And vTy <> TY_BYTE And vTy <> TY_DOUBLE Then
+            Print "error: Input needs String or numeric variable"
             ctx.err = 1
             Exit Function
         End If
         lab = LowEnsureRtInput(ctx)
         IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+        If vTy <> TY_STRING Then
+            lab = LowEnsureRtVal(ctx)
+            IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
+            IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+        End If
         If vByRef <> 0 Then
             IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
             LowEmitLoadOff(ctx.list, vOff, vGlob)
@@ -4162,6 +4289,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     g_rtStrLab = -1
     g_rtPrintLab = -1
     g_rtInputLab = -1
+    g_rtValLab = -1
     retBuf[0] = 0
     list.globSize = 0
 
@@ -4406,6 +4534,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     LowEmitRtStrBody(VarPtr(ctx))
     LowEmitRtPrintBody(VarPtr(ctx))
     LowEmitRtInputBody(VarPtr(ctx))
+    LowEmitRtValBody(VarPtr(ctx))
 
     LowFreeAstBufs()
     g_gNames = NULL
