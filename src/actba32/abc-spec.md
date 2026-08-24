@@ -226,7 +226,8 @@ NUL 終端バイト列。連結・`Mid$` 等は都度確保。
 | 指令 | 意味 |
 |------|------|
 | `#include "path"` | 挿入 |
-| `#console` | CUI ヒント（`.pj` の `#USEWINDOW=0` と併用可） |
+| `#console` | `Include\console\console.idx` を挿入 |
+| `#n88basic` | `Include\N88BASIC\n88basic.idx` を挿入（`LINE`/`CIRCLE` 文は **actba64**） |
 | `#strict` | 無視 |
 
 ## 6. WinAPI / ランタイム（リンカ自動 IAT）

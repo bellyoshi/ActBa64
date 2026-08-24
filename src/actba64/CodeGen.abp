@@ -15,6 +15,18 @@ Function IrDllNameOf(dllKind As DWord, dst As *Byte) As Long
     ElseIf dllKind = IR_DLL_KERNEL32 Then
         lstrcpy(dst, "kernel32.dll")
         IrDllNameOf = 1
+    ElseIf dllKind = IR_DLL_GDI32 Then
+        lstrcpy(dst, "gdi32.dll")
+        IrDllNameOf = 1
+    ElseIf dllKind = IR_DLL_IMM32 Then
+        lstrcpy(dst, "imm32.dll")
+        IrDllNameOf = 1
+    ElseIf dllKind = IR_DLL_COMDLG32 Then
+        lstrcpy(dst, "comdlg32.dll")
+        IrDllNameOf = 1
+    ElseIf dllKind = IR_DLL_SHELL32 Then
+        lstrcpy(dst, "shell32.dll")
+        IrDllNameOf = 1
     End If
 End Function
 
@@ -23,7 +35,7 @@ Sub IrCollect(list As *IrList, builder As *ImportBuilder)
     Dim n As Long
     Dim opv As Long
     Dim ops As *IrOp
-    Dim tmp(63) As Byte
+    Dim tmp(255) As Byte
     Dim dll(31) As Byte
     Dim sid As Long
 
@@ -39,17 +51,20 @@ Sub IrCollect(list As *IrList, builder As *ImportBuilder)
         ElseIf opv = OP_LEA_RDX_STR Or opv = OP_LEA_R8_STR Or opv = OP_LEA_RAX_STR Then
             IrCopyStrAt(list, i, VarPtr(tmp))
             sid = IbAddString(builder, VarPtr(tmp))
+            If sid < 0 Then
+                Print "error: too many string literals (max " + Str$(IB_MAX_STRING) + ")"
+            End If
             ops[i].strId = sid
         End If
     Next
 End Sub
 
-Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder)
+Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord)
     Dim i As Long
     Dim n As Long
     Dim opv As Long
     Dim ops As *IrOp
-    Dim tmp(63) As Byte
+    Dim tmp(255) As Byte
     Dim dll(31) As Byte
     Dim iatRva As DWord
     Dim strRva As DWord
@@ -60,6 +75,7 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder)
     Dim at As Long
     Dim rel As Long
     Dim nextRip As Long
+    Dim globOff As DWord
 
     labOff = calloc(SizeOf(Long) * IR_MAX_LABELS)
     fixups = calloc(SizeOf(IrFixup) * IR_MAX_FIXUPS)
@@ -187,6 +203,12 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder)
                 fixups[nFix].lab = ops[i].arg1
                 nFix = nFix + 1
             End If
+        ElseIf opv = OP_LEA_RAX_GLOB Then
+            at = EmitLeaRaxLabRel32(cb)
+            globOff = ops[i].arg1
+            nextRip = at + 4
+            rel = (dataRva + globOff) - (TEXT_RVA + nextRip)
+            PutDword(VarPtr(cb.buf[at]), 0, rel)
         ElseIf opv = OP_SHL_ECX_3 Then
             EmitShlEcx3(cb)
         ElseIf opv = OP_POP_RAX Then
@@ -213,6 +235,22 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder)
             EmitDivEcx(cb)
         ElseIf opv = OP_MOV_EAX_EDX Then
             EmitMovEaxEdx(cb)
+        ElseIf opv = OP_XOR_EAX_ECX Then
+            EmitXorEaxEcx(cb)
+        ElseIf opv = OP_NOT_EAX Then
+            EmitNotEax(cb)
+        ElseIf opv = OP_SHL_EAX_CL Then
+            EmitShlEaxCl(cb)
+        ElseIf opv = OP_SAR_EAX_CL Then
+            EmitSarEaxCl(cb)
+        ElseIf opv = OP_IMUL_EAX_EDX Then
+            EmitImulEaxEdx(cb)
+        ElseIf opv = OP_DEC_ECX Then
+            EmitDecEcx(cb)
+        ElseIf opv = OP_TEST_ECX Then
+            EmitTestEcx(cb)
+        ElseIf opv = OP_AND_EAX_IMM Then
+            EmitAndEaxImm(cb, ops[i].arg1)
         ElseIf opv = OP_LABEL Then
             li = ops[i].arg1
             If li >= 0 And li < IR_MAX_LABELS Then

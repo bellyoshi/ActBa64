@@ -1,0 +1,453 @@
+' GUI Reversi — Human (Black) vs CPU (White, random legal move)
+' Build:
+'   actba64.exe samples\reversi_gui.abp -o samples\reversi_gui.exe
+'   samples\reversi_gui.exe
+
+#USEWINDOW=1
+
+Const BOARD_SIZE = 8
+Const BOARD_MAX = 63
+Const EMPTY = 0
+Const BLACK = 1
+Const WHITE = 2
+Const CELL = 48
+Const MARGIN = 16
+Const WIN_W = 420
+Const WIN_H = 420
+
+Const COLOR_BOARD = &H008000
+Const COLOR_GRID = &H004000
+Const COLOR_BLACK = &H000000
+Const COLOR_WHITE = &HFFFFFF
+Const COLOR_HINT = &H00FFFF
+
+Dim Board(BOARD_MAX) As Long
+Dim CurrentTurn As Long
+Dim GameOver As Long
+Dim PassStreak As Long
+Dim g_hwnd As Long
+Dim dx(7) As Long
+Dim dy(7) As Long
+Dim g_movesX(63) As Long
+Dim g_movesY(63) As Long
+Dim g_class(31) As Byte
+Dim g_title(31) As Byte
+
+Function Cell(x As Long, y As Long) As Long
+    Cell = x + y * BOARD_SIZE
+End Function
+
+Sub InitDirs()
+    dx(0) = -1
+    dy(0) = -1
+    dx(1) = 0
+    dy(1) = -1
+    dx(2) = 1
+    dy(2) = -1
+    dx(3) = -1
+    dy(3) = 0
+    dx(4) = 1
+    dy(4) = 0
+    dx(5) = -1
+    dy(5) = 1
+    dx(6) = 0
+    dy(6) = 1
+    dx(7) = 1
+    dy(7) = 1
+End Sub
+
+Sub InitBoard()
+    Dim x As Long
+    Dim y As Long
+    For y = 0 To BOARD_SIZE - 1
+        For x = 0 To BOARD_SIZE - 1
+            Board(Cell(x, y)) = EMPTY
+        Next
+    Next
+    Board(Cell(3, 3)) = WHITE
+    Board(Cell(4, 3)) = BLACK
+    Board(Cell(3, 4)) = BLACK
+    Board(Cell(4, 4)) = WHITE
+    CurrentTurn = BLACK
+    GameOver = 0
+    PassStreak = 0
+End Sub
+
+Function CanFlipDirection(x As Long, y As Long, dirX As Long, dirY As Long, player As Long) As Long
+    Dim opponent As Long
+    Dim nx As Long
+    Dim ny As Long
+    Dim count As Long
+    CanFlipDirection = 0
+    If player = BLACK Then
+        opponent = WHITE
+    Else
+        opponent = BLACK
+    End If
+    nx = x + dirX
+    ny = y + dirY
+    count = 0
+    While nx >= 0
+        If nx >= BOARD_SIZE Then Exit While
+        If ny < 0 Then Exit While
+        If ny >= BOARD_SIZE Then Exit While
+        If Board(Cell(nx, ny)) = opponent Then
+            count = count + 1
+        ElseIf Board(Cell(nx, ny)) = player Then
+            If count > 0 Then CanFlipDirection = 1
+            Exit While
+        Else
+            Exit While
+        End If
+        nx = nx + dirX
+        ny = ny + dirY
+    Wend
+End Function
+
+Function CanPut(x As Long, y As Long, player As Long) As Long
+    Dim i As Long
+    CanPut = 0
+    If x < 0 Then Exit Function
+    If x >= BOARD_SIZE Then Exit Function
+    If y < 0 Then Exit Function
+    If y >= BOARD_SIZE Then Exit Function
+    If Board(Cell(x, y)) <> EMPTY Then Exit Function
+    For i = 0 To 7
+        If CanFlipDirection(x, y, dx(i), dy(i), player) = 1 Then
+            CanPut = 1
+            Exit Function
+        End If
+    Next
+End Function
+
+Function HasAnyMove(player As Long) As Long
+    Dim x As Long
+    Dim y As Long
+    HasAnyMove = 0
+    For y = 0 To BOARD_SIZE - 1
+        For x = 0 To BOARD_SIZE - 1
+            If CanPut(x, y, player) = 1 Then
+                HasAnyMove = 1
+                Exit Function
+            End If
+        Next
+    Next
+End Function
+
+Sub FlipAndPut(x As Long, y As Long, player As Long)
+    Dim i As Long
+    Dim opponent As Long
+    Dim nx As Long
+    Dim ny As Long
+    If player = BLACK Then
+        opponent = WHITE
+    Else
+        opponent = BLACK
+    End If
+    Board(Cell(x, y)) = player
+    For i = 0 To 7
+        If CanFlipDirection(x, y, dx(i), dy(i), player) = 1 Then
+            nx = x + dx(i)
+            ny = y + dy(i)
+            While Board(Cell(nx, ny)) = opponent
+                Board(Cell(nx, ny)) = player
+                nx = nx + dx(i)
+                ny = ny + dy(i)
+            Wend
+        End If
+    Next
+End Sub
+
+Sub SwitchTurn()
+    If CurrentTurn = BLACK Then
+        CurrentTurn = WHITE
+    Else
+        CurrentTurn = BLACK
+    End If
+End Sub
+
+Function CountPieces(player As Long) As Long
+    Dim i As Long
+    Dim n As Long
+    n = 0
+    For i = 0 To BOARD_MAX
+        If Board(i) = player Then n = n + 1
+    Next
+    CountPieces = n
+End Function
+
+Sub UpdateStatus()
+    Dim b As Long
+    Dim w As Long
+    Dim s As String
+    b = CountPieces(BLACK)
+    w = CountPieces(WHITE)
+    If GameOver <> 0 Then
+        If b > w Then
+            s = "Reversi - You win!  Black:" + Str$(b) + " White:" + Str$(w)
+        ElseIf w > b Then
+            s = "Reversi - CPU wins  Black:" + Str$(b) + " White:" + Str$(w)
+        Else
+            s = "Reversi - Draw  Black:" + Str$(b) + " White:" + Str$(w)
+        End If
+    ElseIf CurrentTurn = BLACK Then
+        s = "Reversi - Your turn (Black)  Black:" + Str$(b) + " White:" + Str$(w)
+    Else
+        s = "Reversi - CPU turn  Black:" + Str$(b) + " White:" + Str$(w)
+    End If
+    If g_hwnd <> 0 Then SetWindowText(g_hwnd, s)
+End Sub
+
+Sub CpuPlayRandom()
+    Dim n As Long
+    Dim x As Long
+    Dim y As Long
+    Dim pick As Long
+    n = 0
+    For y = 0 To BOARD_SIZE - 1
+        For x = 0 To BOARD_SIZE - 1
+            If CanPut(x, y, WHITE) = 1 Then
+                g_movesX(n) = x
+                g_movesY(n) = y
+                n = n + 1
+            End If
+        Next
+    Next
+    If n <= 0 Then Exit Sub
+    pick = GetTickCount() Mod n
+    FlipAndPut(g_movesX(pick), g_movesY(pick), WHITE)
+End Sub
+
+Sub AdvanceAfterMove()
+    SwitchTurn()
+    PassStreak = 0
+    While GameOver = 0
+        If HasAnyMove(CurrentTurn) = 0 Then
+            PassStreak = PassStreak + 1
+            If PassStreak >= 2 Then
+                GameOver = 1
+                Exit Sub
+            End If
+            SwitchTurn()
+        ElseIf CurrentTurn = WHITE Then
+            Sleep(250)
+            CpuPlayRandom()
+            SwitchTurn()
+            PassStreak = 0
+        Else
+            Exit Sub
+        End If
+    Wend
+End Sub
+
+Function HitCell(px As Long, py As Long, ByRef cx As Long, ByRef cy As Long) As Long
+    HitCell = 0
+    If px < MARGIN Then Exit Function
+    If py < MARGIN Then Exit Function
+    cx = (px - MARGIN) \ CELL
+    cy = (py - MARGIN) \ CELL
+    If cx < 0 Then Exit Function
+    If cy < 0 Then Exit Function
+    If cx >= BOARD_SIZE Then Exit Function
+    If cy >= BOARD_SIZE Then Exit Function
+    HitCell = 1
+End Function
+
+Sub DrawDisk(hdc As Long, cx As Long, cy As Long, player As Long)
+    Dim px As Long
+    Dim py As Long
+    Dim pen As Long
+    Dim brush As Long
+    Dim oldPen As Long
+    Dim oldBrush As Long
+    Dim pad As Long
+    px = MARGIN + cx * CELL
+    py = MARGIN + cy * CELL
+    pad = 4
+    If player = BLACK Then
+        pen = CreatePen(PS_SOLID, 1, COLOR_BLACK)
+        brush = CreateSolidBrush(COLOR_BLACK)
+    Else
+        pen = CreatePen(PS_SOLID, 2, COLOR_BLACK)
+        brush = CreateSolidBrush(COLOR_WHITE)
+    End If
+    If pen = 0 Then Exit Sub
+    If brush = 0 Then
+        DeleteObject(pen)
+        Exit Sub
+    End If
+    oldPen = SelectObject(hdc, pen)
+    oldBrush = SelectObject(hdc, brush)
+    Ellipse(hdc, px + pad, py + pad, px + CELL - pad, py + CELL - pad)
+    SelectObject(hdc, oldBrush)
+    SelectObject(hdc, oldPen)
+    DeleteObject(brush)
+    DeleteObject(pen)
+End Sub
+
+Sub DrawHint(hdc As Long, cx As Long, cy As Long)
+    Dim px As Long
+    Dim py As Long
+    Dim pen As Long
+    Dim brush As Long
+    Dim oldPen As Long
+    Dim oldBrush As Long
+    Dim mid As Long
+    px = MARGIN + cx * CELL
+    py = MARGIN + cy * CELL
+    mid = CELL \ 2
+    pen = CreatePen(PS_SOLID, 1, COLOR_HINT)
+    brush = CreateSolidBrush(COLOR_HINT)
+    If pen = 0 Then Exit Sub
+    If brush = 0 Then
+        DeleteObject(pen)
+        Exit Sub
+    End If
+    oldPen = SelectObject(hdc, pen)
+    oldBrush = SelectObject(hdc, brush)
+    Ellipse(hdc, px + mid - 4, py + mid - 4, px + mid + 4, py + mid + 4)
+    SelectObject(hdc, oldBrush)
+    SelectObject(hdc, oldPen)
+    DeleteObject(brush)
+    DeleteObject(pen)
+End Sub
+
+Sub DrawBoard(hdc As Long)
+    Dim x As Long
+    Dim y As Long
+    Dim i As Long
+    Dim pen As Long
+    Dim brush As Long
+    Dim oldPen As Long
+    Dim oldBrush As Long
+    Dim rc As RECT
+    Dim boardPx As Long
+    Dim v As Long
+
+    boardPx = CELL * BOARD_SIZE
+    rc.left = MARGIN - 2
+    rc.top = MARGIN - 2
+    rc.right = MARGIN + boardPx + 2
+    rc.bottom = MARGIN + boardPx + 2
+    brush = CreateSolidBrush(COLOR_BOARD)
+    If brush <> 0 Then
+        FillRect(hdc, VarPtr(rc), brush)
+        DeleteObject(brush)
+    End If
+
+    pen = CreatePen(PS_SOLID, 1, COLOR_GRID)
+    If pen <> 0 Then
+        oldPen = SelectObject(hdc, pen)
+        For i = 0 To BOARD_SIZE
+            MoveToEx(hdc, MARGIN + i * CELL, MARGIN, 0)
+            LineTo(hdc, MARGIN + i * CELL, MARGIN + boardPx)
+            MoveToEx(hdc, MARGIN, MARGIN + i * CELL, 0)
+            LineTo(hdc, MARGIN + boardPx, MARGIN + i * CELL)
+        Next
+        SelectObject(hdc, oldPen)
+        DeleteObject(pen)
+    End If
+
+    If GameOver = 0 And CurrentTurn = BLACK Then
+        For y = 0 To BOARD_SIZE - 1
+            For x = 0 To BOARD_SIZE - 1
+                If CanPut(x, y, BLACK) = 1 Then DrawHint(hdc, x, y)
+            Next
+        Next
+    End If
+
+    For y = 0 To BOARD_SIZE - 1
+        For x = 0 To BOARD_SIZE - 1
+            v = Board(Cell(x, y))
+            If v = BLACK Then
+                DrawDisk(hdc, x, y, BLACK)
+            ElseIf v = WHITE Then
+                DrawDisk(hdc, x, y, WHITE)
+            End If
+        Next
+    Next
+End Sub
+
+Sub OnLButtonDown(lParam As Long)
+    Dim px As Long
+    Dim py As Long
+    Dim cx As Long
+    Dim cy As Long
+    If GameOver <> 0 Then Exit Sub
+    If CurrentTurn <> BLACK Then Exit Sub
+    px = lParam And 65535
+    If px >= 32768 Then px = px - 65536
+    py = (lParam \ 65536) And 65535
+    If py >= 32768 Then py = py - 65536
+    If HitCell(px, py, cx, cy) = 0 Then Exit Sub
+    If CanPut(cx, cy, BLACK) = 0 Then Exit Sub
+    FlipAndPut(cx, cy, BLACK)
+    AdvanceAfterMove()
+    UpdateStatus()
+    If g_hwnd <> 0 Then InvalidateRect(g_hwnd, ByVal 0, TRUE)
+End Sub
+
+Function ReversiWndProc(hWnd As Long, message As DWord, wParam As Long, lParam As Long) As Long
+    Dim ps As PAINTSTRUCT
+    Dim hdc As Long
+
+    If message = WM_PAINT Then
+        hdc = BeginPaint(hWnd, VarPtr(ps))
+        DrawBoard(hdc)
+        EndPaint(hWnd, VarPtr(ps))
+        ReversiWndProc = 0
+        Exit Function
+    End If
+    If message = WM_LBUTTONDOWN Then
+        OnLButtonDown(lParam)
+        ReversiWndProc = 0
+        Exit Function
+    End If
+    If message = WM_DESTROY Then
+        PostQuitMessage(0)
+        ReversiWndProc = 0
+        Exit Function
+    End If
+    ReversiWndProc = DefWindowProcA(hWnd, message, wParam, lParam)
+End Function
+
+Sub ReversiRun()
+    Dim wc As WNDCLASSEX
+    Dim hInst As Long
+    Dim msg As MSG
+    Dim r As Long
+
+    InitDirs()
+    InitBoard()
+
+    lstrcpy(VarPtr(g_class), "ActBa64Reversi")
+    lstrcpy(VarPtr(g_title), "Reversi")
+    hInst = GetModuleHandleA(0)
+
+    FillMemory(VarPtr(wc), SizeOf(WNDCLASSEX), 0)
+    wc.cbSize = SizeOf(WNDCLASSEX)
+    wc.style = CS_HREDRAW Or CS_VREDRAW
+    wc.lpfnWndProc = AddressOf(ReversiWndProc)
+    wc.hInstance = hInst
+    wc.hCursor = LoadCursorA(0, MAKEINTRESOURCE(IDC_ARROW))
+    wc.hbrBackground = GetStockObject(BLACK_BRUSH)
+    wc.lpszClassName = VarPtr(g_class)
+    RegisterClassExA(VarPtr(wc))
+
+    g_hwnd = CreateWindowExA(0, VarPtr(g_class), VarPtr(g_title), WS_OVERLAPPEDWINDOW Or WS_VISIBLE, 80, 80, WIN_W, WIN_H, 0, 0, hInst, 0)
+    If g_hwnd = 0 Then Exit Sub
+
+    UpdateStatus()
+    ShowWindow(g_hwnd, SW_SHOW)
+    UpdateWindow(g_hwnd)
+
+    Do
+        r = GetMessageA(VarPtr(msg), 0, 0, 0)
+        If r = 0 Then Exit Do
+        If r = -1 Then Exit Do
+        TranslateMessage(VarPtr(msg))
+        DispatchMessageA(VarPtr(msg))
+    Loop
+End Sub
+
+ReversiRun()

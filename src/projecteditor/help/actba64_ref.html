@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>actba64 言語リファレンス</title>
+<style>
+:root { --bg:#f7f5f0; --card:#fff; --ink:#1f2430; --muted:#5c6573; --acc:#1f5f8b; --line:#d8d3c8; --code:#f0ece4; }
+* { box-sizing:border-box; }
+body { margin:0; font:16px/1.6 "Segoe UI","Meiryo","Yu Gothic UI",sans-serif; background:var(--bg); color:var(--ink); }
+a { color:var(--acc); }
+header { background:#1f5f8b; color:#fff; padding:20px 28px; }
+header h1 { margin:0 0 4px; font-size:22px; }
+header p { margin:0; opacity:.9; font-size:14px; }
+.wrap { display:grid; grid-template-columns:240px 1fr; max-width:1100px; margin:0 auto; }
+nav { padding:20px 16px 40px; border-right:1px solid var(--line); position:sticky; top:0; height:100vh; overflow:auto; font-size:14px; }
+nav a { display:block; text-decoration:none; padding:3px 0; color:#334; }
+nav .s { margin-top:12px; font-weight:700; color:#1f5f8b; }
+main { padding:24px 32px 64px; }
+h2 { margin:36px 0 12px; padding-bottom:6px; border-bottom:2px solid var(--acc); }
+h3 { margin:22px 0 8px; }
+table { border-collapse:collapse; width:100%; background:var(--card); margin:10px 0 18px; }
+th,td { border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; }
+th { background:#e8eef3; }
+code,pre { font-family:Consolas,"Cascadia Mono",monospace; font-size:13.5px; }
+pre { background:var(--code); padding:12px 14px; overflow:auto; border:1px solid var(--line); }
+.note { background:#fff8e6; border:1px solid #e6d7a8; padding:10px 12px; margin:12px 0; }
+.kw { display:inline-block; background:#e8eef3; padding:0 6px; border-radius:4px; font-family:Consolas,monospace; }
+.index a { margin-right:10px; white-space:nowrap; }
+footer { color:var(--muted); font-size:13px; margin-top:40px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>actba64 言語リファレンス</h1>
+  <p>ActiveBasic 互換サブセット → 64bit PE32+ 直接出力。完全互換ではありません。</p>
+</header>
+<div class="wrap">
+<nav>
+  <div class="s">目次</div>
+  <a href="#overview">概要 / CLI</a>
+  <a href="#types">型とサイズ</a>
+  <a href="#declare-dim">Dim / Const / Type</a>
+  <a href="#declare">Declare Lib</a>
+  <a href="#abi">呼び出し規則</a>
+  <a href="#statements">文</a>
+  <a href="#operators">演算子</a>
+  <a href="#builtins">組み込み関数</a>
+  <a href="#math">Math（千分率）</a>
+  <a href="#n88basic">N88BASIC</a>
+  <a href="#directives">ディレクティブ</a>
+  <a href="#winapi">WinAPI / IAT</a>
+  <a href="#rad">RAD / InsMenu</a>
+  <a href="#diff">actba32 との差分</a>
+  <a href="#unsupported">非対応</a>
+  <a href="#index">キーワード索引</a>
+</nav>
+<main>
+
+<h2 id="overview">概要</h2>
+<p><span class="kw" id="actba64">actba64</span> は ActiveBasic 風ソースを <strong>64bit PE（PE32+）</strong> に直接コンパイルします。エントリは結合後ソースのトップレベル文です。終了は <code>End</code>（コード 0）または <code>ExitProcess(n)</code>。</p>
+<pre>actba64 &lt;src.abp|.pj&gt; -o &lt;out.exe&gt;</pre>
+<table>
+<tr><th>拡張子</th><th>意味</th></tr>
+<tr><td><code>.abp</code></td><td>ソース 1 ファイル</td></tr>
+<tr><td><code>.pj</code></td><td>プロジェクト（<code>#SOURCE</code> 以下を結合して 1 コンパイル単位）</td></tr>
+</table>
+<p>コメントは <code>'</code> から行末。識別子は大小文字を区別しません。同一行の <code>:</code> で文を連結できます。</p>
+
+<h2 id="types">型とサイズ（64bit）</h2>
+<p class="note"><strong>重要:</strong> actba64 は LP64 ではありません。<code>Long</code> は 32bit のまま、ポインタだけが 8 バイトです。言語プリミティブの 64bit 整数演算（<code>LongLong</code> 算術）はありません。</p>
+<table>
+<tr><th>型</th><th>サイズ</th><th>備考</th></tr>
+<tr id="byte"><td><code>Byte</code></td><td>1</td><td></td></tr>
+<tr id="word"><td><code>Word</code></td><td>2</td><td></td></tr>
+<tr id="long"><td><code>Long</code></td><td>4</td><td>符号付き 32bit 演算の基本型</td></tr>
+<tr id="dword"><td><code>DWord</code></td><td>4</td><td><code>Long</code> 相当（パック・WinAPI 幅）</td></tr>
+<tr id="integer"><td><code>Integer</code></td><td>4</td><td><code>TypeDef Integer = Long</code></td></tr>
+<tr id="string"><td><code>String</code></td><td>8</td><td>NUL 終端バイト列へのポインタ</td></tr>
+<tr id="ptr"><td><code>*T</code></td><td><strong>8</strong></td><td>例: <code>*Byte</code> <code>*Long</code> <code>*MSG</code></td></tr>
+<tr id="handle"><td><code>HANDLE</code></td><td>8</td><td><code>TypeDef HANDLE = VoidPtr</code>（<code>*Byte</code>）</td></tr>
+<tr id="hwnd"><td><code>HWND</code> 等</td><td>8</td><td>不透明ハンドル。実体はポインタ</td></tr>
+<tr id="voidptr"><td><code>VoidPtr</code> / <code>BytePtr</code></td><td>8</td><td><code>*Byte</code></td></tr>
+<tr id="long_ptr"><td><code>LONG_PTR</code> / <code>ULONG_PTR</code></td><td>8</td><td>ポインタ幅整数スロット</td></tr>
+<tr id="wparam"><td><code>WPARAM</code> / <code>LPARAM</code> / <code>LRESULT</code></td><td>8</td><td><code>ULONG_PTR</code> / <code>LONG_PTR</code></td></tr>
+<tr id="hfile"><td><code>HFILE</code></td><td>4</td><td><code>TypeDef HFILE = Long</code>（例外）</td></tr>
+</table>
+
+<h3 id="longlong">LONGLONG / DWORD64</h3>
+<p>現状、<code>LongLong</code> / <code>QWord</code> / <code>DWORD64</code> を <strong>64bit 整数型として演算する機能はありません</strong>。Win64 でポインタ幅の値が必要なときは次を使います。</p>
+<ul>
+<li>ハンドル・ポインタ引数: <code>HANDLE</code> / <code>HWND</code> / <code>*Byte</code> / <code>VoidPtr</code></li>
+<li>メッセージ引数: <code>WPARAM</code> / <code>LPARAM</code> / <code>LRESULT</code>（8 バイト）</li>
+<li>64bit ビットパターンを保持するだけなら <code>LONG_PTR</code> または UDT（lo/hi の 2×DWord）</li>
+</ul>
+<pre id="typedef">TypeDef VoidPtr = *Byte
+TypeDef HANDLE = VoidPtr
+TypeDef LONG_PTR = VoidPtr
+TypeDef ULONG_PTR = VoidPtr
+TypeDef LRESULT = LONG_PTR
+TypeDef WPARAM = ULONG_PTR
+TypeDef LPARAM = LONG_PTR
+TypeDef LPSTR = *Byte
+TypeDef Integer = Long</pre>
+<p>これらは <code>Include\default\Windows.sbp</code> で自動導入されます。</p>
+
+<h3 id="type">Type / 配列</h3>
+<pre>Type POINTAPI
+    x As Long
+    y As Long
+End Type
+
+Dim a(N) As T     ' 添字 0..N（要素数 N+1）
+Dim buf[259] As Byte
+Dim p As *Byte
+Dim h As POINTAPI
+h.x = 10
+p[0] = 65</pre>
+<p>メンバ: <code>x.field</code> / <code>p-&gt;field</code> / ネスト <code>cf.ptCurrentPos.x</code>。モジュール級 <code>Dim</code> は <code>.data</code> グローバル（手続きからも参照可）。</p>
+
+<h2 id="declare-dim">Dim / Const</h2>
+<pre id="dim">Dim a As Long
+Dim b = 3 As Long
+Dim s$                  ' As String 省略可
+Dim t As String
+Dim p As *Byte
+Dim msg As MSG</pre>
+<pre id="const">Const MAX_PATH = 260
+Const GENERIC_READ = &amp;H80000000
+Const FontName = "UDEV Gothic"   ' 文字列 Const 可</pre>
+<p>整数リテラルは十進または <code>&amp;H</code> 十六進。条件は「0 以外が真」。</p>
+
+<h2 id="declare">Declare Lib（Win64 API）</h2>
+<pre>Declare Function MessageBoxA Lib "user32.dll" (ByVal hWnd As HWND, ByVal lpText As *Byte, ByVal lpCaption As *Byte, ByVal uType As Long) As Long
+Declare Function CreateFileA Lib "kernel32" Alias "CreateFileA" (ByVal lpFileName As *Byte, ...) As HANDLE
+Declare Sub RtlMoveMemory Lib "kernel32" (ByVal dest As *Byte, ByVal src As *Byte, ByVal n As Long)</pre>
+<ul>
+<li id="lib"><code>Declare Function|Sub 名前 Lib "dll" [Alias "export"] (引数...) [As 型]</code></li>
+<li>対応 DLL: <code>kernel32</code> / <code>user32</code> / <code>gdi32</code> / <code>imm32</code> / <code>comdlg32</code> / <code>shell32</code>（.dll 省略可）</li>
+<li id="byval"><code>ByVal</code> = 値渡し、<span id="byref"><code>ByRef</code></span> = アドレス渡し。UDT を API に渡すときはアドレスになることが多い</li>
+<li>ポインタ引数は <code>*Byte</code> / <code>VoidPtr</code> / <code>HANDLE</code> / <code>HWND</code> など <strong>8 バイト幅</strong>で書く</li>
+<li><code>Long</code> / <code>DWord</code> は 32bit のまま（フラグ・文字数など）</li>
+<li><code>SetWindowLong</code> は内部で <code>SetWindowLongPtrA</code> にマップ（64bit）</li>
+<li>Declare しなくても、コンパイラが知る名前は IAT に載る（下記 WinAPI）</li>
+</ul>
+<p id="alias"><code>Alias</code> はエクスポート名が Basic 名と違うときに指定します。</p>
+
+<h2 id="abi">呼び出し規則（x64 Windows ABI）</h2>
+<ul>
+<li>整数・ポインタ引数: <code>RCX</code>, <code>RDX</code>, <code>R8</code>, <code>R9</code>、以降はスタック</li>
+<li>呼び出し側が 32 バイトのシャドウスペースを確保</li>
+<li>スタック 16 バイト整列</li>
+<li>戻り値は <code>RAX</code>（32bit 値は EAX）</li>
+<li>actba32 の stdcall とは異なる。同じ Declare でもポインタ幅を 8 に直す必要がある</li>
+</ul>
+<pre><span id="function"></span><span id="sub"></span>Function Add(a As Long, b As Long) As Long
+    Add = a + b
+End Function
+
+Sub Inc(ByRef x As Long)
+    x = x + 1
+End Sub</pre>
+<p><code>Exit Sub</code> / <code>Exit Function</code> 可。ネストした手続きは不可。戻り値は <code>Function名 = 式</code>。</p>
+
+<h2 id="class">Class（フェーズ1）</h2>
+<pre id="class-decl">Class Counter
+    Public
+    value As Long
+    Sub Counter(v As Long)
+        value = v
+    End Sub
+    Sub ~Counter()
+    End Sub
+    Sub Add(n As Long)
+        value = value + n
+    End Sub
+    Function GetValue() As Long
+        GetValue = value
+    End Function
+End Class
+
+Dim c As Counter(10)
+c.Add(32)
+x = c.GetValue()</pre>
+<ul>
+<li><code>Class</code> / <code>End Class</code>。メンバ変数は Type と同様のレイアウト</li>
+<li><code>Private</code> / <code>Public</code>（省略時 Private）。<code>Protected</code> は Public 扱い</li>
+<li>メソッドは暗黙の <code>Me</code>。呼び出しは <code>obj.Method(args)</code></li>
+<li>ctor: <code>Sub ClassName(...)</code> → <code>Dim obj As ClassName(args)</code></li>
+<li>dtor: <code>Sub ~ClassName()</code> → スコープ脱出時に呼出</li>
+<li>未対応: <code>Inherits</code> / <code>Virtual</code> / <code>New</code> / <code>Delete</code></li>
+</ul>
+
+<h2 id="statements">文</h2>
+<pre id="if">If cond Then
+    ...
+ElseIf cond Then
+    ...
+Else
+    ...
+End If
+If cond Then stmt          ' 単行 If</pre>
+<pre id="select">Select Case expr
+    Case 定数
+    Case Else
+End Select</pre>
+<pre id="while">While cond
+    ...
+Wend                       ' Exit While 可</pre>
+<pre id="for">For i = 式 To 式
+    ...
+Next                       ' Exit For 可。Step なし</pre>
+<pre id="do">Do
+    ...
+Loop                       ' Exit Do 可。Do While/Until なし</pre>
+<p id="print"><code>Print 式</code> / <code>Print 式;</code>（CUI）。<span id="input"><code>Input 変数$</code></span> は String のみ（stdin 1 行）。</p>
+<p id="sleep"><code>Sleep(ms)</code> — ミリ秒待つ（括弧必須）。待ち中も <code>PeekMessage</code> でウインドウを処理する（<code>Include\default\Sleep.abp</code>、常時利用可）。</p>
+<p id="end"><code>End</code> はプロセス終了（コード 0）。<code>#n88basic</code> 時は窓を出して閉じるまで待つ（<code>N88_End</code>）。</p>
+
+<h2 id="operators">演算子</h2>
+<p>優先（高い順）: <code>As</code> キャスト → <code>^</code> → 単項 <code>-</code> → <code>* / \ Mod</code> → <code>+ - &amp;</code> → <code>&lt;&lt; &gt;&gt;</code> → 関係 → <code>Not</code> → <code>And</code> → <code>Or</code> → <code>Xor</code>。関係の値は真=<code>-1</code> / 偽=<code>0</code>。</p>
+<table>
+<tr><th>演算</th><th>意味</th></tr>
+<tr><td><code>+ - *</code></td><td>整数。文字列の <code>+</code> / <code>&amp;</code> は連結（同義）</td></tr>
+<tr id="amp"><td><code>&amp;</code></td><td>文字列連結</td></tr>
+<tr id="idiv"><td><code>\</code> / <code>/</code></td><td>整数除算（Long では同義）</td></tr>
+<tr><td><code>Mod</code></td><td>剰余</td></tr>
+<tr><td><code>^</code></td><td>整数累乗（非負指数）</td></tr>
+<tr><td><code>&lt;&lt;</code> / <code>&gt;&gt;</code></td><td>左シフト / 符号付き右シフト</td></tr>
+<tr><td><code>= &lt;&gt; &gt;&lt; &lt; &gt; &lt;= &gt;=</code></td><td>比較（値は -1/0。文字列は辞書順）</td></tr>
+<tr id="and"><td><code>And</code> / <code>Or</code> / <code>Xor</code></td><td>ビット演算。条件の And/Or は短絡しうる</td></tr>
+<tr><td>単項 <code>-</code> / <code>Not</code></td><td>符号反転 / ビット反転</td></tr>
+<tr><td><code>expr As Type</code></td><td>キャスト（Byte/Word は切捨て。String 不可）</td></tr>
+<tr><td><code>+=</code> 等 / <code>++</code> <code>--</code></td><td>複合代入・インクリメント・デクリメント</td></tr>
+</table>
+<p>実数除算としての <code>/</code> は未対応（整数除算として扱う）。</p>
+
+<h2 id="builtins">組み込み関数</h2>
+<pre id="varptr">VarPtr(左辺)              ' アドレス
+<span id="addressof"></span>AddressOf(手続き名)       ' 関数アドレス
+<span id="sizeof"></span>SizeOf(型名)              ' 型サイズ
+Len(文字列 | UDT)         ' 文字数 or 構造体サイズ
+Asc(s)
+Left$(s, n) / Right$(s, n) / Mid$(s, start[, len])
+Chr$(n) / Chr(n)
+Str$(n)
+StrPtr(s) / MakeStr(p As *Byte)
+RGB(r, g, b)
+LOWORD(n)
+MakeIntResource(id)
+malloc(n) / calloc(n) / free(p)
+memcpy(dst, src, n) / FillMemory(p, n, b)</pre>
+<p id="left$">文字列は ANSI 寄りの NUL 終端。<span id="chr$">Chr$</span> / <span id="right$">Right$</span> / <span id="rgb">RGB</span> / <span id="loword">LOWORD</span> をサポート。</p>
+
+<h2 id="math">Math（固定小数点・千分率）</h2>
+<p><code>Include\default\Math.abp</code> を常時挿入します。<strong>1.0 = 1000</strong>。言語の浮動小数点演算はありません。</p>
+<table>
+<tr><th>定数</th><th>値</th></tr>
+<tr><td><code>MATH_ONE</code></td><td>1000</td></tr>
+<tr><td><code>MATH_PI</code></td><td>3142（π）</td></tr>
+<tr><td><code>MATH_HPI</code></td><td>1571（π/2）</td></tr>
+<tr><td><code>MATH_PI2</code></td><td>6283（2π）</td></tr>
+<tr><td><code>MATH_E</code></td><td>2718</td></tr>
+</table>
+<pre id="sin">Print Sin(MATH_HPI)     ' ≒ 1000
+Print Cos(0)            ' = 1000
+Print SinDeg(30)        ' ≒ 500</pre>
+<p>関数: <code>MathDiv</code> / <code>MathMod</code> / <span id="abs"><code>Abs</code></span> / <code>Sgn</code> / <code>Min</code> / <code>Max</code> /
+<span id="sqr"><code>Sqr</code></span>（整数平方根） / <code>Sin</code> / <code>Cos</code> / <code>Tan</code> / <code>SinDeg</code> / <code>CosDeg</code> /
+<span id="atn"><code>Atn</code></span> / <span id="exp"><code>Exp</code></span> / <code>DegToRad</code> / <code>RadToDeg</code>。
+<code>Sin</code> / <code>Cos</code> はマクローリン展開（ラジアン千分率）。</p>
+
+<h2 id="n88basic">N88BASIC モード</h2>
+<p><code>#n88basic</code> / <code>#N88BASIC</code> で <code>Include\N88BASIC\n88basic.idx</code>（実体 <code>n88graph.abp</code>）を挿入し、640×480 の黒窓（タイトル N88BASIC）を GUI で開きます。</p>
+<ul>
+<li><code>End</code> → <code>N88_End()</code>（窓を表示して閉じるまで待つ）。ソース末尾に <code>N88_Run()</code> も付く</li>
+<li><code>LINE</code> / <code>CIRCLE</code> / <code>LOCATE</code> / <code>PAINT</code> が変数代入でないときだけ専用文として解釈</li>
+<li>LP（最終参照点）を保持。線の終点・円の中心へ更新</li>
+</ul>
+<pre id="line">LINE (x1,y1)-(x2,y2)[,color][,B|BF]
+LINE -(x2,y2)[,color][,B|BF]          ' 始点は LP</pre>
+<p>省略時の <code>color</code> は 7（白）。<code>B</code> = 四角形の枠、<code>BF</code> = 塗りつぶし四角。</p>
+<pre id="circle">CIRCLE (x,y),r[,color][,start][,end][,aspect][,F[,color2]]
+CIRCLE STEP(x,y),r[,...]              ' 中心は LP からの相対
+CIRCLE ,r[,...]                       ' 中心は LP</pre>
+<ul>
+<li>角度はラジアン（小数可。内部は千分率。例: <code>3.14</code> → 3140）。省略または <code>start=end</code> で全周</li>
+<li>負の角度は絶対値で円弧し、中心から半径線を引く（扇形）</li>
+<li><code>aspect</code> は 垂直半径/水平半径（省略時 1.0）</li>
+<li><code>F</code> で塗りつぶし（タイルストリングは未対応）</li>
+</ul>
+<pre id="locate">LOCATE x, y
+Locate(x, y)          ' 桁 x, 行 y（0 始まり）。以降の Print は窓へ</pre>
+<pre id="paint">PAINT (x, y), color1 [, color2]
+' color1=塗り色、color2=境界色（省略時 color1）</pre>
+<table>
+<tr><th>色</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th></tr>
+<tr><td></td><td>黒</td><td>青</td><td>赤</td><td>マゼンタ</td><td>緑</td><td>シアン</td><td>黄</td><td>白</td></tr>
+</table>
+<pre>#N88BASIC
+Locate 0, 0: Print "hello"
+Line(40, 40)-(180, 140), 7, B
+Paint (50, 50), 2, 7
+Sleep(300)
+End</pre>
+<p class="note">actba32 はライブラリ挿入のみ。<code>LINE (x)-(y)</code> 文はパースせず、<code>Line(sx,sy,ex,ey,color,mode)</code> と <code>N88_Run()</code> を自分で書く。</p>
+
+<h2 id="directives">ディレクティブ / Include</h2>
+<table>
+<tr><th>行</th><th>意味</th></tr>
+<tr id="include"><td><code>#include "path"</code></td><td>挿入（include-once、深さ上限あり）</td></tr>
+<tr id="usewindow"><td><code>#USEWINDOW=0|1</code></td><td>0=CUI / 1=GUI サブシステム（ソース・.pj 可）</td></tr>
+<tr id="console"><td><code>#console</code></td><td><code>Include\console\console.idx</code> を挿入</td></tr>
+<tr id="n88dir"><td><code>#n88basic</code></td><td>N88 モード（上記）。GUI を強制</td></tr>
+<tr id="strict"><td><code>#strict</code></td><td>無視</td></tr>
+<tr id="source"><td><code>#SOURCE</code>（.pj）</td><td>続く行が入力ソース</td></tr>
+<tr><td>その他 <code>#...</code></td><td>字句レベルで行スキップ</td></tr>
+</table>
+<p>実行ファイル近傍の <code>Include\default\default.idx</code> を先頭に自動挿入します（<code>Windows.sbp</code> / <code>WinConsts.sbp</code> / <code>WinTypes.sbp</code> / <code>Math.abp</code> / <code>Sleep.abp</code>）。ヘッダに Declare 群は載せません。</p>
+
+<h2 id="winapi">WinAPI / IAT</h2>
+<p>名前マップまたは <code>Declare</code> した API がインポートテーブルに載ります。</p>
+<p><strong>kernel32:</strong> ExitProcess, GetCommandLineA, lstrlenA/lstrcpyA/lstrcatA/lstrcmpA, CreateFileA, ReadFile, WriteFile, CloseHandle, GetFileSize, GetFileAttributesA, GetProcessHeap, HeapAlloc, HeapFree, GetStdHandle, GetModuleHandleA, GetModuleFileNameA, CreateProcessA, WaitForSingleObject, GetExitCodeProcess, GlobalAlloc/Lock/Unlock, RtlMoveMemory, RtlFillMemory, CreatePipe, SetHandleInformation</p>
+<p><strong>user32:</strong> MessageBoxA, GetMessageA, TranslateMessage, DispatchMessageA, CreateWindowExA, DefWindowProcA, RegisterClassExA, SendMessageA, PostMessageA, PostQuitMessage, DestroyWindow, CreateMenu, CreatePopupMenu, InsertMenuA, SetMenu, TrackPopupMenu, キャレット/クリップボード/InvalidateRect など</p>
+<p><strong>gdi32 / imm32 / comdlg32 / shell32:</strong> CreateFontA, CreateSolidBrush, CreatePen, SelectObject, TextOutA, Ellipse, Arc, Pie, BitBlt, ImmGetContext, GetOpenFileNameA, ShellExecuteA など</p>
+<p>N88 / Sleep 向け: PeekMessageA, MsgWaitForMultipleObjects, GetTickCount</p>
+<p>未登録かつ未 Declare の呼び出しはコンパイルエラーになります。</p>
+
+<h2 id="rad">RAD / InsMenu</h2>
+<pre id="insmenu">InsMenu hMenu, pos, flags, Ex"キャプション", id, hSubMenu, 0
+InsMenu hMenu, pos, flags          ' セパレータ</pre>
+<p>内部で <code>InsertMenuA</code> を呼びます。<code>hSubMenu &lt;&gt; 0</code> なら <code>MF_POPUP</code> を付与します。</p>
+
+<h2 id="diff">actba32 との主な差分</h2>
+<table>
+<tr><th></th><th>actba32</th><th>actba64</th></tr>
+<tr><td>出力</td><td>32bit PE</td><td>64bit PE32+</td></tr>
+<tr><td>ポインタ / String / HANDLE</td><td>4</td><td><strong>8</strong></td></tr>
+<tr><td>Long</td><td>4</td><td>4</td></tr>
+<tr><td>呼び出し</td><td>stdcall</td><td>x64 Windows ABI</td></tr>
+<tr><td>Declare Lib</td><td>限定的</td><td>○</td></tr>
+<tr><td>#USEWINDOW</td><td>○</td><td>○</td></tr>
+<tr><td>演算</td><td>Xor / / / \ / Mod / &lt;&lt; &gt;&gt; / ^ / Not</td><td>同左（整数。<code>/</code>=<code>\</code>）</td></tr>
+<tr><td>For Step / Do While</td><td>○</td><td>なし（Exit For は可）</td></tr>
+<tr><td>N88 LINE/CIRCLE 文</td><td>ライブラリのみ</td><td>構文パース + GUI 窓</td></tr>
+<tr><td>文連結 :</td><td>○</td><td>○</td></tr>
+</table>
+
+<h2 id="unsupported">非対応（意図的）</h2>
+<ul>
+<li>イベント / COM（Class フェーズ1は対応。Inherits / Virtual / New は未対応）</li>
+<li>汎用の浮動小数点演算（<code>CIRCLE</code> の小数リテラルと <code>Math</code> の千分率だけ）</li>
+<li><code>GoTo</code> / <code>With</code> / <code>ReDim</code> / ネスト手続き</li>
+<li>64bit 整数演算（LongLong 算術）</li>
+<li>リソース（<code>#RESOURCE</code>）埋め込み</li>
+</ul>
+
+<h2 id="index">キーワード索引</h2>
+<p class="index">
+<a href="#byte">Byte</a> <a href="#word">Word</a> <a href="#long">Long</a> <a href="#dword">DWord</a> <a href="#integer">Integer</a>
+<a href="#string">String</a> <a href="#ptr">*T</a> <a href="#handle">HANDLE</a> <a href="#hwnd">HWND</a>
+<a href="#wparam">WPARAM</a> <a href="#long_ptr">LONG_PTR</a> <a href="#longlong">LongLong</a> <a href="#typedef">TypeDef</a> <a href="#type">Type</a>
+<a href="#dim">Dim</a> <a href="#const">Const</a> <a href="#declare">Declare</a> <a href="#alias">Alias</a> <a href="#lib">Lib</a>
+<a href="#byval">ByVal</a> <a href="#byref">ByRef</a> <a href="#function">Function</a> <a href="#sub">Sub</a> <a href="#class">Class</a>
+<a href="#if">If</a> <a href="#select">Select</a> <a href="#while">While</a> <a href="#for">For</a> <a href="#do">Do</a>
+<a href="#print">Print</a> <a href="#input">Input</a> <a href="#sleep">Sleep</a> <a href="#end">End</a>
+<a href="#and">And</a> <a href="#amp">&amp;</a> <a href="#idiv">\</a>
+<a href="#varptr">VarPtr</a> <a href="#sizeof">SizeOf</a> <a href="#addressof">AddressOf</a>
+<a href="#left$">Left$</a> <a href="#right$">Right$</a> <a href="#chr$">Chr$</a> <a href="#rgb">RGB</a> <a href="#loword">LOWORD</a>
+<a href="#sin">Sin</a> <a href="#sqr">Sqr</a> <a href="#abs">Abs</a> <a href="#atn">Atn</a> <a href="#exp">Exp</a>
+<a href="#n88basic">#n88basic</a> <a href="#line">LINE</a> <a href="#circle">CIRCLE</a> <a href="#locate">LOCATE</a> <a href="#paint">PAINT</a>
+<a href="#include">#include</a> <a href="#console">#console</a> <a href="#usewindow">#USEWINDOW</a> <a href="#insmenu">InsMenu</a>
+</p>
+
+<footer>
+actba64 言語リファレンス — ProjectEditor の「ヘルプ」または F1 から開きます。<br>
+詳細な共通仕様はリポジトリの <code>docs/language.md</code> も参照してください。
+</footer>
+</main>
+</div>
+</body>
+</html>

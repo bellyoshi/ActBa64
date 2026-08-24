@@ -1,32 +1,50 @@
 Declare Function IsClipboardFormatAvailable Lib "user32.dll" (ByVal format As Long) As Long
 
-Sub EditorClip_CopyAll(hWnd As HWND)
-    Dim s As String
-    Dim n As Long
+Sub EditorClip_CopyText(hWnd As HWND, s As String)
+    Dim chars As Long
     Dim hMem As HANDLE
     Dim p As *Byte
+    Dim wide As *Byte
 
-    s = TextBuf_GetConfirmed$()
-    n = Len(s)
-    If OpenClipboard(hWnd) = 0 Then Exit Sub
+    wide = Enc_Utf8ToWide(s, chars)
+    If OpenClipboard(hWnd) = 0 Then
+        If wide <> 0 Then free(wide)
+        Exit Sub
+    End If
     EmptyClipboard()
-    hMem = GlobalAlloc(GMEM_MOVEABLE, n + 1)
+    hMem = GlobalAlloc(GMEM_MOVEABLE, (chars + 1) * 2)
     If hMem <> 0 Then
         p = GlobalLock(hMem)
         If p <> 0 Then
-            If n > 0 Then memcpy(p, StrPtr(s), n)
-            p[n] = 0
+            If chars > 0 And wide <> 0 Then memcpy(p, wide, chars * 2)
+            p[chars * 2] = 0
+            p[chars * 2 + 1] = 0
             GlobalUnlock(hMem)
-            SetClipboardData(CF_TEXT, hMem)
+            SetClipboardData(CF_UNICODETEXT, hMem)
         End If
     End If
     CloseClipboard()
+    If wide <> 0 Then free(wide)
+End Sub
+
+Sub EditorClip_CopyAll(hWnd As HWND)
+    If TextBuf_HasSelection() <> 0 Then
+        EditorClip_CopyText(hWnd, TextBuf_GetSelected$())
+    Else
+        EditorClip_CopyText(hWnd, TextBuf_GetConfirmed$())
+    End If
 End Sub
 
 Sub EditorClip_CutAll(hWnd As HWND)
+    If TextBuf_HasSelection() <> 0 Then
+        EditorClip_CopyText(hWnd, TextBuf_GetSelected$())
+        TextBuf_DeleteSelection()
+        EditorDoc_MarkDirty()
+        Exit Sub
+    End If
     EditorUndo_EndCoalesce()
     EditorUndo_BeforeEdit()
-    EditorClip_CopyAll(hWnd)
+    EditorClip_CopyText(hWnd, TextBuf_GetConfirmed$())
     TextBuf_SetText("")
     EditorUndo_EndCoalesce()
     EditorDoc_MarkDirty()
@@ -35,11 +53,18 @@ End Sub
 Sub EditorClip_Paste(hWnd As HWND)
     Dim hMem As HANDLE
     Dim p As *Byte
+    Dim pw As *Byte
+    Dim chars As Long
+    Dim n As Long
     Dim s As String
 
-    If IsClipboardFormatAvailable(CF_TEXT) = 0 Then Exit Sub
+    If IsClipboardFormatAvailable(CF_UNICODETEXT) = 0 And IsClipboardFormatAvailable(CF_TEXT) = 0 Then Exit Sub
     If OpenClipboard(hWnd) = 0 Then Exit Sub
-    hMem = GetClipboardData(CF_TEXT)
+    If IsClipboardFormatAvailable(CF_UNICODETEXT) <> 0 Then
+        hMem = GetClipboardData(CF_UNICODETEXT)
+    Else
+        hMem = GetClipboardData(CF_TEXT)
+    End If
     If hMem = 0 Then
         CloseClipboard()
         Exit Sub
@@ -49,13 +74,41 @@ Sub EditorClip_Paste(hWnd As HWND)
         CloseClipboard()
         Exit Sub
     End If
-    s = MakeStr(p)
+    If IsClipboardFormatAvailable(CF_UNICODETEXT) <> 0 Then
+        pw = p
+        chars = 0
+        While pw[chars * 2] <> 0 Or pw[chars * 2 + 1] <> 0
+            chars = chars + 1
+        Wend
+        s = Enc_WideToUtf8$(pw, chars)
+    Else
+        n = lstrlen(p)
+        s = Enc_BytesToUtf8$(p, n, ENC_CP932)
+    End If
     GlobalUnlock(hMem)
     CloseClipboard()
 
     EditorUndo_EndCoalesce()
+    If TextBuf_HasSelection() <> 0 Then
+        TextBuf_DeleteSelection()
+    End If
     EditorUndo_BeforeEdit()
     TextBuf_Append(s)
     EditorUndo_EndCoalesce()
     EditorDoc_MarkDirty()
+End Sub
+
+Sub EditorClip_Delete(hWnd As HWND)
+    EditorUndo_EndCoalesce()
+    If TextBuf_HasSelection() <> 0 Then
+        TextBuf_DeleteSelection()
+    Else
+        TextBuf_DeleteForward()
+    End If
+    EditorUndo_EndCoalesce()
+    EditorDoc_MarkDirty()
+End Sub
+
+Sub EditorClip_SelectAll()
+    TextBuf_SelectAll()
 End Sub

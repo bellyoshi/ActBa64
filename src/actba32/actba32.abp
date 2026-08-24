@@ -65,20 +65,82 @@ Function ToolDir$() As String
     End If
 End Function
 
-' Include/default/default.idx?i?c?[???? or ?J?????g?j
-Function DefaultIncludeIdx$() As String
+' Include（src\Include）。exe 隣 / 3 階層上まで / カレント
+Function IncludeFind$(rel As String) As String
+    Dim dir As String
     Dim p As String
-    p = ToolDir$() + "Include\default\default.idx"
+    IncludeFind$ = ""
+    dir = ToolDir$()
+    p = dir + rel
     If FileExists(p) <> 0 Then
-        DefaultIncludeIdx$ = p
+        IncludeFind$ = p
         Exit Function
     End If
-    p = "Include\default\default.idx"
+    p = dir + "..\" + rel
     If FileExists(p) <> 0 Then
-        DefaultIncludeIdx$ = p
+        IncludeFind$ = p
         Exit Function
     End If
-    DefaultIncludeIdx$ = ""
+    p = dir + "..\..\" + rel
+    If FileExists(p) <> 0 Then
+        IncludeFind$ = p
+        Exit Function
+    End If
+    p = dir + "..\..\..\" + rel
+    If FileExists(p) <> 0 Then
+        IncludeFind$ = p
+        Exit Function
+    End If
+    p = rel
+    If FileExists(p) <> 0 Then
+        IncludeFind$ = p
+    End If
+End Function
+
+Function DefaultIncludeIdx$() As String
+    DefaultIncludeIdx$ = IncludeFind$("Include\default\default.idx")
+End Function
+
+Function ConsoleIncludeIdx$() As String
+    ConsoleIncludeIdx$ = IncludeFind$("Include\console\console.idx")
+End Function
+
+Function N88BasicIncludeIdx$() As String
+    N88BasicIncludeIdx$ = IncludeFind$("Include\N88BASIC\n88basic.idx")
+End Function
+
+' ソースに #name ディレクティブがあるか（name は小文字。例: "console"）
+Function TextHasHashDir(text As String, dirName As String) As Long
+    Dim low As String
+    Dim oneLine As String
+    Dim i As Long
+    Dim start As Long
+    Dim n As Long
+    Dim c As Long
+    Dim p As *Byte
+    Dim key As String
+    TextHasHashDir = 0
+    key = "#" + Lower$(dirName)
+    n = Len(text)
+    If n = 0 Then Exit Function
+    p = StrPtr(text)
+    i = 0
+    While i < n
+        start = i
+        While i < n
+            c = p[i]
+            If c = CH_NL Or c = CH_CR Then Exit While
+            i = i + 1
+        Wend
+        oneLine = StripCommentPj$(Mid$(text, start + 1, i - start))
+        low = Lower$(Trim$(oneLine))
+        If low = key Or StartsWith(low, key + " ") <> 0 Or StartsWith(low, key + Chr$(9)) <> 0 Then
+            TextHasHashDir = 1
+            Exit Function
+        End If
+        If i < n And p[i] = CH_CR Then i = i + 1
+        If i < n And p[i] = CH_NL Then i = i + 1
+    Wend
 End Function
 
 Function AppendDefaultIncludes() As Long
@@ -94,6 +156,52 @@ Function AppendDefaultIncludes() As Long
     If ExpandFileInto(VarPtr(gSbCombine), idx) = 0 Then Exit Function
     If gExpandOk = 0 Then Exit Function
     AppendDefaultIncludes = 1
+End Function
+
+' #console / #n88basic / #prompt に応じてプロファイル idx を追記
+Function AppendProfileIncludes(text As String) As Long
+    Dim idx As String
+    Dim wantN88 As Long
+    AppendProfileIncludes = 0
+    If TextHasHashDir(text, "console") <> 0 Then
+        idx = ConsoleIncludeIdx$()
+        If idx = "" Then
+            Print "warning: not found: Include\console\console.idx"
+        Else
+            SbAppendStr(VarPtr(gSbCombine), "' ---- Include/console ----")
+            SbAppendCRLF(VarPtr(gSbCombine))
+            If ExpandFileInto(VarPtr(gSbCombine), idx) = 0 Then Exit Function
+            If gExpandOk = 0 Then Exit Function
+        End If
+    End If
+    wantN88 = TextHasHashDir(text, "n88basic")
+    If wantN88 = 0 Then
+        wantN88 = TextHasHashDir(text, "prompt")
+    End If
+    If wantN88 <> 0 Then
+        idx = N88BasicIncludeIdx$()
+        If idx = "" Then
+            Print "warning: not found: Include\N88BASIC\n88basic.idx"
+        Else
+            SbAppendStr(VarPtr(gSbCombine), "' ---- Include/N88BASIC ----")
+            SbAppendCRLF(VarPtr(gSbCombine))
+            If ExpandFileInto(VarPtr(gSbCombine), idx) = 0 Then Exit Function
+            If gExpandOk = 0 Then Exit Function
+        End If
+    End If
+    AppendProfileIncludes = 1
+End Function
+
+Function SourcesWantProfilesText$() As String
+    Dim i As Long
+    Dim t As String
+    Dim all As String
+    all = ""
+    For i = 0 To gNSources - 1
+        t = LoadTextFile$(gSources(i))
+        all = all + t + Chr$(10)
+    Next
+    SourcesWantProfilesText$ = all
 End Function
 
 Function StripCommentPj$(s As String) As String
@@ -501,6 +609,8 @@ Function CombineSources() As Long
     gCombinedAbp = ""
     ' Include/default を先頭へ（ソースに明示 #include 不要）
     If AppendDefaultIncludes() = 0 Then Exit Function
+    ' #console / #n88basic ならプロファイル idx
+    If AppendProfileIncludes(SourcesWantProfilesText$()) = 0 Then Exit Function
     ' #SOURCE を順に展開。#include は once
     For i = 0 To gNSources - 1
         If AppendSourceChunk(gSources(i)) = 0 Then Exit Function
@@ -524,6 +634,7 @@ Function PrepareAbp(abpPath As String) As Long
     Dim idx As String
     Dim defaults As String
     Dim lowPath As String
+    Dim part As String
 
     PrepareAbp = 0
     gPreparedAbp = ""
@@ -536,16 +647,36 @@ Function PrepareAbp(abpPath As String) As Long
     gExpandOk = 1
     defaults = ""
     lowPath = Lower$(abpPath)
-    ' *_combined.abp は CombineSources が default 済み
+    text = LoadTextFile$(abpPath)
+    ' *_combined.abp は CombineSources が default/profile 済み
     If InStr(1, lowPath, "_combined.abp") = 0 Then
         idx = DefaultIncludeIdx$()
         If idx <> "" Then
             defaults = ExpandFile$(idx)
             If gExpandOk = 0 Then Exit Function
         End If
+        If TextHasHashDir(text, "console") <> 0 Then
+            idx = ConsoleIncludeIdx$()
+            If idx = "" Then
+                Print "warning: not found: Include\console\console.idx"
+            Else
+                part = ExpandFile$(idx)
+                If gExpandOk = 0 Then Exit Function
+                defaults = defaults + part
+            End If
+        End If
+        If TextHasHashDir(text, "n88basic") <> 0 Or TextHasHashDir(text, "prompt") <> 0 Then
+            idx = N88BasicIncludeIdx$()
+            If idx = "" Then
+                Print "warning: not found: Include\N88BASIC\n88basic.idx"
+            Else
+                part = ExpandFile$(idx)
+                If gExpandOk = 0 Then Exit Function
+                defaults = defaults + part
+            End If
+        End If
     End If
 
-    text = LoadTextFile$(abpPath)
     If TextHasInclude(text) = 0 And defaults = "" Then
         gPreparedAbp = abpPath
         PrepareAbp = 1

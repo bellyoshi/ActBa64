@@ -23,10 +23,19 @@ Const TK_RBRACK = 17
 Const TK_DOT = 18
 Const TK_MINUS = 19
 Const TK_ARROW = 20
+Const TK_AMP = 21
+Const TK_BACKSLASH = 22
+Const TK_FLOAT = 23
+Const TK_SLASH = 24
+Const TK_SHL = 25
+Const TK_SHR = 26
+Const TK_CARET = 27
+Const TK_TILDE = 28
+Const TK_COLON = 29
 Const TK_ERROR = 99
 
 Const LEX_MAX_TOKS = 131072
-Const LEX_TEXT_LEN = 64
+Const LEX_TEXT_LEN = 256
 
 Type Tok
     kind As Long
@@ -82,6 +91,41 @@ Function LexIsAlnum(c As Long) As Long
     Else
         LexIsAlnum = 0
     End If
+End Function
+
+' 行末の _ （および直後の空白・'注釈）→ 次行へ継続。識別子 _foo とは区別
+Function LexLineContHere(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim p As Long
+    Dim c As Long
+
+    LexLineContHere = 0
+    src = lx.src
+    p = lx.pos + 1
+    c = src[p]
+    If LexIsAlnum(c) <> 0 Then Exit Function
+    If c = 36 Then Exit Function
+    While src[p] = 32 Or src[p] = 9
+        p = p + 1
+    Wend
+    If src[p] = 39 Then
+        While src[p] <> 0 And src[p] <> 10 And src[p] <> 13
+            p = p + 1
+        Wend
+    End If
+    If src[p] <> 0 And src[p] <> 10 And src[p] <> 13 Then Exit Function
+    lx.pos = p
+    If src[lx.pos] = 13 Then
+        lx.line = lx.line + 1
+        lx.pos = lx.pos + 1
+        If src[lx.pos] = 10 Then
+            lx.pos = lx.pos + 1
+        End If
+    ElseIf src[lx.pos] = 10 Then
+        lx.line = lx.line + 1
+        lx.pos = lx.pos + 1
+    End If
+    LexLineContHere = 1
 End Function
 
 Function LexCreate(capacity As Long) As *Lexer
@@ -167,7 +211,7 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
     Dim start As Long
     Dim n As Long
     Dim idx As Long
-    Dim buf(63) As Byte
+    Dim buf(255) As Byte
     Dim i As Long
     Dim toks As *Tok
 
@@ -195,12 +239,44 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
             While src[lx.pos] <> 0 And src[lx.pos] <> 10 And src[lx.pos] <> 13
                 lx.pos = lx.pos + 1
             Wend
+        ElseIf c = 47 Then
+            ' /* ... */ 以外は除算 TK_SLASH
+            If src[lx.pos + 1] = 42 Then
+                lx.pos = lx.pos + 2
+                Do
+                    If src[lx.pos] = 0 Then
+                        lx.err = 1
+                        Exit Function
+                    End If
+                    If src[lx.pos] = 13 Then
+                        lx.line = lx.line + 1
+                        lx.pos = lx.pos + 1
+                        If src[lx.pos] = 10 Then
+                            lx.pos = lx.pos + 1
+                        End If
+                    ElseIf src[lx.pos] = 10 Then
+                        lx.line = lx.line + 1
+                        lx.pos = lx.pos + 1
+                    ElseIf src[lx.pos] = 42 Then
+                        If src[lx.pos + 1] = 47 Then
+                            lx.pos = lx.pos + 2
+                            Exit Do
+                        End If
+                        lx.pos = lx.pos + 1
+                    Else
+                        lx.pos = lx.pos + 1
+                    End If
+                Loop
+            Else
+                LexPush(lx, TK_SLASH)
+                lx.pos = lx.pos + 1
+            End If
         ElseIf c = 35 Then
             While src[lx.pos] <> 0 And src[lx.pos] <> 10 And src[lx.pos] <> 13
                 lx.pos = lx.pos + 1
             Wend
         ElseIf c = 38 Then
-            ' &H hex literal
+            ' &H hex literal, else string concat &
             n2 = src[lx.pos + 1]
             If n2 = 72 Or n2 = 104 Then
                 lx.pos = lx.pos + 2
@@ -223,19 +299,74 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
                 toks = lx.toks
                 toks[idx].num = n
             Else
-                lx.err = 1
-                Exit Function
+                LexPush(lx, TK_AMP)
+                lx.pos = lx.pos + 1
             End If
+        ElseIf c = 92 Then
+            LexPush(lx, TK_BACKSLASH)
+            lx.pos = lx.pos + 1
         ElseIf LexIsDigit(c) <> 0 Then
             n = 0
             While LexIsDigit(src[lx.pos]) <> 0
                 n = n * 10 + (src[lx.pos] - 48)
                 lx.pos = lx.pos + 1
             Wend
-            idx = LexPush(lx, TK_NUMBER)
-            If idx < 0 Then Exit Function
-            toks = lx.toks
-            toks[idx].num = n
+            ' 1.5 / 6.28 → TK_FLOAT（千分率: 1500 / 6280）
+            If src[lx.pos] = 46 Then
+                If LexIsDigit(src[lx.pos + 1]) <> 0 Then
+                    lx.pos = lx.pos + 1
+                    n2 = 0
+                    i = 0
+                    While LexIsDigit(src[lx.pos]) <> 0
+                        If i < 3 Then
+                            n2 = n2 * 10 + (src[lx.pos] - 48)
+                            i = i + 1
+                        End If
+                        lx.pos = lx.pos + 1
+                    Wend
+                    While i < 3
+                        n2 = n2 * 10
+                        i = i + 1
+                    Wend
+                    idx = LexPush(lx, TK_FLOAT)
+                    If idx < 0 Then Exit Function
+                    toks = lx.toks
+                    toks[idx].num = n * 1000 + n2
+                Else
+                    idx = LexPush(lx, TK_NUMBER)
+                    If idx < 0 Then Exit Function
+                    toks = lx.toks
+                    toks[idx].num = n
+                End If
+            Else
+                idx = LexPush(lx, TK_NUMBER)
+                If idx < 0 Then Exit Function
+                toks = lx.toks
+                toks[idx].num = n
+            End If
+        ElseIf c = 95 Then
+            ' 行継続 _ または識別子 _foo
+            If LexLineContHere(lx) <> 0 Then
+                ' skip
+            Else
+                start = lx.pos
+                While LexIsAlnum(src[lx.pos]) <> 0
+                    lx.pos = lx.pos + 1
+                Wend
+                If src[lx.pos] = 36 Then
+                    lx.pos = lx.pos + 1
+                End If
+                n = lx.pos - start
+                i = 0
+                While i < n And i < LEX_TEXT_LEN - 1
+                    buf[i] = src[start + i]
+                    i = i + 1
+                Wend
+                buf[i] = 0
+                idx = LexPush(lx, TK_IDENT)
+                If idx < 0 Then Exit Function
+                LexStoreText(lx, idx, VarPtr(buf), i)
+            End If
         ElseIf LexIsAlpha(c) <> 0 Then
             start = lx.pos
             While LexIsAlnum(src[lx.pos]) <> 0
@@ -295,6 +426,9 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
         ElseIf c = 59 Then
             LexPush(lx, TK_SEMI)
             lx.pos = lx.pos + 1
+        ElseIf c = 58 Then
+            LexPush(lx, TK_COLON)
+            lx.pos = lx.pos + 1
         ElseIf c = 44 Then
             LexPush(lx, TK_COMMA)
             lx.pos = lx.pos + 1
@@ -321,6 +455,12 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
         ElseIf c = 42 Then
             LexPush(lx, TK_STAR)
             lx.pos = lx.pos + 1
+        ElseIf c = 94 Then
+            LexPush(lx, TK_CARET)
+            lx.pos = lx.pos + 1
+        ElseIf c = 126 Then
+            LexPush(lx, TK_TILDE)
+            lx.pos = lx.pos + 1
         ElseIf c = 61 Then
             LexPush(lx, TK_EQ)
             lx.pos = lx.pos + 1
@@ -332,13 +472,24 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
             ElseIf n2 = 62 Then
                 LexPush(lx, TK_NE)
                 lx.pos = lx.pos + 2
+            ElseIf n2 = 60 Then
+                LexPush(lx, TK_SHL)
+                lx.pos = lx.pos + 2
             Else
                 LexPush(lx, TK_LT)
                 lx.pos = lx.pos + 1
             End If
         ElseIf c = 62 Then
-            If src[lx.pos + 1] = 61 Then
+            n2 = src[lx.pos + 1]
+            If n2 = 61 Then
                 LexPush(lx, TK_GE)
+                lx.pos = lx.pos + 2
+            ElseIf n2 = 60 Then
+                ' >< は <> と同じ（等しくない）
+                LexPush(lx, TK_NE)
+                lx.pos = lx.pos + 2
+            ElseIf n2 = 62 Then
+                LexPush(lx, TK_SHR)
                 lx.pos = lx.pos + 2
             Else
                 LexPush(lx, TK_GT)

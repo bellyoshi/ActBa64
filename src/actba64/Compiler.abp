@@ -9,6 +9,8 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     Dim codeMem As *Byte
     Dim cb As CodeBuffer
     Dim textVirt As DWord
+    Dim dataVirt As DWord
+    Dim dataRva As DWord
     Dim idataRva As DWord
 
     CompileIrToPe = 0
@@ -22,7 +24,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
 
     IrCollect(list, builder)
 
-    idataBuf = calloc(65536)
+    idataBuf = calloc(524288)
     If idataBuf = NULL Then
         Print "error: out of memory (.idata)"
         free(builder)
@@ -39,10 +41,13 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     cb.buf = codeMem
     cb.capacity = 1048576
 
+    dataVirt = AlignUp(list.globSize, SECTION_ALIGN)
+    If dataVirt < SECTION_ALIGN Then dataVirt = SECTION_ALIGN
+
     ' 1st pass: measure .text size (RIP imm は長さに影響しない)
     IbFinalize(builder, IDATA_RVA, idataBuf, idataSize)
     cb.size = 0
-    IrEmitCode(list, VarPtr(cb), builder)
+    IrEmitCode(list, VarPtr(cb), builder, TEXT_RVA + SECTION_ALIGN)
     If cb.size >= cb.capacity Then
         Print "error: code too large"
         free(codeMem)
@@ -52,12 +57,13 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     End If
 
     textVirt = AlignUp(cb.size, SECTION_ALIGN)
-    idataRva = TEXT_RVA + textVirt
+    dataRva = TEXT_RVA + textVirt
+    idataRva = dataRva + dataVirt
 
-    ' 2nd pass: idata を .text 直後に置き直し、正しい RIP で再 emit
+    ' 2nd pass: .data after .text; .idata after .data
     IbFinalize(builder, idataRva, idataBuf, idataSize)
     cb.size = 0
-    IrEmitCode(list, VarPtr(cb), builder)
+    IrEmitCode(list, VarPtr(cb), builder, dataRva)
     If cb.size >= cb.capacity Then
         Print "error: code too large"
         free(codeMem)
@@ -73,7 +79,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
         Exit Function
     End If
 
-    If WritePe64(outPath, codeMem, cb.size, idataBuf, idataSize, builder, subsystem) <> 0 Then
+    If WritePe64(outPath, codeMem, cb.size, list.globSize, idataBuf, idataSize, builder, subsystem) <> 0 Then
         CompileIrToPe = 1
     Else
         Print "error: cannot write: " + MakeStr(outPath)
@@ -84,7 +90,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     free(builder)
 End Function
 
-Function CompileSource(src As *Byte, outPath As *Byte) As Long
+Function CompileSource(src As *Byte, outPath As *Byte, useWindow As Long) As Long
     Dim ast As *Ast
     Dim list As *IrList
     Dim subsystem As Long
@@ -110,11 +116,12 @@ Function CompileSource(src As *Byte, outPath As *Byte) As Long
 
     subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI
     If AstToIr(ast, list, subsystem) = 0 Then
-        Print "error: codegen failed"
+        Print "error: codegen failed (AstToIr)"
         IrFree(list)
         AstFree(ast)
         Exit Function
     End If
+    If useWindow <> 0 Then subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI
 
     If CompileIrToPe(list, outPath, subsystem) <> 0 Then
         CompileSource = 1
@@ -124,51 +131,85 @@ Function CompileSource(src As *Byte, outPath As *Byte) As Long
     AstFree(ast)
 End Function
 
-Function CompileToyFile(srcPath As *Byte, outPath As *Byte) As Long
+Function CompileFile(srcPath As *Byte, outPath As *Byte) As Long
     Dim src As *Byte
     Dim srcSize As Long
     Dim expanded As *Byte
+    Dim full As *Byte
 
-    CompileToyFile = 0
+    CompileFile = 0
+    If PpStateInit() = 0 Then
+        Print "error: out of memory (preproc)"
+        Exit Function
+    End If
     src = LoadFile(srcPath, srcSize)
     If src = NULL Then
         Print "error: cannot open: " + MakeStr(srcPath)
+        PpStateFree()
         Exit Function
     End If
     If srcSize <= 0 Then
         Print "error: empty source: " + MakeStr(srcPath)
         free(src)
+        PpStateFree()
         Exit Function
     End If
 
+    PpOnceReset()
     expanded = ExpandIncludes(src, srcSize, srcPath)
     free(src)
     If expanded = NULL Then
         Print "error: preprocess failed: " + MakeStr(srcPath)
+        PpStateFree()
         Exit Function
     End If
 
-    CompileToyFile = CompileSource(expanded, outPath)
+    full = PpPrependDefaults(expanded)
     free(expanded)
+    If full = NULL Then
+        Print "error: preprocess failed: " + MakeStr(srcPath)
+        PpStateFree()
+        Exit Function
+    End If
+
+    CompileFile = CompileSource(full, outPath, g_ppUseWindow)
+    free(full)
+    PpStateFree()
 End Function
 
-Function CompileToyPj(pjPath As *Byte, outPath As *Byte) As Long
+Function CompilePj(pjPath As *Byte, outPath As *Byte) As Long
     Dim combined As *Byte
+    Dim full As *Byte
 
-    CompileToyPj = 0
+    CompilePj = 0
+    If PpStateInit() = 0 Then
+        Print "error: out of memory (preproc)"
+        Exit Function
+    End If
     combined = CombinePjSources(pjPath)
     If combined = NULL Then
         Print "error: cannot load project: " + MakeStr(pjPath)
+        PpStateFree()
         Exit Function
     End If
-    CompileToyPj = CompileSource(combined, outPath)
+
+    full = PpPrependDefaults(combined)
     free(combined)
+    If full = NULL Then
+        Print "error: preprocess failed: " + MakeStr(pjPath)
+        PpStateFree()
+        Exit Function
+    End If
+
+    CompilePj = CompileSource(full, outPath, g_ppUseWindow)
+    free(full)
+    PpStateFree()
 End Function
 
 Function CompileInput(srcPath As *Byte, outPath As *Byte) As Long
     If PpPathEndsWithPj(srcPath) <> 0 Then
-        CompileInput = CompileToyPj(srcPath, outPath)
+        CompileInput = CompilePj(srcPath, outPath)
     Else
-        CompileInput = CompileToyFile(srcPath, outPath)
+        CompileInput = CompileFile(srcPath, outPath)
     End If
 End Function

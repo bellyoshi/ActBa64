@@ -77,6 +77,7 @@ function Get-Meta([string]$path) {
     $expect = 0
     $gui = $null
     $target = $false
+    $stdin = @()
     foreach ($line in (Get-Content -LiteralPath $path -Encoding Default -ErrorAction Stop)) {
         if ($line -match "^\s*'\s*Expect\s*:\s*(-?\d+)\s*$") {
             $expect = [int]$Matches[1]
@@ -87,11 +88,14 @@ function Get-Meta([string]$path) {
         if ($line -match "(?i)^\s*'\s*Target\s*:\s*actba64\s*$") {
             $target = $true
         }
+        if ($line -match "^\s*'\s*Stdin\s*:\s?(.*)$") {
+            $stdin += $Matches[1]
+        }
     }
     if ($null -eq $gui) {
         $gui = 0
     }
-    return @{ Expect = $expect; Gui = $gui; Target = $target }
+    return @{ Expect = $expect; Gui = $gui; Target = $target; Stdin = $stdin }
 }
 
 function Get-PjOwnedAbp {
@@ -138,6 +142,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     }
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($name) + "_test.exe"
     $exePath = Join-Path $OutDir $exeName
+    $stdinPath = $exePath + ".stdin"
 
     if (Test-Path -LiteralPath $exePath) {
         Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
@@ -152,7 +157,17 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         return
     }
 
-    $proc = Start-Process -FilePath $exePath -WorkingDirectory $Root -PassThru -WindowStyle Hidden
+    $startArgs = @{
+        FilePath = $exePath
+        WorkingDirectory = $Root
+        PassThru = $true
+        WindowStyle = "Hidden"
+    }
+    if ($meta.Stdin.Count -gt 0) {
+        Set-Content -LiteralPath $stdinPath -Value $meta.Stdin -Encoding Ascii
+        $startArgs.RedirectStandardInput = $stdinPath
+    }
+    $proc = Start-Process @startArgs
     if ($meta.Gui -eq 1) {
         Start-Sleep -Milliseconds $GuiWaitMs
         if (-not $proc.HasExited) {
@@ -189,6 +204,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
 
     if (-not $KeepArtifacts) {
         Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stdinPath -Force -ErrorAction SilentlyContinue
     }
 }
 
