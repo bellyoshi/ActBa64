@@ -67,7 +67,7 @@ function Invoke-BootBuild([string]$driverExe, [string]$outStage) {
     foreach ($line in $log) { Write-Host $line }
 
     $joined = [string]::Join("`n", @($log))
-    $failHint = $joined -match "(?i)abc fail|asm fail|link fail|cannot |not found:|error:"
+    $failHint = $joined -match "(?im)^(?:error:|.*\b(?:abc fail|asm fail|link fail|cannot )).*"
 
     if ($code -ne 0 -or $failHint -or -not (Test-Path -LiteralPath $outPath)) {
         Write-Error "build failed: $Pj -> $relOut exit=$code"

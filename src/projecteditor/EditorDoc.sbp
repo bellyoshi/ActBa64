@@ -1,5 +1,16 @@
 Dim g_docPath As String
 Dim g_docDirty As Long
+Dim g_docEncoding As Long
+
+Function EditorDoc_EncodingLabel$() As String
+    If g_docEncoding = ENC_UTF8_BOM Then
+        EditorDoc_EncodingLabel$ = "UTF-8 BOM"
+    ElseIf g_docEncoding = ENC_CP932 Then
+        EditorDoc_EncodingLabel$ = "Shift-JIS"
+    Else
+        EditorDoc_EncodingLabel$ = "UTF-8"
+    End If
+End Function
 
 Sub EditorDoc_UpdateTitle(hWnd As HWND)
     Dim title As String
@@ -8,6 +19,7 @@ Sub EditorDoc_UpdateTitle(hWnd As HWND)
     Else
         title = "editor - " + g_docPath
     End If
+    title = title + " [" + EditorBuild_TargetLabel$() + ", " + EditorDoc_EncodingLabel$() + "]"
     If g_docDirty <> 0 Then title = title + " *"
     SetWindowText(hWnd, title)
 End Sub
@@ -27,6 +39,7 @@ Function EditorDoc_LoadTextFile$(path As String) As String
     Dim fsiz As Long
     Dim nRead As DWord
     Dim p As *Byte
+    Dim encoding As Long
 
     EditorDoc_LoadTextFile$ = ""
     hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
@@ -44,12 +57,15 @@ Function EditorDoc_LoadTextFile$(path As String) As String
         Exit Function
     End If
 
+    nRead = 0
     If fsiz > 0 Then
         ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
     End If
     CloseHandle(hFile)
-    p[fsiz] = 0
-    EditorDoc_LoadTextFile$ = MakeStr(p)
+    p[nRead] = 0
+    encoding = Enc_Detect(p, nRead)
+    g_docEncoding = encoding
+    EditorDoc_LoadTextFile$ = Enc_BytesToUtf8$(p, nRead, encoding)
     free(p)
 End Function
 
@@ -57,22 +73,29 @@ Function EditorDoc_WriteTextFile(path As String, text As String) As Long
     Dim hFile As HANDLE
     Dim nWritten As DWord
     Dim n As Long
+    Dim bytes As *Byte
 
     EditorDoc_WriteTextFile = 0
-    n = Len(text)
+    bytes = Enc_EncodeText(text, g_docEncoding, n)
+    If bytes = 0 And n > 0 Then Exit Function
     hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    If hFile = INVALID_HANDLE_VALUE Then
+        If bytes <> 0 Then free(bytes)
+        Exit Function
+    End If
     If n > 0 Then
-        WriteFile(hFile, StrPtr(text), n, VarPtr(nWritten), ByVal NULL)
+        WriteFile(hFile, bytes, n, VarPtr(nWritten), ByVal NULL)
     Else
         nWritten = 0
     End If
     CloseHandle(hFile)
+    If bytes <> 0 Then free(bytes)
     If nWritten = n Then EditorDoc_WriteTextFile = 1
 End Function
 
 Sub EditorDoc_New(hWnd As HWND)
     g_docPath = ""
+    g_docEncoding = ENC_UTF8
     TextBuf_SetText("")
     EditorUndo_Reset()
     VirtualScroll_Init()
@@ -147,12 +170,14 @@ End Function
 
 Function EditorDoc_SaveAs(hWnd As HWND) As Long
     Dim path As String
+    Dim msg As String
 
     EditorDoc_SaveAs = 0
     path = EditorDoc_BrowseSave$(hWnd)
     If Len(path) = 0 Then Exit Function
     If EditorDoc_WriteTextFile(path, TextBuf_GetConfirmed$()) = 0 Then
-        MessageBox(hWnd, "Failed to save file.", "editor", MB_OK)
+        msg = UiText$(UI_SAVE_FAILED)
+        MessageBox(hWnd, msg, "editor", MB_OK)
         Exit Function
     End If
     g_docPath = path
@@ -162,13 +187,15 @@ Function EditorDoc_SaveAs(hWnd As HWND) As Long
 End Function
 
 Function EditorDoc_Save(hWnd As HWND) As Long
+    Dim msg As String
     EditorDoc_Save = 0
     If Len(g_docPath) = 0 Then
         EditorDoc_Save = EditorDoc_SaveAs(hWnd)
         Exit Function
     End If
     If EditorDoc_WriteTextFile(g_docPath, TextBuf_GetConfirmed$()) = 0 Then
-        MessageBox(hWnd, "Failed to save file.", "editor", MB_OK)
+        msg = UiText$(UI_SAVE_FAILED)
+        MessageBox(hWnd, msg, "editor", MB_OK)
         Exit Function
     End If
     EditorDoc_ClearDirty()
@@ -176,12 +203,14 @@ Function EditorDoc_Save(hWnd As HWND) As Long
     EditorDoc_Save = 1
 End Function
 
-Sub EditorDoc_Open(hWnd As HWND)
-    Dim path As String
+Sub EditorDoc_OpenPath(hWnd As HWND, path As String)
     Dim text As String
+    Dim attr As Long
 
-    path = EditorDoc_BrowseOpen$(hWnd)
     If Len(path) = 0 Then Exit Sub
+    attr = GetFileAttributes(StrPtr(path))
+    If attr = -1 Then Exit Sub
+    If (attr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then Exit Sub
 
     text = EditorDoc_LoadTextFile$(path)
     g_docPath = path
@@ -193,6 +222,109 @@ Sub EditorDoc_Open(hWnd As HWND)
     InvalidateRect(hWnd, ByVal 0, TRUE)
 End Sub
 
+Sub EditorDoc_Open(hWnd As HWND)
+    Dim path As String
+
+    path = EditorDoc_BrowseOpen$(hWnd)
+    If Len(path) = 0 Then Exit Sub
+    EditorDoc_OpenPath(hWnd, path)
+End Sub
+
+Sub EditorDoc_DropFiles(hWnd As HWND, ByVal hDrop As HDROP)
+    Dim fileName[MAX_PATH - 1] As Byte
+    Dim n As Long
+    Dim path As String
+
+    FillMemory(VarPtr(fileName), MAX_PATH, 0)
+    n = DragQueryFile(hDrop, 0, VarPtr(fileName), MAX_PATH)
+    DragFinish(hDrop)
+    If n <= 0 Then Exit Sub
+    path = MakeStr(fileName)
+    If Len(path) = 0 Then Exit Sub
+    EditorDoc_OpenPath(hWnd, path)
+End Sub
+
 Function EditorDoc_EnsureSaved(hWnd As HWND) As Long
     EditorDoc_EnsureSaved = EditorDoc_Save(hWnd)
 End Function
+
+Function EditorDoc_CmdArg$(ByVal index As Long) As String
+    Dim cmd As *Byte
+    Dim i As Long
+    Dim n As Long
+    Dim c As Byte
+    Dim argi As Long
+    Dim out As *Byte
+    Dim m As Long
+    Dim inQuote As Long
+
+    EditorDoc_CmdArg$ = ""
+    cmd = GetCommandLine()
+    If cmd = 0 Then Exit Function
+    n = lstrlen(cmd)
+    If n <= 0 Then Exit Function
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+
+    i = 0
+    argi = 0
+    While i < n
+        While i < n
+            c = cmd[i]
+            If c <> 32 And c <> 9 Then Exit While
+            i = i + 1
+        Wend
+        If i >= n Then Exit While
+
+        m = 0
+        inQuote = 0
+        If cmd[i] = 34 Then
+            inQuote = 1
+            i = i + 1
+        End If
+        While i < n
+            c = cmd[i]
+            If inQuote <> 0 Then
+                If c = 34 Then
+                    i = i + 1
+                    Exit While
+                End If
+            Else
+                If c = 32 Or c = 9 Then Exit While
+            End If
+            out[m] = c
+            m = m + 1
+            i = i + 1
+        Wend
+        out[m] = 0
+        If argi = index Then
+            EditorDoc_CmdArg$ = MakeStr(out)
+            free(out)
+            Exit Function
+        End If
+        argi = argi + 1
+    Wend
+    free(out)
+End Function
+
+Sub EditorDoc_OpenFromCommandLine(hWnd As HWND)
+    Dim path As String
+    Dim dir As String
+    Dim attr As Long
+
+    path = EditorDoc_CmdArg$(1)
+    If Len(path) = 0 Then Exit Sub
+
+    attr = GetFileAttributes(StrPtr(path))
+    If attr = -1 Then
+        dir = EditorBuild_ExeDir$()
+        If Len(dir) > 0 Then
+            path = dir + path
+            attr = GetFileAttributes(StrPtr(path))
+        End If
+    End If
+    If attr = -1 Then Exit Sub
+    If (attr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then Exit Sub
+
+    EditorDoc_OpenPath(hWnd, path)
+End Sub

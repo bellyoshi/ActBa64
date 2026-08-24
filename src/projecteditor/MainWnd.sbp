@@ -1,6 +1,6 @@
 Declare Function ImmGetContext Lib "imm32.dll" (ByVal hWnd As HWND) As Long
 Declare Function ImmReleaseContext Lib "imm32.dll" (ByVal hWnd As HWND, ByVal hIMC As Long) As Long
-Declare Function ImmGetCompositionStringA Lib "imm32.dll" (ByVal hIMC As Long, ByVal dwIndex As Long, ByVal lpBuf As *Byte, ByVal dwBufLen As Long) As Long
+Declare Function ImmGetCompositionStringW Lib "imm32.dll" (ByVal hIMC As Long, ByVal dwIndex As Long, ByVal lpBuf As *Byte, ByVal dwBufLen As Long) As Long
 Const GCS_RESULTSTR = &H0800
 Const GCS_COMPSTR   = &H0008
 
@@ -35,18 +35,21 @@ End Sub
 
 Function ImmCompToStr$(hIMC As Long, dwIndex As Long) As String
     Dim n As Long
+    Dim chars As Long
     Dim buf As *Byte
 
     ImmCompToStr$ = ""
-    n = ImmGetCompositionStringA(hIMC, dwIndex, 0, 0)
+    n = ImmGetCompositionStringW(hIMC, dwIndex, 0, 0)
     If n <= 0 Then Exit Function
 
-    buf = malloc(n + 1)
+    chars = n \ 2
+    buf = malloc(n + 2)
     If buf = 0 Then Exit Function
 
-    ImmGetCompositionStringA(hIMC, dwIndex, buf, n)
+    ImmGetCompositionStringW(hIMC, dwIndex, buf, n)
     buf[n] = 0
-    ImmCompToStr$ = MakeStr(buf)
+    buf[n + 1] = 0
+    ImmCompToStr$ = Enc_WideToUtf8$(buf, chars)
     free(buf)
 End Function
 
@@ -65,6 +68,12 @@ End Sub
 
 Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
     Select Case dwMsg
+
+
+        Case WM_CONTEXTMENU
+            EditorContext_Show(hWnd, lParam)
+            MainWndProc = 0
+            Exit Function
 
         Case WM_CHAR
             If wParam = VK_BACK Then
@@ -95,6 +104,10 @@ Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As L
             ElseIf wParam = VK_NEXT Then
                 coreBridgeScrollBy(hWnd, VirtualScroll_VisibleRows(hWnd))
                 InvalidateRect(hWnd, ByVal 0, TRUE)
+            ElseIf wParam = VK_F1 Then
+                EditorHelp_Show(EditorHelp_KeywordAtCursor$())
+            ElseIf wParam = VK_DELETE Then
+                MainWnd_IDM_DELETE_MenuClick()
             End If
 
         Case WM_LBUTTONDOWN
@@ -172,13 +185,14 @@ Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As L
     End Select
 
 	MainWndProc=EventCall_MainWnd(hWnd,dwMsg,wParam,lParam)
+
 End Function
 
 Sub MainWnd_Destroy()
 	EditorCaret_Destroy()
 	EditorFont_Shutdown()
 	TextBuf_Destroy()
-	editor_DestroyObjects()
+	ProjectEditor_DestroyObjects()
 	PostQuitMessage(0)
 End Sub
 
@@ -190,6 +204,15 @@ End Sub
 Sub MainWnd_IDM_FILEOPEN_MenuClick()
     EditorUndo_EndCoalesce()
     EditorDoc_Open(hMainWnd)
+End Sub
+
+Sub MainWnd_DropFiles(hDrop As HDROP)
+    EditorUndo_EndCoalesce()
+    EditorDoc_DropFiles(hMainWnd, hDrop)
+End Sub
+
+Sub MainWnd_OpenStartup(hWnd As HWND)
+    EditorDoc_OpenFromCommandLine(hWnd)
 End Sub
 
 Sub MainWnd_IDM_UNDO_MenuClick()
@@ -218,6 +241,16 @@ Sub MainWnd_IDM_PASTE_MenuClick()
     EditorInvalidate(hMainWnd)
 End Sub
 
+Sub MainWnd_IDM_DELETE_MenuClick()
+    EditorClip_Delete(hMainWnd)
+    EditorInvalidate(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_SELECTALL_MenuClick()
+    EditorClip_SelectAll()
+    EditorInvalidate(hMainWnd)
+End Sub
+
 Sub MainWnd_IDM_RUN_MenuClick()
     EditorUndo_EndCoalesce()
     EditorBuild_Run(hMainWnd)
@@ -228,6 +261,14 @@ Sub MainWnd_IDM_COMPILE_MenuClick()
     EditorBuild_Compile(hMainWnd)
 End Sub
 
+Sub MainWnd_IDM_TARGET64_MenuClick()
+    EditorBuild_SetTarget32(0)
+End Sub
+
+Sub MainWnd_IDM_TARGET32_MenuClick()
+    EditorBuild_SetTarget32(1)
+End Sub
+
 Sub MainWnd_IDM_SAVEAS_MenuClick()
     EditorUndo_EndCoalesce()
     EditorDoc_SaveAs(hMainWnd)
@@ -236,4 +277,17 @@ End Sub
 Sub MainWnd_IDM_SAVE_MenuClick()
     EditorUndo_EndCoalesce()
     EditorDoc_Save(hMainWnd)
+End Sub
+
+Sub MainWnd_IDM_HELP_ACTBA64_MenuClick()
+    EditorHelp_Show("")
+End Sub
+
+
+
+Sub MainWnd_Create(ByRef CreateStruct As CREATESTRUCT)
+    If hMainWnd = 0 Then Exit Sub
+    EditorBuild_Init(hMainWnd)
+    DragAcceptFiles(hMainWnd, TRUE)
+    MainWnd_OpenStartup(hMainWnd)
 End Sub

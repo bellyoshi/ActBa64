@@ -1,0 +1,258 @@
+' Text encoding support. Editor text is always UTF-8 internally.
+
+Const ENC_UTF8 = 1
+Const ENC_UTF8_BOM = 2
+Const ENC_CP932 = 3
+
+Const ENC_CP_UTF8 = 65001
+Const ENC_CP932_CODEPAGE = 932
+Const ENC_MB_ERR_INVALID_CHARS = &H00000008
+
+Function Enc_Utf8CharBytes(ByVal b As Long) As Long
+    If b < &H80 Then
+        Enc_Utf8CharBytes = 1
+    ElseIf b >= &HC2 And b <= &HDF Then
+        Enc_Utf8CharBytes = 2
+    ElseIf b >= &HE0 And b <= &HEF Then
+        Enc_Utf8CharBytes = 3
+    ElseIf b >= &HF0 And b <= &HF4 Then
+        Enc_Utf8CharBytes = 4
+    Else
+        Enc_Utf8CharBytes = 1
+    End If
+End Function
+
+Function Enc_IsUtf8Continuation(ByVal b As Long) As Long
+    If b >= &H80 And b <= &HBF Then
+        Enc_IsUtf8Continuation = 1
+    Else
+        Enc_IsUtf8Continuation = 0
+    End If
+End Function
+
+Function Enc_IsValidUtf8(ByVal raw As *Byte, ByVal n As Long) As Long
+    Dim i As Long
+    Dim b0 As Long
+    Dim b1 As Long
+    Dim b2 As Long
+    Dim b3 As Long
+    Dim count As Long
+
+    Enc_IsValidUtf8 = 0
+    If raw = 0 Then Exit Function
+    i = 0
+    While i < n
+        b0 = raw[i]
+        count = Enc_Utf8CharBytes(b0)
+        If count = 1 Then
+            If b0 >= &H80 Then Exit Function
+        Else
+            If i + count > n Then Exit Function
+            b1 = raw[i + 1]
+            If Enc_IsUtf8Continuation(b1) = 0 Then Exit Function
+            If count >= 3 Then
+                b2 = raw[i + 2]
+                If Enc_IsUtf8Continuation(b2) = 0 Then Exit Function
+                If b0 = &HE0 And b1 < &HA0 Then Exit Function
+                If b0 = &HED And b1 >= &HA0 Then Exit Function
+            End If
+            If count = 4 Then
+                b3 = raw[i + 3]
+                If Enc_IsUtf8Continuation(b3) = 0 Then Exit Function
+                If b0 = &HF0 And b1 < &H90 Then Exit Function
+                If b0 = &HF4 And b1 > &H8F Then Exit Function
+            End If
+        End If
+        i = i + count
+    Wend
+    Enc_IsValidUtf8 = 1
+End Function
+
+Function Enc_Detect(ByVal raw As *Byte, ByVal n As Long) As Long
+    If n >= 3 Then
+        If raw[0] = &HEF And raw[1] = &HBB And raw[2] = &HBF Then
+            Enc_Detect = ENC_UTF8_BOM
+            Exit Function
+        End If
+    End If
+    If Enc_IsValidUtf8(raw, n) <> 0 Then
+        Enc_Detect = ENC_UTF8
+    Else
+        Enc_Detect = ENC_CP932
+    End If
+End Function
+
+Function Enc_CopyBytes$(ByVal raw As *Byte, ByVal n As Long) As String
+    Dim out As *Byte
+    Enc_CopyBytes$ = ""
+    If raw = 0 Or n <= 0 Then Exit Function
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+    memcpy(out, raw, n)
+    out[n] = 0
+    Enc_CopyBytes$ = MakeStr(out)
+    free(out)
+End Function
+
+Function Enc_BytesToUtf8$(ByVal raw As *Byte, ByVal n As Long, ByVal encoding As Long) As String
+    Dim src As *Byte
+    Dim srcLen As Long
+    Dim wide As *Byte
+    Dim wideLen As Long
+    Dim out As *Byte
+    Dim outLen As Long
+
+    Enc_BytesToUtf8$ = ""
+    If raw = 0 Or n <= 0 Then Exit Function
+    src = raw
+    srcLen = n
+    If encoding = ENC_UTF8_BOM Then
+        If srcLen <= 3 Then Exit Function
+        src = VarPtr(raw[3])
+        srcLen = srcLen - 3
+        Enc_BytesToUtf8$ = Enc_CopyBytes$(src, srcLen)
+        Exit Function
+    End If
+    If encoding = ENC_UTF8 Then
+        Enc_BytesToUtf8$ = Enc_CopyBytes$(src, srcLen)
+        Exit Function
+    End If
+
+    wideLen = EditorMultiByteToWideChar(ENC_CP932_CODEPAGE, 0, src, srcLen, 0, 0)
+    If wideLen <= 0 Then Exit Function
+    wide = malloc((wideLen + 1) * 2)
+    If wide = 0 Then Exit Function
+    If EditorMultiByteToWideChar(ENC_CP932_CODEPAGE, 0, src, srcLen, wide, wideLen) <= 0 Then
+        free(wide)
+        Exit Function
+    End If
+    wide[wideLen * 2] = 0
+    wide[wideLen * 2 + 1] = 0
+
+    outLen = EditorWideCharToMultiByte(ENC_CP_UTF8, 0, wide, wideLen, 0, 0, 0, 0)
+    If outLen <= 0 Then
+        free(wide)
+        Exit Function
+    End If
+    out = malloc(outLen + 1)
+    If out = 0 Then
+        free(wide)
+        Exit Function
+    End If
+    EditorWideCharToMultiByte(ENC_CP_UTF8, 0, wide, wideLen, out, outLen, 0, 0)
+    out[outLen] = 0
+    Enc_BytesToUtf8$ = MakeStr(out)
+    free(out)
+    free(wide)
+End Function
+
+Function Enc_Utf8ToWide(ByVal text As String, ByRef outChars As Long) As *Byte
+    Dim src As *Byte
+    Dim n As Long
+    Dim wide As *Byte
+
+    Enc_Utf8ToWide = 0
+    outChars = 0
+    n = Len(text)
+    If n <= 0 Then Exit Function
+    src = StrPtr(text)
+    outChars = EditorMultiByteToWideChar(ENC_CP_UTF8, ENC_MB_ERR_INVALID_CHARS, src, n, 0, 0)
+    If outChars <= 0 Then Exit Function
+    wide = malloc((outChars + 1) * 2)
+    If wide = 0 Then
+        outChars = 0
+        Exit Function
+    End If
+    If EditorMultiByteToWideChar(ENC_CP_UTF8, 0, src, n, wide, outChars) <= 0 Then
+        free(wide)
+        outChars = 0
+        Exit Function
+    End If
+    wide[outChars * 2] = 0
+    wide[outChars * 2 + 1] = 0
+    Enc_Utf8ToWide = wide
+End Function
+
+Function Enc_WideToUtf8$(ByVal wide As *Byte, ByVal chars As Long) As String
+    Dim out As *Byte
+    Dim n As Long
+    Enc_WideToUtf8$ = ""
+    If wide = 0 Or chars <= 0 Then Exit Function
+    n = EditorWideCharToMultiByte(ENC_CP_UTF8, 0, wide, chars, 0, 0, 0, 0)
+    If n <= 0 Then Exit Function
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+    EditorWideCharToMultiByte(ENC_CP_UTF8, 0, wide, chars, out, n, 0, 0)
+    out[n] = 0
+    Enc_WideToUtf8$ = MakeStr(out)
+    free(out)
+End Function
+
+Function Enc_EncodeText(ByVal text As String, ByVal encoding As Long, ByRef outLen As Long) As *Byte
+    Dim n As Long
+    Dim out As *Byte
+    Dim wide As *Byte
+    Dim wideLen As Long
+
+    Enc_EncodeText = 0
+    outLen = 0
+    n = Len(text)
+    If encoding = ENC_UTF8 Or encoding = ENC_UTF8_BOM Then
+        outLen = n
+        If encoding = ENC_UTF8_BOM Then outLen = outLen + 3
+        out = malloc(outLen + 1)
+        If out = 0 Then
+            outLen = 0
+            Exit Function
+        End If
+        If encoding = ENC_UTF8_BOM Then
+            out[0] = &HEF
+            out[1] = &HBB
+            out[2] = &HBF
+            If n > 0 Then memcpy(VarPtr(out[3]), StrPtr(text), n)
+        Else
+            If n > 0 Then memcpy(out, StrPtr(text), n)
+        End If
+        out[outLen] = 0
+        Enc_EncodeText = out
+        Exit Function
+    End If
+
+    wide = Enc_Utf8ToWide(text, wideLen)
+    If wide = 0 Then Exit Function
+    outLen = EditorWideCharToMultiByte(ENC_CP932_CODEPAGE, 0, wide, wideLen, 0, 0, 0, 0)
+    If outLen <= 0 Then
+        free(wide)
+        Exit Function
+    End If
+    out = malloc(outLen + 1)
+    If out = 0 Then
+        outLen = 0
+        free(wide)
+        Exit Function
+    End If
+    EditorWideCharToMultiByte(ENC_CP932_CODEPAGE, 0, wide, wideLen, out, outLen, 0, 0)
+    out[outLen] = 0
+    free(wide)
+    Enc_EncodeText = out
+End Function
+
+Function Enc_TextExtentUtf8(ByVal hDC As HDC, ByVal text As String, ByRef lpSize As SIZE) As Long
+    Dim wide As *Byte
+    Dim chars As Long
+    Enc_TextExtentUtf8 = 0
+    wide = Enc_Utf8ToWide(text, chars)
+    If wide = 0 Then Exit Function
+    Enc_TextExtentUtf8 = EditorGetTextExtentPoint32W(hDC, wide, chars, lpSize)
+    free(wide)
+End Function
+
+Function Enc_TextOutUtf8(ByVal hDC As HDC, ByVal x As Long, ByVal y As Long, ByVal text As String) As Long
+    Dim wide As *Byte
+    Dim chars As Long
+    Enc_TextOutUtf8 = 0
+    wide = Enc_Utf8ToWide(text, chars)
+    If wide = 0 Then Exit Function
+    Enc_TextOutUtf8 = EditorTextOutW(hDC, x, y, wide, chars)
+    free(wide)
+End Function
