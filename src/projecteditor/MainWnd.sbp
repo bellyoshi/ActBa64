@@ -19,6 +19,34 @@ Declare Function ImmSetCompositionWindow Lib "imm32.dll" (ByVal hIMC As Long, lp
 
 Const CFS_POINT = &H0002
 
+Dim g_imeSkipChar As Long
+Dim g_cp932Lead As Long
+
+Sub EditorAppendAnsiChar(ByVal ch As Long)
+    Dim s As String
+    If ch < 128 Then
+        If g_cp932Lead <> 0 Then
+            s = Enc_Cp932CharToUtf8$(g_cp932Lead, 0)
+            If Len(s) > 0 Then TextBuf_Append(s)
+            g_cp932Lead = 0
+        End If
+        TextBuf_AppendChar(ch)
+        Exit Sub
+    End If
+    If g_cp932Lead = 0 Then
+        If Enc_IsSjisLead(ch) <> 0 Then
+            g_cp932Lead = ch
+        Else
+            s = Enc_Cp932CharToUtf8$(ch, 0)
+            If Len(s) > 0 Then TextBuf_Append(s)
+        End If
+    Else
+        s = Enc_Cp932CharToUtf8$(g_cp932Lead, ch)
+        If Len(s) > 0 Then TextBuf_Append(s)
+        g_cp932Lead = 0
+    End If
+End Sub
+
 Sub UpdateImePosition(hWnd As HWND, x As Long, y As Long)
     Dim hIMC As Long
     Dim cf As COMPOSITIONFORM
@@ -77,11 +105,17 @@ Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As L
 
         Case WM_CHAR
             If wParam = VK_BACK Then
+                g_cp932Lead = 0
                 coreBridgeDeleteCharBeforeCursor()
             ElseIf wParam = 13 Then
+                g_cp932Lead = 0
                 TextBuf_AppendChar(10)
             ElseIf wParam >= 32 Then
-                TextBuf_AppendChar(wParam)
+                If g_imeSkipChar <> 0 Then
+                    g_imeSkipChar = 0
+                Else
+                    EditorAppendAnsiChar(wParam)
+                End If
             End If
             EditorInvalidate(hWnd)
 
@@ -141,6 +175,8 @@ Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As L
                 If (lParam And GCS_RESULTSTR) <> 0 Then
                     TextBuf_Append(ImmCompToStr$(hIMC, GCS_RESULTSTR))
                     TextBuf_ClearComp()
+                    g_imeSkipChar = 1
+                    g_cp932Lead = 0
                 ElseIf (lParam And GCS_COMPSTR) <> 0 Then
                     TextBuf_SetComp(ImmCompToStr$(hIMC, GCS_COMPSTR))
                 End If

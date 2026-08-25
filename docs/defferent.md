@@ -23,36 +23,101 @@
   - ActiveBasic ver 5 はリリース候補版のまま開発が停止しており、64bit が正式機能として確立していない。
   - 本処理系では 64bit 環境でのコンパイルおよび実行を前提とした設計とし、64bit 対応を正式にサポートする。
 
-### N88BASIC 風グラフィック（`#n88basic`）
 
-- **`#n88basic` / `#N88BASIC` / `#prompt`**
-  - N88BASIC に近い `LINE` / `CIRCLE` と 640×480 黒窓を有効化する互換モード。
-  - `#prompt` は ActiveBasic 互換の完全別名（`#n88basic` と全く同じ）。
-  - 「対話的に 1 行ずつ入力して即時実行する REPL」ではない。
-  - **actba64** は文の構文をパースし、GUI 窓と `End` 時のメッセージループを自動で付ける。`LINE` / `CIRCLE` / `LOCATE` / `PAINT`、および `Print`（数値は `Str$` 相当）に対応。
-  - **actba32** はライブラリ（`n88graph.abp`）を挿入するのみ。`Line(...)` / `Circle(...)` 呼び出しと `N88_Run()` は手動。
-  - 詳細は [language.md §1.6](./language.md#16-n88basic-モード)。
-
-### `Declare Lib`（actba64）
-
-- **外部 DLL 呼び出し**
-  - actba64 は `Declare Function|Sub ... Lib "dll" [Alias "..."]` で Win64 API を IAT に載せられる。
-  - actba32 は従来どおり名前解決＋IAT（`Declare` 構文は非対応）。
-
-### `Sleep` / `Math`（標準ライブラリ）
-
-- **`Sleep`**
-  - `Include\default\Sleep.abp` を常時挿入。待ち時間中もウインドウメッセージを処理する。
-  - actba64 / actba32 とも `Sleep(ms)`（手続き呼び出し）。
-- **`Math`**
-  - `Include\default\Math.abp` を常時挿入。千分率（`1.0 = 1000`）の固定小数点。`Sin` / `Cos` / `Sqr` など。
 
 ## 今後対応していくもの（現時点では未対応）
 
-### 対話的実行（REPL）
+### 文字列
+ActiveBasic 4.20 
+Chr$(0)も有効な文字列。
 
-- 対話的にコードを入力して評価する REPL は、必要に応じて別途検討する。
+1 = Len(Chr$(0)) 
+現状null文字で終了の文字コード
+0 = Len(Chr$(0))
 
+"Hello" + Chr$(0) + "World"
+→HELLO\0World
+
+### Ex文字列
+
+### RAD機能
+Project Editor の機能拡充
+
+### 関数ポインタ
+
+### 要確認 ByRef
+
+### rcファイルの取り込み
+
+### #strictディレクティブ
+
+### #define
+
+### GoSub Return 
+関数の中のReturnとどう折り合いをつけるか。
+
+### Enum
+
+### Let
+
+### SetDouble,SetWord
+
+### TypeDef
+
+### With
+
+### OpenOpen filename$ [For Access] As number
+Close [number]
+ 
+### Print # Input #
+### Field Get Put
+### Input 
+Input "文字列", variableに対応していない。
+現状 Input variableのみ。
+### Write
+### Cls
+### 要確認Window,DelWindow
+### MsgBox
+MessageBoxは動く
+### Beep
+### ChDir
+### Exec
+### Kill
+### MkDir
+### Randomize,Rnd()
+### CDbl,CInt,CSng
+### GetDouble,GetSingle,GetDWord
+### StrPtr
+### Abs
+### 要確認ATn,Tan,Exp,Log,Fix,Int,Sqr
+### Sgn
+### HIBYTE HIWORD  LOBYTE  LOWORD MAKELONG MAKEWORD
+### 要確認Asc Chr$
+### Date$
+### Hex$
+### Inkey$
+### Input$(Length)
+### 要確認Left$,Len,Oct$,Right$
+### Str$
+### String$
+### Time$
+### Val
+### ZeroString
+### Eof(filenumber)
+### Loc,Lof
+### calloc,realloc
+### AddressOf
+### ELM
+### RGB
+### SizeOf
+### InStr
+### ハンドル  
+### Win32API
+
+### DirectX
+当時はDirect9
+現在は最新12
+簡単なほうで11
 ### `Include` ライブラリの拡充
 
 - **標準ライブラリの強化**

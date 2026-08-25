@@ -82,6 +82,40 @@ Function Enc_Detect(ByVal raw As *Byte, ByVal n As Long) As Long
     End If
 End Function
 
+' actba64 の MakeStr はポインタをそのまま返す。AB4.20 はコピーする。
+' どちらでも安全なよう、Mid$ で独立した文字列を作ってからバッファを解放する。
+Function Enc_IsSjisLead(ByVal b As Long) As Long
+    If (b >= &H81 And b <= &H9F) Or (b >= &HE0 And b <= &HFC) Then
+        Enc_IsSjisLead = 1
+    Else
+        Enc_IsSjisLead = 0
+    End If
+End Function
+
+Function Enc_Cp932CharToUtf8$(ByVal b0 As Long, ByVal b1 As Long) As String
+    Dim raw(3) As Byte
+    Dim n As Long
+    raw[0] = b0 And &HFF
+    If b1 <> 0 Then
+        raw[1] = b1 And &HFF
+        raw[2] = 0
+        n = 2
+    Else
+        raw[1] = 0
+        n = 1
+    End If
+    Enc_Cp932CharToUtf8$ = Enc_BytesToUtf8$(VarPtr(raw), n, ENC_CP932)
+End Function
+
+Function Enc_DupCStr$(ByVal p As *Byte, ByVal n As Long) As String
+    Dim s As String
+    Enc_DupCStr$ = ""
+    If p = 0 Then Exit Function
+    If n <= 0 Then Exit Function
+    s = MakeStr(p)
+    Enc_DupCStr$ = Mid$(s, 1, n)
+End Function
+
 Function Enc_CopyBytes$(ByVal raw As *Byte, ByVal n As Long) As String
     Dim out As *Byte
     Enc_CopyBytes$ = ""
@@ -90,7 +124,7 @@ Function Enc_CopyBytes$(ByVal raw As *Byte, ByVal n As Long) As String
     If out = 0 Then Exit Function
     memcpy(out, raw, n)
     out[n] = 0
-    Enc_CopyBytes$ = MakeStr(out)
+    Enc_CopyBytes$ = Enc_DupCStr$(out, n)
     free(out)
 End Function
 
@@ -141,7 +175,7 @@ Function Enc_BytesToUtf8$(ByVal raw As *Byte, ByVal n As Long, ByVal encoding As
     End If
     EditorWideCharToMultiByte(ENC_CP_UTF8, 0, wide, wideLen, out, outLen, 0, 0)
     out[outLen] = 0
-    Enc_BytesToUtf8$ = MakeStr(out)
+    Enc_BytesToUtf8$ = Enc_DupCStr$(out, outLen)
     free(out)
     free(wide)
 End Function
@@ -156,7 +190,7 @@ Function Enc_Utf8ToWide(ByVal text As String, ByRef outChars As Long) As *Byte
     n = Len(text)
     If n <= 0 Then Exit Function
     src = StrPtr(text)
-    outChars = EditorMultiByteToWideChar(ENC_CP_UTF8, ENC_MB_ERR_INVALID_CHARS, src, n, 0, 0)
+    outChars = EditorMultiByteToWideChar(ENC_CP_UTF8, 0, src, n, 0, 0)
     If outChars <= 0 Then Exit Function
     wide = malloc((outChars + 1) * 2)
     If wide = 0 Then
@@ -184,7 +218,7 @@ Function Enc_WideToUtf8$(ByVal wide As *Byte, ByVal chars As Long) As String
     If out = 0 Then Exit Function
     EditorWideCharToMultiByte(ENC_CP_UTF8, 0, wide, chars, out, n, 0, 0)
     out[n] = 0
-    Enc_WideToUtf8$ = MakeStr(out)
+    Enc_WideToUtf8$ = Enc_DupCStr$(out, n)
     free(out)
 End Function
 
