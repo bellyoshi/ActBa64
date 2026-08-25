@@ -8,7 +8,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 | **actba32** | `actba32` + `abc` / `abassembler` / `ablinker` | 32bit PE（asm→obj→exe） |
 
 本文は両実装の共通核を先に書き、差分は各節末または [§9](#9-actba32-と-actba64-の差分) にまとめます。  
-ビルド手順は [build.md](./build.md) を参照。
+ビルド手順は [build.md](./build.md)、ActiveBasic との差分は [different.md](./different.md) を参照。
 
 ---
 
@@ -167,7 +167,7 @@ PAINT (x, y), color1 [, color2]
 | `Double` | 8 | **8** | IEEE 相当の 8 バイト枠（演算は限定） |
 | `HANDLE` / `HWND` 等 | 4 | **8** | 64bit は `VoidPtr` / `*T`（`HFILE` は 4 のまま） |
 | `*T` | 4 | **8** | ポインタ |
-| `String` | ポインタ相当 (4) | ポインタ相当 (**8**) | NUL 終端バイト列 |
+| `String` | ポインタ相当 (4) | ポインタ相当 (**8**) | 長さプレフィックス付きバイト列（AB4.20 互換） |
 | `Type` 名 | メンバ合計 | メンバ合計 | 自然整列 |
 
 条件式は「0 以外が真」。
@@ -403,9 +403,12 @@ memcpy(dst, src, n)
 
 ## 6. 文字列
 
-- 表現: NUL 終端のバイト列（ANSI 寄り）
-- 連結・`Left$` / `Mid$` 等は必要に応じて確保
-- 内容比較は実装依存（`=` やヘルパ関数）
+- 表現: ActiveBasic 4.20 互換。ヒープ／静的データの直前 4 バイトに長さ（dword）、ポインタはデータ先頭を指す
+- `Len(s)` はその長さを返す（`lstrlen` ではない）。`Chr$(0)` は長さ 1
+- 末尾に WinAPI 用の NUL を付けるが、データ中の埋め込み NUL も有効
+- `StrPtr(s)` はデータ先頭（恒等）。`MakeStr(p)` は NUL 終端 `BytePtr` から長さ付き String を複製
+- 連結・`Left$` / `Mid$` 等は都度ヒープ確保
+- 内容比較は長さ付き辞書順（埋め込み NUL 対応）。ヒープ文字列は長さ dword の最上位ビットで印付けし、代入時に自動解放
 - `InStr` / `Lower$` などは **言語組み込みではなく** ライブラリ `.abp` として提供される場合がある
 
 actba32 の方がランタイムが広い（`Hex$` / `Val` / `InStr` 等）。actba64 でも `Chr$` / `Right$` は組み込み。
@@ -556,7 +559,9 @@ End
 
 ## 関連
 
+- ドキュメント一覧: [index.md](./index.md)
 - ビルド: [build.md](./build.md)
+- ActiveBasic との相違: [different.md](./different.md)
 - エディタ向け actba64 リファレンス: [src/projecteditor/help/actba64_ref.html](../src/projecteditor/help/actba64_ref.html)（ヘルプメニュー / F1）
 - N88 図形サンプル: [src/actba64/samples/n88_shapes.abp](../src/actba64/samples/n88_shapes.abp)
 - Math サンプル: [src/actba64/samples/math_test.abp](../src/actba64/samples/math_test.abp)

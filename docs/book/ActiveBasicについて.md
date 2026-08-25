@@ -1,16 +1,15 @@
-ActiveBasic.com
-サイトはすでに見れなくなっている。
+# ActiveBasic について
 
-現在入手可能
-Ver4.20 
-→Vectorなど
+[ActiveBasic.com](http://ActiveBasic.com) のサイトはすでに閲覧できない。
 
-VersatileBasic
-「ActiveBasic」はv2.00からの登場。
-https://forest.watch.impress.co.jp/article/2000/05/10/activebasic.html
-この時期からEXEに変換することが可能になった。
+## 入手
 
-～v1.0時代 VersatileBasicと呼ばれていた。
-https://forest.watch.impress.co.jp/article/1999/09/02/versatilebasic.html
+- **Ver 4.20** — Vector などから入手可能
 
+## 来歴
 
+- **VersatileBasic**（〜v1.0）
+  - [窓の杜記事（1999）](https://forest.watch.impress.co.jp/article/1999/09/02/versatilebasic.html)
+- **ActiveBasic**（v2.00 から）
+  - EXE への変換が可能に
+  - [窓の杜記事（2000）](https://forest.watch.impress.co.jp/article/2000/05/10/activebasic.html)

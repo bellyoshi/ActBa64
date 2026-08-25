@@ -17,18 +17,18 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 | `src/projecteditor` | エディタ |
 | `release/` | 配布一式（`build.ps1` が生成。git 管理外） |
 | `src/prototype*` | 開発途中の試作 |
-| `doc/` | ドキュメント |
+| `docs/` | ドキュメント（[一覧](docs/index.md)） |
 
 ## ドキュメント
 
-- [ビルド手順](doc/build.md)
-- [言語仕様](doc/language.md)
-- [ActiveBasic との相違](doc/defferent.md)
+- [ビルド手順](docs/build.md)
+- [言語仕様](docs/language.md)
+- [ActiveBasic との相違](docs/different.md)
 - エディタ向けリファレンス: [src/projecteditor/help/actba64_ref.html](src/projecteditor/help/actba64_ref.html)（F1）
 
 ## ビルド
 
-詳細は [doc/build.md](doc/build.md)。要約:
+詳細は [docs/build.md](docs/build.md)。要約:
 
 ```powershell
 # リリース一式（要: src\actba32\bin\stage0 に ab420 成果物）
@@ -68,4 +68,4 @@ actba32 <src.abp|.pj> [-o <out.exe>]
 .\bin\stage2\actba64.exe .\samples\n88_shapes.abp -o .\samples\n88_shapes.exe
 ```
 
-`#n88basic` で `LINE` / `CIRCLE` が使えます。`Sleep` と千分率の `Math`（`Sin` / `Cos` 等）は標準ヘッダから常時利用できます。詳細は [doc/language.md](doc/language.md)。
+`#n88basic` で `LINE` / `CIRCLE` が使えます。`Sleep` と千分率の `Math`（`Sin` / `Cos` 等）は標準ヘッダから常時利用できます。詳細は [docs/language.md](docs/language.md)。
