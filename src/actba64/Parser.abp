@@ -2963,7 +2963,112 @@ Function ParseMakeEmptyClassFunc(p As *Parser, mangled As *Byte, isSub As Long) 
     ParseMakeEmptyClassFunc = nFunc
 End Function
 
-' Class 内の Sub/Function（Virtual/Inherits はエラー）
+' Class 内の Virtual Function/Sub 宣言（本体なし・vtable スロットのみ）
+Function ParseClassVirtDecl(p As *Parser) As Long
+    Dim name(63) As Byte
+    Dim pname(63) As Byte
+    Dim typeName(63) As Byte
+    Dim kAs(7) As Byte
+    Dim kLong(7) As Byte
+    Dim kSub(7) As Byte
+    Dim kFun(15) As Byte
+    Dim kByRef(15) As Byte
+    Dim kByVal(15) As Byte
+    Dim kByte(7) As Byte
+    Dim kStr(15) As Byte
+    Dim isFun As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim slot As Long
+
+    ParseClassVirtDecl = 0
+    isFun = 0
+    lstrcpy(VarPtr(kSub), "sub")
+    lstrcpy(VarPtr(kFun), "function")
+    If ParseIdentIs(p, VarPtr(kFun)) <> 0 Then
+        isFun = 1
+        p.pos = p.pos + 1
+    ElseIf ParseIdentIs(p, VarPtr(kSub)) <> 0 Then
+        p.pos = p.pos + 1
+    Else
+        p.err = 1
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+
+    lstrcpy(VarPtr(kAs), "as")
+    lstrcpy(VarPtr(kLong), "long")
+    lstrcpy(VarPtr(kByRef), "byref")
+    lstrcpy(VarPtr(kByVal), "byval")
+    lstrcpy(VarPtr(kByte), "byte")
+    lstrcpy(VarPtr(kStr), "string")
+
+    If ParseTokKind(p) <> TK_RPAREN Then
+        Do
+            If ParseIdentIs(p, VarPtr(kByRef)) <> 0 Then
+                p.pos = p.pos + 1
+            ElseIf ParseIdentIs(p, VarPtr(kByVal)) <> 0 Then
+                p.pos = p.pos + 1
+            End If
+            If ParseCopyIdent(p, VarPtr(pname)) = 0 Then Exit Function
+            If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
+                p.err = 1
+                Exit Function
+            End If
+            p.pos = p.pos + 1
+            ' *T / **T / 基本型 / UDT（型情報は呼び出し側で使わずスロットのみ登録）
+            While ParseTokKind(p) = TK_STAR
+                p.pos = p.pos + 1
+            Wend
+            If ParseIdentIs(p, VarPtr(kLong)) <> 0 Then
+                p.pos = p.pos + 1
+            ElseIf ParseIdentIs(p, VarPtr(kStr)) <> 0 Then
+                p.pos = p.pos + 1
+            ElseIf ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
+                p.pos = p.pos + 1
+            ElseIf ParseEatLongAlias(p) <> 0 Then
+            Else
+                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+                    p.err = 1
+                    Exit Function
+                End If
+            End If
+            If ParseTokKind(p) <> TK_COMMA Then Exit Do
+            p.pos = p.pos + 1
+        Loop
+    End If
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+
+    If isFun <> 0 Then
+        If ParseIdentIs(p, VarPtr(kAs)) <> 0 Then
+            p.pos = p.pos + 1
+            While ParseTokKind(p) = TK_STAR
+                p.pos = p.pos + 1
+            Wend
+            If ParseIdentIs(p, VarPtr(kStr)) <> 0 Then
+                p.pos = p.pos + 1
+            ElseIf ParseIdentIs(p, VarPtr(kLong)) <> 0 Then
+                p.pos = p.pos + 1
+            ElseIf ParseEatLongAlias(p) <> 0 Then
+            Else
+                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+            End If
+        End If
+    End If
+
+    ast = p.ast
+    types = ast.types
+    slot = TyAddVirt(types, p.classTi, VarPtr(name))
+    If slot < 0 Then
+        Print "error: too many Virtual methods"
+        p.err = 1
+        Exit Function
+    End If
+    ParseClassVirtDecl = 1
+End Function
+
+' Class 内の Sub/Function（本体あり）
 Function ParseClassMethod(p As *Parser, className As *Byte, ByRef outIsCtor As Long, ByRef outIsDtor As Long) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -3221,7 +3326,9 @@ Function ParseClassStmt(p As *Parser) As Long
     Dim kVirt(15) As Byte
     Dim kSub(7) As Byte
     Dim kFun(15) As Byte
+    Dim parent(63) As Byte
     Dim ti As Long
+    Dim parentTi As Long
     Dim count As Long
     Dim sz As Long
     Dim fieldTy As Long
@@ -3234,6 +3341,7 @@ Function ParseClassStmt(p As *Parser) As Long
     Dim isCtor As Long
     Dim isDtor As Long
     Dim access As Long
+    Dim isIface As Long
 
     ParseClassStmt = -1
     p.pos = p.pos + 1
@@ -3250,11 +3358,28 @@ Function ParseClassStmt(p As *Parser) As Long
         Exit Function
     End If
 
+    isIface = 0
     lstrcpy(VarPtr(kInh), "inherits")
     If ParseIdentIs(p, VarPtr(kInh)) <> 0 Then
-        Print "error: Class Inherits not supported yet"
-        p.err = 1
-        Exit Function
+        p.pos = p.pos + 1
+        If ParseCopyIdent(p, VarPtr(parent)) = 0 Then Exit Function
+        parentTi = TyFind(types, VarPtr(parent))
+        If parentTi < 0 Then
+            Print "error: Inherits parent not found: " + MakeStr(VarPtr(parent))
+            p.err = 1
+            Exit Function
+        End If
+        If TyIsClass(types, parentTi) = 0 Then
+            Print "error: Inherits parent is not a Class"
+            p.err = 1
+            Exit Function
+        End If
+        If TyCopyVirts(types, ti, parentTi) = 0 Then
+            Print "error: Inherits Virtual copy failed"
+            p.err = 1
+            Exit Function
+        End If
+        isIface = 1
     End If
 
     lstrcpy(VarPtr(kEnd), "end")
@@ -3299,9 +3424,9 @@ Function ParseClassStmt(p As *Parser) As Long
             p.pos = p.pos + 1
             access = 1
         ElseIf ParseIdentIs(p, VarPtr(kVirt)) <> 0 Then
-            Print "error: Virtual methods not supported yet"
-            p.err = 1
-            Exit Function
+            p.pos = p.pos + 1
+            If ParseClassVirtDecl(p) = 0 Then Exit Function
+            isIface = 1
         ElseIf ParseIdentIs(p, VarPtr(kSub)) <> 0 Or ParseIdentIs(p, VarPtr(kFun)) <> 0 Then
             nMeth = ParseClassMethod(p, VarPtr(name), isCtor, isDtor)
             If nMeth < 0 Then Exit Function
@@ -3362,22 +3487,25 @@ Function ParseClassStmt(p As *Parser) As Long
         End If
     Loop
 
-    If hasCtor = 0 Then
-        lstrcpy(VarPtr(mangled), name)
-        lstrcat(VarPtr(mangled), "_Ctor")
-        nMeth = ParseMakeEmptyClassFunc(p, VarPtr(mangled), 1)
-        If nMeth < 0 Then Exit Function
-        nodes = ast.nodes
-        nodes[nPrev].nxt = nMeth
-        nPrev = nMeth
-    End If
-    If hasDtor = 0 Then
-        lstrcpy(VarPtr(mangled), name)
-        lstrcat(VarPtr(mangled), "_Dtor")
-        nMeth = ParseMakeEmptyClassFunc(p, VarPtr(mangled), 1)
-        If nMeth < 0 Then Exit Function
-        nodes = ast.nodes
-        nodes[nPrev].nxt = nMeth
+    ' COM インターフェース（Virtual のみ）は空 ctor/dtor を付けない
+    If isIface = 0 Then
+        If hasCtor = 0 Then
+            lstrcpy(VarPtr(mangled), name)
+            lstrcat(VarPtr(mangled), "_Ctor")
+            nMeth = ParseMakeEmptyClassFunc(p, VarPtr(mangled), 1)
+            If nMeth < 0 Then Exit Function
+            nodes = ast.nodes
+            nodes[nPrev].nxt = nMeth
+            nPrev = nMeth
+        End If
+        If hasDtor = 0 Then
+            lstrcpy(VarPtr(mangled), name)
+            lstrcat(VarPtr(mangled), "_Dtor")
+            nMeth = ParseMakeEmptyClassFunc(p, VarPtr(mangled), 1)
+            If nMeth < 0 Then Exit Function
+            nodes = ast.nodes
+            nodes[nPrev].nxt = nMeth
+        End If
     End If
 
     p.classTi = -1
@@ -4304,6 +4432,10 @@ Function ParseDeclareStmt(p As *Parser) As Long
             p.pos = p.pos + 1
             If ParseTokKind(p) = TK_STAR Then
                 p.pos = p.pos + 1
+                ' **T はポインタ幅の引数として扱う
+                If ParseTokKind(p) = TK_STAR Then
+                    p.pos = p.pos + 1
+                End If
                 If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
                     p.pos = p.pos + 1
                     pty = TY_PTR_BYTE
@@ -4370,6 +4502,9 @@ Function ParseDeclareStmt(p As *Parser) As Long
                 p.pos = p.pos + 1
             ElseIf ParseTokKind(p) = TK_STAR Then
                 p.pos = p.pos + 1
+                If ParseTokKind(p) = TK_STAR Then
+                    p.pos = p.pos + 1
+                End If
                 If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
                     p.pos = p.pos + 1
                 Else

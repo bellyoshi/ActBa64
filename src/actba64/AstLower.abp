@@ -2235,10 +2235,30 @@ Function LowRecvClassTi(ctx As *LowerCtx, recvIdx As Long) As Long
     If nodes[recvIdx].kind <> AST_VAR Then Exit Function
     AstCopyStr(ast, recvIdx, VarPtr(name))
     If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
-    If vTy <> TY_UDT Then Exit Function
+    If vTy <> TY_UDT And vTy <> TY_PTR_UDT Then Exit Function
     tt = ast.types
     If TyIsClass(tt, vTypeIdx) = 0 Then Exit Function
     LowRecvClassTi = vTypeIdx
+End Function
+
+Function LowRecvIsPtr(ctx As *LowerCtx, recvIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+
+    LowRecvIsPtr = 0
+    If recvIdx < 0 Then Exit Function
+    ast = ctx.ast
+    nodes = ast.nodes
+    If nodes[recvIdx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, recvIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy = TY_PTR_UDT Then LowRecvIsPtr = 1
 End Function
 
 Sub LowMangleClass(className As *Byte, member As *Byte, dst As *Byte)
@@ -2778,7 +2798,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     ElseIf k = AST_CALL Then
         AstCopyStr(ast, idx, VarPtr(name))
         If nodes[idx].extra = -3 Then
-            ' obj.Method(...) — right=receiver, left=user args, str=short name
+            ' obj.Method(...) / p->Method(...) — right=receiver, left=user args, str=short name
             ti = LowRecvClassTi(ctx, nodes[idx].right)
             If ti < 0 Then
                 Print "error: method call on non-class"
@@ -2788,13 +2808,6 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             tt = ast.types
             j = ti * 48
             names = tt.typeNames
-            LowMangleClass(VarPtr(names[j]), VarPtr(name), VarPtr(buf))
-            lab = LowFindFunc(ctx, VarPtr(buf))
-            If lab < 0 Then
-                Print "error: unknown method '" + MakeStr(VarPtr(buf)) + "'"
-                ctx.err = 1
-                Exit Function
-            End If
             nArgs = nodes[idx].num + 1
             If nArgs > 16 Then
                 ctx.err = 1
@@ -2824,25 +2837,68 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_SUB_RSP, stk, 0)
             argi = 4
             While argi < nArgs
-                If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
+                useAddr = LowCallUseAddr(ctx, args[argi], 0, 0, 1)
+                If useAddr <> 0 Then
+                    If LowAddr(ctx, nodes[args[argi]].left) = 0 Then Exit Function
+                Else
+                    If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
+                End If
                 IrEmit(list, OP_STORE_RSP_RAX, 32 + (argi - 4) * 8, 0)
                 argi = argi + 1
             Wend
             If nArgs >= 4 Then
-                If LowExprArg(ctx, nodes[args[3]].left) = 0 Then Exit Function
+                useAddr = LowCallUseAddr(ctx, args[3], 0, 0, 1)
+                If useAddr <> 0 Then
+                    If LowAddr(ctx, nodes[args[3]].left) = 0 Then Exit Function
+                Else
+                    If LowExprArg(ctx, nodes[args[3]].left) = 0 Then Exit Function
+                End If
                 IrEmit(list, OP_MOV_R9_RAX, 0, 0)
             End If
             If nArgs >= 3 Then
-                If LowExprArg(ctx, nodes[args[2]].left) = 0 Then Exit Function
+                useAddr = LowCallUseAddr(ctx, args[2], 0, 0, 1)
+                If useAddr <> 0 Then
+                    If LowAddr(ctx, nodes[args[2]].left) = 0 Then Exit Function
+                Else
+                    If LowExprArg(ctx, nodes[args[2]].left) = 0 Then Exit Function
+                End If
                 IrEmit(list, OP_MOV_R8_RAX, 0, 0)
             End If
             If nArgs >= 2 Then
-                If LowExprArg(ctx, nodes[args[1]].left) = 0 Then Exit Function
+                useAddr = LowCallUseAddr(ctx, args[1], 0, 0, 1)
+                If useAddr <> 0 Then
+                    If LowAddr(ctx, nodes[args[1]].left) = 0 Then Exit Function
+                Else
+                    If LowExprArg(ctx, nodes[args[1]].left) = 0 Then Exit Function
+                End If
                 IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
             End If
-            If LowAddr(ctx, nodes[idx].right) = 0 Then Exit Function
+            ' Me: 値クラスはアドレス、*Class はポインタ値
+            If LowRecvIsPtr(ctx, nodes[idx].right) <> 0 Then
+                If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            Else
+                If LowAddr(ctx, nodes[idx].right) = 0 Then Exit Function
+            End If
             IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-            IrEmit(list, OP_CALL_LAB, lab, 0)
+            lab = TyFindVirt(tt, ti, VarPtr(name))
+            If lab >= 0 Then
+                ' COM / Virtual: call [ [*this] + slot*8 ]
+                IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+                If lab <> 0 Then
+                    IrEmit(list, OP_ADD_RAX_IMM, lab * 8, 0)
+                End If
+                IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+                IrEmit(list, OP_CALL_RAX, 0, 0)
+            Else
+                LowMangleClass(VarPtr(names[j]), VarPtr(name), VarPtr(buf))
+                lab = LowFindFunc(ctx, VarPtr(buf))
+                If lab < 0 Then
+                    Print "error: unknown method '" + MakeStr(VarPtr(buf)) + "'"
+                    ctx.err = 1
+                    Exit Function
+                End If
+                IrEmit(list, OP_CALL_LAB, lab, 0)
+            End If
             IrEmit(list, OP_ADD_RSP, stk, 0)
             LowExpr = 1
             Exit Function

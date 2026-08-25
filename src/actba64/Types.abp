@@ -4,21 +4,27 @@
 
 Const TYMAX_TYPES = 128
 Const TYMAX_FIELDS = 512
+Const TYMAX_VIRTS = 1024
 Const TYNAME_LEN = 48
 
 Type TypeTable
     nTypes As Long
     nFields As Long
+    nVirts As Long
     typeNames As *Byte
     typeSizes As *Long
     typeFirst As *Long
     typeIsClass As *Long
+    typeVirtFirst As *Long
+    typeVirtCount As *Long
     fieldNames As *Byte
     fieldOffs As *Long
     fieldSizes As *Long
     fieldCounts As *Long
     fieldNext As *Long
     fieldTypeIdxs As *Long
+    virtNames As *Byte
+    virtNext As *Long
 End Type
 
 Function TyNameEq(a As *Byte, b As *Byte) As Long
@@ -47,12 +53,16 @@ Sub TyFree(t As *TypeTable)
     If t.typeSizes <> NULL Then free(t.typeSizes)
     If t.typeFirst <> NULL Then free(t.typeFirst)
     If t.typeIsClass <> NULL Then free(t.typeIsClass)
+    If t.typeVirtFirst <> NULL Then free(t.typeVirtFirst)
+    If t.typeVirtCount <> NULL Then free(t.typeVirtCount)
     If t.fieldNames <> NULL Then free(t.fieldNames)
     If t.fieldOffs <> NULL Then free(t.fieldOffs)
     If t.fieldSizes <> NULL Then free(t.fieldSizes)
     If t.fieldCounts <> NULL Then free(t.fieldCounts)
     If t.fieldNext <> NULL Then free(t.fieldNext)
     If t.fieldTypeIdxs <> NULL Then free(t.fieldTypeIdxs)
+    If t.virtNames <> NULL Then free(t.virtNames)
+    If t.virtNext <> NULL Then free(t.virtNext)
     free(t)
 End Sub
 
@@ -65,18 +75,23 @@ Function TyCreate() As *TypeTable
     t.typeSizes = calloc(SizeOf(Long) * TYMAX_TYPES)
     t.typeFirst = calloc(SizeOf(Long) * TYMAX_TYPES)
     t.typeIsClass = calloc(SizeOf(Long) * TYMAX_TYPES)
+    t.typeVirtFirst = calloc(SizeOf(Long) * TYMAX_TYPES)
+    t.typeVirtCount = calloc(SizeOf(Long) * TYMAX_TYPES)
     t.fieldNames = calloc(TYMAX_FIELDS * TYNAME_LEN)
     t.fieldOffs = calloc(SizeOf(Long) * TYMAX_FIELDS)
     t.fieldSizes = calloc(SizeOf(Long) * TYMAX_FIELDS)
     t.fieldCounts = calloc(SizeOf(Long) * TYMAX_FIELDS)
     t.fieldNext = calloc(SizeOf(Long) * TYMAX_FIELDS)
     t.fieldTypeIdxs = calloc(SizeOf(Long) * TYMAX_FIELDS)
-    If t.typeNames = NULL Or t.typeSizes = NULL Or t.typeFirst = NULL Or t.typeIsClass = NULL Or t.fieldNames = NULL Or t.fieldOffs = NULL Or t.fieldSizes = NULL Or t.fieldCounts = NULL Or t.fieldNext = NULL Or t.fieldTypeIdxs = NULL Then
+    t.virtNames = calloc(TYMAX_VIRTS * TYNAME_LEN)
+    t.virtNext = calloc(SizeOf(Long) * TYMAX_VIRTS)
+    If t.typeNames = NULL Or t.typeSizes = NULL Or t.typeFirst = NULL Or t.typeIsClass = NULL Or t.typeVirtFirst = NULL Or t.typeVirtCount = NULL Or t.fieldNames = NULL Or t.fieldOffs = NULL Or t.fieldSizes = NULL Or t.fieldCounts = NULL Or t.fieldNext = NULL Or t.fieldTypeIdxs = NULL Or t.virtNames = NULL Or t.virtNext = NULL Then
         TyFree(t)
         Exit Function
     End If
     t.nTypes = 0
     t.nFields = 0
+    t.nVirts = 0
     TyCreate = t
 End Function
 
@@ -189,6 +204,8 @@ Function TyAdd(t As *TypeTable, name As *Byte) As Long
     sizes[i] = 0
     firsts[i] = -1
     t.typeIsClass[i] = 0
+    t.typeVirtFirst[i] = -1
+    t.typeVirtCount[i] = 0
     t.nTypes = i + 1
     TyAdd = i
 End Function
@@ -353,4 +370,104 @@ Function TyFindFieldEx(t As *TypeTable, typeIdx As Long, name As *Byte, ByRef ou
         End If
         fi = nexts[fi]
     Wend
+End Function
+
+' Virtual メソッドを追加。戻り値は vtable スロット番号（失敗時 -1）
+Function TyAddVirt(t As *TypeTable, typeIdx As Long, name As *Byte) As Long
+    Dim vi As Long
+    Dim names As *Byte
+    Dim nexts As *Long
+    Dim firsts As *Long
+    Dim counts As *Long
+    Dim j As Long
+    Dim cur As Long
+    Dim last As Long
+
+    TyAddVirt = -1
+    If t = NULL Then Exit Function
+    If typeIdx < 0 Or typeIdx >= t.nTypes Then Exit Function
+    If t.nVirts >= TYMAX_VIRTS Then Exit Function
+
+    vi = t.nVirts
+    names = t.virtNames
+    nexts = t.virtNext
+    firsts = t.typeVirtFirst
+    counts = t.typeVirtCount
+
+    j = 0
+    cur = vi * TYNAME_LEN
+    While name[j] <> 0 And j < TYNAME_LEN - 1
+        names[cur + j] = name[j]
+        j = j + 1
+    Wend
+    names[cur + j] = 0
+    nexts[vi] = -1
+
+    If firsts[typeIdx] < 0 Then
+        firsts[typeIdx] = vi
+    Else
+        last = firsts[typeIdx]
+        While nexts[last] >= 0
+            last = nexts[last]
+        Wend
+        nexts[last] = vi
+    End If
+
+    TyAddVirt = counts[typeIdx]
+    counts[typeIdx] = counts[typeIdx] + 1
+    t.nVirts = vi + 1
+End Function
+
+' 名前から vtable スロットを探す。無ければ -1
+Function TyFindVirt(t As *TypeTable, typeIdx As Long, name As *Byte) As Long
+    Dim vi As Long
+    Dim names As *Byte
+    Dim nexts As *Long
+    Dim firsts As *Long
+    Dim cur As Long
+    Dim slot As Long
+
+    TyFindVirt = -1
+    If t = NULL Then Exit Function
+    If typeIdx < 0 Or typeIdx >= t.nTypes Then Exit Function
+    names = t.virtNames
+    nexts = t.virtNext
+    firsts = t.typeVirtFirst
+    vi = firsts[typeIdx]
+    slot = 0
+    While vi >= 0
+        cur = vi * TYNAME_LEN
+        If TyNameEq(VarPtr(names[cur]), name) <> 0 Then
+            TyFindVirt = slot
+            Exit Function
+        End If
+        slot = slot + 1
+        vi = nexts[vi]
+    Wend
+End Function
+
+' 親クラスの Virtual スロットを子へコピー（Inherits）
+Function TyCopyVirts(t As *TypeTable, dstTi As Long, srcTi As Long) As Long
+    Dim vi As Long
+    Dim names As *Byte
+    Dim nexts As *Long
+    Dim firsts As *Long
+    Dim cur As Long
+    Dim slot As Long
+
+    TyCopyVirts = 0
+    If t = NULL Then Exit Function
+    If dstTi < 0 Or dstTi >= t.nTypes Then Exit Function
+    If srcTi < 0 Or srcTi >= t.nTypes Then Exit Function
+    names = t.virtNames
+    nexts = t.virtNext
+    firsts = t.typeVirtFirst
+    vi = firsts[srcTi]
+    While vi >= 0
+        cur = vi * TYNAME_LEN
+        slot = TyAddVirt(t, dstTi, VarPtr(names[cur]))
+        If slot < 0 Then Exit Function
+        vi = nexts[vi]
+    Wend
+    TyCopyVirts = 1
 End Function
