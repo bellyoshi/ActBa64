@@ -57,6 +57,9 @@ Dim g_rtStrLab As Long
 Dim g_rtPrintLab As Long
 Dim g_rtInputLab As Long
 Dim g_rtValLab As Long
+Dim g_rtMakeStrLab As Long
+Dim g_rtStrCmpLab As Long
+Dim g_rtStrFreeLab As Long
 ' AstToIr buffer pointers for error-path free (stage0 max 16 args)
 Dim g_fb0 As *Byte
 Dim g_fb1 As *Byte
@@ -304,6 +307,81 @@ Sub LowEmitStoreOff(list As *IrList, off As Long, isGlob As Long)
     Else
         IrEmit(list, OP_STORE_LOCAL, off, 0)
     End If
+End Sub
+
+' String 代入: 旧ヒープ文字列を解放してから格納（rax=新値）
+Sub LowEmitStoreString(ctx As *LowerCtx, off As Long, isGlob As Long)
+    Dim list As *IrList
+    Dim lab As Long
+
+    list = ctx.list
+    lab = LowEnsureRtStrFree(ctx)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If isGlob <> 0 Then
+        IrEmit(list, OP_LEA_RAX_GLOB, off, 0)
+        IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    Else
+        IrEmit(list, OP_LOAD_LOCAL, off, 0)
+    End If
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_CALL_LAB, lab, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    LowEmitStoreOff(list, off, isGlob)
+End Sub
+
+' RHS が既に IEEE Single ビットか（float リテラル / Single 変数）
+Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim k As Long
+    Dim base As Long
+
+    LowExprIsSingleBits = 0
+    If idx < 0 Then Exit Function
+    ast = ctx.ast
+    nodes = ast.nodes
+    k = nodes[idx].kind
+    If k = AST_NUM Then
+        If nodes[idx].extra = 1 Then LowExprIsSingleBits = 1
+        Exit Function
+    End If
+    If k = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_SINGLE Then LowExprIsSingleBits = 1
+        End If
+        Exit Function
+    End If
+    If k = AST_INDEX Or k = AST_CALL Then
+        If nodes[idx].num = 1 Then
+            base = nodes[idx].left
+            If k = AST_CALL Then
+                AstCopyStr(ast, idx, VarPtr(name))
+            Else
+                If nodes[base].kind = AST_VAR Then
+                    AstCopyStr(ast, base, VarPtr(name))
+                Else
+                    Exit Function
+                End If
+            End If
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_SINGLE_ARR Then LowExprIsSingleBits = 1
+            End If
+        End If
+        Exit Function
+    End If
+End Function
+
+' eax が整数のとき Single 代入用に IEEE ビットへ（既にビットなら何もしない）
+Sub LowEmitCvtToSingleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
+    If LowExprIsSingleBits(ctx, rhsIdx) <> 0 Then Exit Sub
+    IrEmit(ctx.list, OP_CVT_I32_TO_SS, 0, 0)
 End Sub
 
 Function LowFindConst(ctx As *LowerCtx, name As *Byte) As Long
@@ -1188,21 +1266,64 @@ Function LowEnsureRtVal(ctx As *LowerCtx) As Long
     LowEnsureRtVal = g_rtValLab
 End Function
 
+Function LowEnsureRtMakeStr(ctx As *LowerCtx) As Long
+    If g_rtMakeStrLab < 0 Then
+        g_rtMakeStrLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtMakeStr = g_rtMakeStrLab
+End Function
+
+Function LowEnsureRtStrCmp(ctx As *LowerCtx) As Long
+    If g_rtStrCmpLab < 0 Then
+        g_rtStrCmpLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtStrCmp = g_rtStrCmpLab
+End Function
+
+Function LowEnsureRtStrFree(ctx As *LowerCtx) As Long
+    If g_rtStrFreeLab < 0 Then
+        g_rtStrFreeLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtStrFree = g_rtStrFreeLab
+End Function
+
+' rax = String ptr → eax = Len（NULL→0）。[ptr-4] の下位31bit
+Sub LowEmitLoadStrLen(list As *IrList, labZ As Long, labE As Long)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labZ, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
+    IrEmit(list, OP_JMP, labE, 0)
+    IrEmit(list, OP_LABEL, labZ, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_LABEL, labE, 0)
+End Sub
+
 Sub LowEmitRtCatBody(ctx As *LowerCtx)
     Dim list As *IrList
     Dim sApi(15) As Byte
     Dim empty(1) As Byte
     Dim labA As Long
     Dim labB As Long
+    Dim labCopyA As Long
+    Dim labCopyADone As Long
+    Dim labCopyB As Long
+    Dim labCopyBDone As Long
 
     If g_rtCatLab < 0 Then Exit Sub
     list = ctx.list
     empty[0] = 0
     labA = LowNewLab(ctx)
     labB = LowNewLab(ctx)
+    labCopyA = LowNewLab(ctx)
+    labCopyADone = LowNewLab(ctx)
+    labCopyB = LowNewLab(ctx)
+    labCopyBDone = LowNewLab(ctx)
 
+    ' locals: -8 a, -16 b, -24 la, -32 lb, -40 total, -48 base, -56 dst
     IrEmit(list, OP_LABEL, g_rtCatLab, 0)
-    IrEmit(list, OP_ENTER, 64, 0)
+    IrEmit(list, OP_ENTER, 80, 0)
     IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
     IrEmit(list, OP_STORE_LOCAL_EDX, -16, 0)
 
@@ -1221,47 +1342,106 @@ Sub LowEmitRtCatBody(ctx As *LowerCtx)
     IrEmit(list, OP_LABEL, labB, 0)
 
     IrEmit(list, OP_LOAD_LOCAL, -8, 0)
-    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-    lstrcpy(VarPtr(sApi), "lstrlenA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
     IrEmit(list, OP_STORE_LOCAL, -24, 0)
 
     IrEmit(list, OP_LOAD_LOCAL, -16, 0)
-    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-    lstrcpy(VarPtr(sApi), "lstrlenA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+
     IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
-    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
-    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
 
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 5, 0)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
     lstrcpy(VarPtr(sApi), "GetProcessHeap")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
     IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
     IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
     IrEmit(list, OP_MOV_R8_RAX, 0, 0)
     lstrcpy(VarPtr(sApi), "HeapAlloc")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
-    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_STORE_LOCAL, -48, 0)
 
-    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
-    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
+
+    ' copy a
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_LABEL, labCopyA, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labCopyADone, 0)
     IrEmit(list, OP_LOAD_LOCAL, -8, 0)
-    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
-    lstrcpy(VarPtr(sApi), "lstrcpyA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labCopyA, 0)
+    IrEmit(list, OP_LABEL, labCopyADone, 0)
 
+    ' copy b
     IrEmit(list, OP_LOAD_LOCAL, -32, 0)
-    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_LABEL, labCopyB, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labCopyBDone, 0)
     IrEmit(list, OP_LOAD_LOCAL, -16, 0)
-    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
-    lstrcpy(VarPtr(sApi), "lstrcatA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labCopyB, 0)
+    IrEmit(list, OP_LABEL, labCopyBDone, 0)
 
-    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_MOV_ECX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
 End Sub
 
@@ -1317,9 +1497,9 @@ Sub LowEmitRtMidBody(ctx As *LowerCtx)
 
     ' rem = len - start0
     IrEmit(list, OP_LOAD_LOCAL, -8, 0)
-    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-    lstrcpy(VarPtr(sApi), "lstrlenA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     IrEmit(list, OP_LOAD_LOCAL, -16, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
@@ -1360,9 +1540,9 @@ Sub LowEmitRtMidBody(ctx As *LowerCtx)
     IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
     IrEmit(list, OP_STORE_LOCAL, -8, 0)
 
-    ' dst = HeapAlloc(count+1)
+    ' dst = HeapAlloc(count+5); [base]=count; return base+4
     IrEmit(list, OP_LOAD_LOCAL, -24, 0)
-    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 5, 0)
     IrEmit(list, OP_STORE_LOCAL, -40, 0)
     lstrcpy(VarPtr(sApi), "GetProcessHeap")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
@@ -1372,8 +1552,21 @@ Sub LowEmitRtMidBody(ctx As *LowerCtx)
     IrEmit(list, OP_MOV_R8_RAX, 0, 0)
     lstrcpy(VarPtr(sApi), "HeapAlloc")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
-    IrEmit(list, OP_STORE_LOCAL, -32, 0)
     IrEmit(list, OP_STORE_LOCAL, -48, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
 
     IrEmit(list, OP_LABEL, labLoop, 0)
     IrEmit(list, OP_LOAD_LOCAL, -24, 0)
@@ -1401,6 +1594,7 @@ Sub LowEmitRtMidBody(ctx As *LowerCtx)
     IrEmit(list, OP_MOV_ECX, 0, 0)
     IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
     IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
 End Sub
 
@@ -1430,12 +1624,12 @@ Sub LowEmitRtStrBody(ctx As *LowerCtx)
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
     IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
     IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
-    IrEmit(list, OP_MOV_EAX_IMM, 16, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 20, 0)
     IrEmit(list, OP_MOV_R8_RAX, 0, 0)
     lstrcpy(VarPtr(sApi), "HeapAlloc")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
     IrEmit(list, OP_STORE_LOCAL, -16, 0)
-    IrEmit(list, OP_ADD_RAX_IMM, 15, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 19, 0)
     IrEmit(list, OP_MOV_ECX, 0, 0)
     IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
     IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
@@ -1488,6 +1682,25 @@ Sub LowEmitRtStrBody(ctx As *LowerCtx)
     IrEmit(list, OP_LABEL, labNoSign, 0)
     IrEmit(list, OP_LOAD_LOCAL, -24, 0)
     IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    ' len = (base + 19) - start; store at start-4
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 19, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+    IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
 End Sub
 
@@ -1517,9 +1730,9 @@ Sub LowEmitRtPrintBody(ctx As *LowerCtx)
     IrEmit(list, OP_LOAD_LOCAL, -8, 0)
     IrEmit(list, OP_TEST_RAX, 0, 0)
     IrEmit(list, OP_JZ, labNl, 0)
-    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-    lstrcpy(VarPtr(sApi), "lstrlenA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
     IrEmit(list, OP_TEST_RAX, 0, 0)
     IrEmit(list, OP_JZ, labNl, 0)
     IrEmit(list, OP_STORE_LOCAL, -24, 0)
@@ -1573,7 +1786,7 @@ Sub LowEmitRtInputBody(ctx As *LowerCtx)
     labDone = LowNewLab(ctx)
     labSkipCr = LowNewLab(ctx)
 
-    ' locals: -8 ch, -16 handle, -24 buf, -32 len, -40 nRead
+    ' locals: -8 ch, -16 handle, -24 buf(base), -32 len, -40 nRead
     IrEmit(list, OP_LABEL, g_rtInputLab, 0)
     IrEmit(list, OP_ENTER, 80, 0)
     IrEmit(list, OP_XOR_EAX, 0, 0)
@@ -1583,7 +1796,7 @@ Sub LowEmitRtInputBody(ctx As *LowerCtx)
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
     IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
     IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
-    IrEmit(list, OP_MOV_EAX_IMM, 256, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 260, 0)
     IrEmit(list, OP_MOV_R8_RAX, 0, 0)
     lstrcpy(VarPtr(sApi), "HeapAlloc")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
@@ -1648,6 +1861,7 @@ Sub LowEmitRtInputBody(ctx As *LowerCtx)
     IrEmit(list, OP_LOAD_LOCAL, -32, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
     IrEmit(list, OP_INC_LOCAL, -32, 0)
@@ -1656,14 +1870,25 @@ Sub LowEmitRtInputBody(ctx As *LowerCtx)
     IrEmit(list, OP_JMP, labLoop, 0)
 
     IrEmit(list, OP_LABEL, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
     IrEmit(list, OP_LOAD_LOCAL, -24, 0)
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     IrEmit(list, OP_LOAD_LOCAL, -32, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
     IrEmit(list, OP_MOV_ECX, 0, 0)
     IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
     IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
 
     IrEmit(list, OP_LABEL, labFail, 0)
@@ -1780,6 +2005,214 @@ Sub LowEmitRtValBody(ctx As *LowerCtx)
     IrEmit(list, OP_NEG_EAX, 0, 0)
     IrEmit(list, OP_JMP, labDone, 0)
 
+    IrEmit(list, OP_LABEL, labDone, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' MakeStr(p) ― NUL 終端 BytePtr → 長さ付き String（複製）
+Sub LowEmitRtMakeStrBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim sApi(15) As Byte
+    Dim empty(1) As Byte
+    Dim labOk As Long
+    Dim labCopy As Long
+    Dim labNul As Long
+
+    If g_rtMakeStrLab < 0 Then Exit Sub
+    list = ctx.list
+    empty[0] = 0
+    labOk = LowNewLab(ctx)
+    labCopy = LowNewLab(ctx)
+    labNul = LowNewLab(ctx)
+
+    ' rcx = p; locals: -8 src, -16 len, -24 base, -32 dst
+    IrEmit(list, OP_LABEL, g_rtMakeStrLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JNZ, labOk, 0)
+    IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(empty))
+    IrEmit(list, OP_LEAVE, 0, 0)
+
+    IrEmit(list, OP_LABEL, labOk, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "lstrlenA")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 5, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "HeapAlloc")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+
+    IrEmit(list, OP_LABEL, labCopy, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labNul, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_JMP, labCopy, 0)
+
+    IrEmit(list, OP_LABEL, labNul, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_MOV_ECX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' StrCmp(rcx=a, rdx=b) → eax（長さ付き辞書順）
+Sub LowEmitRtStrCmpBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labMinB As Long
+    Dim labLoop As Long
+    Dim labByteDiff As Long
+    Dim labByLen As Long
+
+    If g_rtStrCmpLab < 0 Then Exit Sub
+    list = ctx.list
+    labMinB = LowNewLab(ctx)
+    labLoop = LowNewLab(ctx)
+    labByteDiff = LowNewLab(ctx)
+    labByLen = LowNewLab(ctx)
+
+    IrEmit(list, OP_LABEL, g_rtStrCmpLab, 0)
+    IrEmit(list, OP_ENTER, 64, 0)
+    IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
+    IrEmit(list, OP_STORE_LOCAL_EDX, -16, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JLE, labMinB, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labLoop, 0)
+    IrEmit(list, OP_LABEL, labMinB, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+
+    IrEmit(list, OP_LABEL, labLoop, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labByLen, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labByteDiff, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labLoop, 0)
+
+    IrEmit(list, OP_LABEL, labByteDiff, 0)
+    IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+    IrEmit(list, OP_NEG_EAX, 0, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+
+    IrEmit(list, OP_LABEL, labByLen, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+    IrEmit(list, OP_NEG_EAX, 0, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' StrFree(rcx=p): ヒープ印付きなら HeapFree(p-4)
+Sub LowEmitRtStrFreeBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim sApi(15) As Byte
+    Dim labDone As Long
+    Dim labSkip As Long
+
+    If g_rtStrFreeLab < 0 Then Exit Sub
+    list = ctx.list
+    labDone = LowNewLab(ctx)
+    labSkip = LowNewLab(ctx)
+
+    IrEmit(list, OP_LABEL, g_rtStrFreeLab, 0)
+    IrEmit(list, OP_ENTER, 32, 0)
+    IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "HeapFree")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
     IrEmit(list, OP_LABEL, labDone, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
 End Sub
@@ -2686,15 +3119,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             labZ = LowNewLab(ctx)
             labE = LowNewLab(ctx)
-            IrEmit(list, OP_TEST_RAX, 0, 0)
-            IrEmit(list, OP_JZ, labZ, 0)
-            IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-            lstrcpy(VarPtr(sLen), "lstrlenA")
-            LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sLen))
-            IrEmit(list, OP_JMP, labE, 0)
-            IrEmit(list, OP_LABEL, labZ, 0)
-            IrEmit(list, OP_XOR_EAX, 0, 0)
-            IrEmit(list, OP_LABEL, labE, 0)
+            LowEmitLoadStrLen(list, labZ, labE)
             LowExpr = 1
         ElseIf nodes[idx].num = BI_MAKEINTRESOURCE Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
@@ -2738,7 +3163,10 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_CALL_LAB, lab, 0)
             LowExpr = 1
         ElseIf nodes[idx].num = BI_MAKESTR Then
+            lab = LowEnsureRtMakeStr(ctx)
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+            IrEmit(list, OP_CALL_LAB, lab, 0)
             LowExpr = 1
         ElseIf nodes[idx].num = BI_MEMCPY Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
@@ -2787,31 +3215,29 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_CALL_LAB, lab, 0)
             LowExpr = 1
         ElseIf nodes[idx].num = BI_CHR Then
-            If LowConstInt(ast, nodes[idx].left, v) <> 0 Then
-                buf[0] = v
-                buf[1] = 0
-                IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(buf))
-                LowExpr = 1
-                Exit Function
-            End If
-            ' HeapAlloc(2); buf[0] = code; buf[1] = 0
+            ' HeapAlloc(6); [0]=1; [4]=code; [5]=0; return base+4
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(list, OP_PUSH_RAX, 0, 0)
             lstrcpy(VarPtr(sLen), "GetProcessHeap")
             IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
             IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
             IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
-            IrEmit(list, OP_MOV_EAX_IMM, 2, 0)
+            IrEmit(list, OP_MOV_EAX_IMM, 6, 0)
             IrEmit(list, OP_MOV_R8_RAX, 0, 0)
             lstrcpy(VarPtr(sLen), "HeapAlloc")
             IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_MOV_ECX, &H80000001, 0)
+            IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
             IrEmit(list, OP_PUSH_RAX, 0, 0)
             IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
             IrEmit(list, OP_MOV_ECX, 0, 0)
             IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
             IrEmit(list, OP_POP_RAX, 0, 0)
-            IrEmit(list, OP_POP_RCX, 0, 0)
-            IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
             LowExpr = 1
         ElseIf nodes[idx].num = BI_RIGHT Then
             ' Right$(s, n) => Mid$(s, len - n + 1, n)
@@ -2834,12 +3260,12 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
             IrEmit(list, OP_PUSH_RAX, 0, 0)
             IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
-            ' rax = s (stack: s, n) → rax = lstrlen(s)
+            ' rax = s (stack: s, n) → rax = Len(s)
             IrEmit(list, OP_TEST_RAX, 0, 0)
             IrEmit(list, OP_JZ, labA, 0)
-            IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-            lstrcpy(VarPtr(sLen), "lstrlenA")
-            LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sLen))
+            IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+            IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+            IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
             IrEmit(list, OP_JMP, labB, 0)
             IrEmit(list, OP_LABEL, labA, 0)
             IrEmit(list, OP_XOR_EAX, 0, 0)
@@ -3409,17 +3835,18 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     End If
 End Function
 
-' 文字列比較: lstrcmpA → eax（<0 / 0 / >0）。NULL は空文字扱い
+' 文字列比較: 長さ付き辞書順 → eax（<0 / 0 / >0）。NULL は空文字扱い
 Function LowEmitStrCmp(ctx As *LowerCtx, leftIdx As Long, rightIdx As Long) As Long
     Dim list As *IrList
-    Dim sCmp(15) As Byte
     Dim empty(1) As Byte
     Dim labA As Long
     Dim labB As Long
+    Dim lab As Long
 
     LowEmitStrCmp = 0
     list = ctx.list
     empty[0] = 0
+    lab = LowEnsureRtStrCmp(ctx)
     labA = LowNewLab(ctx)
     labB = LowNewLab(ctx)
     If LowExpr(ctx, leftIdx) = 0 Then Exit Function
@@ -3435,8 +3862,7 @@ Function LowEmitStrCmp(ctx As *LowerCtx, leftIdx As Long, rightIdx As Long) As L
     IrEmit(list, OP_LABEL, labB, 0)
     IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
-    lstrcpy(VarPtr(sCmp), "lstrcmpA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sCmp))
+    IrEmit(list, OP_CALL_LAB, lab, 0)
     LowEmitStrCmp = 1
 End Function
 
@@ -3833,6 +4259,9 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
                 ctx.err = 1
                 Exit Function
             End If
+            If vTy = TY_SINGLE Then
+                LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+            End If
             LowEmitStoreOff(ctx.list, vOff, vGlob)
         End If
         LowStmtHeavy = 1
@@ -3845,6 +4274,24 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         leftK = nodes[leftIdx].kind
         If leftK = AST_INDEX Or leftK = AST_CALL Then
             If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+            If leftK = AST_CALL Then
+                AstCopyStr(ast, leftIdx, VarPtr(name))
+                If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                    If vTy = TY_SINGLE_ARR Then
+                        LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+                    End If
+                End If
+            Else
+                base = nodes[leftIdx].left
+                If nodes[base].kind = AST_VAR Then
+                    AstCopyStr(ast, base, VarPtr(name))
+                    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                        If vTy = TY_SINGLE_ARR Then
+                            LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+                        End If
+                    End If
+                End If
+            End If
             IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
             If LowAddr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(ctx.list, OP_POP_RCX, 0, 0)
@@ -3931,11 +4378,16 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
                 ctx.err = 1
                 Exit Function
             End If
+            If vTy = TY_SINGLE Then
+                LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+            End If
             If vByRef <> 0 Then
                 IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
                 LowEmitLoadOff(ctx.list, vOff, vGlob)
                 IrEmit(ctx.list, OP_POP_RCX, 0, 0)
                 IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+            ElseIf vTy = TY_STRING Then
+                LowEmitStoreString(ctx, vOff, vGlob)
             Else
                 LowEmitStoreOff(ctx.list, vOff, vGlob)
             End If
@@ -4140,6 +4592,8 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
             LowEmitLoadOff(ctx.list, vOff, vGlob)
             IrEmit(ctx.list, OP_POP_RCX, 0, 0)
             IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+        ElseIf vTy = TY_STRING Then
+            LowEmitStoreString(ctx, vOff, vGlob)
         Else
             LowEmitStoreOff(ctx.list, vOff, vGlob)
         End If
@@ -4388,6 +4842,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     Dim frame As Long
     Dim param As Long
     Dim pi As Long
+    Dim j As Long
     Dim offs As *Long
     Dim ty As Long
     Dim bound As Long
@@ -4495,6 +4950,9 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     g_rtPrintLab = -1
     g_rtInputLab = -1
     g_rtValLab = -1
+    g_rtMakeStrLab = -1
+    g_rtStrCmpLab = -1
+    g_rtStrFreeLab = -1
     retBuf[0] = 0
     list.globSize = 0
 
@@ -4677,15 +5135,15 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 pi = pi + 1
                 param = nodes[param].nxt
             Wend
-            If retBuf[0] <> 0 Then
-                pi = LowFindSym(VarPtr(ctx), VarPtr(retBuf))
-                If pi < 0 Then
-                    LowFreeAstBufs()
-                    Exit Function
-                End If
+            ' 非引数ローカル（戻り値スロット含む）を 0 初期化。
+            ' String を未初期化のまま StoreString→StrFree するとスタックゴミを
+            ' HeapFree して AV するため必須。
+            j = pi
+            While j < ctx.symCount
                 IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
-                IrEmit(list, OP_STORE_LOCAL, offs[pi], 0)
-            End If
+                IrEmit(list, OP_STORE_LOCAL, offs[j], 0)
+                j = j + 1
+            Wend
             If LowStmtList(VarPtr(ctx), nodes[stmt].right) = 0 Or ctx.err <> 0 Then
                 AstCopyStr(ast, stmt, VarPtr(nm))
                 Print "error: codegen in function '" + MakeStr(VarPtr(nm)) + "'"
@@ -4740,6 +5198,9 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     LowEmitRtPrintBody(VarPtr(ctx))
     LowEmitRtInputBody(VarPtr(ctx))
     LowEmitRtValBody(VarPtr(ctx))
+    LowEmitRtMakeStrBody(VarPtr(ctx))
+    LowEmitRtStrCmpBody(VarPtr(ctx))
+    LowEmitRtStrFreeBody(VarPtr(ctx))
 
     LowFreeAstBufs()
     g_gNames = NULL

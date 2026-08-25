@@ -215,9 +215,10 @@ End
 - 呼び出し、`SizeOf(T)`、`VarPtr(x)`、`StrPtr(s)`
 - `a(i)` / `p[i]` / `x.Field` / `p.Field`
 
-### 5.7 文字列（案 A・既定）
+### 5.7 文字列（AB4.20 互換・長さプレフィックス）
 
-NUL 終端バイト列。連結・`Mid$` 等は都度確保。
+データ直前の 32bit に長さ。ポインタはデータ先頭。埋め込み NUL 可（`Len(Chr$(0))=1`）。
+末尾 NUL は WinAPI 用に付与。連結・`Mid$` 等は都度確保。
 
 必須ランタイム: `Len` / `Left$` / `Mid$` / `Chr$` / `Asc` / `Str$` / `Hex$` / `MakeStr` / `StrPtr` / `InStr` / `+` / 内容比較。
 
@@ -304,7 +305,7 @@ abpc <input.abp> [output.exe]     ' 互換（単一ファイル）
 ## 11. 未決事項
 
 1. 複数 `#SOURCE` を「結合して 1 コンパイル」にするか「別 obj をリンク」にするか → **初期は結合を推奨**
-2. String を NUL 終端（案 A）で確定するか
+2. String は長さプレフィックス（AB4.20 互換）で確定
 3. `#USEWINDOW=0` で Subsystem を CUI(3) にするか、現状 GUI(2) のままか
 4. `#SOURCE` 結合時の重複 `Type`/`Const` の扱い（`#include` と二重定義防止）
 
