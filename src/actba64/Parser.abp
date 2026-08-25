@@ -783,6 +783,16 @@ Function ParseFactor(p As *Parser) As Long
         ParseFactor = n
         Exit Function
     End If
+    If ParseTokKind(p) = TK_FLOAT Then
+        ' Single 代入用に IEEE ビットへ変換（N88 千分率は別経路）
+        n = AstAddNode(ast, AST_NUM)
+        If n < 0 Then Exit Function
+        nodes = ast.nodes
+        nodes[n].num = FloatBitsFromMilli(ParseTokNum(p))
+        p.pos = p.pos + 1
+        ParseFactor = n
+        Exit Function
+    End If
     If ParseTokKind(p) = TK_STRING Then
         If ParseStringArg(p, VarPtr(s)) = 0 Then Exit Function
         n = AstAddNode(ast, AST_STRING)
@@ -1223,9 +1233,18 @@ Function ParseUnary(p As *Parser) As Long
     Dim nodes As *AstNode
     Dim e As Long
     Dim n As Long
+    Dim bits As Long
 
     ParseUnary = -1
     If ParseTokKind(p) = TK_MINUS Then
+        ' -1.5 → IEEE Single の符号ビット反転（整数 NEG では壊れる）
+        If ParseTokKindAt(p, p.pos + 1) = TK_FLOAT Then
+            p.pos = p.pos + 1
+            bits = FloatBitsFromMilli(ParseTokNum(p)) Xor &H80000000
+            p.pos = p.pos + 1
+            ParseUnary = ParseMakeNum(p.ast, bits)
+            Exit Function
+        End If
         p.pos = p.pos + 1
         e = ParseUnary(p)
         If e < 0 Then Exit Function
@@ -1789,6 +1808,40 @@ Function ParseMakeNum(ast As *Ast, v As Long) As Long
     nodes = ast.nodes
     nodes[n].num = v
     ParseMakeNum = n
+End Function
+
+' 千分率 (value*1000) → IEEE754 Single ビット列（D3D 等の Single 代入用）
+Function FloatBitsFromMilli(milli As Long) As Long
+    Dim sign As Long
+    Dim num As Long
+    Dim uexp As Long
+    Dim man As Long
+    Dim biased As Long
+
+    FloatBitsFromMilli = 0
+    If milli = 0 Then Exit Function
+    sign = 0
+    If milli < 0 Then
+        sign = 1
+        milli = 0 - milli
+    End If
+    num = milli
+    uexp = 0
+    While num < 1000
+        num = num * 2
+        uexp = uexp - 1
+        If uexp < -140 Then Exit Function
+    Wend
+    While num >= 2000
+        num = num / 2
+        uexp = uexp + 1
+        If uexp > 140 Then Exit Function
+    Wend
+    man = ((num - 1000) * 8388608) / 1000
+    biased = uexp + 127
+    If biased <= 0 Then Exit Function
+    If biased >= 255 Then Exit Function
+    FloatBitsFromMilli = (sign * &H80000000) Or (biased * 8388608) Or man
 End Function
 
 ' B / BF → mode 1 / 2。該当しなければ 0
@@ -2496,23 +2549,37 @@ Function ParseDimOne(p As *Parser) As Long
                                 Else
                                     ty = TY_DOUBLE
                                 End If
-                            ElseIf ParseEatLongAlias(p) <> 0 Then
-                                If bound >= 0 Then
-                                    ty = TY_LONG_ARR
-                                Else
-                                    ty = TY_LONG
-                                End If
                             Else
-                                If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
-                                    p.err = 1
-                                    Exit Function
+                                lstrcpy(VarPtr(kInt), "single")
+                                If ParseIdentIs(p, VarPtr(kInt)) <> 0 Then
+                                    p.pos = p.pos + 1
+                                    If bound >= 0 Then
+                                        ty = TY_SINGLE_ARR
+                                    Else
+                                        ty = TY_SINGLE
+                                    End If
+                                ElseIf ParseEatLongAlias(p) <> 0 Then
+                                    If bound >= 0 Then
+                                        ty = TY_LONG_ARR
+                                    Else
+                                        ty = TY_LONG
+                                    End If
+                                Else
+                                    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+                                        p.err = 1
+                                        Exit Function
+                                    End If
+                                    ti = TyFind(types, VarPtr(typeName))
+                                    If ti < 0 Then
+                                        p.err = 1
+                                        Exit Function
+                                    End If
+                                    If bound >= 0 Then
+                                        ty = TY_UDT_ARR
+                                    Else
+                                        ty = TY_UDT
+                                    End If
                                 End If
-                                ti = TyFind(types, VarPtr(typeName))
-                                If ti < 0 Then
-                                    p.err = 1
-                                    Exit Function
-                                End If
-                                ty = TY_UDT
                             End If
                         End If
                     End If
@@ -2529,16 +2596,16 @@ Function ParseDimOne(p As *Parser) As Long
             If ty <> TY_LONG_ARR Then
                 If ty <> TY_STRING_ARR Then
                     If ty <> TY_DOUBLE_ARR Then
-                        p.err = 1
-                        Exit Function
+                        If ty <> TY_SINGLE_ARR Then
+                            If ty <> TY_UDT_ARR Then
+                                p.err = 1
+                                Exit Function
+                            End If
+                        End If
                     End If
                 End If
             End If
         End If
-    End If
-    If ty = TY_UDT And bound >= 0 Then
-        p.err = 1
-        Exit Function
     End If
     ' Dim obj As CClass(args)
     If ty = TY_UDT And ti >= 0 Then
@@ -3508,6 +3575,7 @@ Function ParseClassStmt(p As *Parser) As Long
         End If
     End If
 
+    TyFinalizeType(types, ti)
     p.classTi = -1
     ParseClassStmt = nFirst
 End Function
@@ -3595,6 +3663,7 @@ Function ParseTypeStmt(p As *Parser) As Long
             Exit Function
         End If
     Loop
+    TyFinalizeType(types, ti)
     nType = AstAddNode(ast, AST_TYPE)
     If nType < 0 Then Exit Function
     AstSetStr(ast, nType, VarPtr(name))
@@ -4212,6 +4281,10 @@ Function ParseFuncStmt(p As *Parser) As Long
             p.pos = p.pos + 1
             If ParseTokKind(p) = TK_STAR Then
                 p.pos = p.pos + 1
+                If ParseTokKind(p) = TK_STAR Then
+                    p.pos = p.pos + 1
+                    isByRef = 1
+                End If
                 If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
                     p.pos = p.pos + 1
                     pty = TY_PTR_BYTE
@@ -4432,9 +4505,10 @@ Function ParseDeclareStmt(p As *Parser) As Long
             p.pos = p.pos + 1
             If ParseTokKind(p) = TK_STAR Then
                 p.pos = p.pos + 1
-                ' **T はポインタ幅の引数として扱う
+                ' **T は out ポインタ（ByRef 扱い）
                 If ParseTokKind(p) = TK_STAR Then
                     p.pos = p.pos + 1
+                    isByRef = 1
                 End If
                 If ParseIdentIs(p, VarPtr(kByte)) <> 0 Then
                     p.pos = p.pos + 1
