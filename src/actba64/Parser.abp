@@ -10,22 +10,13 @@ Type Parser
     err As Long
     n88Mode As Long
     classTi As Long
+    withBase As Long
 End Type
 
 Dim g_clsMethShort(63) As Byte
 Dim g_clsMethMangled(127) As Byte
 Dim g_parseArgByVal As Long
-
-Dim g_pwCur As Long
-Dim g_pwDepth As Long
-Dim g_pwSave0 As Long
-Dim g_pwSave1 As Long
-Dim g_pwSave2 As Long
-Dim g_pwSave3 As Long
-Dim g_pwSave4 As Long
-Dim g_pwSave5 As Long
-Dim g_pwSave6 As Long
-Dim g_pwSave7 As Long
+Dim g_withSave As Long
 
 Function ParseToLower(c As Long) As Long
     If c >= 65 And c <= 90 Then
@@ -211,7 +202,7 @@ End Function
 Function ParseWithLval(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
-    Dim n As Long
+    Dim cur As Long
     Dim name(63) As Byte
     Dim e As Long
     Dim arg0 As Long
@@ -221,7 +212,7 @@ Function ParseWithLval(p As *Parser) As Long
     Dim nPrev As Long
 
     ParseWithLval = -1
-    If g_pwCur < 0 Then
+    If p.withBase < 0 Then
         p.err = 1
         Exit Function
     End If
@@ -230,7 +221,7 @@ Function ParseWithLval(p As *Parser) As Long
         Exit Function
     End If
     ast = p.ast
-    n = g_pwCur
+    cur = p.withBase
     Do
         If ParseTokKind(p) = TK_DOT Then
             p.pos = p.pos + 1
@@ -239,9 +230,9 @@ Function ParseWithLval(p As *Parser) As Long
             If arg0 < 0 Then Exit Function
             AstSetStr(ast, arg0, VarPtr(name))
             nodes = ast.nodes
-            nodes[arg0].left = n
+            nodes[arg0].left = cur
             nodes[arg0].num = 0
-            n = arg0
+            cur = arg0
         ElseIf ParseTokKind(p) = TK_LBRACK Then
             p.pos = p.pos + 1
             e = ParseExpr(p)
@@ -250,19 +241,19 @@ Function ParseWithLval(p As *Parser) As Long
             arg0 = AstAddNode(ast, AST_INDEX)
             If arg0 < 0 Then Exit Function
             nodes = ast.nodes
-            nodes[arg0].left = n
+            nodes[arg0].left = cur
             nodes[arg0].right = e
             nodes[arg0].num = 1
-            n = arg0
+            cur = arg0
         Else
             Exit Do
         End If
     Loop
     If ParseTokKind(p) = TK_LPAREN Then
         nodes = ast.nodes
-        If nodes[n].kind = AST_MEMBER Then
-            AstCopyStr(ast, n, VarPtr(name))
-            arg2 = nodes[n].left
+        If nodes[cur].kind = AST_MEMBER Then
+            AstCopyStr(ast, cur, VarPtr(name))
+            arg2 = nodes[cur].left
             p.pos = p.pos + 1
             arg0 = -1
             nPrev = -1
@@ -288,17 +279,17 @@ Function ParseWithLval(p As *Parser) As Long
                 Loop
             End If
             If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
-            n = AstAddNode(ast, AST_CALL)
-            If n < 0 Then Exit Function
-            AstSetStr(ast, n, VarPtr(name))
+            cur = AstAddNode(ast, AST_CALL)
+            If cur < 0 Then Exit Function
+            AstSetStr(ast, cur, VarPtr(name))
             nodes = ast.nodes
-            nodes[n].left = arg0
-            nodes[n].right = arg2
-            nodes[n].extra = -3
-            nodes[n].num = nArgs
+            nodes[cur].left = arg0
+            nodes[cur].right = arg2
+            nodes[cur].extra = -3
+            nodes[cur].num = nArgs
         End If
     End If
-    ParseWithLval = n
+    ParseWithLval = cur
 End Function
 
 Function ParseCopyIdent(p As *Parser, dst As *Byte) As Long
@@ -917,7 +908,7 @@ Function ParseFactor(p As *Parser) As Long
         Exit Function
     End If
     If ParseTokKind(p) = TK_DOT Then
-        If g_pwCur < 0 Then
+        If p.withBase < 0 Then
             p.err = 1
             Exit Function
         End If
@@ -2875,11 +2866,13 @@ Function ParseAssignStmt(p As *Parser) As Long
 
     ParseAssignStmt = -1
     If ParseTokKind(p) = TK_DOT Then
-        If g_pwCur < 0 Then
+        If p.withBase < 0 Then
             p.err = 1
             Exit Function
         End If
+        g_withSave = p.withBase
         nIdx = ParseWithLval(p)
+        p.withBase = g_withSave
         If nIdx < 0 Then Exit Function
         ast = p.ast
         nodes = ast.nodes
@@ -2887,7 +2880,15 @@ Function ParseAssignStmt(p As *Parser) As Long
             ParseAssignStmt = nIdx
             Exit Function
         End If
-        ParseAssignStmt = ParseAssignOpRhs(p, nIdx)
+        If ParseExpect(p, TK_EQ) = 0 Then Exit Function
+        e = ParseExpr(p)
+        If e < 0 Then Exit Function
+        nAsg = AstAddNode(ast, AST_ASSIGN)
+        If nAsg < 0 Then Exit Function
+        nodes = ast.nodes
+        nodes[nAsg].left = nIdx
+        nodes[nAsg].right = e
+        ParseAssignStmt = nAsg
         Exit Function
     End If
     If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
@@ -4407,130 +4408,29 @@ Function ParseWithStmt(p As *Parser) As Long
     Dim body As Long
     Dim kEnd(7) As Byte
     Dim kWith(7) As Byte
+    Dim saveBase As Long
 
     ParseWithStmt = -1
     p.pos = p.pos + 1
     expr = ParseExpr(p)
     If expr < 0 Then Exit Function
-    If g_pwDepth >= 8 Then
-        p.err = 1
-        Exit Function
-    End If
-    If g_pwDepth = 0 Then
-        g_pwSave0 = g_pwCur
-    ElseIf g_pwDepth = 1 Then
-        g_pwSave1 = g_pwCur
-    ElseIf g_pwDepth = 2 Then
-        g_pwSave2 = g_pwCur
-    ElseIf g_pwDepth = 3 Then
-        g_pwSave3 = g_pwCur
-    ElseIf g_pwDepth = 4 Then
-        g_pwSave4 = g_pwCur
-    ElseIf g_pwDepth = 5 Then
-        g_pwSave5 = g_pwCur
-    ElseIf g_pwDepth = 6 Then
-        g_pwSave6 = g_pwCur
-    ElseIf g_pwDepth = 7 Then
-        g_pwSave7 = g_pwCur
-    End If
-    g_pwCur = expr
-    g_pwDepth = g_pwDepth + 1
+    saveBase = p.withBase
+    p.withBase = expr
     lstrcpy(VarPtr(kWith), "with")
     body = ParseStmtListUntilEndPair(p, VarPtr(kWith))
-    If p.err <> 0 Then
-        If g_pwDepth > 0 Then
-            g_pwDepth = g_pwDepth - 1
-            If g_pwDepth = 0 Then
-                g_pwCur = g_pwSave0
-            ElseIf g_pwDepth = 1 Then
-                g_pwCur = g_pwSave1
-            ElseIf g_pwDepth = 2 Then
-                g_pwCur = g_pwSave2
-            ElseIf g_pwDepth = 3 Then
-                g_pwCur = g_pwSave3
-            ElseIf g_pwDepth = 4 Then
-                g_pwCur = g_pwSave4
-            ElseIf g_pwDepth = 5 Then
-                g_pwCur = g_pwSave5
-            ElseIf g_pwDepth = 6 Then
-                g_pwCur = g_pwSave6
-            ElseIf g_pwDepth = 7 Then
-                g_pwCur = g_pwSave7
-            End If
-        End If
-        Exit Function
-    End If
+    p.withBase = saveBase
+    If p.err <> 0 Then Exit Function
     lstrcpy(VarPtr(kEnd), "end")
     If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
         p.err = 1
-        If g_pwDepth > 0 Then
-            g_pwDepth = g_pwDepth - 1
-            If g_pwDepth = 0 Then
-                g_pwCur = g_pwSave0
-            ElseIf g_pwDepth = 1 Then
-                g_pwCur = g_pwSave1
-            ElseIf g_pwDepth = 2 Then
-                g_pwCur = g_pwSave2
-            ElseIf g_pwDepth = 3 Then
-                g_pwCur = g_pwSave3
-            ElseIf g_pwDepth = 4 Then
-                g_pwCur = g_pwSave4
-            ElseIf g_pwDepth = 5 Then
-                g_pwCur = g_pwSave5
-            ElseIf g_pwDepth = 6 Then
-                g_pwCur = g_pwSave6
-            ElseIf g_pwDepth = 7 Then
-                g_pwCur = g_pwSave7
-            End If
-        End If
         Exit Function
     End If
     p.pos = p.pos + 1
     If ParseIdentIs(p, VarPtr(kWith)) = 0 Then
         p.err = 1
-        If g_pwDepth > 0 Then
-            g_pwDepth = g_pwDepth - 1
-            If g_pwDepth = 0 Then
-                g_pwCur = g_pwSave0
-            ElseIf g_pwDepth = 1 Then
-                g_pwCur = g_pwSave1
-            ElseIf g_pwDepth = 2 Then
-                g_pwCur = g_pwSave2
-            ElseIf g_pwDepth = 3 Then
-                g_pwCur = g_pwSave3
-            ElseIf g_pwDepth = 4 Then
-                g_pwCur = g_pwSave4
-            ElseIf g_pwDepth = 5 Then
-                g_pwCur = g_pwSave5
-            ElseIf g_pwDepth = 6 Then
-                g_pwCur = g_pwSave6
-            ElseIf g_pwDepth = 7 Then
-                g_pwCur = g_pwSave7
-            End If
-        End If
         Exit Function
     End If
     p.pos = p.pos + 1
-    If g_pwDepth > 0 Then
-        g_pwDepth = g_pwDepth - 1
-        If g_pwDepth = 0 Then
-            g_pwCur = g_pwSave0
-        ElseIf g_pwDepth = 1 Then
-            g_pwCur = g_pwSave1
-        ElseIf g_pwDepth = 2 Then
-            g_pwCur = g_pwSave2
-        ElseIf g_pwDepth = 3 Then
-            g_pwCur = g_pwSave3
-        ElseIf g_pwDepth = 4 Then
-            g_pwCur = g_pwSave4
-        ElseIf g_pwDepth = 5 Then
-            g_pwCur = g_pwSave5
-        ElseIf g_pwDepth = 6 Then
-            g_pwCur = g_pwSave6
-        ElseIf g_pwDepth = 7 Then
-            g_pwCur = g_pwSave7
-        End If
-    End If
     ast = p.ast
     nWith = AstAddNode(ast, AST_WITH)
     If nWith < 0 Then Exit Function
@@ -5125,7 +5025,7 @@ Function ParseStmt(p As *Parser) As Long
         Exit Function
     End If
     If ParseTokKind(p) = TK_DOT Then
-        If g_pwCur < 0 Then
+        If p.withBase < 0 Then
             p.err = 1
             Exit Function
         End If
@@ -5150,8 +5050,7 @@ Function ParseProgram(p As *Parser) As Long
     ParseProgram = -1
     ast = p.ast
     p.classTi = -1
-    g_pwCur = -1
-    g_pwDepth = 0
+    p.withBase = -1
     nFirst = -1
     nPrev = -1
 
@@ -5195,8 +5094,6 @@ Function ParseSource(src As *Byte, ast As *Ast) As Long
     Dim tmp(63) As Byte
 
     ParseSource = 0
-    g_pwCur = -1
-    g_pwDepth = 0
     lx = LexCreate(LEX_MAX_TOKS)
     If lx = NULL Then
         Print "error: out of memory (lexer)"
@@ -5215,8 +5112,7 @@ Function ParseSource(src As *Byte, ast As *Ast) As Long
     p.pos = 0
     p.err = 0
     p.n88Mode = PpIsN88Basic()
-    g_pwCur = -1
-    g_pwDepth = 0
+    p.withBase = -1
     If ParseProgram(VarPtr(p)) < 0 Or p.err <> 0 Then
         line = ParseTokLine(VarPtr(p))
         If line <= 0 Then line = 1

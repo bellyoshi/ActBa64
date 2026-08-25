@@ -59,6 +59,7 @@ Dim g_rtInputLab As Long
 Dim g_rtValLab As Long
 Dim g_rtValMilliLab As Long
 Dim g_rtMilliToSingleLab As Long
+Dim g_rtMilliToDoubleLab As Long
 Dim g_rtMakeStrLab As Long
 Dim g_rtStrCmpLab As Long
 Dim g_rtStrFreeLab As Long
@@ -331,7 +332,137 @@ Sub LowEmitStoreString(ctx As *LowerCtx, off As Long, isGlob As Long)
     LowEmitStoreOff(list, off, isGlob)
 End Sub
 
-' RHS が既に IEEE Single ビットか（float リテラル / Single 変数）
+' AST_NUM.extra: 0=整数, 1=Single IEEE bits, 3=千分率リテラル
+Const AST_NUM_MILLI = 3
+
+Function LowPromoteType(a As Long, b As Long) As Long
+    If a = TY_DOUBLE Or b = TY_DOUBLE Then
+        LowPromoteType = TY_DOUBLE
+    ElseIf a = TY_SINGLE Or b = TY_SINGLE Then
+        LowPromoteType = TY_SINGLE
+    Else
+        LowPromoteType = TY_LONG
+    End If
+End Function
+
+Function LowExprType(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim k As Long
+    Dim base As Long
+    Dim lty As Long
+    Dim rty As Long
+
+    LowExprType = TY_LONG
+    If idx < 0 Then Exit Function
+    ast = ctx.ast
+    nodes = ast.nodes
+    k = nodes[idx].kind
+    If k = AST_NUM Then
+        If nodes[idx].extra = AST_NUM_MILLI Then
+            LowExprType = TY_DOUBLE
+        ElseIf nodes[idx].extra = 1 Then
+            LowExprType = TY_SINGLE
+        Else
+            LowExprType = TY_LONG
+        End If
+        Exit Function
+    End If
+    If k = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_DOUBLE Then
+                LowExprType = TY_DOUBLE
+            ElseIf vTy = TY_SINGLE Then
+                LowExprType = TY_SINGLE
+            Else
+                LowExprType = TY_LONG
+            End If
+        End If
+        Exit Function
+    End If
+    If k = AST_BINOP Then
+        lty = LowExprType(ctx, nodes[idx].left)
+        rty = LowExprType(ctx, nodes[idx].right)
+        LowExprType = LowPromoteType(lty, rty)
+        Exit Function
+    End If
+    If k = AST_UNARY Then
+        LowExprType = LowExprType(ctx, nodes[idx].left)
+        Exit Function
+    End If
+    If k = AST_INDEX Or k = AST_CALL Then
+        If nodes[idx].num = 1 Then
+            base = nodes[idx].left
+            If k = AST_CALL Then
+                AstCopyStr(ast, idx, VarPtr(name))
+            Else
+                If nodes[base].kind = AST_VAR Then
+                    AstCopyStr(ast, base, VarPtr(name))
+                Else
+                    Exit Function
+                End If
+            End If
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_DOUBLE_ARR Then
+                    LowExprType = TY_DOUBLE
+                ElseIf vTy = TY_SINGLE_ARR Then
+                    LowExprType = TY_SINGLE
+                End If
+            End If
+        End If
+    End If
+End Function
+
+Function LowExprIsDoubleBits(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim k As Long
+    Dim base As Long
+
+    LowExprIsDoubleBits = 0
+    If idx < 0 Then Exit Function
+    ast = ctx.ast
+    nodes = ast.nodes
+    k = nodes[idx].kind
+    If k = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_DOUBLE Then LowExprIsDoubleBits = 1
+        End If
+        Exit Function
+    End If
+    If k = AST_INDEX Or k = AST_CALL Then
+        If nodes[idx].num = 1 Then
+            base = nodes[idx].left
+            If k = AST_CALL Then
+                AstCopyStr(ast, idx, VarPtr(name))
+            Else
+                If nodes[base].kind = AST_VAR Then
+                    AstCopyStr(ast, base, VarPtr(name))
+                Else
+                    Exit Function
+                End If
+            End If
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_DOUBLE_ARR Then LowExprIsDoubleBits = 1
+            End If
+        End If
+    End If
+End Function
+
 Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -382,8 +513,47 @@ End Function
 
 ' eax が整数のとき Single 代入用に IEEE ビットへ（既にビットなら何もしない）
 Sub LowEmitCvtToSingleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
+    Dim nodes As *AstNode
+    Dim lab As Long
     If LowExprIsSingleBits(ctx, rhsIdx) <> 0 Then Exit Sub
+    nodes = ctx.ast.nodes
+    If nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_MILLI Then
+        lab = LowEnsureRtMilliToSingle(ctx)
+        IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
     IrEmit(ctx.list, OP_CVT_I32_TO_SS, 0, 0)
+End Sub
+
+' rax が Double ビットでないとき IEEE Double へ
+Sub LowEmitCvtToDoubleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
+    Dim nodes As *AstNode
+    Dim lab As Long
+    Dim rty As Long
+    If LowExprIsDoubleBits(ctx, rhsIdx) <> 0 Then Exit Sub
+    nodes = ctx.ast.nodes
+    rty = LowExprType(ctx, rhsIdx)
+    If rty = TY_SINGLE Or (nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = 1) Then
+        IrEmit(ctx.list, OP_CVT_SS_TO_SD, 0, 0)
+        Exit Sub
+    End If
+    If nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_MILLI Then
+        lab = LowEnsureRtMilliToDouble(ctx)
+        IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
+    IrEmit(ctx.list, OP_CVT_I32_TO_SD, 0, 0)
+End Sub
+
+' Double 式を Long 変数へ格納するとき trunc
+Sub LowEmitCvtToLongIfNeeded(ctx As *LowerCtx, rhsIdx As Long, dstTy As Long)
+    If dstTy <> TY_LONG And dstTy <> TY_BYTE Then Exit Sub
+    If LowExprType(ctx, rhsIdx) = TY_DOUBLE Then
+        IrEmit(ctx.list, OP_CVT_SD_TO_I32, 0, 0)
+    ElseIf LowExprType(ctx, rhsIdx) = TY_SINGLE Then
+        IrEmit(ctx.list, OP_CVT_SS_TO_SD, 0, 0)
+        IrEmit(ctx.list, OP_CVT_SD_TO_I32, 0, 0)
+    End If
 End Sub
 
 Function LowFindConst(ctx As *LowerCtx, name As *Byte) As Long
@@ -1273,6 +1443,13 @@ Function LowEnsureRtValMilli(ctx As *LowerCtx) As Long
         g_rtValMilliLab = LowNewLab(ctx)
     End If
     LowEnsureRtValMilli = g_rtValMilliLab
+End Function
+
+Function LowEnsureRtMilliToDouble(ctx As *LowerCtx) As Long
+    If g_rtMilliToDoubleLab < 0 Then
+        g_rtMilliToDoubleLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtMilliToDouble = g_rtMilliToDoubleLab
 End Function
 
 Function LowEnsureRtMilliToSingle(ctx As *LowerCtx) As Long
@@ -2354,6 +2531,27 @@ Sub LowEmitRtMilliToSingleBody(ctx As *LowerCtx)
     IrEmit(list, OP_LEAVE, 0, 0)
 End Sub
 
+' MilliToDouble ― eax の千分率 → rax の IEEE Double（milli / 1000.0）
+Sub LowEmitRtMilliToDoubleBody(ctx As *LowerCtx)
+    Dim list As *IrList
+
+    If g_rtMilliToDoubleLab < 0 Then Exit Sub
+    list = ctx.list
+    IrEmit(list, OP_LABEL, g_rtMilliToDoubleLab, 0)
+    IrEmit(list, OP_ENTER, 32, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1000, 0)
+    IrEmit(list, OP_CVT_I32_TO_SD, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_CVT_I32_TO_SD, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_DIV_SD, 0, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
 ' MakeStr(p) ― NUL 終端 BytePtr → 長さ付き String（複製）
 Sub LowEmitRtMakeStrBody(ctx As *LowerCtx)
     Dim list As *IrList
@@ -3254,6 +3452,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim labA As Long
     Dim labB As Long
     Dim names As *Byte
+    Dim fty As Long
 
     LowExpr = 0
     If idx < 0 Then
@@ -3281,7 +3480,15 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     types = ctx.types
     typeIdxs = ctx.typeIdxs
     If k = AST_NUM Then
-        IrEmit(list, OP_MOV_EAX_IMM, nodes[idx].num, 0)
+        If nodes[idx].extra = 1 Then
+            IrEmit(list, OP_MOV_EAX_IMM, nodes[idx].num, 0)
+        ElseIf nodes[idx].extra = AST_NUM_MILLI Then
+            IrEmit(list, OP_MOV_EAX_IMM, nodes[idx].num, 0)
+            lab = LowEnsureRtMilliToDouble(ctx)
+            IrEmit(list, OP_CALL_LAB, lab, 0)
+        Else
+            IrEmit(list, OP_MOV_EAX_IMM, nodes[idx].num, 0)
+        End If
         LowExpr = 1
     ElseIf k = AST_STRING Then
         AstCopyStr(ast, idx, VarPtr(buf))

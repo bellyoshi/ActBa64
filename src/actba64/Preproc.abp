@@ -13,6 +13,189 @@ Dim g_ppOnceCount As Long
 Dim g_ppUseWindow As Long
 Dim g_ppN88Basic As Long
 
+Const PP_WITH_MAX = 8
+Dim g_ppWithDepth As Long
+Dim g_ppWithCur(255) As Byte
+Dim g_ppWithStack(PP_WITH_MAX * 256) As Byte
+
+Sub PpWithReset()
+    g_ppWithDepth = 0
+    g_ppWithCur[0] = 0
+End Sub
+
+Sub PpStrCopy(dst As *Byte, src As *Byte)
+    Dim i As Long
+    i = 0
+    While src[i] <> 0 And i < 255
+        dst[i] = src[i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Function PpStrEqCI(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    PpStrEqCI = 0
+    i = 0
+    While a[i] <> 0 And b[i] <> 0
+        If PpToLower(a[i]) <> PpToLower(b[i]) Then Exit Function
+        i = i + 1
+    Wend
+    If a[i] <> b[i] Then Exit Function
+    PpStrEqCI = 1
+End Function
+
+Function PpLineTrimOff(line As *Byte, n As Long) As Long
+    Dim i As Long
+    PpLineTrimOff = 0
+    i = 0
+    While i < n
+        If line[i] = 32 Or line[i] = 9 Then
+            i = i + 1
+        Else
+            PpLineTrimOff = i
+            Exit Function
+        End If
+    Wend
+    PpLineTrimOff = n
+End Function
+
+Function PpIsWithStart(line As *Byte, n As Long, off As Long, exprOut As *Byte) As Long
+    Dim k(15) As Byte
+    Dim i As Long
+    Dim j As Long
+    PpIsWithStart = 0
+    If off >= n Then Exit Function
+    lstrcpy(VarPtr(k), "with")
+    If n - off < 4 Then Exit Function
+    i = 0
+    While k[i] <> 0
+        If PpToLower(line[off + i]) <> k[i] Then Exit Function
+        i = i + 1
+    Wend
+    If off + i >= n Then Exit Function
+    If line[off + i] <> 32 And line[off + i] <> 9 Then Exit Function
+    i = off + i + 1
+    While i < n And (line[i] = 32 Or line[i] = 9)
+        i = i + 1
+    Wend
+    j = 0
+    While i < n And j < 255
+        exprOut[j] = line[i]
+        j = j + 1
+        i = i + 1
+    Wend
+    While j > 0 And (exprOut[j - 1] = 32 Or exprOut[j - 1] = 9)
+        j = j - 1
+    Wend
+    exprOut[j] = 0
+    If j <= 0 Then Exit Function
+    PpIsWithStart = 1
+End Function
+
+Function PpIsEndWith(line As *Byte, n As Long, off As Long) As Long
+    Dim kEnd(7) As Byte
+    Dim kWith(7) As Byte
+    Dim i As Long
+    Dim j As Long
+    PpIsEndWith = 0
+    If off >= n Then Exit Function
+    lstrcpy(VarPtr(kEnd), "end")
+    lstrcpy(VarPtr(kWith), "with")
+    i = 0
+    While kEnd[i] <> 0
+        If off + i >= n Then Exit Function
+        If PpToLower(line[off + i]) <> kEnd[i] Then Exit Function
+        i = i + 1
+    Wend
+    i = off + i
+    While i < n And (line[i] = 32 Or line[i] = 9)
+        i = i + 1
+    Wend
+    j = 0
+    While kWith[j] <> 0
+        If i + j >= n Then Exit Function
+        If PpToLower(line[i + j]) <> kWith[j] Then Exit Function
+        j = j + 1
+    Wend
+    i = i + j
+    While i < n And (line[i] = 32 Or line[i] = 9)
+        i = i + 1
+    Wend
+    If i < n Then Exit Function
+    PpIsEndWith = 1
+End Function
+
+Function PpDotNeedsBase(line As *Byte, pos As Long) As Long
+    Dim c As Long
+    PpDotNeedsBase = 0
+    If pos <= 0 Then
+        PpDotNeedsBase = 1
+        Exit Function
+    End If
+    c = line[pos - 1]
+    If c = 32 Or c = 9 Then PpDotNeedsBase = 1
+    If c = 40 Or c = 43 Or c = 45 Or c = 42 Or c = 47 Or c = 92 Then PpDotNeedsBase = 1
+    If c = 61 Or c = 44 Or c = 60 Or c = 62 Then PpDotNeedsBase = 1
+End Function
+
+Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As Long
+    Dim off As Long
+    Dim expr(255) As Byte
+    Dim i As Long
+    Dim j As Long
+    Dim k As Long
+    Dim stackOff As Long
+    PpRewriteWithLine = 0
+    outN = 0
+    off = PpLineTrimOff(line, n)
+    If PpIsWithStart(line, n, off, VarPtr(expr)) <> 0 Then
+        If g_ppWithDepth >= PP_WITH_MAX Then Exit Function
+        stackOff = g_ppWithDepth * 256
+        PpStrCopy(VarPtr(g_ppWithStack[stackOff]), VarPtr(g_ppWithCur))
+        PpStrCopy(VarPtr(g_ppWithCur), VarPtr(expr))
+        g_ppWithDepth = g_ppWithDepth + 1
+        PpRewriteWithLine = 2
+        Exit Function
+    End If
+    If g_ppWithDepth > 0 And PpIsEndWith(line, n, off) <> 0 Then
+        g_ppWithDepth = g_ppWithDepth - 1
+        If g_ppWithDepth > 0 Then
+            stackOff = g_ppWithDepth * 256
+            PpStrCopy(VarPtr(g_ppWithCur), VarPtr(g_ppWithStack[stackOff]))
+        Else
+            g_ppWithCur[0] = 0
+        End If
+        PpRewriteWithLine = 2
+        Exit Function
+    End If
+    If g_ppWithDepth <= 0 Or g_ppWithCur[0] = 0 Then
+        PpRewriteWithLine = 1
+        Exit Function
+    End If
+    j = 0
+    i = 0
+    While i < n
+        If line[i] = 46 Then
+            If PpDotNeedsBase(line, i) <> 0 Then
+                k = 0
+                While g_ppWithCur[k] <> 0 And j < PP_LINE_MAX - 1
+                    out[j] = g_ppWithCur[k]
+                    j = j + 1
+                    k = k + 1
+                Wend
+            End If
+        End If
+        If j >= PP_LINE_MAX - 1 Then Exit Function
+        out[j] = line[i]
+        j = j + 1
+        i = i + 1
+    Wend
+    out[j] = 0
+    outN = j
+    PpRewriteWithLine = 1
+End Function
+
 Function PpIsN88Basic() As Long
     PpIsN88Basic = g_ppN88Basic
 End Function
@@ -352,9 +535,13 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
     Dim child As *Byte
     Dim childSize As Long
     Dim j As Long
+    Dim wOut(511) As Byte
+    Dim wN As Long
+    Dim wSt As Long
 
     PpExpandInto = 0
     If depth >= PP_MAX_DEPTH Then Exit Function
+    If depth = 0 Then PpWithReset()
     If PpEmitFileMark(dst, dstLen, dstCap, curFile) = 0 Then Exit Function
     i = 0
     While i < srcSize
@@ -400,12 +587,23 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
                 free(child)
             End If
         Else
-            If n > 0 Then
-                If PpAppend(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
+            wSt = PpRewriteWithLine(VarPtr(line), n, VarPtr(wOut), wN)
+            If wSt = 0 Then Exit Function
+            If wSt = 2 Then
+                ' With / End With 行は出力しない
+            ElseIf wSt = 1 And wN > 0 Then
+                If PpAppend(dst, dstLen, dstCap, VarPtr(wOut), wN) = 0 Then Exit Function
+                line[0] = 13
+                line[1] = 10
+                If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
+            Else
+                If n > 0 Then
+                    If PpAppend(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
+                End If
+                line[0] = 13
+                line[1] = 10
+                If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
             End If
-            line[0] = 13
-            line[1] = 10
-            If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
         End If
         If i < srcSize And src[i] = 13 Then i = i + 1
         If i < srcSize And src[i] = 10 Then i = i + 1
