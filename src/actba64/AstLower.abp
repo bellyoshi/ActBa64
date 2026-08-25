@@ -358,6 +358,7 @@ Function LowExprType(ctx As *LowerCtx, idx As Long) As Long
     Dim base As Long
     Dim lty As Long
     Dim rty As Long
+    Dim op As Long
 
     LowExprType = TY_LONG
     If idx < 0 Then Exit Function
@@ -388,9 +389,14 @@ Function LowExprType(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     If k = AST_BINOP Then
-        lty = LowExprType(ctx, nodes[idx].left)
-        rty = LowExprType(ctx, nodes[idx].right)
-        LowExprType = LowPromoteType(lty, rty)
+        op = nodes[idx].num
+        If op = BOP_EQ Or op = BOP_NE Or op = BOP_LT Or op = BOP_LE Or op = BOP_GT Or op = BOP_GE Then
+            LowExprType = TY_LONG
+        Else
+            lty = LowExprType(ctx, nodes[idx].left)
+            rty = LowExprType(ctx, nodes[idx].right)
+            LowExprType = LowPromoteType(lty, rty)
+        End If
         Exit Function
     End If
     If k = AST_UNARY Then
@@ -513,10 +519,12 @@ End Function
 
 ' eax が整数のとき Single 代入用に IEEE ビットへ（既にビットなら何もしない）
 Sub LowEmitCvtToSingleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
+    Dim ast As *Ast
     Dim nodes As *AstNode
     Dim lab As Long
     If LowExprIsSingleBits(ctx, rhsIdx) <> 0 Then Exit Sub
-    nodes = ctx.ast.nodes
+    ast = ctx.ast
+    nodes = ast.nodes
     If nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_MILLI Then
         lab = LowEnsureRtMilliToSingle(ctx)
         IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
@@ -527,12 +535,15 @@ End Sub
 
 ' rax が Double ビットでないとき IEEE Double へ
 Sub LowEmitCvtToDoubleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
+    Dim ast As *Ast
     Dim nodes As *AstNode
     Dim lab As Long
     Dim rty As Long
     If LowExprIsDoubleBits(ctx, rhsIdx) <> 0 Then Exit Sub
-    nodes = ctx.ast.nodes
+    ast = ctx.ast
+    nodes = ast.nodes
     rty = LowExprType(ctx, rhsIdx)
+    If rty = TY_DOUBLE Then Exit Sub
     If rty = TY_SINGLE Or (nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = 1) Then
         IrEmit(ctx.list, OP_CVT_SS_TO_SD, 0, 0)
         Exit Sub
@@ -553,6 +564,16 @@ Sub LowEmitCvtToLongIfNeeded(ctx As *LowerCtx, rhsIdx As Long, dstTy As Long)
     ElseIf LowExprType(ctx, rhsIdx) = TY_SINGLE Then
         IrEmit(ctx.list, OP_CVT_SS_TO_SD, 0, 0)
         IrEmit(ctx.list, OP_CVT_SD_TO_I32, 0, 0)
+    End If
+End Sub
+
+' 評価済み rax を式型に合わせて Double へ
+Sub LowEmitCvtRaxToDoubleFromTy(ctx As *LowerCtx, ty As Long)
+    If ty = TY_DOUBLE Then Exit Sub
+    If ty = TY_SINGLE Then
+        IrEmit(ctx.list, OP_CVT_SS_TO_SD, 0, 0)
+    Else
+        IrEmit(ctx.list, OP_CVT_I32_TO_SD, 0, 0)
     End If
 End Sub
 
@@ -4227,7 +4248,11 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     ElseIf k = AST_UNARY Then
         If nodes[idx].num = UOP_NEG Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-            IrEmit(list, OP_NEG_EAX, 0, 0)
+            If LowExprType(ctx, nodes[idx].left) = TY_DOUBLE Then
+                IrEmit(list, OP_NEG_SD, 0, 0)
+            Else
+                IrEmit(list, OP_NEG_EAX, 0, 0)
+            End If
             LowExpr = 1
         ElseIf nodes[idx].num = UOP_NOT Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
@@ -4238,6 +4263,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         End If
     ElseIf k = AST_BINOP Then
         op = nodes[idx].num
+        fty = LowPromoteType(LowExprType(ctx, nodes[idx].left), LowExprType(ctx, nodes[idx].right))
         If op = BOP_ADD Or op = BOP_CAT Then
             If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Or LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then
                 lab = LowEnsureRtCat(ctx)
@@ -4252,27 +4278,53 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             End If
         End If
         If op = BOP_ADD Or op = BOP_MUL Or op = BOP_AND Or op = BOP_OR Or op = BOP_SUB Or op = BOP_XOR Then
-            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-            IrEmit(list, OP_PUSH_RAX, 0, 0)
-            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-            IrEmit(list, OP_POP_RCX, 0, 0)
-            If op = BOP_ADD Then
-                IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
-            ElseIf op = BOP_SUB Then
-                ' eax=right, ecx=left -> eax = left - right
-                IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
-                IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
-            ElseIf op = BOP_MUL Then
-                IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
-            ElseIf op = BOP_AND Then
-                IrEmit(list, OP_AND_EAX_ECX, 0, 0)
-            ElseIf op = BOP_XOR Then
-                IrEmit(list, OP_XOR_EAX_ECX, 0, 0)
+            If fty = TY_DOUBLE And (op = BOP_ADD Or op = BOP_MUL Or op = BOP_SUB) Then
+                If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+                LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
+                IrEmit(list, OP_PUSH_RAX, 0, 0)
+                If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+                LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
+                IrEmit(list, OP_POP_RCX, 0, 0)
+                If op = BOP_ADD Then
+                    IrEmit(list, OP_ADD_SD, 0, 0)
+                ElseIf op = BOP_SUB Then
+                    IrEmit(list, OP_SUB_SD, 0, 0)
+                Else
+                    IrEmit(list, OP_MUL_SD, 0, 0)
+                End If
+                LowExpr = 1
             Else
-                IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+                If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+                IrEmit(list, OP_PUSH_RAX, 0, 0)
+                If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+                IrEmit(list, OP_POP_RCX, 0, 0)
+                If op = BOP_ADD Then
+                    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+                ElseIf op = BOP_SUB Then
+                    IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+                    IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+                ElseIf op = BOP_MUL Then
+                    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+                ElseIf op = BOP_AND Then
+                    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+                ElseIf op = BOP_XOR Then
+                    IrEmit(list, OP_XOR_EAX_ECX, 0, 0)
+                Else
+                    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+                End If
+                LowExpr = 1
             End If
-            LowExpr = 1
         ElseIf op = BOP_IDIV Or op = BOP_DIV Then
+            If fty = TY_DOUBLE Then
+                If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+                LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
+                IrEmit(list, OP_PUSH_RAX, 0, 0)
+                If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+                LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
+                IrEmit(list, OP_POP_RCX, 0, 0)
+                IrEmit(list, OP_DIV_SD, 0, 0)
+                LowExpr = 1
+            Else
             ' eax = left, ecx = right, edx = 0 → div ecx
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(list, OP_PUSH_RAX, 0, 0)
@@ -4282,6 +4334,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_XOR_EDX, 0, 0)
             IrEmit(list, OP_DIV_ECX, 0, 0)
             LowExpr = 1
+            End If
         ElseIf op = BOP_MOD Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
             IrEmit(list, OP_PUSH_RAX, 0, 0)
@@ -4342,6 +4395,32 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                     IrEmit(list, OP_JLE, labB, 0)
                 Else
                     IrEmit(list, OP_JL, labB, 0)
+                End If
+                IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
+                IrEmit(list, OP_LABEL, labB, 0)
+                LowExpr = 1
+            ElseIf fty = TY_DOUBLE Then
+                If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+                LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
+                IrEmit(list, OP_PUSH_RAX, 0, 0)
+                If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+                LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
+                IrEmit(list, OP_POP_RCX, 0, 0)
+                IrEmit(list, OP_UCOMISD, 0, 0)
+                IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+                labB = LowNewLab(ctx)
+                If op = BOP_EQ Then
+                    IrEmit(list, OP_JNE, labB, 0)
+                ElseIf op = BOP_NE Then
+                    IrEmit(list, OP_JE, labB, 0)
+                ElseIf op = BOP_LT Then
+                    IrEmit(list, OP_JAE, labB, 0)
+                ElseIf op = BOP_LE Then
+                    IrEmit(list, OP_JA, labB, 0)
+                ElseIf op = BOP_GT Then
+                    IrEmit(list, OP_JBE, labB, 0)
+                Else
+                    IrEmit(list, OP_JB, labB, 0)
                 End If
                 IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
                 IrEmit(list, OP_LABEL, labB, 0)
@@ -4424,6 +4503,9 @@ Function LowCmpFalseJcc(ctx As *LowerCtx, idx As Long) As Long
     Dim ast As *Ast
     Dim op As Long
     Dim list As *IrList
+    Dim fty As Long
+    Dim lty As Long
+    Dim rty As Long
 
     LowCmpFalseJcc = 0
     ast = ctx.ast
@@ -4454,10 +4536,38 @@ Function LowCmpFalseJcc(ctx As *LowerCtx, idx As Long) As Long
         End If
         Exit Function
     End If
+    lty = LowExprType(ctx, nodes[idx].left)
+    rty = LowExprType(ctx, nodes[idx].right)
+    fty = LowPromoteType(lty, rty)
     If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    If fty = TY_DOUBLE Then
+        LowEmitCvtRaxToDoubleFromTy(ctx, lty)
+    End If
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    If fty = TY_DOUBLE Then
+        LowEmitCvtRaxToDoubleFromTy(ctx, rty)
+    End If
     IrEmit(list, OP_POP_RCX, 0, 0)
+    If fty = TY_DOUBLE Then
+        IrEmit(list, OP_UCOMISD, 0, 0)
+        If op = BOP_EQ Then
+            LowCmpFalseJcc = OP_JNE
+        ElseIf op = BOP_NE Then
+            LowCmpFalseJcc = OP_JE
+        ElseIf op = BOP_LT Then
+            LowCmpFalseJcc = OP_JAE
+        ElseIf op = BOP_LE Then
+            LowCmpFalseJcc = OP_JA
+        ElseIf op = BOP_GT Then
+            LowCmpFalseJcc = OP_JBE
+        ElseIf op = BOP_GE Then
+            LowCmpFalseJcc = OP_JB
+        Else
+            ctx.err = 1
+        End If
+        Exit Function
+    End If
     IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
     If op = BOP_EQ Then
         LowCmpFalseJcc = OP_JNE
@@ -4496,6 +4606,14 @@ Function LowCmpTrueJcc(falseJcc As Long) As Long
         LowCmpTrueJcc = OP_JG
     ElseIf falseJcc = OP_JL Then
         LowCmpTrueJcc = OP_JGE
+    ElseIf falseJcc = OP_JAE Then
+        LowCmpTrueJcc = OP_JB
+    ElseIf falseJcc = OP_JB Then
+        LowCmpTrueJcc = OP_JAE
+    ElseIf falseJcc = OP_JA Then
+        LowCmpTrueJcc = OP_JBE
+    ElseIf falseJcc = OP_JBE Then
+        LowCmpTrueJcc = OP_JA
     End If
 End Function
 
@@ -4819,6 +4937,10 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
             End If
             If vTy = TY_SINGLE Then
                 LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+            ElseIf vTy = TY_DOUBLE Then
+                LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+            Else
+                LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, vTy)
             End If
             LowEmitStoreOff(ctx.list, vOff, vGlob)
         End If
@@ -4837,6 +4959,8 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
                 If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
                     If vTy = TY_SINGLE_ARR Then
                         LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+                    ElseIf vTy = TY_DOUBLE_ARR Then
+                        LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
                     End If
                 End If
             Else
@@ -4846,6 +4970,8 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
                     If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
                         If vTy = TY_SINGLE_ARR Then
                             LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+                        ElseIf vTy = TY_DOUBLE_ARR Then
+                            LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
                         End If
                     End If
                 End If
@@ -4938,6 +5064,10 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
             End If
             If vTy = TY_SINGLE Then
                 LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+            ElseIf vTy = TY_DOUBLE Then
+                LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+            Else
+                LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, vTy)
             End If
             If vByRef <> 0 Then
                 IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
@@ -5150,6 +5280,9 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
             If vTy = TY_SINGLE Then
                 lab = LowEnsureRtMilliToSingle(ctx)
+                IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+            ElseIf vTy = TY_DOUBLE Then
+                lab = LowEnsureRtMilliToDouble(ctx)
                 IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
             End If
         End If
@@ -5588,6 +5721,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     g_rtValLab = -1
     g_rtValMilliLab = -1
     g_rtMilliToSingleLab = -1
+    g_rtMilliToDoubleLab = -1
     g_rtMakeStrLab = -1
     g_rtStrCmpLab = -1
     g_rtStrFreeLab = -1
@@ -5838,6 +5972,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     LowEmitRtValBody(VarPtr(ctx))
     LowEmitRtValMilliBody(VarPtr(ctx))
     LowEmitRtMilliToSingleBody(VarPtr(ctx))
+    LowEmitRtMilliToDoubleBody(VarPtr(ctx))
     LowEmitRtMakeStrBody(VarPtr(ctx))
     LowEmitRtStrCmpBody(VarPtr(ctx))
     LowEmitRtStrFreeBody(VarPtr(ctx))
