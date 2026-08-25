@@ -1051,6 +1051,13 @@ Sub LowEmitExitImm(ctx As *LowerCtx, code As DWord)
     IrEmitStr(ctx.list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sExit))
 End Sub
 
+' Nested API call with own shadow space so it does not trash an outer call's stack args.
+Sub LowEmitApiCallShadow(list As *IrList, dllKind As Long, apiName As *Byte)
+    IrEmit(list, OP_SUB_RSP, 40, 0)
+    IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    IrEmit(list, OP_ADD_RSP, 40, 0)
+End Sub
+
 Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
@@ -2683,7 +2690,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_JZ, labZ, 0)
             IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
             lstrcpy(VarPtr(sLen), "lstrlenA")
-            IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
+            LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sLen))
             IrEmit(list, OP_JMP, labE, 0)
             IrEmit(list, OP_LABEL, labZ, 0)
             IrEmit(list, OP_XOR_EAX, 0, 0)
@@ -2832,7 +2839,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_JZ, labA, 0)
             IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
             lstrcpy(VarPtr(sLen), "lstrlenA")
-            IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
+            LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sLen))
             IrEmit(list, OP_JMP, labB, 0)
             IrEmit(list, OP_LABEL, labA, 0)
             IrEmit(list, OP_XOR_EAX, 0, 0)
@@ -2926,7 +2933,8 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             End If
             stk = (stk + 15) And (0 - 16)
             IrEmit(list, OP_SUB_RSP, stk, 0)
-            argi = 4
+            ' user args 1..n-1 into home/stack; this (rcx) set last
+            argi = 1
             While argi < nArgs
                 useAddr = LowCallUseAddr(ctx, args[argi], 0, 0, 1)
                 If useAddr <> 0 Then
@@ -2934,34 +2942,19 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 Else
                     If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
                 End If
-                IrEmit(list, OP_STORE_RSP_RAX, 32 + (argi - 4) * 8, 0)
+                IrEmit(list, OP_STORE_RSP_RAX, argi * 8, 0)
                 argi = argi + 1
             Wend
             If nArgs >= 4 Then
-                useAddr = LowCallUseAddr(ctx, args[3], 0, 0, 1)
-                If useAddr <> 0 Then
-                    If LowAddr(ctx, nodes[args[3]].left) = 0 Then Exit Function
-                Else
-                    If LowExprArg(ctx, nodes[args[3]].left) = 0 Then Exit Function
-                End If
+                IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
                 IrEmit(list, OP_MOV_R9_RAX, 0, 0)
             End If
             If nArgs >= 3 Then
-                useAddr = LowCallUseAddr(ctx, args[2], 0, 0, 1)
-                If useAddr <> 0 Then
-                    If LowAddr(ctx, nodes[args[2]].left) = 0 Then Exit Function
-                Else
-                    If LowExprArg(ctx, nodes[args[2]].left) = 0 Then Exit Function
-                End If
+                IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
                 IrEmit(list, OP_MOV_R8_RAX, 0, 0)
             End If
             If nArgs >= 2 Then
-                useAddr = LowCallUseAddr(ctx, args[1], 0, 0, 1)
-                If useAddr <> 0 Then
-                    If LowAddr(ctx, nodes[args[1]].left) = 0 Then Exit Function
-                Else
-                    If LowExprArg(ctx, nodes[args[1]].left) = 0 Then Exit Function
-                End If
+                IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
                 IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
             End If
             ' Me: 値クラスはアドレス、*Class はポインタ値
@@ -3210,8 +3203,9 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             Exit Function
         End If
         IrEmit(list, OP_SUB_RSP, stk, 0)
-        ' stack args 4..n-1
-        argi = 4
+        ' Evaluate all args into home/stack slots first so nested calls
+        ' (Len/lstrlenA etc.) cannot clobber already-set arg registers.
+        argi = 0
         While argi < nArgs
             bbit = 1
             j = 0
@@ -3225,44 +3219,24 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             Else
                 If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
             End If
-            IrEmit(list, OP_STORE_RSP_RAX, 32 + (argi - 4) * 8, 0)
+            IrEmit(list, OP_STORE_RSP_RAX, argi * 8, 0)
             argi = argi + 1
         Wend
-        ' register args 3,2,1,0
+        ' Load register args from home space (volatile regs safe now)
         If nArgs >= 4 Then
-            useAddr = LowCallUseAddr(ctx, args[3], byBits, 8, isApi)
-            If useAddr <> 0 Then
-                If LowAddr(ctx, nodes[args[3]].left) = 0 Then Exit Function
-            Else
-                If LowExprArg(ctx, nodes[args[3]].left) = 0 Then Exit Function
-            End If
+            IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
             IrEmit(list, OP_MOV_R9_RAX, 0, 0)
         End If
         If nArgs >= 3 Then
-            useAddr = LowCallUseAddr(ctx, args[2], byBits, 4, isApi)
-            If useAddr <> 0 Then
-                If LowAddr(ctx, nodes[args[2]].left) = 0 Then Exit Function
-            Else
-                If LowExprArg(ctx, nodes[args[2]].left) = 0 Then Exit Function
-            End If
+            IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
             IrEmit(list, OP_MOV_R8_RAX, 0, 0)
         End If
         If nArgs >= 2 Then
-            useAddr = LowCallUseAddr(ctx, args[1], byBits, 2, isApi)
-            If useAddr <> 0 Then
-                If LowAddr(ctx, nodes[args[1]].left) = 0 Then Exit Function
-            Else
-                If LowExprArg(ctx, nodes[args[1]].left) = 0 Then Exit Function
-            End If
+            IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
             IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
         End If
         If nArgs >= 1 Then
-            useAddr = LowCallUseAddr(ctx, args[0], byBits, 1, isApi)
-            If useAddr <> 0 Then
-                If LowAddr(ctx, nodes[args[0]].left) = 0 Then Exit Function
-            Else
-                If LowExprArg(ctx, nodes[args[0]].left) = 0 Then Exit Function
-            End If
+            IrEmit(list, OP_LOAD_RSP_RAX, 0, 0)
             IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
         End If
         If isApi <> 0 Then
