@@ -57,6 +57,8 @@ Dim g_rtStrLab As Long
 Dim g_rtPrintLab As Long
 Dim g_rtInputLab As Long
 Dim g_rtValLab As Long
+Dim g_rtValMilliLab As Long
+Dim g_rtMilliToSingleLab As Long
 Dim g_rtMakeStrLab As Long
 Dim g_rtStrCmpLab As Long
 Dim g_rtStrFreeLab As Long
@@ -1266,6 +1268,20 @@ Function LowEnsureRtVal(ctx As *LowerCtx) As Long
     LowEnsureRtVal = g_rtValLab
 End Function
 
+Function LowEnsureRtValMilli(ctx As *LowerCtx) As Long
+    If g_rtValMilliLab < 0 Then
+        g_rtValMilliLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtValMilli = g_rtValMilliLab
+End Function
+
+Function LowEnsureRtMilliToSingle(ctx As *LowerCtx) As Long
+    If g_rtMilliToSingleLab < 0 Then
+        g_rtMilliToSingleLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtMilliToSingle = g_rtMilliToSingleLab
+End Function
+
 Function LowEnsureRtMakeStr(ctx As *LowerCtx) As Long
     If g_rtMakeStrLab < 0 Then
         g_rtMakeStrLab = LowNewLab(ctx)
@@ -2004,6 +2020,335 @@ Sub LowEmitRtValBody(ctx As *LowerCtx)
     IrEmit(list, OP_JZ, labDone, 0)
     IrEmit(list, OP_NEG_EAX, 0, 0)
     IrEmit(list, OP_JMP, labDone, 0)
+
+    IrEmit(list, OP_LABEL, labDone, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' ValMilli(s) ― 符号付き十進数を千分率（milli）で返す。rc=文字列 ptr
+' "3.14"→3140, "7"→7000, "-1.5"→-1500, ".5"→500
+Sub LowEmitRtValMilliBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labSpace As Long
+    Dim labSign As Long
+    Dim labPlus As Long
+    Dim labDigit As Long
+    Dim labDot As Long
+    Dim labFrac As Long
+    Dim labPad As Long
+    Dim labScale As Long
+    Dim labEnd As Long
+    Dim labDone As Long
+
+    If g_rtValMilliLab < 0 Then Exit Sub
+    list = ctx.list
+    labSpace = LowNewLab(ctx)
+    labSign = LowNewLab(ctx)
+    labPlus = LowNewLab(ctx)
+    labDigit = LowNewLab(ctx)
+    labDot = LowNewLab(ctx)
+    labFrac = LowNewLab(ctx)
+    labPad = LowNewLab(ctx)
+    labScale = LowNewLab(ctx)
+    labEnd = LowNewLab(ctx)
+    labDone = LowNewLab(ctx)
+
+    ' locals: -8 ptr, -16 neg, -24 ival, -32 frac, -40 fracDigits
+    IrEmit(list, OP_LABEL, g_rtValMilliLab, 0)
+    IrEmit(list, OP_ENTER, 64, 0)
+    IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+
+    IrEmit(list, OP_LABEL, labSpace, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labSign, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labSpace, 0)
+
+    IrEmit(list, OP_LABEL, labSign, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 45, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labPlus, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labDigit, 0)
+
+    IrEmit(list, OP_LABEL, labPlus, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 43, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labDigit, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+
+    IrEmit(list, OP_LABEL, labDigit, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 48, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JL, labDot, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 57, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JG, labDot, 0)
+    IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -48, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_MOV_ECX, 10, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labDigit, 0)
+
+    IrEmit(list, OP_LABEL, labDot, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 46, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labScale, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+
+    IrEmit(list, OP_LABEL, labFrac, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 3, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labPad, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 48, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JL, labPad, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 57, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JG, labPad, 0)
+    IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -48, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_MOV_ECX, 10, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_INC_LOCAL, -40, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labFrac, 0)
+
+    IrEmit(list, OP_LABEL, labPad, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 3, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labScale, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_MOV_ECX, 10, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_INC_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labPad, 0)
+
+    IrEmit(list, OP_LABEL, labScale, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_MOV_ECX, 1000, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+
+    IrEmit(list, OP_LABEL, labEnd, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_NEG_EAX, 0, 0)
+    IrEmit(list, OP_JMP, labDone, 0)
+
+    IrEmit(list, OP_LABEL, labDone, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' MilliToSingle ― eax の千分率 → eax の IEEE Single ビット列（Parser.FloatBitsFromMilli 相当）
+Sub LowEmitRtMilliToSingleBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labZero As Long
+    Dim labPos As Long
+    Dim labNormLo As Long
+    Dim labNormHi As Long
+    Dim labNormDone As Long
+    Dim labBadExp As Long
+    Dim labDone As Long
+
+    If g_rtMilliToSingleLab < 0 Then Exit Sub
+    list = ctx.list
+    labZero = LowNewLab(ctx)
+    labPos = LowNewLab(ctx)
+    labNormLo = LowNewLab(ctx)
+    labNormHi = LowNewLab(ctx)
+    labNormDone = LowNewLab(ctx)
+    labBadExp = LowNewLab(ctx)
+    labDone = LowNewLab(ctx)
+
+    ' locals: -8 sign(0/1), -16 num, -24 uexp, -32 man, -40 biased
+    IrEmit(list, OP_LABEL, g_rtMilliToSingleLab, 0)
+    IrEmit(list, OP_ENTER, 64, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labZero, 0)
+
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labPos, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_NEG_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+
+    IrEmit(list, OP_LABEL, labPos, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+
+    IrEmit(list, OP_LABEL, labNormLo, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1000, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labNormHi, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, -140, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JL, labBadExp, 0)
+    IrEmit(list, OP_JMP, labNormLo, 0)
+
+    IrEmit(list, OP_LABEL, labNormHi, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 2000, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JL, labNormDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_XOR_EDX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, 2, 0)
+    IrEmit(list, OP_DIV_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_INC_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 140, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JG, labBadExp, 0)
+    IrEmit(list, OP_JMP, labNormHi, 0)
+
+    IrEmit(list, OP_LABEL, labNormDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_MOV_ECX, 1000, 0)
+    IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, 8388608, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_XOR_EDX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, 1000, 0)
+    IrEmit(list, OP_DIV_ECX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 127, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JLE, labBadExp, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 255, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labBadExp, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_MOV_ECX, 8388608, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_JMP, labDone, 0)
+
+    IrEmit(list, OP_LABEL, labBadExp, 0)
+    IrEmit(list, OP_LABEL, labZero, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
 
     IrEmit(list, OP_LABEL, labDone, 0)
     IrEmit(list, OP_LEAVE, 0, 0)
@@ -4146,6 +4491,12 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
     Dim saveDo As Long
     Dim saveWhile As Long
     Dim saveFor As Long
+    Dim doMode As Long
+    Dim cond As Long
+    Dim stepIdx As Long
+    Dim labStepNeg As Long
+    Dim labStepCont As Long
+    Dim useInc As Long
     Dim byRefs As *Long
     Dim types As *Long
     Dim list As *IrList
@@ -4575,7 +4926,7 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
             ctx.err = 1
             Exit Function
         End If
-        If vTy <> TY_STRING And vTy <> TY_LONG And vTy <> TY_BYTE And vTy <> TY_DOUBLE Then
+        If vTy <> TY_STRING And vTy <> TY_LONG And vTy <> TY_BYTE And vTy <> TY_DOUBLE And vTy <> TY_SINGLE Then
             Print "error: Input needs String or numeric variable"
             ctx.err = 1
             Exit Function
@@ -4583,9 +4934,17 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         lab = LowEnsureRtInput(ctx)
         IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
         If vTy <> TY_STRING Then
-            lab = LowEnsureRtVal(ctx)
+            If vTy = TY_SINGLE Or vTy = TY_DOUBLE Then
+                lab = LowEnsureRtValMilli(ctx)
+            Else
+                lab = LowEnsureRtVal(ctx)
+            End If
             IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
             IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+            If vTy = TY_SINGLE Then
+                lab = LowEnsureRtMilliToSingle(ctx)
+                IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
+            End If
         End If
         If vByRef <> 0 Then
             IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
@@ -4605,9 +4964,31 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         labEnd = LowNewLab(ctx)
         saveDo = g_doEndLab
         g_doEndLab = labEnd
-        IrEmit(ctx.list, OP_LABEL, labTop, 0)
-        If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
-        IrEmit(ctx.list, OP_JMP, labTop, 0)
+        doMode = nodes[idx].extra
+        cond = nodes[idx].left
+        If doMode = DO_WHILE_TOP Then
+            IrEmit(ctx.list, OP_LABEL, labTop, 0)
+            If LowJumpIfFalse(ctx, cond, labEnd) = 0 Then Exit Function
+            If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(ctx.list, OP_JMP, labTop, 0)
+        ElseIf doMode = DO_UNTIL_TOP Then
+            IrEmit(ctx.list, OP_LABEL, labTop, 0)
+            If LowJumpIfTrue(ctx, cond, labEnd) = 0 Then Exit Function
+            If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(ctx.list, OP_JMP, labTop, 0)
+        ElseIf doMode = DO_WHILE_BOTTOM Then
+            IrEmit(ctx.list, OP_LABEL, labTop, 0)
+            If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
+            If LowJumpIfTrue(ctx, cond, labTop) = 0 Then Exit Function
+        ElseIf doMode = DO_UNTIL_BOTTOM Then
+            IrEmit(ctx.list, OP_LABEL, labTop, 0)
+            If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
+            If LowJumpIfFalse(ctx, cond, labTop) = 0 Then Exit Function
+        Else
+            IrEmit(ctx.list, OP_LABEL, labTop, 0)
+            If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
+            IrEmit(ctx.list, OP_JMP, labTop, 0)
+        End If
         IrEmit(ctx.list, OP_LABEL, labEnd, 0)
         g_doEndLab = saveDo
         LowStmtHeavy = 1
@@ -4624,7 +5005,7 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         g_whileEndLab = saveWhile
         LowStmtHeavy = 1
     ElseIf k = AST_FOR Then
-        ' left=var, right=from, extra=to, num=body
+        ' left=var, right=from, extra=to, num=body, strId=step
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
         AstCopyStr(ast, nodes[idx].left, VarPtr(name))
         If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
@@ -4634,29 +5015,75 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         LowEmitStoreOff(ctx.list, vOff, vGlob)
         labTop = LowNewLab(ctx)
         labEnd = LowNewLab(ctx)
+        labStepNeg = LowNewLab(ctx)
+        labStepCont = LowNewLab(ctx)
         saveFor = g_forEndLab
         g_forEndLab = labEnd
+        stepIdx = nodes[idx].strId
+        useInc = 0
+        If stepIdx >= 0 Then
+            If nodes[stepIdx].kind = AST_NUM Then
+                If nodes[stepIdx].num = 1 Then
+                    useInc = 1
+                End If
+            End If
+        End If
         IrEmit(ctx.list, OP_LABEL, labTop, 0)
         LowEmitLoadOff(ctx.list, vOff, vGlob)
         IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
         If LowExpr(ctx, nodes[idx].extra) = 0 Then Exit Function
+        IrEmit(ctx.list, OP_MOV_EDX_EAX, 0, 0)
         IrEmit(ctx.list, OP_POP_RCX, 0, 0)
-        IrEmit(ctx.list, OP_CMP_ECX_EAX, 0, 0)
-        ' exit when i > to  (ecx=i, eax=to)
-        IrEmit(ctx.list, OP_JG, labEnd, 0)
+        If stepIdx >= 0 Then
+            If LowExpr(ctx, stepIdx) = 0 Then Exit Function
+            IrEmit(ctx.list, OP_TEST_EAX, 0, 0)
+            IrEmit(ctx.list, OP_JL, labStepNeg, 0)
+            IrEmit(ctx.list, OP_MOV_EAX_EDX, 0, 0)
+            IrEmit(ctx.list, OP_CMP_ECX_EAX, 0, 0)
+            IrEmit(ctx.list, OP_JG, labEnd, 0)
+            IrEmit(ctx.list, OP_JMP, labStepCont, 0)
+            IrEmit(ctx.list, OP_LABEL, labStepNeg, 0)
+            IrEmit(ctx.list, OP_MOV_EAX_EDX, 0, 0)
+            IrEmit(ctx.list, OP_CMP_ECX_EAX, 0, 0)
+            IrEmit(ctx.list, OP_JL, labEnd, 0)
+            IrEmit(ctx.list, OP_LABEL, labStepCont, 0)
+        Else
+            IrEmit(ctx.list, OP_MOV_EAX_EDX, 0, 0)
+            IrEmit(ctx.list, OP_CMP_ECX_EAX, 0, 0)
+            IrEmit(ctx.list, OP_JG, labEnd, 0)
+        End If
         body = nodes[idx].num
         If LowStmtList(ctx, body) = 0 Then Exit Function
-        If vGlob <> 0 Then
+        If useInc <> 0 And vGlob = 0 Then
+            IrEmit(ctx.list, OP_INC_LOCAL, vOff, 0)
+        ElseIf useInc <> 0 Then
             LowEmitLoadOff(ctx.list, vOff, vGlob)
             IrEmit(ctx.list, OP_MOV_ECX, 1, 0)
             IrEmit(ctx.list, OP_ADD_EAX_ECX, 0, 0)
             LowEmitStoreOff(ctx.list, vOff, vGlob)
+        ElseIf stepIdx >= 0 Then
+            LowEmitLoadOff(ctx.list, vOff, vGlob)
+            IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
+            If LowExpr(ctx, stepIdx) = 0 Then Exit Function
+            IrEmit(ctx.list, OP_POP_RCX, 0, 0)
+            IrEmit(ctx.list, OP_ADD_EAX_ECX, 0, 0)
+            LowEmitStoreOff(ctx.list, vOff, vGlob)
         Else
-            IrEmit(ctx.list, OP_INC_LOCAL, vOff, 0)
+            If vGlob <> 0 Then
+                LowEmitLoadOff(ctx.list, vOff, vGlob)
+                IrEmit(ctx.list, OP_MOV_ECX, 1, 0)
+                IrEmit(ctx.list, OP_ADD_EAX_ECX, 0, 0)
+                LowEmitStoreOff(ctx.list, vOff, vGlob)
+            Else
+                IrEmit(ctx.list, OP_INC_LOCAL, vOff, 0)
+            End If
         End If
         IrEmit(ctx.list, OP_JMP, labTop, 0)
         IrEmit(ctx.list, OP_LABEL, labEnd, 0)
         g_forEndLab = saveFor
+        LowStmtHeavy = 1
+    ElseIf k = AST_WITH Then
+        If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
         LowStmtHeavy = 1
     Else
         Print "error: unsupported statement kind " + Str$(k)
@@ -4796,6 +5223,8 @@ Function LowCollectDimsInList(ctx As *LowerCtx, idx As Long, asGlob As Long) As 
             If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
         ElseIf k = AST_FOR Then
             If LowCollectDimsInList(ctx, nodes[cur].num, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_WITH Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
         End If
         cur = nodes[cur].nxt
     Wend
@@ -4950,6 +5379,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     g_rtPrintLab = -1
     g_rtInputLab = -1
     g_rtValLab = -1
+    g_rtValMilliLab = -1
+    g_rtMilliToSingleLab = -1
     g_rtMakeStrLab = -1
     g_rtStrCmpLab = -1
     g_rtStrFreeLab = -1
@@ -5198,6 +5629,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     LowEmitRtPrintBody(VarPtr(ctx))
     LowEmitRtInputBody(VarPtr(ctx))
     LowEmitRtValBody(VarPtr(ctx))
+    LowEmitRtValMilliBody(VarPtr(ctx))
+    LowEmitRtMilliToSingleBody(VarPtr(ctx))
     LowEmitRtMakeStrBody(VarPtr(ctx))
     LowEmitRtStrCmpBody(VarPtr(ctx))
     LowEmitRtStrFreeBody(VarPtr(ctx))
