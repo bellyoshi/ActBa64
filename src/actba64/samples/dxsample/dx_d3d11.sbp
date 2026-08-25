@@ -4,11 +4,10 @@ Dim g_pDevice As *ID3D11Device
 Dim g_pContext As *ID3D11DeviceContext
 Dim g_pSwapChain As *IDXGISwapChain
 Dim g_pRTV As *ID3D11RenderTargetView
-Dim g_pVB As *ID3D11Buffer
 Dim g_pVS As *ID3D11VertexShader
 Dim g_pPS As *ID3D11PixelShader
-Dim g_pLayout As *ID3D11InputLayout
-Dim g_vp As D3D11_VIEWPORT
+Dim g_vpW As Long
+Dim g_vpH As Long
 
 ' IID_ID3D11Texture2D = {6f15aaf2-d208-4e89-9ab4-489535d34f9c}
 Dim IID_ID3D11Texture2D As GUID
@@ -32,10 +31,6 @@ Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, p
 End Function
 
 Sub dx_ReleaseAll()
-	If g_pLayout Then
-		g_pLayout->Release()
-		g_pLayout = 0
-	End If
 	If g_pPS Then
 		g_pPS->Release()
 		g_pPS = 0
@@ -43,10 +38,6 @@ Sub dx_ReleaseAll()
 	If g_pVS Then
 		g_pVS->Release()
 		g_pVS = 0
-	End If
-	If g_pVB Then
-		g_pVB->Release()
-		g_pVB = 0
 	End If
 	If g_pRTV Then
 		g_pRTV->Release()
@@ -68,10 +59,13 @@ End Sub
 
 Function dx_CreateTriangle() As Long
 	Dim hlsl As String
-	hlsl = "struct VS_IN{float3 pos:POSITION;float4 col:COLOR;};"
-	hlsl = hlsl + "struct PS_IN{float4 pos:SV_POSITION;float4 col:COLOR;};"
-	hlsl = hlsl + "PS_IN VS(VS_IN i){PS_IN o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
-	hlsl = hlsl + "float4 PS(PS_IN i):SV_Target{return i.col;}"
+	' SV_VertexID の小さな三角形（時計回り = D3D11 デフォルト前面）+ 赤
+	hlsl = "float4 VS(uint id:SV_VertexID):SV_POSITION{"
+	hlsl = hlsl + "float2 p=float2(0.0,0.5);"
+	hlsl = hlsl + "if(id==1)p=float2(0.5,-0.5);"
+	hlsl = hlsl + "if(id==2)p=float2(-0.5,-0.5);"
+	hlsl = hlsl + "return float4(p,0.0,1.0);}"
+	hlsl = hlsl + "float4 PS():SV_Target{return float4(1.0,0.0,0.0,1.0);}"
 
 	Dim pVSBlob As *ID3DBlob
 	Dim pPSBlob As *ID3DBlob
@@ -91,7 +85,13 @@ Function dx_CreateTriangle() As Long
 	End If
 
 	Dim hr As DWord
-	hr = g_pDevice->CreateVertexShader(pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), 0, VarPtr(g_pVS))
+	Dim vsCode As VoidPtr
+	Dim vsLen As DWord
+	Dim psCode As VoidPtr
+	Dim psLen As DWord
+	vsCode = pVSBlob->GetBufferPointer()
+	vsLen = pVSBlob->GetBufferSize()
+	hr = g_pDevice->CreateVertexShader(vsCode, vsLen, 0, VarPtr(g_pVS))
 	If hr Then
 		pVSBlob->Release()
 		pPSBlob->Release()
@@ -99,79 +99,11 @@ Function dx_CreateTriangle() As Long
 		Exit Function
 	End If
 
-	hr = g_pDevice->CreatePixelShader(pPSBlob->GetBufferPointer(), pPSBlob->GetBufferSize(), 0, VarPtr(g_pPS))
-	If hr Then
-		pVSBlob->Release()
-		pPSBlob->Release()
-		dx_CreateTriangle = 0
-		Exit Function
-	End If
-
-	Dim semPOSITION As String
-	Dim semCOLOR As String
-	semPOSITION = "POSITION"
-	semCOLOR = "COLOR"
-	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
-	ZeroMemory(VarPtr(layout[0]), SizeOf(D3D11_INPUT_ELEMENT_DESC) * 2)
-	layout[0].SemanticName = StrPtr(semPOSITION)
-	layout[0].SemanticIndex = 0
-	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
-	layout[0].InputSlot = 0
-	layout[0].AlignedByteOffset = 0
-	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
-	layout[0].InstanceDataStepRate = 0
-	layout[1].SemanticName = StrPtr(semCOLOR)
-	layout[1].SemanticIndex = 0
-	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
-	layout[1].InputSlot = 0
-	layout[1].AlignedByteOffset = 12
-	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
-	layout[1].InstanceDataStepRate = 0
-
-	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), VarPtr(g_pLayout))
+	psCode = pPSBlob->GetBufferPointer()
+	psLen = pPSBlob->GetBufferSize()
+	hr = g_pDevice->CreatePixelShader(psCode, psLen, 0, VarPtr(g_pPS))
 	pVSBlob->Release()
 	pPSBlob->Release()
-	If hr Then
-		dx_CreateTriangle = 0
-		Exit Function
-	End If
-
-	Dim vtx[2] As SimpleVertex
-	vtx[0].x = 0.0
-	vtx[0].y = 0.5
-	vtx[0].z = 0.0
-	vtx[0].r = 1.0
-	vtx[0].g = 0.0
-	vtx[0].b = 0.0
-	vtx[0].a = 1.0
-
-	vtx[1].x = 0.5
-	vtx[1].y = -0.5
-	vtx[1].z = 0.0
-	vtx[1].r = 0.0
-	vtx[1].g = 1.0
-	vtx[1].b = 0.0
-	vtx[1].a = 1.0
-
-	vtx[2].x = -0.5
-	vtx[2].y = -0.5
-	vtx[2].z = 0.0
-	vtx[2].r = 0.0
-	vtx[2].g = 0.0
-	vtx[2].b = 1.0
-	vtx[2].a = 1.0
-
-	Dim bd As D3D11_BUFFER_DESC
-	ZeroMemory(VarPtr(bd), Len(bd))
-	bd.ByteWidth = SizeOf(SimpleVertex) * 3
-	bd.Usage = D3D11_USAGE_DEFAULT
-	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
-
-	Dim initData As D3D11_SUBRESOURCE_DATA
-	ZeroMemory(VarPtr(initData), Len(initData))
-	initData.pSysMem = VarPtr(vtx[0])
-
-	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
 	If hr Then
 		dx_CreateTriangle = 0
 		Exit Function
@@ -189,8 +121,10 @@ Function dx_Init(hWnd As HWND) As Long
 	Dim h As Long
 	w = rc.right - rc.left
 	h = rc.bottom - rc.top
-	If w < 1 Then w = 1
-	If h < 1 Then h = 1
+	If w < 1 Then w = 640
+	If h < 1 Then h = 480
+	g_vpW = w
+	g_vpH = h
 
 	Dim sd As DXGI_SWAP_CHAIN_DESC
 	ZeroMemory(VarPtr(sd), Len(sd))
@@ -250,12 +184,6 @@ Function dx_Init(hWnd As HWND) As Long
 		Exit Function
 	End If
 
-	ZeroMemory(VarPtr(g_vp), Len(g_vp))
-	g_vp.Width = w
-	g_vp.Height = h
-	g_vp.MinDepth = 0.0
-	g_vp.MaxDepth = 1.0
-
 	If dx_CreateTriangle() = 0 Then
 		MessageBox(hWnd, "CreateTriangle resources failed.", "Error", MB_OK or MB_ICONSTOP)
 		dx_Init = 0
@@ -273,22 +201,32 @@ End Sub
 
 Sub dx_RenderClear()
 	Dim clearColor[3] As Single
+	Dim vp[5] As Single
+	Dim wBits As Long
+	Dim hBits As Long
+
 	clearColor[0] = 0.05
 	clearColor[1] = 0.10
 	clearColor[2] = 0.20
 	clearColor[3] = 1.0
 
+	' D3D11_VIEWPORT を Single[6] で渡す（Clear はビューポート無視、Draw は必須）
+	vp[0] = 0.0
+	vp[1] = 0.0
+	wBits = LongToSingleBits(g_vpW)
+	hBits = LongToSingleBits(g_vpH)
+	memcpy(VarPtr(vp[2]), VarPtr(wBits), 4)
+	memcpy(VarPtr(vp[3]), VarPtr(hBits), 4)
+	vp[4] = 0.0
+	vp[5] = 1.0
+
 	g_pContext->OMSetRenderTargets(1, VarPtr(g_pRTV), 0)
-	g_pContext->RSSetViewports(1, VarPtr(g_vp))
+	g_pContext->RSSetViewports(1, VarPtr(vp[0]))
 	g_pContext->ClearRenderTargetView(g_pRTV, VarPtr(clearColor[0]))
 End Sub
 
 Sub dx_RenderDraw()
-	Dim stride As DWord
-	stride = SizeOf(SimpleVertex)
-	Dim offset = 0 As DWord
-	g_pContext->IASetInputLayout(g_pLayout)
-	g_pContext->IASetVertexBuffers(0, 1, VarPtr(g_pVB), VarPtr(stride), VarPtr(offset))
+	g_pContext->IASetInputLayout(0)
 	g_pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
 	g_pContext->VSSetShader(g_pVS, 0, 0)
 	g_pContext->PSSetShader(g_pPS, 0, 0)
