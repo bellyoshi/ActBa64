@@ -2004,8 +2004,12 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
                 If vTy <> TY_LONG_ARR Then
                     If vTy <> TY_STRING_ARR Then
                         If vTy <> TY_DOUBLE_ARR Then
-                            ctx.err = 1
-                            Exit Function
+                            If vTy <> TY_SINGLE_ARR Then
+                                If vTy <> TY_UDT_ARR Then
+                                    ctx.err = 1
+                                    Exit Function
+                                End If
+                            End If
                         End If
                     End If
                 End If
@@ -2019,10 +2023,38 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(list, OP_PUSH_RAX, 0, 0)
             LowEmitLeaOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
-            If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+            If vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
                 IrEmit(list, OP_SHL_ECX_3, 0, 0)
+                IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+            ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+                ' Long/DWord/Single = 4 bytes（WinAPI の UINT* 等と互換）
+                IrEmit(list, OP_PUSH_RAX, 0, 0)
+                IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+                IrEmit(list, OP_MOV_ECX, 4, 0)
+                IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+                IrEmit(list, OP_POP_RCX, 0, 0)
+                IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+            ElseIf vTy = TY_UDT_ARR Then
+                ti = vTypeIdx
+                tsizes = tt.typeSizes
+                esz = tsizes[ti]
+                If esz <= 0 Then
+                    ctx.err = 1
+                    Exit Function
+                End If
+                If esz = 1 Then
+                    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+                Else
+                    IrEmit(list, OP_PUSH_RAX, 0, 0)
+                    IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+                    IrEmit(list, OP_MOV_ECX, esz, 0)
+                    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+                    IrEmit(list, OP_POP_RCX, 0, 0)
+                    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+                End If
+            Else
+                IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
             End If
-            IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
             LowAddr = 1
             Exit Function
         End If
@@ -2113,11 +2145,44 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(list, OP_PUSH_RAX, 0, 0)
         If vTy = TY_BYTE_ARR Then
             LowEmitLeaOff(list, vOff, vGlob)
-        ElseIf vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+        ElseIf vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
             LowEmitLeaOff(list, vOff, vGlob)
             IrEmit(list, OP_POP_RCX, 0, 0)
             IrEmit(list, OP_SHL_ECX_3, 0, 0)
             IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+            LowAddr = 1
+            Exit Function
+        ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+            LowEmitLeaOff(list, vOff, vGlob)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            IrEmit(list, OP_MOV_ECX, 4, 0)
+            IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+            LowAddr = 1
+            Exit Function
+        ElseIf vTy = TY_UDT_ARR Then
+            ti = vTypeIdx
+            tsizes = tt.typeSizes
+            esz = tsizes[ti]
+            If esz <= 0 Then
+                ctx.err = 1
+                Exit Function
+            End If
+            LowEmitLeaOff(list, vOff, vGlob)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            If esz = 1 Then
+                IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+            Else
+                IrEmit(list, OP_PUSH_RAX, 0, 0)
+                IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+                IrEmit(list, OP_MOV_ECX, esz, 0)
+                IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+                IrEmit(list, OP_POP_RCX, 0, 0)
+                IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+            End If
             LowAddr = 1
             Exit Function
         ElseIf vTy = TY_PTR_BYTE Then
@@ -2164,6 +2229,14 @@ Function LowExprArg(ctx As *LowerCtx, idx As Long) As Long
                 LowExprArg = LowAddr(ctx, idx)
                 Exit Function
             End If
+            If vTy = TY_SINGLE_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_UDT_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
             If vTy = TY_STRING_ARR Then
                 LowExprArg = LowAddr(ctx, idx)
                 Exit Function
@@ -2207,7 +2280,18 @@ End Function
 
 Function LowUseArgAddr(ctx As *LowerCtx, idx As Long, byBits As Long, bit As Long, isApi As Long) As Long
     Dim v As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
     LowUseArgAddr = 0
+    If idx >= 0 Then
+        ast = ctx.ast
+        nodes = ast.nodes
+        If nodes[idx].kind = AST_BUILTIN Then
+            If nodes[idx].num = BI_VARPTR Or nodes[idx].num = BI_STRPTR Then
+                Exit Function
+            End If
+        End If
+    End If
     v = byBits And bit
     If v <> 0 Then
         LowUseArgAddr = 1
@@ -2332,6 +2416,7 @@ Sub LowEmitGlobalClassDtors(ctx As *LowerCtx)
 End Sub
 
 Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -2504,8 +2589,14 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
                 If vTy = TY_PTR_LONG Or vTy = TY_LONG_ARR Then
                     LowLoadSized(list, 4)
-                ElseIf vTy = TY_STRING_ARR Then
+                ElseIf vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
                     LowLoadSized(list, 8)
+                ElseIf vTy = TY_SINGLE_ARR Then
+                    LowLoadSized(list, 4)
+                ElseIf vTy = TY_UDT_ARR Then
+                    ' 要素全体の値ロードはしない（メンバアクセス経由）
+                    ctx.err = 1
+                    Exit Function
                 Else
                     IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
                 End If
@@ -2880,7 +2971,11 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 If LowAddr(ctx, nodes[idx].right) = 0 Then Exit Function
             End If
             IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-            lab = TyFindVirt(tt, ti, VarPtr(name))
+            lab = -1
+            vals = tt.typeVirtCount
+            If vals[ti] > 0 Then
+                lab = TyFindVirt(tt, ti, VarPtr(name))
+            End If
             If lab >= 0 Then
                 ' COM / Virtual: call [ [*this] + slot*8 ]
                 IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
@@ -3031,13 +3126,19 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
             End If
             If vTy = TY_LONG_ARR And nodes[idx].num = 1 Then
                 If LowAddr(ctx, idx) = 0 Then Exit Function
-                IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+                IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
                 LowExpr = 1
                 Exit Function
             End If
             If vTy = TY_DOUBLE_ARR And nodes[idx].num = 1 Then
                 If LowAddr(ctx, idx) = 0 Then Exit Function
                 IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+                LowExpr = 1
+                Exit Function
+            End If
+            If vTy = TY_SINGLE_ARR And nodes[idx].num = 1 Then
+                If LowAddr(ctx, idx) = 0 Then Exit Function
+                IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
                 LowExpr = 1
                 Exit Function
             End If
@@ -3548,7 +3649,71 @@ Function LowJumpIfTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
     End If
 End Function
 
+' If を別関数に分離（LowStmt 巨大フレームの入れ子によるスタック破壊を避ける）
+Function LowStmtIf(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim labElse As Long
+    Dim labEnd As Long
+    Dim thenList As Long
+    Dim elseList As Long
+    Dim r As Long
+
+    LowStmtIf = 0
+    ast = ctx.ast
+    nodes = ast.nodes
+    thenList = nodes[idx].right
+    elseList = nodes[idx].extra
+    labElse = LowNewLab(ctx)
+    labEnd = LowNewLab(ctx)
+    r = LowJumpIfFalse(ctx, nodes[idx].left, labElse)
+    If r = 0 Then Exit Function
+    r = LowStmtList(ctx, thenList)
+    If r = 0 Then Exit Function
+    IrEmit(ctx.list, OP_JMP, labEnd, 0)
+    IrEmit(ctx.list, OP_LABEL, labElse, 0)
+    r = LowStmtList(ctx, elseList)
+    If r = 0 Then Exit Function
+    IrEmit(ctx.list, OP_LABEL, labEnd, 0)
+    LowStmtIf = 1
+End Function
+
 Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+
+    ' 薄いディスパッチ: 巨大フレームの LowStmtHeavy を入れ子にしない
+    LowStmt = 0
+    If idx < 0 Then
+        LowStmt = 1
+        Exit Function
+    End If
+    ast = ctx.ast
+    nodes = ast.nodes
+    k = nodes[idx].kind
+    If k = AST_IF Then
+        LowStmt = LowStmtIf(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_CALL Then
+        LowStmt = LowExpr(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_EXITFUNC Then
+        If g_funcEndLab < 0 Then
+            ctx.err = 1
+            Exit Function
+        End If
+        IrEmit(ctx.list, OP_JMP, g_funcEndLab, 0)
+        LowStmt = 1
+        Exit Function
+    End If
+    LowStmt = LowStmtHeavy(ctx, idx)
+End Function
+
+Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -3596,9 +3761,9 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
     Dim kCtor(7) As Byte
     Dim names As *Byte
 
-    LowStmt = 0
+    LowStmtHeavy = 0
     If idx < 0 Then
-        LowStmt = 1
+        LowStmtHeavy = 1
         Exit Function
     End If
     ast = ctx.ast
@@ -3681,7 +3846,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                         IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
                         IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
                         IrEmit(ctx.list, OP_ADD_RSP, stk, 0)
-                        LowStmt = 1
+                        LowStmtHeavy = 1
                         Exit Function
                     End If
                 End If
@@ -3696,11 +3861,11 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             End If
             LowEmitStoreOff(ctx.list, vOff, vGlob)
         End If
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_CONST Then
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_TYPE Then
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_ASSIGN Then
         leftIdx = nodes[idx].left
         leftK = nodes[leftIdx].kind
@@ -3712,8 +3877,10 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             If leftK = AST_CALL Then
                 AstCopyStr(ast, leftIdx, VarPtr(name))
                 If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-                    If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+                    If vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
                         IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+                    ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+                        LowStoreSized(ctx.list, 4)
                     Else
                         IrEmit(ctx.list, OP_STORE_BYTE_RAX_CL, 0, 0)
                     End If
@@ -3753,8 +3920,10 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                 Else
                     AstCopyStr(ast, base, VarPtr(name))
                     If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-                        If vTy = TY_LONG_ARR Or vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+                        If vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
                             IrEmit(ctx.list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+                        ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+                            LowStoreSized(ctx.list, 4)
                         ElseIf vTy = TY_PTR_LONG Then
                             LowStoreSized(ctx.list, 4)
                         Else
@@ -3765,7 +3934,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                     End If
                 End If
             End If
-            LowStmt = 1
+            LowStmtHeavy = 1
         ElseIf leftK = AST_MEMBER Then
             If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
             IrEmit(ctx.list, OP_PUSH_RAX, 0, 0)
@@ -3779,7 +3948,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
                 Exit Function
             End If
             LowStoreSized(ctx.list, fsz)
-            LowStmt = 1
+            LowStmtHeavy = 1
         ElseIf leftK = AST_VAR Then
             If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
             AstCopyStr(ast, nodes[idx].left, VarPtr(name))
@@ -3796,16 +3965,16 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             Else
                 LowEmitStoreOff(ctx.list, vOff, vGlob)
             End If
-            LowStmt = 1
+            LowStmtHeavy = 1
         Else
             ctx.err = 1
         End If
     ElseIf k = AST_FUNC Then
         ' emitted separately
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_DECLARE Then
         ' 宣言のみ（コード生成なし）
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_INSMENU Then
         ' InsertMenuA(hMenu, pos, flags, uIDNewItem, lpNewItem)
         list = ctx.list
@@ -3877,45 +4046,44 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         lstrcpy(VarPtr(sApi), "InsertMenuA")
         IrEmitStr(list, OP_CALL_API, IR_DLL_USER32, VarPtr(sApi))
         IrEmit(list, OP_ADD_RSP, stk, 0)
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_CALL Then
-        If LowExpr(ctx, idx) = 0 Then Exit Function
-        LowStmt = 1
+        LowStmtHeavy = LowExpr(ctx, idx)
     ElseIf k = AST_EXIT Then
         If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
         LowEmitExitEax(ctx)
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_EXITDO Then
         If g_doEndLab < 0 Then
             ctx.err = 1
             Exit Function
         End If
         IrEmit(ctx.list, OP_JMP, g_doEndLab, 0)
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_EXITWHILE Then
         If g_whileEndLab < 0 Then
             ctx.err = 1
             Exit Function
         End If
         IrEmit(ctx.list, OP_JMP, g_whileEndLab, 0)
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_EXITFOR Then
         If g_forEndLab < 0 Then
             ctx.err = 1
             Exit Function
         End If
         IrEmit(ctx.list, OP_JMP, g_forEndLab, 0)
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_EXITFUNC Then
         If g_funcEndLab < 0 Then
             ctx.err = 1
             Exit Function
         End If
         IrEmit(ctx.list, OP_JMP, g_funcEndLab, 0)
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_END Then
         LowEmitExitImm(ctx, 0)
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_PRINT Then
         If LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
             If nodes[idx].left >= 0 Then
@@ -3965,7 +4133,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
             IrEmit(ctx.list, OP_MOV_RCX_RAX, 0, 0)
             IrEmit(ctx.list, OP_CALL_LAB, lab, 0)
         End If
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_INPUT Then
         ' Input var ― String はそのまま、数値型は十進整数へ変換
         If nodes[idx].left < 0 Then
@@ -4001,23 +4169,9 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         Else
             LowEmitStoreOff(ctx.list, vOff, vGlob)
         End If
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_IF Then
-        labElse = LowNewLab(ctx)
-        labEnd = LowNewLab(ctx)
-        If LowJumpIfFalse(ctx, nodes[idx].left, labElse) = 0 Then
-            Exit Function
-        End If
-        If LowStmtList(ctx, nodes[idx].right) = 0 Then
-            Exit Function
-        End If
-        IrEmit(ctx.list, OP_JMP, labEnd, 0)
-        IrEmit(ctx.list, OP_LABEL, labElse, 0)
-        If LowStmtList(ctx, nodes[idx].extra) = 0 Then
-            Exit Function
-        End If
-        IrEmit(ctx.list, OP_LABEL, labEnd, 0)
-        LowStmt = 1
+        LowStmtHeavy = LowStmtIf(ctx, idx)
     ElseIf k = AST_DO Then
         labTop = LowNewLab(ctx)
         labEnd = LowNewLab(ctx)
@@ -4028,7 +4182,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(ctx.list, OP_JMP, labTop, 0)
         IrEmit(ctx.list, OP_LABEL, labEnd, 0)
         g_doEndLab = saveDo
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_WHILE Then
         labTop = LowNewLab(ctx)
         labEnd = LowNewLab(ctx)
@@ -4040,7 +4194,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(ctx.list, OP_JMP, labTop, 0)
         IrEmit(ctx.list, OP_LABEL, labEnd, 0)
         g_whileEndLab = saveWhile
-        LowStmt = 1
+        LowStmtHeavy = 1
     ElseIf k = AST_FOR Then
         ' left=var, right=from, extra=to, num=body
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
@@ -4075,7 +4229,7 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(ctx.list, OP_JMP, labTop, 0)
         IrEmit(ctx.list, OP_LABEL, labEnd, 0)
         g_forEndLab = saveFor
-        LowStmt = 1
+        LowStmtHeavy = 1
     Else
         Print "error: unsupported statement kind " + Str$(k)
         ctx.err = 1
@@ -4125,11 +4279,15 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
     ElseIf ty = TY_LONG_ARR Then
         bound = LowBoundVal(ctx, nodes[dimIdx].left)
         If bound < 0 Then Exit Function
-        nbytes = (bound + 1) * 8
+        nbytes = (bound + 1) * 4
     ElseIf ty = TY_DOUBLE_ARR Then
         bound = LowBoundVal(ctx, nodes[dimIdx].left)
         If bound < 0 Then Exit Function
         nbytes = (bound + 1) * 8
+    ElseIf ty = TY_SINGLE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 4
     ElseIf ty = TY_STRING_ARR Then
         bound = LowBoundVal(ctx, nodes[dimIdx].left)
         If bound < 0 Then Exit Function
@@ -4138,6 +4296,23 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
         nbytes = 1
     ElseIf ty = TY_DOUBLE Then
         nbytes = 8
+    ElseIf ty = TY_SINGLE Then
+        nbytes = 4
+    ElseIf ty = TY_UDT_ARR Then
+        ti = nodes[dimIdx].extra
+        If ti < 0 Then
+            Print "error: Dim UDT[] missing type '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        tsizes = tt.typeSizes
+        nbytes = tsizes[ti]
+        If nbytes <= 0 Then
+            Print "error: Dim UDT[] size 0 '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
+        nbytes = nbytes * (bound + 1)
     ElseIf ty = TY_UDT Then
         ti = nodes[dimIdx].extra
         If ti < 0 Then
@@ -4504,7 +4679,7 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 LowFreeAstBufs()
                 Exit Function
             End If
-            frame = LowAlign16(ctx.frameUsed + &H28)
+            frame = LowAlign16(ctx.frameUsed + &H28 + &H2000)
             If frame < &H28 Then frame = &H28
             g_funcEndLab = LowNewLab(VarPtr(ctx))
             IrEmit(list, OP_LABEL, nodes[stmt].extra, 0)

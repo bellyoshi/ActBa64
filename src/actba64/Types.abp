@@ -68,6 +68,7 @@ End Sub
 
 Function TyCreate() As *TypeTable
     Dim t As *TypeTable
+    Dim i As Long
     TyCreate = NULL
     t = calloc(SizeOf(TypeTable))
     If t = NULL Then Exit Function
@@ -92,6 +93,12 @@ Function TyCreate() As *TypeTable
     t.nTypes = 0
     t.nFields = 0
     t.nVirts = 0
+    i = 0
+    While i < TYMAX_TYPES
+        t.typeVirtFirst[i] = -1
+        t.typeVirtCount[i] = 0
+        i = i + 1
+    Wend
     TyCreate = t
 End Function
 
@@ -225,6 +232,76 @@ Function TyIsClass(t As *TypeTable, typeIdx As Long) As Long
     If t.typeIsClass[typeIdx] <> 0 Then TyIsClass = 1
 End Function
 
+' C 互換: 型のアラインメント（ネスト UDT は要素の最大整列。size 丸めではない）
+Function TyAlignOf(t As *TypeTable, typeIdx As Long) As Long
+    Dim fi As Long
+    Dim nexts As *Long
+    Dim firsts As *Long
+    Dim sizes As *Long
+    Dim tys As *Long
+    Dim tsizes As *Long
+    Dim a As Long
+    Dim best As Long
+    Dim esz As Long
+    Dim fty As Long
+
+    TyAlignOf = 1
+    If t = NULL Then Exit Function
+    If typeIdx < 0 Or typeIdx >= t.nTypes Then Exit Function
+    firsts = t.typeFirst
+    nexts = t.fieldNext
+    sizes = t.fieldSizes
+    tys = t.fieldTypeIdxs
+    tsizes = t.typeSizes
+    best = 1
+    fi = firsts[typeIdx]
+    If fi < 0 Then
+        esz = tsizes[typeIdx]
+        If esz >= 8 Then
+            TyAlignOf = 8
+        ElseIf esz >= 4 Then
+            TyAlignOf = 4
+        ElseIf esz >= 2 Then
+            TyAlignOf = 2
+        End If
+        Exit Function
+    End If
+    While fi >= 0
+        fty = tys[fi]
+        esz = sizes[fi]
+        If fty >= 0 Then
+            a = TyAlignOf(t, fty)
+        Else
+            a = esz
+            If a > 8 Then a = 8
+            If a < 1 Then a = 1
+        End If
+        If a > best Then best = a
+        fi = nexts[fi]
+    Wend
+    TyAlignOf = best
+End Function
+
+' End Type 時にサイズを型アラインへ切り上げ（MSVC 互換）
+Sub TyFinalizeType(t As *TypeTable, typeIdx As Long)
+    Dim tsizes As *Long
+    Dim a As Long
+    Dim sz As Long
+    Dim remn As Long
+
+    If t = NULL Then Exit Sub
+    If typeIdx < 0 Or typeIdx >= t.nTypes Then Exit Sub
+    a = TyAlignOf(t, typeIdx)
+    If a < 1 Then Exit Sub
+    tsizes = t.typeSizes
+    sz = tsizes[typeIdx]
+    remn = sz Mod a
+    If remn <> 0 Then
+        sz = sz + (a - remn)
+        tsizes[typeIdx] = sz
+    End If
+End Sub
+
 Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As Long, count As Long, fieldTy As Long) As Long
     Dim fi As Long
     Dim names As *Byte
@@ -247,9 +324,14 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     If elemSize <= 0 Or count <= 0 Then Exit Function
     If t.nFields >= TYMAX_FIELDS Then Exit Function
 
-    align = elemSize
+    ' ネスト UDT は「サイズ」ではなく「型のアライン」で整列（DXGI 等）
+    If fieldTy >= 0 Then
+        align = TyAlignOf(t, fieldTy)
+    Else
+        align = elemSize
+    End If
     If align > 8 Then align = 8
-    If align = 0 Then align = 1
+    If align < 1 Then align = 1
     tsizes = t.typeSizes
     off = tsizes[typeIdx]
     cur = align - 1
@@ -373,27 +455,41 @@ Function TyFindFieldEx(t As *TypeTable, typeIdx As Long, name As *Byte, ByRef ou
 End Function
 
 ' Virtual メソッドを追加。戻り値は vtable スロット番号（失敗時 -1）
+' 各型のスロットは virtNames[typeVirtFirst .. + typeVirtCount) の連続領域
 Function TyAddVirt(t As *TypeTable, typeIdx As Long, name As *Byte) As Long
     Dim vi As Long
     Dim names As *Byte
-    Dim nexts As *Long
     Dim firsts As *Long
     Dim counts As *Long
     Dim j As Long
     Dim cur As Long
-    Dim last As Long
+    Dim base As Long
+    Dim cnt As Long
 
     TyAddVirt = -1
     If t = NULL Then Exit Function
     If typeIdx < 0 Or typeIdx >= t.nTypes Then Exit Function
     If t.nVirts >= TYMAX_VIRTS Then Exit Function
 
-    vi = t.nVirts
-    names = t.virtNames
-    nexts = t.virtNext
     firsts = t.typeVirtFirst
     counts = t.typeVirtCount
+    names = t.virtNames
+    cnt = counts[typeIdx]
+    base = firsts[typeIdx]
+    If cnt = 0 Or base < 0 Then
+        base = t.nVirts
+        firsts[typeIdx] = base
+        counts[typeIdx] = 0
+        cnt = 0
+    Else
+        ' 連続配置のため、末尾に足すのはこの型が最後に追加された場合のみ
+        If base + cnt <> t.nVirts Then
+            Print "error: Virtual slot packing"
+            Exit Function
+        End If
+    End If
 
+    vi = t.nVirts
     j = 0
     cur = vi * TYNAME_LEN
     While name[j] <> 0 And j < TYNAME_LEN - 1
@@ -401,73 +497,72 @@ Function TyAddVirt(t As *TypeTable, typeIdx As Long, name As *Byte) As Long
         j = j + 1
     Wend
     names[cur + j] = 0
-    nexts[vi] = -1
 
-    If firsts[typeIdx] < 0 Then
-        firsts[typeIdx] = vi
-    Else
-        last = firsts[typeIdx]
-        While nexts[last] >= 0
-            last = nexts[last]
-        Wend
-        nexts[last] = vi
-    End If
-
-    TyAddVirt = counts[typeIdx]
-    counts[typeIdx] = counts[typeIdx] + 1
+    TyAddVirt = cnt
+    counts[typeIdx] = cnt + 1
     t.nVirts = vi + 1
 End Function
 
 ' 名前から vtable スロットを探す。無ければ -1
 Function TyFindVirt(t As *TypeTable, typeIdx As Long, name As *Byte) As Long
-    Dim vi As Long
     Dim names As *Byte
-    Dim nexts As *Long
     Dim firsts As *Long
+    Dim counts As *Long
     Dim cur As Long
     Dim slot As Long
+    Dim base As Long
+    Dim cnt As Long
 
     TyFindVirt = -1
     If t = NULL Then Exit Function
     If typeIdx < 0 Or typeIdx >= t.nTypes Then Exit Function
     names = t.virtNames
-    nexts = t.virtNext
     firsts = t.typeVirtFirst
-    vi = firsts[typeIdx]
+    counts = t.typeVirtCount
+    base = firsts[typeIdx]
+    cnt = counts[typeIdx]
+    If base < 0 Or cnt <= 0 Then Exit Function
     slot = 0
-    While vi >= 0
-        cur = vi * TYNAME_LEN
+    While slot < cnt
+        cur = (base + slot) * TYNAME_LEN
         If TyNameEq(VarPtr(names[cur]), name) <> 0 Then
             TyFindVirt = slot
             Exit Function
         End If
         slot = slot + 1
-        vi = nexts[vi]
     Wend
 End Function
 
 ' 親クラスの Virtual スロットを子へコピー（Inherits）
 Function TyCopyVirts(t As *TypeTable, dstTi As Long, srcTi As Long) As Long
-    Dim vi As Long
     Dim names As *Byte
-    Dim nexts As *Long
     Dim firsts As *Long
+    Dim counts As *Long
     Dim cur As Long
     Dim slot As Long
+    Dim base As Long
+    Dim cnt As Long
+    Dim i As Long
 
     TyCopyVirts = 0
     If t = NULL Then Exit Function
     If dstTi < 0 Or dstTi >= t.nTypes Then Exit Function
     If srcTi < 0 Or srcTi >= t.nTypes Then Exit Function
     names = t.virtNames
-    nexts = t.virtNext
     firsts = t.typeVirtFirst
-    vi = firsts[srcTi]
-    While vi >= 0
-        cur = vi * TYNAME_LEN
+    counts = t.typeVirtCount
+    base = firsts[srcTi]
+    cnt = counts[srcTi]
+    If cnt <= 0 Or base < 0 Then
+        TyCopyVirts = 1
+        Exit Function
+    End If
+    i = 0
+    While i < cnt
+        cur = (base + i) * TYNAME_LEN
         slot = TyAddVirt(t, dstTi, VarPtr(names[cur]))
         If slot < 0 Then Exit Function
-        vi = nexts[vi]
+        i = i + 1
     Wend
     TyCopyVirts = 1
 End Function
