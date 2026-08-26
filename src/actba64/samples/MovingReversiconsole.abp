@@ -1,0 +1,764 @@
+#console
+' ============================================================
+' Moving Reversi - Console Prototype
+'
+' Rules:
+'
+' 1. The game is played on an 8 x 8 board.
+'
+' 2. Black moves first.
+'
+' 3. On each turn, a player may do one of the following:
+'
+'    A) Place a new piece on an empty square.
+'
+'       The placement must flip at least one opponent piece.
+'       Pieces are flipped using the same rules as Reversi.
+'
+'    B) Move one existing piece.
+'
+'       A piece may move exactly one square in any of the
+'       eight directions, like a king in chess.
+'
+'       The destination square must be empty.
+'
+'       After the move, the moved piece must flip at least
+'       one opponent piece using Reversi rules.
+'
+' 4. A player must make a legal move if one exists.
+'
+' 5. If a player has no legal placement and no legal movement,
+'    the player passes.
+'
+' 6. The game ends when both players cannot make a legal move.
+'
+' 7. The player with more pieces wins.
+'
+' Input:
+'
+'   P x y
+'       Place a new piece at x,y.
+'
+'   M x1 y1 x2 y2
+'       Move a piece from x1,y1 to x2,y2.
+'
+'   Q
+'       Quit the game.
+'
+' Coordinates:
+'
+'   x = 1 to 8
+'   y = 1 to 8
+'
+' ============================================================
+
+Const EMPTY = 0
+Const BLACK = 1
+Const WHITE = 2
+
+Dim board[7, 7] As Long
+
+Dim dx[7] As Long
+Dim dy[7] As Long
+
+Dim player As Long
+Dim passCount As Long
+Dim command As String
+
+
+' ------------------------------------------------------------
+' Initialize direction vectors.
+' ------------------------------------------------------------
+
+Sub InitDirections()
+
+    dx[0] = -1
+    dy[0] = -1
+
+    dx[1] = 0
+    dy[1] = -1
+
+    dx[2] = 1
+    dy[2] = -1
+
+    dx[3] = -1
+    dy[3] = 0
+
+    dx[4] = 1
+    dy[4] = 0
+
+    dx[5] = -1
+    dy[5] = 1
+
+    dx[6] = 0
+    dy[6] = 1
+
+    dx[7] = 1
+    dy[7] = 1
+
+End Sub
+
+
+' ------------------------------------------------------------
+' Initialize the board.
+' ------------------------------------------------------------
+
+Sub InitBoard()
+
+    Dim x As Long
+    Dim y As Long
+
+    For y = 0 To 7
+        For x = 0 To 7
+            board[x, y] = EMPTY
+        Next
+    Next
+
+    board[3, 3] = WHITE
+    board[4, 4] = WHITE
+
+    board[4, 3] = BLACK
+    board[3, 4] = BLACK
+
+End Sub
+
+
+' ------------------------------------------------------------
+' Return the opponent color.
+' ------------------------------------------------------------
+
+Function Opponent(player As Long) As Long
+
+    If player = BLACK Then
+        Opponent = WHITE
+    Else
+        Opponent = BLACK
+    End If
+
+End Function
+
+
+' ------------------------------------------------------------
+' Check whether coordinates are inside the board.
+' ------------------------------------------------------------
+
+Function IsInside(x As Long, y As Long) As Long
+
+    If x >= 0 And x < 8 And y >= 0 And y < 8 Then
+        IsInside = TRUE
+    Else
+        IsInside = FALSE
+    End If
+
+End Function
+
+
+' ------------------------------------------------------------
+' Print the board.
+' B = Black
+' W = White
+' . = Empty
+' ------------------------------------------------------------
+
+Sub PrintBoard()
+
+    Dim x As Long
+    Dim y As Long
+
+    Print
+    Print "  1 2 3 4 5 6 7 8"
+
+    For y = 0 To 7
+
+        Print y + 1;
+
+        For x = 0 To 7
+
+            Select Case board(x, y)
+
+                Case EMPTY
+                    Print " .";
+
+                Case BLACK
+                    Print " B";
+
+                Case WHITE
+                    Print " W";
+
+            End Select
+
+        Next
+
+        Print
+
+    Next
+
+    Print
+
+End Sub
+
+
+' ------------------------------------------------------------
+' Check whether a piece already located at x,y can flip
+' at least one opponent piece.
+'
+' The square x,y must already contain the player's piece.
+' ------------------------------------------------------------
+
+Function CanReverseFrom(x As Long, y As Long, player As Long) As Long
+
+    Dim dir As Long
+    Dim nx As Long
+    Dim ny As Long
+    Dim enemy As Long
+    Dim foundEnemy As Long
+
+    enemy = Opponent(player)
+
+    For dir = 0 To 7
+
+        nx = x + dx[dir]
+        ny = y + dy[dir]
+
+        foundEnemy = FALSE
+
+        While IsInside(nx, ny)
+
+            If board[nx, ny] = enemy Then
+
+                foundEnemy = TRUE
+
+            ElseIf board[nx, ny] = player Then
+
+                If foundEnemy Then
+                    CanReverseFrom = TRUE
+                    Exit Function
+                End If
+
+                Exit While
+
+            Else
+
+                Exit While
+
+            End If
+
+            nx = nx + dx[dir]
+            ny = ny + dy[dir]
+
+        Wend
+
+    Next
+
+    CanReverseFrom = FALSE
+
+End Function
+
+
+' ------------------------------------------------------------
+' Check whether a new piece can be placed.
+' ------------------------------------------------------------
+
+Function CanPlace(x As Long, y As Long, player As Long) As Long
+
+    If IsInside(x, y) = FALSE Then
+        CanPlace = FALSE
+        Exit Function
+    End If
+
+    If board[x, y] <> EMPTY Then
+        CanPlace = FALSE
+        Exit Function
+    End If
+
+    board[x, y] = player
+
+    CanPlace = CanReverseFrom(x, y, player)
+
+    board[x, y] = EMPTY
+
+End Function
+
+
+' ------------------------------------------------------------
+' Flip opponent pieces in all valid directions.
+'
+' This function assumes that board(x,y) already contains
+' the player's piece.
+' ------------------------------------------------------------
+
+Sub ReversePieces(x As Long, y As Long, player As Long)
+
+    Dim dir As Long
+    Dim nx As Long
+    Dim ny As Long
+
+    Dim tx[7] As Long
+    Dim ty[7] As Long
+    Dim count As Long
+
+    Dim enemy As Long
+    Dim i As Long
+
+    enemy = Opponent(player)
+
+    For dir = 0 To 7
+
+        nx = x + dx[dir]
+        ny = y + dy[dir]
+
+        count = 0
+
+        While IsInside(nx, ny)
+
+            If board[nx, ny] = enemy Then
+
+                tx[count] = nx
+                ty[count] = ny
+                count = count + 1
+
+            ElseIf board(nx, ny) = player Then
+
+                If count > 0 Then
+
+                    For i = 0 To count - 1
+                        board[tx[i], ty[i]] = player
+                    Next
+
+                End If
+
+                Exit While
+
+            Else
+
+                Exit While
+
+            End If
+
+            nx = nx + dx(dir)
+            ny = ny + dy(dir)
+
+        Wend
+
+    Next
+
+End Sub
+
+
+' ------------------------------------------------------------
+' Place a new piece.
+' ------------------------------------------------------------
+
+Function PlacePiece(x As Long, y As Long, player As Long) As Long
+
+    If CanPlace(x, y, player) = FALSE Then
+
+        PlacePiece = FALSE
+        Exit Function
+
+    End If
+
+    board(x, y) = player
+
+    ReversePieces(x, y, player)
+
+    PlacePiece = TRUE
+
+End Function
+
+
+' ------------------------------------------------------------
+' Check whether a piece can move one square.
+' ------------------------------------------------------------
+
+Function CanMove( _
+    fromX As Long, _
+    fromY As Long, _
+    toX As Long, _
+    toY As Long, _
+    player As Long _
+) As Long
+
+    Dim oldFrom As Long
+    Dim oldTo As Long
+
+    If IsInside(fromX, fromY) = FALSE Then
+        CanMove = FALSE
+        Exit Function
+    End If
+
+    If IsInside(toX, toY) = FALSE Then
+        CanMove = FALSE
+        Exit Function
+    End If
+
+    If board(fromX, fromY) <> player Then
+        CanMove = FALSE
+        Exit Function
+    End If
+
+    If board(toX, toY) <> EMPTY Then
+        CanMove = FALSE
+        Exit Function
+    End If
+
+    ' A piece moves like a king in chess.
+    If Abs(toX - fromX) > 1 Then
+        CanMove = FALSE
+        Exit Function
+    End If
+
+    If Abs(toY - fromY) > 1 Then
+        CanMove = FALSE
+        Exit Function
+    End If
+
+    ' Moving to the same square is not allowed.
+    If fromX = toX And fromY = toY Then
+        CanMove = FALSE
+        Exit Function
+    End If
+
+    ' Temporarily move the piece.
+    board(fromX, fromY) = EMPTY
+    board(toX, toY) = player
+
+    CanMove = CanReverseFrom(toX, toY, player)
+
+    ' Restore the board.
+    board(toX, toY) = EMPTY
+    board(fromX, fromY) = player
+
+End Function
+
+
+' ------------------------------------------------------------
+' Move a piece.
+' ------------------------------------------------------------
+
+Function MovePiece( _
+    fromX As Long, _
+    fromY As Long, _
+    toX As Long, _
+    toY As Long, _
+    player As Long _
+) As Long
+
+    If CanMove(fromX, fromY, toX, toY, player) = FALSE Then
+
+        MovePiece = FALSE
+        Exit Function
+
+    End If
+
+    board(fromX, fromY) = EMPTY
+    board(toX, toY) = player
+
+    ReversePieces(toX, toY, player)
+
+    MovePiece = TRUE
+
+End Function
+
+
+' ------------------------------------------------------------
+' Check whether the player has at least one legal placement.
+' ------------------------------------------------------------
+
+Function HasPlace(player As Long) As Long
+
+    Dim x As Long
+    Dim y As Long
+
+    For y = 0 To 7
+
+        For x = 0 To 7
+
+            If CanPlace(x, y, player) Then
+                HasPlace = TRUE
+                Exit Function
+            End If
+
+        Next
+
+    Next
+
+    HasPlace = FALSE
+
+End Function
+
+
+' ------------------------------------------------------------
+' Check whether the player has at least one legal movement.
+' ------------------------------------------------------------
+
+Function HasMove(player As Long) As Long
+
+    Dim x As Long
+    Dim y As Long
+    Dim dir As Long
+
+    Dim toX As Long
+    Dim toY As Long
+
+    For y = 0 To 7
+
+        For x = 0 To 7
+
+            If board(x, y) = player Then
+
+                For dir = 0 To 7
+
+                    toX = x + dx(dir)
+                    toY = y + dy(dir)
+
+                    If CanMove(x, y, toX, toY, player) Then
+
+                        HasMove = TRUE
+                        Exit Function
+
+                    End If
+
+                Next
+
+            End If
+
+        Next
+
+    Next
+
+    HasMove = FALSE
+
+End Function
+
+
+' ------------------------------------------------------------
+' Count pieces.
+' ------------------------------------------------------------
+
+Function CountPieces(player As Long) As Long
+
+    Dim x As Long
+    Dim y As Long
+    Dim count As Long
+
+    count = 0
+
+    For y = 0 To 7
+
+        For x = 0 To 7
+
+            If board(x, y) = player Then
+                count = count + 1
+            End If
+
+        Next
+
+    Next
+
+    CountPieces = count
+
+End Function
+
+Function UCase$(inputString As String) As String
+    Dim i As Integer
+    Dim char As String
+    Dim result As String
+
+    result = ""
+
+    For i = 1 To Len(inputString)
+        char = Mid$(inputString, i, 1)
+        If char >= "a" And char <= "z" Then
+            char = Chr$(Asc(char) - 32)
+        End If
+        result = result & char
+    Next i
+
+    UCase$ = result
+End Function
+
+
+' ============================================================
+' Main program
+' ============================================================
+
+InitDirections()
+InitBoard()
+
+player = BLACK
+passCount = 0
+
+Print "Moving Reversi"
+Print "=============="
+Print
+Print "Commands:"
+Print "  P x y          Place a new piece"
+Print "  M x1 y1 x2 y2 Move a piece one square"
+Print "  Q              Quit"
+Print
+
+
+While passCount < 2
+
+    PrintBoard()
+
+    If player = BLACK Then
+        Print "Black turn."
+    Else
+        Print "White turn."
+    End If
+
+    ' Check whether the current player can do anything.
+    If HasPlace(player) = FALSE And HasMove(player) = FALSE Then
+
+        Print "No legal move. Pass."
+        Print
+
+        passCount = passCount + 1
+
+        player = Opponent(player)
+
+        Continue While
+
+    End If
+
+    passCount = 0
+
+    Print
+    Print "Enter command:";
+
+    Input command
+
+    command = UCase$(command)
+
+    If command = "Q" Then
+        Exit While
+    End If
+
+    ' --------------------------------------------------------
+    ' Because INPUT reads one value here, commands are entered
+    ' in two steps for simplicity.
+    '
+    ' Example:
+    '
+    ' P
+    ' 4
+    ' 3
+    '
+    ' or:
+    '
+    ' M
+    ' 4
+    ' 4
+    ' 5
+    ' 5
+    ' --------------------------------------------------------
+
+    If command = "P" Then
+
+        Dim x As Long
+        Dim y As Long
+
+        Print "X (1-8): ";
+        Input x
+
+        Print "Y (1-8): ";
+        Input y
+
+        x = x - 1
+        y = y - 1
+
+        If PlacePiece(x, y, player) Then
+
+            player = Opponent(player)
+
+        Else
+
+            Print "Illegal placement."
+
+        End If
+
+
+    ElseIf command = "M" Then
+
+        Dim fromX As Long
+        Dim fromY As Long
+        Dim toX As Long
+        Dim toY As Long
+
+        Print "From X (1-8): ";
+        Input fromX
+
+        Print "From Y (1-8): ";
+        Input fromY
+
+        Print "To X (1-8): ";
+        Input toX
+
+        Print "To Y (1-8): ";
+        Input toY
+
+        fromX = fromX - 1
+        fromY = fromY - 1
+
+        toX = toX - 1
+        toY = toY - 1
+
+        If MovePiece(fromX, fromY, toX, toY, player) Then
+
+            player = Opponent(player)
+
+        Else
+
+            Print "Illegal move."
+
+        End If
+
+
+    Else
+
+        Print "Unknown command."
+
+    End If
+
+Wend
+
+
+' ------------------------------------------------------------
+' Game result.
+' ------------------------------------------------------------
+
+Dim blackCount As Long
+Dim whiteCount As Long
+
+blackCount = CountPieces(BLACK)
+whiteCount = CountPieces(WHITE)
+
+Print
+PrintBoard()
+
+Print "Game Over"
+Print
+
+Print "Black: "; blackCount
+Print "White: "; whiteCount
+
+If blackCount > whiteCount Then
+
+    Print "Black wins."
+
+ElseIf whiteCount > blackCount Then
+
+    Print "White wins."
+
+Else
+
+    Print "Draw."
+
+End If
+
+Print
+Print "Press Enter to exit."
+
+Input command
