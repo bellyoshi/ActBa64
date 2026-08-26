@@ -70,6 +70,23 @@ Function GenArith(expr As String) As Long
     GenArith = EmitExpr(ni)
 End Function
 
+' 算術式 → ST(0)（Double）
+Function GenArithAsDouble(expr As String) As Long
+    Dim ni As Long
+    Dim e As String
+    GenArithAsDouble = 0
+    gParseCondMode = 0
+    e = StripTypeCast$(expr)
+    If LexExpr(e) = 0 Then Exit Function
+    ni = ParseExpr()
+    If ni < 0 Then Exit Function
+    If TokPeek() <> TK_EOF Then
+        Print "junk after expression: " + expr
+        Exit Function
+    End If
+    GenArithAsDouble = EmitExprAsDouble(ni)
+End Function
+
 ' 左辺値のアドレス → eax（ByRef 実引数用）
 Function GenArithAddr(expr As String) As Long
     Dim ni As Long
@@ -1045,6 +1062,9 @@ Function CompileOneDim(decl As String) As Long
     varIdx = AddVarEx(name, elemSize, count, isPtr, isStr)
     If varIdx < 0 Then Exit Function
     gVarTypeIdx(varIdx) = typeIdx
+    If Lower$(typeName) = "double" Then
+        gVarIsFloat(varIdx) = 1
+    End If
     ' ローカル String はスロットを先に 0 クリア（EmitStoreVar→StrFree がゴミを解放しないように）
     If isStr <> 0 And gVarIsGlobal(varIdx) = 0 And count = 1 Then
         EmitAsm("xor eax, eax")
@@ -1761,6 +1781,7 @@ Sub SaveMainScope()
             gSavedVarCount(i) = gVarCount(i)
             gSavedVarIsPtr(i) = gVarIsPtr(i)
             gSavedVarIsStr(i) = gVarIsStr(i)
+            gSavedVarIsFloat(i) = gVarIsFloat(i)
             gSavedVarIsGlobal(i) = gVarIsGlobal(i)
             gSavedVarIsByRef(i) = gVarIsByRef(i)
         Next
@@ -1780,6 +1801,7 @@ Sub RestoreMainScope()
             gVarCount(i) = gSavedVarCount(i)
             gVarIsPtr(i) = gSavedVarIsPtr(i)
             gVarIsStr(i) = gSavedVarIsStr(i)
+            gVarIsFloat(i) = gSavedVarIsFloat(i)
             gVarIsGlobal(i) = gSavedVarIsGlobal(i)
             gVarIsByRef(i) = gSavedVarIsByRef(i)
         Next
@@ -1796,13 +1818,12 @@ Function AddArgVar(name As String, off As Long, elemSize As Long, isPtr As Long,
     idx = gNVars
     gVarName(idx) = Lower$(name)
     gVarOff(idx) = off
-    ' gVarSize は添字スケール / p[i] の要素サイズ。
-    ' ポインタ引数はポインタ幅(4)ではなく指し先のサイズを保持する（AddVarEx と同じ）。
     gVarSize(idx) = elemSize
     If isStr <> 0 Then gVarSize(idx) = 4
     gVarCount(idx) = 1
     gVarIsPtr(idx) = isPtr
     gVarIsStr(idx) = isStr
+    gVarIsFloat(idx) = 0
     gVarIsGlobal(idx) = 0
     gVarIsByRef(idx) = isByRef
     gVarTypeIdx(idx) = typeIdx
@@ -1841,13 +1862,15 @@ Function SigArgByRef(si As Long, argIndex As Long) As Long
     If masked <> 0 Then SigArgByRef = 1
 End Function
 
-Sub RegisterSig(name As String, byRefBits As Long)
+Sub RegisterSig(name As String, byRefBits As Long, argFloatBits As Long, retIsFloat As Long)
     Dim i As Long
     Dim n As String
     n = Lower$(name)
     i = FindSig(n)
     If i >= 0 Then
         gSigByRef(i) = byRefBits
+        gSigArgFloat(i) = argFloatBits
+        gSigRetFloat(i) = retIsFloat
         Exit Sub
     End If
     If gNSigs >= MAX_PROCS Then
@@ -1856,14 +1879,33 @@ Sub RegisterSig(name As String, byRefBits As Long)
     End If
     gSigName(gNSigs) = n
     gSigByRef(gNSigs) = byRefBits
+    gSigArgFloat(gNSigs) = argFloatBits
+    gSigRetFloat(gNSigs) = retIsFloat
     gNSigs = gNSigs + 1
 End Sub
+
+Function SigArgIsFloat(si As Long, argIndex As Long) As Long
+    Dim bit As Long
+    Dim k As Long
+    Dim masked As Long
+    SigArgIsFloat = 0
+    If si < 0 Or argIndex < 0 Then Exit Function
+    bit = 1
+    k = 0
+    While k < argIndex
+        bit = bit * 2
+        k = k + 1
+    Wend
+    masked = gSigArgFloat(si) And bit
+    If masked <> 0 Then SigArgIsFloat = 1
+End Function
 
 Function CompileProcHeader(lineStr As String, isFunc As Long) As Long
     Dim low As String
     Dim rest As String
     Dim name As String
     Dim argsText As String
+    Dim retPart As String
     Dim lp As Long
     Dim rp As Long
     Dim a As Long
@@ -1874,11 +1916,15 @@ Function CompileProcHeader(lineStr As String, isFunc As Long) As Long
     Dim argIsStr As Long
     Dim argIsPtr As Long
     Dim argIsByRef As Long
+    Dim argIsFloat As Long
     Dim argType As String
     Dim argElem As Long
     Dim argTypeIdx As Long
     Dim byRefBits As Long
+    Dim argFloatBits As Long
     Dim bit As Long
+    Dim argIdx As Long
+    Dim retSz As Long
 
     CompileProcHeader = 0
     If gInProc <> 0 Then
@@ -1917,21 +1963,31 @@ Function CompileProcHeader(lineStr As String, isFunc As Long) As Long
         Exit Function
     End If
     argsText = ArgsBetween$(rest, lp, rp)
+    retPart = Trim$(Mid$(rest, rp + 1, Len(rest) - rp))
 
     SaveMainScope()
-    ' グローバルは残す。ローカルだけフレームを新規に
     gFrameSize = 0
     gInProc = 1
     gProcName = name
     gProcIsFunc = isFunc
     gProcArgBytes = 0
     gRetOff = 0
+    gProcRetIsFloat = 0
     byRefBits = 0
+    argFloatBits = 0
 
     If isFunc <> 0 Then
-        ' 戻り値スロット
-        gFrameSize = 4
-        gRetOff = -4
+        retSz = 4
+        If StartsWith(Lower$(retPart), "as ") <> 0 Then
+            retPart = Trim$(Mid$(retPart, 4, Len(retPart) - 3))
+            a = 0
+            ExpandTypeName(retPart, a)
+            retSz = TypeSizeOf(retPart)
+            If retSz <= 0 Then retSz = 4
+            If Lower$(retPart) = "double" Then gProcRetIsFloat = 1
+        End If
+        gFrameSize = retSz
+        gRetOff = 0 - retSz
     End If
 
     If argsText <> "" Then
@@ -1941,7 +1997,6 @@ Function CompileProcHeader(lineStr As String, isFunc As Long) As Long
         For i = 0 To gNArgs - 1
             arg = Trim$(gArgs(i))
             argIsByRef = 0
-            ' ByRef/ByVal を除去（ByRef はポインタ渡しとして記録）
             If StartsWith(Lower$(arg), "byref ") <> 0 Then
                 argIsByRef = 1
                 arg = Trim$(Mid$(arg, 7, Len(arg) - 6))
@@ -1951,26 +2006,38 @@ Function CompileProcHeader(lineStr As String, isFunc As Long) As Long
             pos = InStr(1, Lower$(arg), " as ")
             argIsStr = 0
             argIsPtr = 0
+            argIsFloat = 0
             argElem = 4
             argTypeIdx = -1
             If pos > 0 Then
                 argType = Trim$(Mid$(arg, pos + 4, Len(arg) - pos - 3))
                 ExpandTypeName(argType, argIsPtr)
                 If Lower$(argType) = "string" Then argIsStr = 1
+                If Lower$(argType) = "double" Then argIsFloat = 1
                 argElem = TypeSizeOf(argType)
                 If argElem <= 0 Then argElem = 4
                 argTypeIdx = FindType(argType)
                 arg = Trim$(Left$(arg, pos - 1))
             End If
-            If AddArgVar(arg, argOff, argElem, argIsPtr, argIsStr, argTypeIdx, argIsByRef) < 0 Then Exit Function
+            argIdx = AddArgVar(arg, argOff, argElem, argIsPtr, argIsStr, argTypeIdx, argIsByRef)
+            If argIdx < 0 Then Exit Function
+            If argIsFloat <> 0 And argIsByRef = 0 Then
+                gVarIsFloat(argIdx) = 1
+                argFloatBits = argFloatBits Or bit
+            End If
             If argIsByRef <> 0 Then byRefBits = byRefBits Or bit
             bit = bit * 2
-            argOff = argOff + 4
-            gProcArgBytes = gProcArgBytes + 4
+            If argIsFloat <> 0 And argIsByRef = 0 Then
+                argOff = argOff + 8
+                gProcArgBytes = gProcArgBytes + 8
+            Else
+                argOff = argOff + 4
+                gProcArgBytes = gProcArgBytes + 4
+            End If
         Next
     End If
 
-    RegisterSig(name, byRefBits)
+    RegisterSig(name, byRefBits, argFloatBits, gProcRetIsFloat)
     CompileProcHeader = 1
 End Function
 
@@ -1997,7 +2064,11 @@ Function CompileEndProc() As Long
     If gProcIsFunc <> 0 Then
         EmitAsm("mov ebx, ebp")
         EmitAsmImm("add ebx, ", gRetOff)
-        EmitAsmLoadEbx()
+        If gProcRetIsFloat <> 0 Then
+            EmitFldQwordEbx()
+        Else
+            EmitAsmLoadEbx()
+        End If
     End If
     EmitAsm("mov esp, ebp")
     EmitAsm("pop ebp")
@@ -2016,6 +2087,7 @@ Function CompileEndProc() As Long
     gInProc = 0
     gProcName = ""
     gProcIsFunc = 0
+    gProcRetIsFloat = 0
     RestoreMainScope()
     CompileEndProc = 1
 End Function
@@ -2029,7 +2101,11 @@ Function CompileExitProc() As Long
     If gProcIsFunc <> 0 Then
         EmitAsm("mov ebx, ebp")
         EmitAsmImm("add ebx, ", gRetOff)
-        EmitAsmLoadEbx()
+        If gProcRetIsFloat <> 0 Then
+            EmitFldQwordEbx()
+        Else
+            EmitAsmLoadEbx()
+        End If
     End If
     EmitAsm("mov esp, ebp")
     EmitAsm("pop ebp")
@@ -2084,10 +2160,14 @@ Function CompileCallStmt(lineStr As String) As Long
         While i >= 0
             If SigArgByRef(si, i) <> 0 Then
                 If GenArithAddr(gArgs(i)) = 0 Then Exit Function
+                EmitAsm("push eax")
+            ElseIf SigArgIsFloat(si, i) <> 0 Then
+                If GenArithAsDouble(gArgs(i)) = 0 Then Exit Function
+                EmitPushDoubleSt0()
             Else
                 If GenArith(gArgs(i)) = 0 Then Exit Function
+                EmitAsm("push eax")
             End If
-            EmitAsm("push eax")
             i = i - 1
         Wend
     End If

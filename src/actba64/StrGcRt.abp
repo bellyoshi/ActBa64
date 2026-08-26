@@ -1,0 +1,447 @@
+' String GC runtime (StrHeapAlloc / hybrid StrCollect)
+
+Sub LowEmitRtStrHeapAllocBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim sApi(15) As Byte
+    Dim labFail As Long
+    Dim labSkip As Long
+    Dim gcCount As Long
+    Dim gcBlocks As Long
+
+    If g_rtStrHeapAllocLab < 0 Then Exit Sub
+    gcCount = g_gcBaseOff + GC_HDR_COUNT
+    gcBlocks = g_gcBaseOff + GC_HDR_BLOCKS
+    list = ctx.list
+    labFail = LowNewLab(ctx)
+    labSkip = LowNewLab(ctx)
+
+    IrEmit(list, OP_LABEL, g_rtStrHeapAllocLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "HeapAlloc")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labFail, 0)
+
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, GC_MAX_BLOCKS, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labSkip, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+
+    IrEmit(list, OP_LABEL, labSkip, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+    IrEmit(list, OP_LABEL, labFail, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+' StrGcMarkPrecise / StrGcMarkConservative 共通: rcx=ptr, extra=-56 に 0=precise 1=conservative
+Sub LowEmitRtStrGcMarkBody(ctx As *LowerCtx, labId As Long, requireTag As Long)
+    Dim list As *IrList
+    Dim labLoop As Long
+    Dim labDone As Long
+    Dim labNext As Long
+    Dim labHit As Long
+    Dim labMark As Long
+    Dim gcCount As Long
+    Dim gcBlocks As Long
+    Dim gcMarks As Long
+
+    If labId < 0 Then Exit Sub
+    gcCount = g_gcBaseOff + GC_HDR_COUNT
+    gcBlocks = g_gcBaseOff + GC_HDR_BLOCKS
+    gcMarks = g_gcBaseOff + GC_HDR_MARKS
+    list = ctx.list
+    labLoop = LowNewLab(ctx)
+    labDone = LowNewLab(ctx)
+    labNext = LowNewLab(ctx)
+    labHit = LowNewLab(ctx)
+    labMark = LowNewLab(ctx)
+
+    IrEmit(list, OP_LABEL, labId, 0)
+    IrEmit(list, OP_ENTER, 88, 0)
+    IrEmit(list, OP_STORE_LOCAL_ECX, -8, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, requireTag, 0)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+
+    IrEmit(list, OP_LABEL, labLoop, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labDone, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labNext, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -48, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JL, labNext, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JG, labNext, 0)
+
+    IrEmit(list, OP_LABEL, labHit, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labMark, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labNext, 0)
+
+    IrEmit(list, OP_LABEL, labMark, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, 1, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_JMP, labDone, 0)
+
+    IrEmit(list, OP_LABEL, labNext, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_JMP, labLoop, 0)
+    IrEmit(list, OP_LABEL, labDone, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub
+
+Sub LowEmitRtStrGcPreciseBody(ctx As *LowerCtx)
+    LowEmitRtStrGcMarkBody(ctx, g_rtStrGcPreciseLab, 0)
+End Sub
+
+Sub LowEmitRtStrGcConsBody(ctx As *LowerCtx)
+    LowEmitRtStrGcMarkBody(ctx, g_rtStrGcConsLab, 1)
+End Sub
+
+Sub LowEmitRtStrCollectBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim sApi(15) As Byte
+    Dim labClr As Long
+    Dim labClrDone As Long
+    Dim labPrec As Long
+    Dim labPrecDone As Long
+    Dim labGlob As Long
+    Dim labGlobDone As Long
+    Dim labStk As Long
+    Dim labStkDone As Long
+    Dim labSweep As Long
+    Dim labSweepDone As Long
+    Dim labSweepNext As Long
+    Dim gcCount As Long
+    Dim gcBlocks As Long
+    Dim gcMarks As Long
+    Dim gcPrecCnt As Long
+    Dim gcPrecRoots As Long
+    Dim labPrecise As Long
+    Dim labCons As Long
+
+    If g_rtStrCollectLab < 0 Then Exit Sub
+    gcCount = g_gcBaseOff + GC_HDR_COUNT
+    gcBlocks = g_gcBaseOff + GC_HDR_BLOCKS
+    gcMarks = g_gcBaseOff + GC_HDR_MARKS
+    gcPrecCnt = g_gcBaseOff + GC_HDR_PRECISE_COUNT
+    gcPrecRoots = g_gcBaseOff + GC_HDR_PRECISE_ROOTS
+    list = ctx.list
+    labClr = LowNewLab(ctx)
+    labClrDone = LowNewLab(ctx)
+    labPrec = LowNewLab(ctx)
+    labPrecDone = LowNewLab(ctx)
+    labGlob = LowNewLab(ctx)
+    labGlobDone = LowNewLab(ctx)
+    labStk = LowNewLab(ctx)
+    labStkDone = LowNewLab(ctx)
+    labSweep = LowNewLab(ctx)
+    labSweepDone = LowNewLab(ctx)
+    labSweepNext = LowNewLab(ctx)
+    labPrecise = g_rtStrGcPreciseLab
+    labCons = g_rtStrGcConsLab
+
+    IrEmit(list, OP_LABEL, g_rtStrCollectLab, 0)
+    IrEmit(list, OP_ENTER, 128, 0)
+
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LABEL, labClr, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labClrDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_XOR_ECX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labClr, 0)
+    IrEmit(list, OP_LABEL, labClrDone, 0)
+
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LABEL, labPrec, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcPrecCnt, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labPrecDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcPrecRoots, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_CALL_LAB, labPrecise, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_JMP, labPrec, 0)
+    IrEmit(list, OP_LABEL, labPrecDone, 0)
+
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_LABEL, labGlob, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, g_gcBaseOff, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labGlobDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_CALL_LAB, labCons, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 8, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_JMP, labGlob, 0)
+    IrEmit(list, OP_LABEL, labGlobDone, 0)
+
+    IrEmit(list, OP_MOV_R8_RSP, 0, 0)
+    IrEmit(list, OP_MOV_RAX_R8, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_LABEL, labStk, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_RAX_GS8, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labStkDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_CALL_LAB, labCons, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 8, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_JMP, labStk, 0)
+    IrEmit(list, OP_LABEL, labStkDone, 0)
+
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_LABEL, labSweep, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JL, labSweepDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labSweepDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JNZ, labSweepNext, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EDX_IMM, 0, 0)
+    IrEmit(list, OP_POP_R8, 0, 0)
+    lstrcpy(VarPtr(sApi), "HeapFree")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -48, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -64, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -64, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labSweepDone, 0)
+    IrEmit(list, OP_JMP, labSweep, 0)
+
+    IrEmit(list, OP_LABEL, labSweepNext, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labSweep, 0)
+    IrEmit(list, OP_LABEL, labSweepDone, 0)
+    IrEmit(list, OP_LEAVE, 0, 0)
+End Sub

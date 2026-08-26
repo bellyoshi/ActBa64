@@ -408,7 +408,12 @@ memcpy(dst, src, n)
 - 末尾に WinAPI 用の NUL を付けるが、データ中の埋め込み NUL も有効
 - `StrPtr(s)` はデータ先頭（恒等）。`MakeStr(p)` は NUL 終端 `BytePtr` から長さ付き String を複製
 - 連結・`Left$` / `Mid$` 等は都度ヒープ確保
-- 内容比較は長さ付き辞書順（埋め込み NUL 対応）。ヒープ文字列は長さ dword の最上位ビットで印付けし、代入時に自動解放
+- 内容比較は長さ付き辞書順（埋め込み NUL 対応）
+- **actba64 の String ヒープ**はハイブリッド GC（代入時の自動 `StrFree` はしない）:
+  - **Precise**: `String` / `String` 配列のグローバル・ローカルスロットをコンパイル時に root 登録し、セーフポイントで無条件マーク
+  - **Conservative**: ユーザ globals とスタックを 8 バイト刻み走査し、ヒープタグ付き登録ブロックのみマーク
+  - 確保は `StrHeapAlloc`、回収は `StrCollect`（ループ頭・`Print`/`Input` 後・関数終了前など）
+  - UDT 内の String メンバは型表で区別できないため precise root 未登録（conservative 走査に依存）
 - `InStr` / `Lower$` などは **言語組み込みではなく** ライブラリ `.abp` として提供される場合がある
 
 actba32 の方がランタイムが広い（`Hex$` / `Val` / `InStr` 等）。actba64 でも `Chr$` / `Right$` は組み込み。

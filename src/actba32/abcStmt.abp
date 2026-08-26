@@ -786,9 +786,25 @@ Function EmitAssignAst(lhs As Long, rhs As Long) As Long
     Dim name As String
     Dim kind As Long
     Dim idx As Long
+    Dim lhsFloat As Long
 
     EmitAssignAst = 0
-    If EmitExpr(rhs) = 0 Then Exit Function
+    lhsFloat = 0
+    If gAst[lhs].Kind = NK_IDENT Then
+        name = gPool(gAst[lhs].SIdx)
+        If gInProc <> 0 And gProcIsFunc <> 0 And StrEqCI(name, gProcName) <> 0 Then
+            If gProcRetIsFloat <> 0 Then lhsFloat = 1
+        Else
+            idx = FindVar(name)
+            If idx >= 0 And gVarIsFloat(idx) <> 0 Then lhsFloat = 1
+        End If
+    End If
+
+    If lhsFloat <> 0 Then
+        If EmitExprAsDouble(rhs) = 0 Then Exit Function
+    Else
+        If EmitExpr(rhs) = 0 Then Exit Function
+    End If
 
     ' Function 名への代入 = 戻り値
     If gInProc <> 0 And gProcIsFunc <> 0 Then
@@ -797,7 +813,11 @@ Function EmitAssignAst(lhs As Long, rhs As Long) As Long
             If StrEqCI(name, gProcName) <> 0 Then
                 EmitAsm("mov ebx, ebp")
                 EmitAsmImm("add ebx, ", gRetOff)
-                EmitAsmStoreEbx()
+                If gProcRetIsFloat <> 0 Then
+                    EmitFstpQwordEbx()
+                Else
+                    EmitAsmStoreEbx()
+                End If
                 EmitAssignAst = 1
                 Exit Function
             End If
@@ -818,14 +838,27 @@ Function EmitAssignAst(lhs As Long, rhs As Long) As Long
     End If
 
     ' メンバ / 添字 / a(i)
-    EmitAsm("push eax")
-    If EmitLValueAddr(lhs) = 0 Then
-        Print "error: cannot assign to lvalue"
-        Exit Function
+    If lhsFloat <> 0 Or AstIsFloat(rhs) <> 0 Then
+        EmitAsm("sub esp, 8")
+        EmitFstpQwordEsp()
+        If EmitLValueAddr(lhs) = 0 Then
+            Print "error: cannot assign to lvalue"
+            Exit Function
+        End If
+        EmitAsm("mov ebx, eax")
+        EmitFldQwordEsp()
+        EmitAsm("add esp, 8")
+        EmitStoreSized(gLValueSize)
+    Else
+        EmitAsm("push eax")
+        If EmitLValueAddr(lhs) = 0 Then
+            Print "error: cannot assign to lvalue"
+            Exit Function
+        End If
+        EmitAsm("mov ebx, eax")
+        EmitAsm("pop eax")
+        EmitStoreSized(gLValueSize)
     End If
-    EmitAsm("mov ebx, eax")
-    EmitAsm("pop eax")
-    EmitStoreSized(gLValueSize)
     EmitAssignAst = 1
 End Function
 

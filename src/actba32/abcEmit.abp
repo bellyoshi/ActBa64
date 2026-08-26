@@ -1,5 +1,52 @@
 ' abcEmit.abp - AST から ASM を生成
 
+' Flags=1 on NK_NUM → 千分率 float リテラル
+Function AstIsFloat(ni As Long) As Long
+    Dim name As String
+    Dim idx As Long
+    Dim si As Long
+    AstIsFloat = 0
+    If ni < 0 Then Exit Function
+    If gAst[ni].Kind = NK_NUM Then
+        If gAst[ni].Flags <> 0 Then AstIsFloat = 1
+        Exit Function
+    End If
+    If gAst[ni].Kind = NK_IDENT Then
+        name = gPool(gAst[ni].SIdx)
+        If gInProc <> 0 And gProcIsFunc <> 0 And gProcRetIsFloat <> 0 Then
+            If StrEqCI(name, gProcName) <> 0 Then
+                AstIsFloat = 1
+                Exit Function
+            End If
+        End If
+        idx = FindVar(name)
+        If idx >= 0 Then AstIsFloat = gVarIsFloat(idx)
+        Exit Function
+    End If
+    If gAst[ni].Kind = NK_UNARY And gAst[ni].Op = OP_NEG Then
+        AstIsFloat = AstIsFloat(gAst[ni].A)
+        Exit Function
+    End If
+    If gAst[ni].Kind = NK_BIN Then
+        If AstIsString(gAst[ni].A) <> 0 Or AstIsString(gAst[ni].B) <> 0 Then Exit Function
+        If AstIsFloat(gAst[ni].A) <> 0 Or AstIsFloat(gAst[ni].B) <> 0 Then AstIsFloat = 1
+        Exit Function
+    End If
+    If gAst[ni].Kind = NK_CALL Then
+        name = gPool(gAst[ni].SIdx)
+        si = FindSig(name)
+        If si >= 0 Then
+            AstIsFloat = gSigRetFloat(si)
+            Exit Function
+        End If
+        Exit Function
+    End If
+    If gAst[ni].Kind = NK_MEMBER Or gAst[ni].Kind = NK_INDEX Then
+        ' 要素サイズ 8 は Double 扱い（UDT 内は未精密）
+        Exit Function
+    End If
+End Function
+
 Function AstIsString(ni As Long) As Long
     Dim name As String
     Dim idx As Long
@@ -268,6 +315,25 @@ Function EmitLValueAddr(ni As Long) As Long
     Print "ByRef needs a variable"
 End Function
 
+' 結果を ST(0) に置く（整数なら昇格、千分率リテラルなら /1000）
+Function EmitExprAsDouble(ni As Long) As Long
+    EmitExprAsDouble = 0
+    If ni < 0 Then Exit Function
+    If gAst[ni].Kind = NK_NUM And gAst[ni].Flags <> 0 Then
+        EmitAsmImm("mov eax, ", gAst[ni].IVal)
+        EmitMilliToDouble()
+        EmitExprAsDouble = 1
+        Exit Function
+    End If
+    If AstIsFloat(ni) <> 0 Then
+        EmitExprAsDouble = EmitExpr(ni)
+        Exit Function
+    End If
+    If EmitExpr(ni) = 0 Then Exit Function
+    EmitLongToDouble()
+    EmitExprAsDouble = 1
+End Function
+
 Function EmitExpr(ni As Long) As Long
     Dim kind As Long
     Dim op As Long
@@ -292,6 +358,64 @@ Function EmitExpr(ni As Long) As Long
     If ni < 0 Then Exit Function
     kind = gAst[ni].Kind
     op = gAst[ni].Op
+
+    ' --- Double 式（結果は ST(0)）---
+    If kind = NK_NUM And gAst[ni].Flags <> 0 Then
+        EmitAsmImm("mov eax, ", gAst[ni].IVal)
+        EmitMilliToDouble()
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_IDENT And AstIsFloat(ni) <> 0 Then
+        name = gPool(gAst[ni].SIdx)
+        If gInProc <> 0 And gProcIsFunc <> 0 And gProcRetIsFloat <> 0 Then
+            If StrEqCI(name, gProcName) <> 0 Then
+                EmitAsm("mov ebx, ebp")
+                EmitAsmImm("add ebx, ", gRetOff)
+                EmitFldQwordEbx()
+                EmitExpr = 1
+                Exit Function
+            End If
+        End If
+        idx = FindVar(name)
+        If idx >= 0 Then
+            EmitLoadVar(idx)
+            EmitExpr = 1
+            Exit Function
+        End If
+        Print "error: undeclared Double: " + name
+        Exit Function
+    End If
+
+    If kind = NK_UNARY And op = OP_NEG And AstIsFloat(gAst[ni].A) <> 0 Then
+        If EmitExprAsDouble(gAst[ni].A) = 0 Then Exit Function
+        EmitFchs()
+        EmitExpr = 1
+        Exit Function
+    End If
+
+    If kind = NK_BIN And AstIsFloat(ni) <> 0 Then
+        If EmitExprAsDouble(gAst[ni].B) = 0 Then Exit Function
+        EmitPushDoubleSt0()
+        If EmitExprAsDouble(gAst[ni].A) = 0 Then Exit Function
+        EmitFldQwordEsp()
+        EmitAsm("add esp, 8")
+        If op = OP_ADD Then
+            EmitFaddp()
+        ElseIf op = OP_SUB Then
+            EmitFsubp()
+        ElseIf op = OP_MUL Then
+            EmitFmulp()
+        ElseIf op = OP_DIV Then
+            EmitFdivp()
+        Else
+            Print "unsupported Double bin op"
+            Exit Function
+        End If
+        EmitExpr = 1
+        Exit Function
+    End If
 
     If kind = NK_NUM Then
         EmitAsmImm("mov eax, ", gAst[ni].IVal)
@@ -320,7 +444,11 @@ Function EmitExpr(ni As Long) As Long
             If StrEqCI(name, gProcName) <> 0 Then
                 EmitAsm("mov ebx, ebp")
                 EmitAsmImm("add ebx, ", gRetOff)
-                EmitAsmLoadEbx()
+                If gProcRetIsFloat <> 0 Then
+                    EmitFldQwordEbx()
+                Else
+                    EmitAsmLoadEbx()
+                End If
                 EmitExpr = 1
                 Exit Function
             End If
@@ -334,12 +462,9 @@ Function EmitExpr(ni As Long) As Long
         idx = FindVar(name)
         If idx >= 0 Then
             If gVarCount(idx) > 1 Then
-                ' 配列名単体 → 先頭アドレス
                 EmitAddrVar(idx)
                 EmitAsm("mov eax, ebx")
             ElseIf gVarTypeIdx(idx) >= 0 And gVarIsPtr(idx) = 0 Then
-                ' UDT（Type 変数）→ ByRef 相当でアドレスを渡す
-                ' （値ロードは eax に載らない / CreateProcess 等の WinAPI 向け）
                 EmitAddrVar(idx)
                 EmitAsm("mov eax, ebx")
             Else
@@ -618,13 +743,18 @@ Function EmitExpr(ni As Long) As Long
         While i >= 0
             If SigArgByRef(si, i) <> 0 Then
                 If EmitLValueAddr(ArgAt(args, i)) = 0 Then Exit Function
+                EmitAsm("push eax")
+            ElseIf SigArgIsFloat(si, i) <> 0 Then
+                If EmitExprAsDouble(ArgAt(args, i)) = 0 Then Exit Function
+                EmitPushDoubleSt0()
             Else
                 If EmitExpr(ArgAt(args, i)) = 0 Then Exit Function
+                EmitAsm("push eax")
             End If
-            EmitAsm("push eax")
             i = i - 1
         Wend
         EmitCallName(name)
+        ' Double 戻りは ST(0) のまま
         EmitExpr = 1
         Exit Function
     End If
@@ -636,6 +766,7 @@ Function EmitCond(ni As Long, falseLab As String) As Long
     Dim rightLab As String
     Dim doneLab As String
     Dim isStr As Long
+    Dim isFlt As Long
     Dim op As Long
 
     EmitCond = 0
@@ -686,6 +817,35 @@ Function EmitCond(ni As Long, falseLab As String) As Long
             EmitCond = 1
             Exit Function
         End If
+        isFlt = AstIsFloat(gAst[ni].A) Or AstIsFloat(gAst[ni].B)
+        If isFlt <> 0 Then
+            ' ST(1)=A, ST(0)=B → fcomp → flags for A ? B
+            If EmitExprAsDouble(gAst[ni].B) = 0 Then Exit Function
+            EmitPushDoubleSt0()
+            If EmitExprAsDouble(gAst[ni].A) = 0 Then Exit Function
+            EmitFldQwordEsp()
+            EmitAsm("add esp, 8")
+            ' ST(0)=B, ST(1)=A; fcomp pops B, compares A with B → C0/C2/C3 in FPU status
+            EmitFcompSt1()
+            EmitFstswAx()
+            EmitSahf()
+            EmitFstpSt0()
+            If op = OP_EQ Then
+                EmitAsm("jne " + falseLab)
+            ElseIf op = OP_NE Then
+                EmitAsm("je " + falseLab)
+            ElseIf op = OP_LT Then
+                EmitAsm("jbe " + falseLab)
+            ElseIf op = OP_GT Then
+                EmitAsm("jae " + falseLab)
+            ElseIf op = OP_LE Then
+                EmitAsm("jb " + falseLab)
+            ElseIf op = OP_GE Then
+                EmitAsm("ja " + falseLab)
+            End If
+            EmitCond = 1
+            Exit Function
+        End If
         If EmitExpr(gAst[ni].A) = 0 Then Exit Function
         EmitAsm("push eax")
         If EmitExpr(gAst[ni].B) = 0 Then Exit Function
@@ -709,6 +869,18 @@ Function EmitCond(ni As Long, falseLab As String) As Long
     End If
 
     ' 値の真偽
+    If AstIsFloat(ni) <> 0 Then
+        If EmitExprAsDouble(ni) = 0 Then Exit Function
+        EmitAsm("sub esp, 8")
+        EmitFstpQwordEsp()
+        EmitAsm("pop eax")
+        EmitAsm("pop edx")
+        EmitAsm("or eax, edx")
+        EmitAsm("cmp eax, 0")
+        EmitAsm("je " + falseLab)
+        EmitCond = 1
+        Exit Function
+    End If
     If EmitExpr(ni) = 0 Then Exit Function
     EmitAsm("cmp eax, 0")
     EmitAsm("je " + falseLab)
