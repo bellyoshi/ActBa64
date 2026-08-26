@@ -9,12 +9,14 @@
 #   .\run_test2.ps1 -Quiet
 #   .\run_test2.ps1 -KeepArtifacts
 #   .\run_test2.ps1 -IncludeGui     # ' Gui: 1 のテストも実行（既定はスキップ）
+#   .\run_test2.ps1 -Actba32        # -actba32 で PE32 を出力して実行
 #   .\run_test2.ps1 -Linker .\bin\stage1\actba64.exe
 #
 # テスト対象: test\*.abp / test\*.pj のうち ' Target: actba64 があるもの
 #   ' Expect: N        … 終了コード期待値（省略時 0）
 #   ' Gui: 1           … 対話 UI 想定（MessageBox 等）。既定では SKIP（-IncludeGui で有効）
 #   ' Target: actba64  … このランナーの対象（必須）
+#   ' Skip32: 1        … -Actba32 時はスキップ（ポインタ幅に依存する SizeOf 等）
 # Print はコンソール WriteFile（Gui 自動判定なし）
 # .pj の #SOURCE に載る .abp は単独ビルドしない
 
@@ -29,7 +31,8 @@ param(
     [switch]$Quiet,
     [switch]$ShowSkipped,
     [switch]$KeepArtifacts,
-    [switch]$IncludeGui
+    [switch]$IncludeGui,
+    [switch]$Actba32
 )
 
 $ErrorActionPreference = "Continue"
@@ -77,6 +80,7 @@ function Get-Meta([string]$path) {
     $expect = 0
     $gui = $null
     $target = $false
+    $skip32 = $false
     $stdin = @()
     foreach ($line in (Get-Content -LiteralPath $path -Encoding Default -ErrorAction Stop)) {
         if ($line -match "^\s*'\s*Expect\s*:\s*(-?\d+)\s*$") {
@@ -88,6 +92,9 @@ function Get-Meta([string]$path) {
         if ($line -match "(?i)^\s*'\s*Target\s*:\s*actba64\s*$") {
             $target = $true
         }
+        if ($line -match "(?i)^\s*'\s*Skip32\s*:\s*1\s*$") {
+            $skip32 = $true
+        }
         if ($line -match "^\s*'\s*Stdin\s*:\s?(.*)$") {
             $stdin += $Matches[1]
         }
@@ -95,7 +102,7 @@ function Get-Meta([string]$path) {
     if ($null -eq $gui) {
         $gui = 0
     }
-    return @{ Expect = $expect; Gui = $gui; Target = $target; Stdin = $stdin }
+    return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin }
 }
 
 function Get-PjOwnedAbp {
@@ -140,6 +147,20 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         }
         return
     }
+    if ($Actba32 -and $meta.Skip32) {
+        $stats.skip++
+        if ($ShowSkipped) {
+            Add-Result $name "SKIP" "skip32"
+        }
+        return
+    }
+    if ($Actba32 -and $name -match '(?i)^t_double') {
+        $stats.skip++
+        if ($ShowSkipped) {
+            Add-Result $name "SKIP" "double/sse32"
+        }
+        return
+    }
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($name) + "_test.exe"
     $exePath = Join-Path $OutDir $exeName
     $stdinPath = $exePath + ".stdin"
@@ -148,7 +169,13 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
     }
 
-    $log = & $Linker $src -o $exePath 2>&1 | ForEach-Object { "$_" }
+    $ccArgs = @($src)
+    if ($Actba32) {
+        $ccArgs += "-actba32"
+    }
+    $ccArgs += "-o"
+    $ccArgs += $exePath
+    $log = & $Linker @ccArgs 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exePath)) {
         $stats.fail++
         $hint = ($log | Select-Object -Last 3) -join " / "

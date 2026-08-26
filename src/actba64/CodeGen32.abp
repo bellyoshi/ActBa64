@@ -1,78 +1,8 @@
 ' ===================================================
-'  CodeGen - IR -> machine code
+'  CodeGen32 - IR -> i386 machine code (abs IAT / strings)
 ' ===================================================
 
-Type IrFixup
-    at As Long
-    lab As Long
-    kind As Long
-End Type
-
-Const IR_FIX_REL32 = 0
-Const IR_FIX_ABS32 = 1
-
-Function IrDllNameOf(dllKind As DWord, dst As *Byte) As Long
-    IrDllNameOf = 0
-    If dllKind = IR_DLL_USER32 Then
-        lstrcpy(dst, "user32.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_KERNEL32 Then
-        lstrcpy(dst, "kernel32.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_GDI32 Then
-        lstrcpy(dst, "gdi32.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_IMM32 Then
-        lstrcpy(dst, "imm32.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_COMDLG32 Then
-        lstrcpy(dst, "comdlg32.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_SHELL32 Then
-        lstrcpy(dst, "shell32.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_OLE32 Then
-        lstrcpy(dst, "ole32.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_D3D11 Then
-        lstrcpy(dst, "d3d11.dll")
-        IrDllNameOf = 1
-    ElseIf dllKind = IR_DLL_D3DCOMPILER Then
-        lstrcpy(dst, "d3dcompiler_47.dll")
-        IrDllNameOf = 1
-    End If
-End Function
-
-Sub IrCollect(list As *IrList, builder As *ImportBuilder)
-    Dim i As Long
-    Dim n As Long
-    Dim opv As Long
-    Dim ops As *IrOp
-    Dim tmp(255) As Byte
-    Dim dll(31) As Byte
-    Dim sid As Long
-
-    ops = list->ops
-    n = list->count
-    For i = 0 To n - 1
-        opv = ops[i].op
-        If opv = OP_CALL_API Then
-            If IrDllNameOf(ops[i].arg1, VarPtr(dll)) <> 0 Then
-                IrCopyStrAt(list, i, VarPtr(tmp))
-                IbAddImport(builder, VarPtr(dll), VarPtr(tmp))
-            End If
-        ElseIf opv = OP_LEA_RDX_STR Or opv = OP_LEA_R8_STR Or opv = OP_LEA_RAX_STR Then
-            IrCopyStrAt(list, i, VarPtr(tmp))
-            sid = IbAddString(builder, VarPtr(tmp))
-            If sid < 0 Then
-                Print "error: too many string literals (max " + Str$(IB_MAX_STRING) + ")"
-            End If
-            ops[i].strId = sid
-        End If
-    Next
-End Sub
-
-Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord)
+Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord)
     Dim i As Long
     Dim n As Long
     Dim opv As Long
@@ -89,6 +19,7 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
     Dim rel As Long
     Dim nextRip As Long
     Dim globOff As DWord
+    Dim absAddr As DWord
 
     labOff = calloc(BytesN(IR_MAX_LABELS, SizeOf(Long)))
     fixups = calloc(BytesN(IR_MAX_FIXUPS, SizeOf(IrFixup)))
@@ -108,47 +39,44 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
     For i = 0 To n - 1
         opv = ops[i].op
         If opv = OP_ENTER Then
-            EmitEnter(cb, ops[i].arg1)
+            Emit32Enter(cb, ops[i].arg1)
         ElseIf opv = OP_LEAVE Then
-            EmitLeaveRet(cb)
-            If ops[i].arg1 <> 0 Then
-                ' 64-bit ignores stdcall pop (Microsoft x64)
-            End If
+            Emit32LeaveRet(cb, ops[i].arg1)
         ElseIf opv = OP_XOR_ECX Then
             EmitXorEcx(cb)
         ElseIf opv = OP_XOR_R9D Then
-            EmitXorR9d(cb)
+            EmitXorEcx(cb)
         ElseIf opv = OP_LEA_RDX_STR Then
             strRva = IbGetStringRva(builder, ops[i].strId)
-            EmitLeaRdxRip(cb, strRva, TEXT_RVA)
+            Emit32MovEdxAbs(cb, IMAGE_BASE_32 + strRva)
         ElseIf opv = OP_LEA_R8_STR Then
             strRva = IbGetStringRva(builder, ops[i].strId)
-            EmitLeaR8Rip(cb, strRva, TEXT_RVA)
+            Emit32MovEdxAbs(cb, IMAGE_BASE_32 + strRva)
         ElseIf opv = OP_LEA_RAX_STR Then
             strRva = IbGetStringRva(builder, ops[i].strId)
-            EmitLeaRaxRip(cb, strRva, TEXT_RVA)
+            Emit32MovAbsEax(cb, IMAGE_BASE_32 + strRva)
         ElseIf opv = OP_MOV_RCX_RAX Then
-            EmitMovRcxRax(cb)
+            Emit32MovEcxEax(cb)
         ElseIf opv = OP_MOV_RDX_RAX Then
-            EmitMovRdxRax(cb)
+            Emit32MovEdxEax(cb)
         ElseIf opv = OP_MOV_R8_RAX Then
-            EmitMovR8Rax(cb)
+            Emit32MovEcxEax(cb)
         ElseIf opv = OP_MOVZX_EAX_BYTE Then
             EmitMovzxEaxByteRax(cb)
         ElseIf opv = OP_TEST_RAX Then
-            EmitTestRax(cb)
+            EmitTestEax(cb)
         ElseIf opv = OP_XOR_EAX Then
             EmitXorEax(cb)
         ElseIf opv = OP_LEA_LOCAL Then
-            EmitLeaLocal(cb, ops[i].arg1)
+            Emit32LeaLocal(cb, ops[i].arg1)
         ElseIf opv = OP_ADD_RAX_RCX Then
-            EmitAddRaxRcx(cb)
+            Emit32AddEaxEcx(cb)
         ElseIf opv = OP_LOADZX_BYTE_RAX Then
             EmitLoadzxByteRax(cb)
         ElseIf opv = OP_STORE_BYTE_RAX_CL Then
             EmitStoreByteRaxCl(cb)
         ElseIf opv = OP_ADD_RAX_IMM Then
-            EmitAddRaxImm(cb, ops[i].arg1)
+            Emit32AddEaxImm(cb, ops[i].arg1)
         ElseIf opv = OP_LOADZX_WORD_RAX Then
             EmitLoadzxWordRax(cb)
         ElseIf opv = OP_STORE_WORD_RAX_CX Then
@@ -158,17 +86,15 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
         ElseIf opv = OP_STORE_DWORD_RAX_ECX Then
             EmitStoreDwordRaxEcx(cb)
         ElseIf opv = OP_LOAD_QWORD_RAX Then
-            EmitLoadQwordRax(cb)
+            Emit32LoadPtr(cb)
         ElseIf opv = OP_LOAD_PTR Then
-            EmitLoadQwordRax(cb)
+            Emit32LoadPtr(cb)
         ElseIf opv = OP_STORE_QWORD_RAX_RCX Then
-            EmitStoreQwordRaxRcx(cb)
+            Emit32StorePtr(cb)
         ElseIf opv = OP_STORE_PTR Then
-            EmitStoreQwordRaxRcx(cb)
+            Emit32StorePtr(cb)
         ElseIf opv = OP_SHL_ECX_2 Then
-            EmitByte(cb, &HC1)
-            EmitByte(cb, &HE1)
-            EmitByte(cb, 2)
+            Emit32ShlEcx2(cb)
         ElseIf opv = OP_AND_EAX_ECX Then
             EmitAndEaxEcx(cb)
         ElseIf opv = OP_OR_EAX_ECX Then
@@ -180,15 +106,15 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
         ElseIf opv = OP_POP_RDX Then
             EmitPopRdx(cb)
         ElseIf opv = OP_XCHG_RAX_RCX Then
-            EmitXchgRaxRcx(cb)
+            Emit32XchgEaxEcx(cb)
         ElseIf opv = OP_MOV_ECX Then
             EmitMovEcxImm(cb, ops[i].arg1)
         ElseIf opv = OP_MOV_EAX_IMM Then
             EmitMovEaxImm(cb, ops[i].arg1)
         ElseIf opv = OP_LOAD_LOCAL Then
-            EmitLoadLocal(cb, ops[i].arg1)
+            Emit32LoadLocal(cb, ops[i].arg1)
         ElseIf opv = OP_STORE_LOCAL Then
-            EmitStoreLocal(cb, ops[i].arg1)
+            Emit32StoreLocal(cb, ops[i].arg1)
         ElseIf opv = OP_PUSH_RAX Then
             EmitPushRax(cb)
         ElseIf opv = OP_POP_RCX Then
@@ -204,11 +130,11 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
         ElseIf opv = OP_TEST_EAX Then
             EmitTestEax(cb)
         ElseIf opv = OP_INC_LOCAL Then
-            EmitIncLocal(cb, ops[i].arg1)
+            Emit32IncLocal(cb, ops[i].arg1)
         ElseIf opv = OP_STORE_LOCAL_ECX Then
-            EmitStoreLocalEcx(cb, ops[i].arg1)
+            Emit32StoreLocalEcx(cb, ops[i].arg1)
         ElseIf opv = OP_STORE_LOCAL_EDX Then
-            EmitStoreLocalEdx(cb, ops[i].arg1)
+            Emit32StoreLocalEdx(cb, ops[i].arg1)
         ElseIf opv = OP_MOV_EDX_IMM Then
             EmitMovEdxImm(cb, ops[i].arg1)
         ElseIf opv = OP_MOV_EDX_EAX Then
@@ -218,47 +144,44 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
             If nFix < IR_MAX_FIXUPS Then
                 fixups[nFix].at = at
                 fixups[nFix].lab = ops[i].arg1
+                fixups[nFix].kind = IR_FIX_REL32
                 nFix = nFix + 1
             End If
         ElseIf opv = OP_CALL_RAX Then
             EmitCallRax(cb)
         ElseIf opv = OP_LEA_RAX_LAB Then
-            at = EmitLeaRaxLabRel32(cb)
+            at = Emit32MovEaxImmFixup(cb)
             If nFix < IR_MAX_FIXUPS Then
                 fixups[nFix].at = at
                 fixups[nFix].lab = ops[i].arg1
+                fixups[nFix].kind = IR_FIX_ABS32
                 nFix = nFix + 1
             End If
         ElseIf opv = OP_LEA_RAX_GLOB Then
-            at = EmitLeaRaxLabRel32(cb)
             globOff = ops[i].arg1
-            nextRip = at + 4
-            rel = (dataRva + globOff) - (TEXT_RVA + nextRip)
-            If at >= 0 And at + 4 <= cb->capacity Then
-                PutDword(cb->buf, at, rel)
-            End If
+            Emit32MovAbsEax(cb, IMAGE_BASE_32 + dataRva + globOff)
         ElseIf opv = OP_SHL_ECX_3 Then
             EmitShlEcx3(cb)
         ElseIf opv = OP_POP_RAX Then
             EmitPopRax(cb)
         ElseIf opv = OP_POP_R8 Then
-            EmitPopR8(cb)
+            EmitPopRcx(cb)
         ElseIf opv = OP_MOV_RAX_R8 Then
-            EmitMovRaxR8(cb)
+            Emit32MovEaxEcx(cb)
         ElseIf opv = OP_SUB_RSP Then
-            EmitSubRsp(cb, ops[i].arg1)
+            Emit32SubEsp(cb, ops[i].arg1)
         ElseIf opv = OP_ADD_RSP Then
-            EmitAddRsp(cb, ops[i].arg1)
+            Emit32AddEsp(cb, ops[i].arg1)
         ElseIf opv = OP_STORE_RSP_RAX Then
-            EmitStoreRspRax(cb, ops[i].arg1)
+            Emit32StoreEspEax(cb, ops[i].arg1)
         ElseIf opv = OP_LOAD_RSP_RAX Then
-            EmitLoadRspRax(cb, ops[i].arg1)
+            Emit32LoadEspEax(cb, ops[i].arg1)
         ElseIf opv = OP_MOV_R9_RAX Then
-            EmitMovR9Rax(cb)
+            Emit32MovEdxEax(cb)
         ElseIf opv = OP_STORE_LOCAL_R8 Then
-            EmitStoreLocalR8(cb, ops[i].arg1)
+            Emit32StoreLocalEcx(cb, ops[i].arg1)
         ElseIf opv = OP_STORE_LOCAL_R9 Then
-            EmitStoreLocalR9(cb, ops[i].arg1)
+            Emit32StoreLocalEdx(cb, ops[i].arg1)
         ElseIf opv = OP_XOR_EDX Then
             EmitXorEdx(cb)
         ElseIf opv = OP_DIV_ECX Then
@@ -311,6 +234,7 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
             If nFix < IR_MAX_FIXUPS Then
                 fixups[nFix].at = at
                 fixups[nFix].lab = ops[i].arg1
+                fixups[nFix].kind = IR_FIX_REL32
                 nFix = nFix + 1
             End If
         ElseIf opv = OP_JZ Or opv = OP_JE Then
@@ -384,18 +308,18 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
                 nFix = nFix + 1
             End If
         ElseIf opv = OP_MOV_RAX_GS8 Then
-            EmitMovRaxGs8(cb)
+            Emit32FsStackBase(cb)
         ElseIf opv = OP_MOV_R8_RSP Then
-            EmitMovR8Rsp(cb)
+            Emit32MovEcxEsp(cb)
         ElseIf opv = OP_CMP_R8_RAX Then
-            EmitCmpR8Rax(cb)
+            Emit32CmpEcxEax(cb)
         ElseIf opv = OP_ADD_R8_IMM Then
-            EmitAddR8Imm8(cb, ops[i].arg1)
+            Emit32AddEcxImm8(cb, ops[i].arg1)
         ElseIf opv = OP_CALL_API Then
             IrDllNameOf(ops[i].arg1, VarPtr(dll))
             IrCopyStrAt(list, i, VarPtr(tmp))
             iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(tmp))
-            EmitCallRip(cb, iatRva, TEXT_RVA)
+            Emit32CallIatAbs(cb, IMAGE_BASE_32 + iatRva)
         ElseIf opv = OP_RET Then
             EmitRet(cb)
         End If
@@ -406,10 +330,17 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
         at = fixups[i].at
         If li >= 0 And li < IR_MAX_LABELS Then
             If labOff[li] >= 0 Then
-                nextRip = at + 4
-                rel = labOff[li] - nextRip
-                If at >= 0 And at + 4 <= cb->capacity Then
-                    PutDword(cb->buf, at, rel)
+                If fixups[i].kind = IR_FIX_ABS32 Then
+                    absAddr = IMAGE_BASE_32 + TEXT_RVA + labOff[li]
+                    If at >= 0 And at + 4 <= cb->capacity Then
+                        PutDword(cb->buf, at, absAddr)
+                    End If
+                Else
+                    nextRip = at + 4
+                    rel = labOff[li] - nextRip
+                    If at >= 0 And at + 4 <= cb->capacity Then
+                        PutDword(cb->buf, at, rel)
+                    End If
                 End If
             End If
         End If

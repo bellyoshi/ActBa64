@@ -7,6 +7,8 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     Dim idataBuf As *Byte
     Dim idataSize As DWord
     Dim codeMem As *Byte
+    Dim codeCap As Long
+    Dim capI As Long
     Dim cb As CodeBuffer
     Dim textVirt As DWord
     Dim dataVirt As DWord
@@ -24,14 +26,21 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
 
     IrCollect(list, builder)
 
-    idataBuf = calloc(524288)
+    idataBuf = calloc(1048576)
     If idataBuf = NULL Then
         Print "error: out of memory (.idata)"
         free(builder)
         Exit Function
     End If
 
-    codeMem = calloc(1048576)
+    ' 8MiB: 1048576 を 8 回足す（AB4.20 の多項加算 / 16bit Const を避ける）
+    codeCap = 0
+    capI = 0
+    While capI < 8
+        AddTo(codeCap, 1048576)
+        capI = capI + 1
+    Wend
+    codeMem = calloc(codeCap)
     If codeMem = NULL Then
         Print "error: out of memory (.text)"
         free(idataBuf)
@@ -39,15 +48,19 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
         Exit Function
     End If
     cb.buf = codeMem
-    cb.capacity = 1048576
+    cb.capacity = codeCap
 
-    dataVirt = AlignUp(list.globSize, SECTION_ALIGN)
+    dataVirt = AlignUp(list->globSize, SECTION_ALIGN)
     If dataVirt < SECTION_ALIGN Then dataVirt = SECTION_ALIGN
 
     ' 1st pass: measure .text size (RIP imm は長さに影響しない)
     IbFinalize(builder, IDATA_RVA, idataBuf, idataSize)
     cb.size = 0
-    IrEmitCode(list, VarPtr(cb), builder, TEXT_RVA + SECTION_ALIGN)
+    If TyIs32() <> 0 Then
+        IrEmitCode32(list, VarPtr(cb), builder, TEXT_RVA + SECTION_ALIGN)
+    Else
+        IrEmitCode(list, VarPtr(cb), builder, TEXT_RVA + SECTION_ALIGN)
+    End If
     If cb.size >= cb.capacity Then
         Print "error: code too large"
         free(codeMem)
@@ -57,13 +70,19 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     End If
 
     textVirt = AlignUp(cb.size, SECTION_ALIGN)
-    dataRva = TEXT_RVA + textVirt
-    idataRva = dataRva + dataVirt
+    dataRva = TEXT_RVA
+    dataRva = dataRva + textVirt
+    idataRva = dataRva
+    idataRva = idataRva + dataVirt
 
     ' 2nd pass: .data after .text; .idata after .data
     IbFinalize(builder, idataRva, idataBuf, idataSize)
     cb.size = 0
-    IrEmitCode(list, VarPtr(cb), builder, dataRva)
+    If TyIs32() <> 0 Then
+        IrEmitCode32(list, VarPtr(cb), builder, dataRva)
+    Else
+        IrEmitCode(list, VarPtr(cb), builder, dataRva)
+    End If
     If cb.size >= cb.capacity Then
         Print "error: code too large"
         free(codeMem)
@@ -79,10 +98,18 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
         Exit Function
     End If
 
-    If WritePe64(outPath, codeMem, cb.size, list.globSize, idataBuf, idataSize, builder, subsystem) <> 0 Then
-        CompileIrToPe = 1
+    If TyIs32() <> 0 Then
+        If WritePe32(outPath, codeMem, cb.size, list->globSize, idataBuf, idataSize, builder, subsystem) <> 0 Then
+            CompileIrToPe = 1
+        Else
+            Print "error: cannot write: " + MakeStr(outPath)
+        End If
     Else
-        Print "error: cannot write: " + MakeStr(outPath)
+        If WritePe64(outPath, codeMem, cb.size, list->globSize, idataBuf, idataSize, builder, subsystem) <> 0 Then
+            CompileIrToPe = 1
+        Else
+            Print "error: cannot write: " + MakeStr(outPath)
+        End If
     End If
 
     free(codeMem)
