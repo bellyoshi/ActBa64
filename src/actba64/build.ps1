@@ -1,16 +1,17 @@
 # build.ps1 - actba64 ブートストラップ
 #
-#   stage0: actba32\bin\stage2 をコピー（32bit actba32 等）
-#   stage0 -> stage1: actba32 で actba64.exe をビルド
-#   stage1 -> stage2: stage1 の actba64 で自己コンパイル
-#   stage2 -> stage3: stage2 の actba64 で再コンパイル
-#   stage2 vs stage3: バイナリ一致を確認（自己ホスト固定点）
+#   stage0: ActiveBasic 4.20 で actba64.pj をビルドした 32bit ホスト
+#           （bin\stage0\actba64.exe。#PLATFORM=32 は AB4.20 用で、出力ターゲットではない）
+#   stage0 -> stage1: stage0 の actba64 で 64bit actba64.exe をビルド（-actba32 なし）
+#   stage1 -> stage2: 自己コンパイル
+#   stage2 -> stage3: 再コンパイル
+#   stage2 vs stage3: バイナリ一致（自己ホスト固定点）
 #
 # 使い方:
 #   .\build.ps1
-#   .\build.ps1 -SkipCopy
+#   .\build.ps1 -SkipCopy       # Include を stage0 へコピーしない
 #   .\build.ps1 -Stage1Only
-#   .\build.ps1 -SkipStage1   # 既存 stage1 を使い stage2/stage3 のみ
+#   .\build.ps1 -SkipStage1
 #   .\build.ps1 -SkipCompare
 
 param(
@@ -24,12 +25,10 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 Set-Location $Root
 
-$SrcStage2 = Join-Path $Root "..\actba32\bin\stage2"
+$IncludeSrc = Join-Path $Root "..\Include"
 $Stage0 = Join-Path $Root "bin\stage0"
 $Pj = "actba64.pj"
 $ExeName = "actba64.exe"
-$BootTools = @("actba32.exe", "abc.exe", "abassembler.exe", "ablinker.exe")
-$BootDriver = "actba32.exe"
 
 function Get-StageDir([string]$stage) {
     return Join-Path $Root "bin\$stage"
@@ -41,50 +40,22 @@ function Ensure-Dir([string]$dir) {
     }
 }
 
-function Invoke-BootBuild([string]$driverExe, [string]$outStage) {
-    $outDir = Get-StageDir $outStage
-    $relOut = "bin\$outStage\$ExeName"
-    $outPath = Join-Path $outDir $ExeName
-    Ensure-Dir $outDir
-
-    $beforeTime = [datetime]::MinValue
-    $beforeLen = -1
-    if (Test-Path -LiteralPath $outPath) {
-        $prev = Get-Item -LiteralPath $outPath
-        $beforeTime = $prev.LastWriteTimeUtc
-        $beforeLen = $prev.Length
+function Test-Actba64Driver([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $false
     }
-
-    Write-Host ""
-    Write-Host "=== stage0 actba32 -> $outStage ==="
-    Write-Host "driver: $driverExe"
-    Write-Host "-- ${Pj}: -o $relOut"
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    $log = & $driverExe $Pj -o $relOut 2>&1 | ForEach-Object { "$_" }
-    $sw.Stop()
-    $code = [int]$LASTEXITCODE
-
-    foreach ($line in $log) { Write-Host $line }
-
-    $joined = [string]::Join("`n", @($log))
-    $failHint = $joined -match "(?im)^(?:error:|.*\b(?:abc fail|asm fail|link fail|cannot )).*"
-
-    if ($code -ne 0 -or $failHint -or -not (Test-Path -LiteralPath $outPath)) {
-        Write-Error "build failed: $Pj -> $relOut exit=$code"
-        exit 1
+    $len = (Get-Item -LiteralPath $path).Length
+    if ($len -lt 80000) {
+        Write-Host ("note: $path is ${len} bytes (too small for a compiler)")
+        return $false
     }
-    $fi = Get-Item -LiteralPath $outPath
-    if ($fi.LastWriteTimeUtc -le $beforeTime -and $fi.Length -eq $beforeLen) {
-        Write-Error "output was not updated: $outPath"
-        exit 1
-    }
-
-    Write-Host ("OK: {0} ({1} bytes, {2}s)" -f $outPath, $fi.Length, [math]::Round($sw.Elapsed.TotalSeconds, 2))
+    return $true
 }
 
 function Invoke-Actba64Build([string]$driverStage, [string]$outStage) {
     $driver = Join-Path (Get-StageDir $driverStage) $ExeName
     $outDir = Get-StageDir $outStage
+    $relOut = "bin\$outStage\$ExeName"
     $outPath = Join-Path $outDir $ExeName
     $pjPath = Join-Path $Root $Pj
 
@@ -101,16 +72,14 @@ function Invoke-Actba64Build([string]$driverStage, [string]$outStage) {
     Write-Host ""
     Write-Host "=== $driverStage -> $outStage ==="
     Write-Host "driver: $driver"
-    Write-Host "-- $ExeName $Pj -o $outPath"
+    Write-Host "-- $ExeName $Pj -o $relOut"
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $log = & $driver $pjPath -o $outPath 2>&1 | ForEach-Object { "$_" }
-    $sw.Stop()
+    & $driver $pjPath -o $relOut
     $code = [int]$LASTEXITCODE
-
-    foreach ($line in $log) { Write-Host $line }
+    $sw.Stop()
 
     if ($code -ne 0 -or -not (Test-Path -LiteralPath $outPath)) {
-        Write-Error "build failed: $driverStage -> $outStage exit=$code"
+        Write-Error "build failed: $driverStage -> $outStage exit=$code (no output at $outPath)"
         exit 1
     }
 
@@ -152,7 +121,6 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root $Pj))) {
     exit 2
 }
 
-# --- stage0 -> stage1 ---
 if ($SkipStage1) {
     $stage1Exe = Join-Path (Get-StageDir "stage1") $ExeName
     if (-not (Test-Path -LiteralPath $stage1Exe)) {
@@ -161,34 +129,43 @@ if ($SkipStage1) {
     }
     Write-Host "=== skip stage1 (reuse $stage1Exe) ==="
 } else {
-    # stage0: copy actba32 toolchain
+    Ensure-Dir $Stage0
+    $Driver = Join-Path $Stage0 $ExeName
+    if (-not (Test-Actba64Driver $Driver)) {
+        $fallback = $null
+        foreach ($cand in @("stage2", "stage3", "stage1")) {
+            $p = Join-Path (Get-StageDir $cand) $ExeName
+            if (Test-Actba64Driver $p) {
+                $fallback = $p
+                break
+            }
+        }
+        if ($null -eq $fallback) {
+            Write-Error @"
+stage0 missing or invalid: $Driver
+Rebuild actba64.pj with ActiveBasic 4.20 into bin\stage0\actba64.exe
+(#USEWINDOW=0 / CUI). A ~24KB GUI exe is not the compiler.
+"@
+            exit 2
+        }
+        Write-Host "=== stage0 actba64.exe is not a usable compiler; using $fallback ==="
+        Copy-Item -LiteralPath $fallback -Destination $Driver -Force
+    }
+
     if (-not $SkipCopy) {
-        if (-not (Test-Path -LiteralPath $SrcStage2)) {
-            Write-Error "source not found: $SrcStage2"
+        if (-not (Test-Path -LiteralPath $IncludeSrc)) {
+            Write-Error "Include not found: $IncludeSrc"
             exit 2
         }
-        Ensure-Dir (Split-Path $Stage0 -Parent)
-        if (Test-Path -LiteralPath $Stage0) {
-            Remove-Item -LiteralPath $Stage0 -Recurse -Force
+        $incDst = Join-Path $Stage0 "Include"
+        if (Test-Path -LiteralPath $incDst) {
+            Remove-Item -LiteralPath $incDst -Recurse -Force
         }
-        Write-Host "=== copy actba32\bin\stage2 -> bin\stage0 ==="
-        Copy-Item -LiteralPath $SrcStage2 -Destination $Stage0 -Recurse
+        Write-Host "=== copy Include -> bin\stage0\Include ==="
+        Copy-Item -LiteralPath $IncludeSrc -Destination $incDst -Recurse
     }
 
-    $Driver = Join-Path $Stage0 $BootDriver
-    if (-not (Test-Path -LiteralPath $Driver)) {
-        Write-Error "actba32 not found: $Driver"
-        exit 2
-    }
-    foreach ($t in $BootTools) {
-        $p = Join-Path $Stage0 $t
-        if (-not (Test-Path -LiteralPath $p)) {
-            Write-Error "stage0 missing: $p"
-            exit 2
-        }
-    }
-
-    Invoke-BootBuild -driverExe $Driver -outStage "stage1"
+    Invoke-Actba64Build -driverStage "stage0" -outStage "stage1"
 }
 
 if ($Stage1Only) {
@@ -197,10 +174,7 @@ if ($Stage1Only) {
     exit 0
 }
 
-# --- stage1 -> stage2 ---
 Invoke-Actba64Build -driverStage "stage1" -outStage "stage2"
-
-# --- stage2 -> stage3 ---
 Invoke-Actba64Build -driverStage "stage2" -outStage "stage3"
 
 if (-not $SkipCompare) {

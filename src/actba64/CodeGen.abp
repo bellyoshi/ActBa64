@@ -5,7 +5,11 @@
 Type IrFixup
     at As Long
     lab As Long
+    kind As Long
 End Type
+
+Const IR_FIX_REL32 = 0
+Const IR_FIX_ABS32 = 1
 
 Function IrDllNameOf(dllKind As DWord, dst As *Byte) As Long
     IrDllNameOf = 0
@@ -48,8 +52,8 @@ Sub IrCollect(list As *IrList, builder As *ImportBuilder)
     Dim dll(31) As Byte
     Dim sid As Long
 
-    ops = list.ops
-    n = list.count
+    ops = list->ops
+    n = list->count
     For i = 0 To n - 1
         opv = ops[i].op
         If opv = OP_CALL_API Then
@@ -86,16 +90,16 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
     Dim nextRip As Long
     Dim globOff As DWord
 
-    labOff = calloc(SizeOf(Long) * IR_MAX_LABELS)
-    fixups = calloc(SizeOf(IrFixup) * IR_MAX_FIXUPS)
+    labOff = calloc(BytesN(IR_MAX_LABELS, SizeOf(Long)))
+    fixups = calloc(BytesN(IR_MAX_FIXUPS, SizeOf(IrFixup)))
     If labOff = NULL Or fixups = NULL Then
         If labOff <> NULL Then free(labOff)
         If fixups <> NULL Then free(fixups)
         Exit Sub
     End If
 
-    ops = list.ops
-    n = list.count
+    ops = list->ops
+    n = list->count
     nFix = 0
     For i = 0 To IR_MAX_LABELS - 1
         labOff[i] = -1
@@ -107,6 +111,9 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
             EmitEnter(cb, ops[i].arg1)
         ElseIf opv = OP_LEAVE Then
             EmitLeaveRet(cb)
+            If ops[i].arg1 <> 0 Then
+                ' 64-bit ignores stdcall pop (Microsoft x64)
+            End If
         ElseIf opv = OP_XOR_ECX Then
             EmitXorEcx(cb)
         ElseIf opv = OP_XOR_R9D Then
@@ -152,8 +159,16 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
             EmitStoreDwordRaxEcx(cb)
         ElseIf opv = OP_LOAD_QWORD_RAX Then
             EmitLoadQwordRax(cb)
+        ElseIf opv = OP_LOAD_PTR Then
+            EmitLoadQwordRax(cb)
         ElseIf opv = OP_STORE_QWORD_RAX_RCX Then
             EmitStoreQwordRaxRcx(cb)
+        ElseIf opv = OP_STORE_PTR Then
+            EmitStoreQwordRaxRcx(cb)
+        ElseIf opv = OP_SHL_ECX_2 Then
+            EmitByte(cb, &HC1)
+            EmitByte(cb, &HE1)
+            EmitByte(cb, 2)
         ElseIf opv = OP_AND_EAX_ECX Then
             EmitAndEaxEcx(cb)
         ElseIf opv = OP_OR_EAX_ECX Then
@@ -219,7 +234,9 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
             globOff = ops[i].arg1
             nextRip = at + 4
             rel = (dataRva + globOff) - (TEXT_RVA + nextRip)
-            PutDword(VarPtr(cb.buf[at]), 0, rel)
+            If at >= 0 And at + 4 <= cb->capacity Then
+                PutDword(cb->buf, at, rel)
+            End If
         ElseIf opv = OP_SHL_ECX_3 Then
             EmitShlEcx3(cb)
         ElseIf opv = OP_POP_RAX Then
@@ -287,7 +304,7 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
         ElseIf opv = OP_LABEL Then
             li = ops[i].arg1
             If li >= 0 And li < IR_MAX_LABELS Then
-                labOff[li] = cb.size
+                labOff[li] = cb->size
             End If
         ElseIf opv = OP_JMP Then
             at = EmitJmpRel32(cb)
@@ -391,7 +408,9 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
             If labOff[li] >= 0 Then
                 nextRip = at + 4
                 rel = labOff[li] - nextRip
-                PutDword(VarPtr(cb.buf[at]), 0, rel)
+                If at >= 0 And at + 4 <= cb->capacity Then
+                    PutDword(cb->buf, at, rel)
+                End If
             End If
         End If
     Next

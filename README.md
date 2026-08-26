@@ -4,18 +4,17 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 
 | 成果物 | 役割 |
 |---|---|
-| `actba64.exe` | ActiveBasic サブセット → **64bit PE（PE32+）** |
-| `actba32.exe` | ActiveBasic サブセット → **32bit PE**（内部で `abc` / `abassembler` / `ablinker` を呼ぶ） |
+| `actba64.exe` | ActiveBasic サブセット → 既定 **64bit PE（PE32+）**。`-actba32` で **32bit PE（PE32）** |
 
 ## 構成
 
 | パス | 内容 |
 |---|---|
-| `src/Include` | 標準ヘッダ（actba32 / actba64 / エディタ共通） |
-| `src/actba32` | 32bit ツールチェーン（`actba32` / `abc` / `abassembler` / `ablinker`）の自己ホスト |
-| `src/actba64` | 64bit コンパイラ（actba32 からブートストラップ） |
+| `src/Include` | 標準ヘッダ（コンパイラ / エディタ共通） |
+| `src/actba64` | コンパイラ（Lexer → Parser → AST → IR → 機械語 + PE） |
 | `src/projecteditor` | エディタ |
 | `release/` | 配布一式（`build.ps1` が生成。git 管理外） |
+| `src/actba32` | 旧 32bit ツールチェーン（参照用。ブートストラップには使わない） |
 | `src/prototype*` | 開発途中の試作 |
 | `docs/` | ドキュメント（[一覧](docs/index.md)） |
 
@@ -31,8 +30,8 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 詳細は [docs/build.md](docs/build.md)。要約:
 
 ```powershell
-# リリース一式（要: src\actba32\bin\stage0 に ab420 成果物）
-# → release\ に ProjectEditor.exe / actba64.exe / actba32.exe / Include / help
+# 要: src\actba64\bin\stage0\actba64.exe（ActiveBasic 4.20 で actba64.pj をビルド）
+# → release\ に ProjectEditor.exe / actba64.exe / Include / help
 .\build.ps1
 
 # 既存 stage2 だけ使い、エディタ再コンパイルとコピーのみ
@@ -42,27 +41,23 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 段階ごとの手動ビルド:
 
 ```powershell
-# 1) 32bit（要: bin\stage0 に ab420 成果物）
-cd src\actba32
-.\selfbuild.ps1
-
-# 2) 64bit
-cd ..\actba64
+cd src\actba64
 .\build.ps1
 .\run_test2.ps1 stage2
+.\run_test2.ps1 stage2 -Actba32
 ```
 
 ## 使い方
 
 ```text
-actba64 <src.abp|.pj> -o <out.exe>
-actba32 <src.abp|.pj> [-o <out.exe>]
+actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 ```
 
 例:
 
 ```powershell
 .\bin\stage2\actba64.exe hello.abp -o hello.exe
+.\bin\stage2\actba64.exe hello.abp -actba32 -o hello32.exe
 
 # N88BASIC 図形（640x480）
 .\bin\stage2\actba64.exe .\samples\n88_shapes.abp -o .\samples\n88_shapes.exe

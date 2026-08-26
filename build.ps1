@@ -1,6 +1,6 @@
 # build.ps1 - リリース一式を release\ に揃える
 #
-#   既定: actba32 自己ホスト → actba64 ブートストラップ → ProjectEditor → コピー
+#   既定: actba64 ブートストラップ → ProjectEditor → コピー
 #   -SkipSelfHost: 既存 stage2 を使い、ProjectEditor 再コンパイルとコピーのみ
 #   -SkipCompare: 子スクリプトのバイナリ比較をスキップ
 #
@@ -18,19 +18,16 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 Set-Location $Root
 
-$Actba32Dir = Join-Path $Root "src\actba32"
 $Actba64Dir = Join-Path $Root "src\actba64"
 $EditorDir = Join-Path $Root "src\projecteditor"
 $ReleaseDir = Join-Path $Root "release"
 
-$Actba32Stage2 = Join-Path $Actba32Dir "bin\stage2"
 $Actba64Stage2 = Join-Path $Actba64Dir "bin\stage2"
 $Actba64Exe = Join-Path $Actba64Stage2 "actba64.exe"
 $IncludeSrc = Join-Path $Root "src\Include"
 $HelpSrc = Join-Path $EditorDir "help"
 $EditorPj = Join-Path $EditorDir "ProjectEditor.pj"
 
-$Actba32Tools = @("actba32.exe", "abc.exe", "abassembler.exe", "ablinker.exe")
 $EditorWbp = @("Callback.wbp", "MakeWindow.wbp")
 
 function Invoke-ChildScript([string]$scriptPath, [string[]]$scriptArgs) {
@@ -60,20 +57,14 @@ function Copy-LockedAware([string]$src, [string]$dst) {
 }
 
 if (-not $SkipSelfHost) {
-    $selfArgs = @()
     $actba64Args = @()
     if ($SkipCompare) {
-        $selfArgs += "-SkipCompare"
         $actba64Args += "-SkipCompare"
     }
-    Invoke-ChildScript (Join-Path $Actba32Dir "selfbuild.ps1") $selfArgs
     Invoke-ChildScript (Join-Path $Actba64Dir "build.ps1") $actba64Args
 }
 
-foreach ($t in $Actba32Tools) {
-    Assert-File (Join-Path $Actba32Stage2 $t) "actba32 stage2 missing (run without -SkipSelfHost, and keep src\actba32\bin\stage0)"
-}
-Assert-File $Actba64Exe "actba64 stage2 missing (run without -SkipSelfHost)"
+Assert-File $Actba64Exe "actba64 stage2 missing (run without -SkipSelfHost; need src\actba64\bin\stage0\actba64.exe from AB4.20)"
 Assert-File $IncludeSrc "Include missing"
 Assert-File $EditorPj "ProjectEditor project missing"
 Assert-File $HelpSrc "help missing"
@@ -116,10 +107,6 @@ Copy-LockedAware $tmpEditor (Join-Path $ReleaseDir "ProjectEditor.exe")
 Remove-Item -LiteralPath $tmpEditor -Force
 
 Copy-Item -LiteralPath $Actba64Exe -Destination (Join-Path $ReleaseDir "actba64.exe") -Force
-foreach ($t in $Actba32Tools) {
-    Copy-Item -LiteralPath (Join-Path $Actba32Stage2 $t) -Destination (Join-Path $ReleaseDir $t) -Force
-}
-
 Copy-Item -LiteralPath $IncludeSrc -Destination (Join-Path $ReleaseDir "Include") -Recurse -Force
 Copy-Item -LiteralPath $HelpSrc -Destination (Join-Path $ReleaseDir "help") -Recurse -Force
 
