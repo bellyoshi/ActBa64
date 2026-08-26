@@ -58,6 +58,98 @@ Sub EmitAsmStoreEbxReg(reg As String)
     SbAppendCRLF(VarPtr(gSbText))
 End Sub
 
+' --- x87 helpers（.text の db で埋め込み）---
+Sub EmitDb3(b0 As Long, b1 As Long, b2 As Long)
+    EmitAsm("db " + Trim$(Str$(b0)) + ", " + Trim$(Str$(b1)) + ", " + Trim$(Str$(b2)))
+End Sub
+
+Sub EmitDb2(b0 As Long, b1 As Long)
+    EmitAsm("db " + Trim$(Str$(b0)) + ", " + Trim$(Str$(b1)))
+End Sub
+
+Sub EmitDb1(b0 As Long)
+    EmitAsm("db " + Trim$(Str$(b0)))
+End Sub
+
+Sub EmitFldQwordEbx()
+    EmitDb2(&HDD, &H03)
+End Sub
+
+Sub EmitFstpQwordEbx()
+    EmitDb2(&HDD, &H1B)
+End Sub
+
+Sub EmitFildDwordEsp()
+    EmitDb3(&HDB, &H04, &H24)
+End Sub
+
+Sub EmitFstpQwordEsp()
+    EmitDb3(&HDD, &H1C, &H24)
+End Sub
+
+Sub EmitFldQwordEsp()
+    EmitDb3(&HDD, &H04, &H24)
+End Sub
+
+Sub EmitFaddp()
+    EmitDb2(&HDE, &HC1)
+End Sub
+
+Sub EmitFsubp()
+    EmitDb2(&HDE, &HE9)
+End Sub
+
+Sub EmitFmulp()
+    EmitDb2(&HDE, &HC9)
+End Sub
+
+Sub EmitFdivp()
+    EmitDb2(&HDE, &HF9)
+End Sub
+
+Sub EmitFchs()
+    EmitDb2(&HD9, &HE0)
+End Sub
+
+Sub EmitFcompSt1()
+    EmitDb2(&HD8, &HD9)
+End Sub
+
+Sub EmitFstswAx()
+    EmitDb2(&HDF, &HE0)
+End Sub
+
+Sub EmitSahf()
+    EmitDb1(&H9E)
+End Sub
+
+Sub EmitFstpSt0()
+    EmitDb2(&HDD, &HD8)
+End Sub
+
+' eax(milli) → ST(0) IEEE Double
+Sub EmitMilliToDouble()
+    EmitAsm("push eax")
+    EmitFildDwordEsp()
+    EmitAsm("mov eax, 1000")
+    EmitAsm("push eax")
+    EmitFildDwordEsp()
+    EmitFdivp()
+    EmitAsm("add esp, 8")
+End Sub
+
+' eax(int) → ST(0)
+Sub EmitLongToDouble()
+    EmitAsm("push eax")
+    EmitFildDwordEsp()
+    EmitAsm("add esp, 4")
+End Sub
+
+Sub EmitPushDoubleSt0()
+    EmitAsm("sub esp, 8")
+    EmitFstpQwordEsp()
+End Sub
+
 Sub EmitLabel(lab As String)
     SbAppendStr(VarPtr(gSbText), lab)
     SbAppendStr(VarPtr(gSbText), ":")
@@ -579,6 +671,15 @@ Function TypeSizeOfNorm() As Long
         TypeSizeOfNorm = 4
         Exit Function
     End If
+    ' single = 4 / double = 8
+    If n = 6 And p[0] = CH_LS And p[1] = CH_LI And p[2] = CH_LN And p[3] = CH_LG And p[4] = CH_LL And p[5] = CH_LE Then
+        TypeSizeOfNorm = 4
+        Exit Function
+    End If
+    If n = 6 And p[0] = CH_LD And p[1] = CH_LO And p[2] = CH_LU And p[3] = CH_LB And p[4] = CH_LL And p[5] = CH_LE Then
+        TypeSizeOfNorm = 8
+        Exit Function
+    End If
     TypeSizeOfNorm = 0
     For i = 0 To gNTypes - 1
         If ArenaEqNorm(gTypeNameOff(i), gTypeNameLen(i)) <> 0 Then
@@ -908,6 +1009,8 @@ Sub EmitLoadSized(size As Long)
         EmitAsm("movzx eax, " + Chr$(CH_LBRACK) + "ebx" + Chr$(CH_RBRACK))
     ElseIf size = 2 Then
         EmitAsm("movzx eax, word " + Chr$(CH_LBRACK) + "ebx" + Chr$(CH_RBRACK))
+    ElseIf size = 8 Then
+        EmitFldQwordEbx()
     Else
         EmitAsmLoadEbx()
     End If
@@ -918,6 +1021,8 @@ Sub EmitStoreSized(size As Long)
         EmitAsmStoreEbxReg("al")
     ElseIf size = 2 Then
         EmitAsmStoreEbxReg("ax")
+    ElseIf size = 8 Then
+        EmitFstpQwordEbx()
     Else
         EmitAsmStoreEbx()
     End If
@@ -1161,6 +1266,7 @@ Function AddVarEx(name As String, elemSize As Long, count As Long, isPtr As Long
     gVarCount(idx) = count
     gVarIsPtr(idx) = isPtr
     gVarIsStr(idx) = isStr
+    gVarIsFloat(idx) = 0
     gVarIsByRef(idx) = 0
     gVarTypeIdx(idx) = -1
     gNVars = gNVars + 1
@@ -1189,15 +1295,22 @@ Sub EmitAddrOfVar(idx As Long)
     End If
 End Sub
 
-' 変数を eax へロード
+' 変数を eax / ST(0) へロード
 Sub EmitLoadVar(idx As Long)
     EmitAddrOfVar(idx)
+    If gVarIsFloat(idx) <> 0 Then
+        EmitFldQwordEbx()
+        Exit Sub
+    End If
     If gVarIsPtr(idx) <> 0 Or gVarIsStr(idx) <> 0 Or gVarSize(idx) = 4 Then
         EmitAsmLoadEbx()
     ElseIf gVarSize(idx) = 1 Then
         EmitAsm("movzx eax, " + Chr$(CH_LBRACK) + "ebx" + Chr$(CH_RBRACK))
     ElseIf gVarSize(idx) = 2 Then
         EmitAsm("movzx eax, word " + Chr$(CH_LBRACK) + "ebx" + Chr$(CH_RBRACK))
+    ElseIf gVarSize(idx) = 8 Then
+        ' Double 以外の 8 バイト（未対応）は下位 dword
+        EmitAsmLoadEbx()
     Else
         Print "unsupported load size"
         End
@@ -1216,6 +1329,12 @@ Sub EmitStoreVar(idx As Long)
         EmitAsm("pop ebx")
         EmitAsm("pop eax")
         EmitAsmStoreEbx()
+        Exit Sub
+    End If
+    If gVarIsFloat(idx) <> 0 Then
+        ' ST(0) → qword
+        EmitAddrOfVar(idx)
+        EmitFstpQwordEbx()
         Exit Sub
     End If
     EmitAddrOfVar(idx)
