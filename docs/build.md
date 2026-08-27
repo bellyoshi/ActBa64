@@ -70,6 +70,7 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 
 ```powershell
 .\run_test2.ps1                 # bin\stage1\actba64.exe（既定・64bit）
+.\run_test2.ps1 stage0          # ブートストラップ起点（AB4.20 手動ビルド）の確認
 .\run_test2.ps1 stage2
 .\run_test2.ps1 stage2 -Actba32 # 同じテストを PE32 で
 .\run_test2.ps1 -Rebuild
@@ -83,6 +84,8 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 | `' Expect: N` | 終了コード期待値（省略時 0） |
 | `' Gui: 1` | 対話 UI 想定。既定は SKIP |
 | `' Skip32: 1` | `-Actba32` 時はスキップ（ポインタ幅依存など） |
+
+スキップの大半は **`' Target: actba64` が無い旧手動テスト**（ランナー対象外）か、**`.pj` の `#SOURCE` に含まれる .abp**（プロジェクトテストで代替）です。Summary 行の下に内訳が出ます。GUI テストは `-IncludeGui`、32bit では `t_double*` など SSE 未対応分が追加でスキップされます。
 
 ---
 
