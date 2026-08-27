@@ -87,6 +87,69 @@ function Invoke-Actba64Build([string]$driverStage, [string]$outStage) {
     Write-Host ("OK: {0} ({1} bytes, {2}s)" -f $outPath, $fi.Length, [math]::Round($sw.Elapsed.TotalSeconds, 2))
 }
 
+# If stage0 is missing/too old (e.g. SYM_MAX=512), promote stage2/stage3/stage1 into stage0.
+function Ensure-CapableStage0 {
+    $stage0Exe = Join-Path $Stage0 $ExeName
+    Ensure-Dir $Stage0
+
+    function Get-FallbackDriver {
+        foreach ($cand in @("stage2", "stage3", "stage1")) {
+            $p = Join-Path (Get-StageDir $cand) $ExeName
+            if (-not (Test-Actba64Driver $p)) { continue }
+            if ((Test-Path -LiteralPath $stage0Exe) -and ((Resolve-Path $p).Path -eq (Resolve-Path $stage0Exe).Path)) {
+                continue
+            }
+            return $p
+        }
+        return $null
+    }
+
+    if (-not (Test-Actba64Driver $stage0Exe)) {
+        $fallback = Get-FallbackDriver
+        if ($null -eq $fallback) {
+            Write-Error @"
+stage0 missing or invalid: $stage0Exe
+Rebuild actba64.pj with ActiveBasic 4.20 into bin\stage0\actba64.exe
+(#USEWINDOW=0 / CUI). A ~24KB GUI exe is not the compiler.
+"@
+            exit 2
+        }
+        Write-Host "=== stage0 actba64.exe is not a usable compiler; using $fallback ==="
+        Copy-Item -LiteralPath $fallback -Destination $stage0Exe -Force
+        return
+    }
+
+    Ensure-Dir (Get-StageDir "stage1")
+    $probeRel = "bin\stage1\_bootstrap_probe.exe"
+    $probeOut = Join-Path $Root $probeRel
+    if (Test-Path -LiteralPath $probeOut) {
+        Remove-Item -LiteralPath $probeOut -Force
+    }
+    $probeLines = & $stage0Exe (Join-Path $Root $Pj) -o $probeRel 2>&1 | ForEach-Object { "$_" }
+    $probeCode = [int]$LASTEXITCODE
+    $probeOk = ($probeCode -eq 0) -and (Test-Path -LiteralPath $probeOut)
+    Remove-Item -LiteralPath $probeOut -Force -ErrorAction SilentlyContinue
+    if ($probeOk) {
+        return
+    }
+
+    $joined = $probeLines -join "`n"
+    $replacement = Get-FallbackDriver
+    if ($null -eq $replacement) {
+        Write-Error @"
+stage0 cannot compile current sources: $stage0Exe
+$joined
+Need a newer self-hosted binary in bin\stage1|stage2|stage3, or rebuild stage0 with AB4.20 after raising limits.
+"@
+        exit 2
+    }
+    Write-Host "=== stage0 cannot compile current sources; promoting $replacement -> stage0 ==="
+    if ($joined -match "too many functions") {
+        Write-Host "    (old stage0 still has a fixed function limit; current sources need a dyn-capacity compiler)"
+    }
+    Copy-Item -LiteralPath $replacement -Destination $stage0Exe -Force
+}
+
 function Compare-StageExes([string]$a, [string]$b) {
     Write-Host ""
     Write-Host "=== compare $a vs $b ==="
@@ -129,28 +192,7 @@ if ($SkipStage1) {
     }
     Write-Host "=== skip stage1 (reuse $stage1Exe) ==="
 } else {
-    Ensure-Dir $Stage0
-    $Driver = Join-Path $Stage0 $ExeName
-    if (-not (Test-Actba64Driver $Driver)) {
-        $fallback = $null
-        foreach ($cand in @("stage2", "stage3", "stage1")) {
-            $p = Join-Path (Get-StageDir $cand) $ExeName
-            if (Test-Actba64Driver $p) {
-                $fallback = $p
-                break
-            }
-        }
-        if ($null -eq $fallback) {
-            Write-Error @"
-stage0 missing or invalid: $Driver
-Rebuild actba64.pj with ActiveBasic 4.20 into bin\stage0\actba64.exe
-(#USEWINDOW=0 / CUI). A ~24KB GUI exe is not the compiler.
-"@
-            exit 2
-        }
-        Write-Host "=== stage0 actba64.exe is not a usable compiler; using $fallback ==="
-        Copy-Item -LiteralPath $fallback -Destination $Driver -Force
-    }
+    Ensure-CapableStage0
 
     if (-not $SkipCopy) {
         if (-not (Test-Path -LiteralPath $IncludeSrc)) {
