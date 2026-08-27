@@ -11,9 +11,6 @@ Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, 
     Dim dll(31) As Byte
     Dim iatRva As DWord
     Dim strRva As DWord
-    Dim labOff As *Long
-    Dim fixups As *IrFixup
-    Dim nFix As Long
     Dim li As Long
     Dim at As Long
     Dim rel As Long
@@ -21,20 +18,28 @@ Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, 
     Dim globOff As DWord
     Dim absAddr As DWord
 
-    labOff = calloc(BytesN(IR_MAX_LABELS, SizeOf(Long)))
-    fixups = calloc(BytesN(IR_MAX_FIXUPS, SizeOf(IrFixup)))
-    If labOff = NULL Or fixups = NULL Then
-        If labOff <> NULL Then free(labOff)
-        If fixups <> NULL Then free(fixups)
+    If g_cgLabOff <> NULL Then free(g_cgLabOff)
+    If g_cgFix <> NULL Then free(g_cgFix)
+    g_cgLabCap = DYN_INIT
+    g_cgFixCap = DYN_INIT
+    g_cgLabOff = calloc(BytesN(g_cgLabCap, SizeOf(Long)))
+    g_cgFix = calloc(BytesN(g_cgFixCap, SizeOf(IrFixup)))
+    If g_cgLabOff = NULL Or g_cgFix = NULL Then
+        If g_cgLabOff <> NULL Then free(g_cgLabOff)
+        If g_cgFix <> NULL Then free(g_cgFix)
+        g_cgLabOff = NULL
+        g_cgFix = NULL
+        g_cgLabCap = 0
+        g_cgFixCap = 0
         Exit Sub
     End If
+    For i = 0 To g_cgLabCap - 1
+        g_cgLabOff[i] = -1
+    Next
+    g_cgNFix = 0
 
     ops = list->ops
     n = list->count
-    nFix = 0
-    For i = 0 To IR_MAX_LABELS - 1
-        labOff[i] = -1
-    Next
 
     For i = 0 To n - 1
         opv = ops[i].op
@@ -141,22 +146,12 @@ Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, 
             EmitMovEdxEax(cb)
         ElseIf opv = OP_CALL_LAB Then
             at = EmitCallRel32(cb)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                fixups[nFix].kind = IR_FIX_REL32
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_CALL_RAX Then
             EmitCallRax(cb)
         ElseIf opv = OP_LEA_RAX_LAB Then
             at = Emit32MovEaxImmFixup(cb)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                fixups[nFix].kind = IR_FIX_ABS32
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_ABS32)
         ElseIf opv = OP_LEA_RAX_GLOB Then
             globOff = ops[i].arg1
             Emit32MovAbsEax(cb, IMAGE_BASE_32 + dataRva + globOff)
@@ -226,87 +221,42 @@ Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, 
             EmitCvtSdToI32(cb)
         ElseIf opv = OP_LABEL Then
             li = ops[i].arg1
-            If li >= 0 And li < IR_MAX_LABELS Then
-                labOff[li] = cb->size
+            If CgEnsureLabIdx(li) <> 0 Then
+                g_cgLabOff[li] = cb->size
             End If
         ElseIf opv = OP_JMP Then
             at = EmitJmpRel32(cb)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                fixups[nFix].kind = IR_FIX_REL32
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JZ Or opv = OP_JE Then
             at = EmitJccRel32(cb, &H84)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JNZ Or opv = OP_JNE Then
             at = EmitJccRel32(cb, &H85)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JL Then
             at = EmitJccRel32(cb, &H8C)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JLE Then
             at = EmitJccRel32(cb, &H8E)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JG Then
             at = EmitJccRel32(cb, &H8F)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JGE Then
             at = EmitJccRel32(cb, &H8D)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JB Then
             at = EmitJccRel32(cb, &H82)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JAE Then
             at = EmitJccRel32(cb, &H83)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JBE Then
             at = EmitJccRel32(cb, &H86)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_JA Then
             at = EmitJccRel32(cb, &H87)
-            If nFix < IR_MAX_FIXUPS Then
-                fixups[nFix].at = at
-                fixups[nFix].lab = ops[i].arg1
-                nFix = nFix + 1
-            End If
+            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
         ElseIf opv = OP_MOV_RAX_GS8 Then
             Emit32FsStackBase(cb)
         ElseIf opv = OP_MOV_R8_RSP Then
@@ -325,19 +275,19 @@ Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, 
         End If
     Next
 
-    For i = 0 To nFix - 1
-        li = fixups[i].lab
-        at = fixups[i].at
-        If li >= 0 And li < IR_MAX_LABELS Then
-            If labOff[li] >= 0 Then
-                If fixups[i].kind = IR_FIX_ABS32 Then
-                    absAddr = IMAGE_BASE_32 + TEXT_RVA + labOff[li]
+    For i = 0 To g_cgNFix - 1
+        li = g_cgFix[i].lab
+        at = g_cgFix[i].at
+        If CgEnsureLabIdx(li) <> 0 Then
+            If g_cgLabOff[li] >= 0 Then
+                If g_cgFix[i].kind = IR_FIX_ABS32 Then
+                    absAddr = IMAGE_BASE_32 + TEXT_RVA + g_cgLabOff[li]
                     If at >= 0 And at + 4 <= cb->capacity Then
                         PutDword(cb->buf, at, absAddr)
                     End If
                 Else
                     nextRip = at + 4
-                    rel = labOff[li] - nextRip
+                    rel = g_cgLabOff[li] - nextRip
                     If at >= 0 And at + 4 <= cb->capacity Then
                         PutDword(cb->buf, at, rel)
                     End If
@@ -345,6 +295,11 @@ Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, 
             End If
         End If
     Next
-    free(labOff)
-    free(fixups)
+    free(g_cgLabOff)
+    free(g_cgFix)
+    g_cgLabOff = NULL
+    g_cgFix = NULL
+    g_cgLabCap = 0
+    g_cgFixCap = 0
+    g_cgNFix = 0
 End Sub

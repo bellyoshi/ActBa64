@@ -1,33 +1,34 @@
 ' ===================================================
 '  ImportBuilder - dynamic .idata / string pool builder
-'  (flat arrays: abc VarPtr cannot take nested indexed members)
+'  (heap tables in module Dims: stage0 Type field limit)
 ' ===================================================
 
-Const IB_MAX_DLL = 8
-Const IB_MAX_FUNC = 128
-Const IB_MAX_STRING = 1024
 Const IB_NAME_LEN = 64
 Const IB_STR_LEN = 256
 
 Type ImportBuilder
     dllCount As Long
     stringCount As Long
-    funcCount(7) As Long
-    dllNames(511) As Byte
-    funcNames(65535) As Byte
-    strValues(262143) As Byte
-    funcIatRva(1023) As DWord
-    funcHintRva(1023) As DWord
-    dllIatRva(7) As DWord
-    dllIltRva(7) As DWord
-    dllNameRva(7) As DWord
-    strRva(1023) As DWord
+    dllCap As Long
+    funcCapPerDll As Long
+    stringCap As Long
     iatRva As DWord
     iatSize As DWord
     idtRva As DWord
     idtSize As DWord
     totalSize As DWord
 End Type
+
+Dim g_ibFuncCount As *Long
+Dim g_ibDllNames As *Byte
+Dim g_ibFuncNames As *Byte
+Dim g_ibStrValues As *Byte
+Dim g_ibFuncIatRva As *DWord
+Dim g_ibFuncHintRva As *DWord
+Dim g_ibDllIatRva As *DWord
+Dim g_ibDllIltRva As *DWord
+Dim g_ibDllNameRva As *DWord
+Dim g_ibStrRva As *DWord
 
 Function IbStrLen(s As *Byte) As Long
     Dim n As Long
@@ -68,130 +69,251 @@ Function IbAlign2(v As DWord) As DWord
     IbAlign2 = (v + 1) And &HFFFFFFFE
 End Function
 
-Function IbFuncSlot(dIdx As Long, fIdx As Long) As Long
-    IbFuncSlot = dIdx * IB_MAX_FUNC + fIdx
+Function IbFuncSlot(builder As *ImportBuilder, dIdx As Long, fIdx As Long) As Long
+    IbFuncSlot = dIdx * builder->funcCapPerDll + fIdx
 End Function
 
-Sub IbCopyToBuilderName(builder As *ImportBuilder, baseOff As Long, src As *Byte, maxLen As Long)
+Function IbFuncSlots(builder As *ImportBuilder) As Long
+    IbFuncSlots = builder->dllCap * builder->funcCapPerDll
+End Function
+
+Sub IbCopyBytes(dst As *Byte, baseOff As Long, src As *Byte, maxLen As Long)
     Dim i As Long
     i = 0
     While src[i] <> 0 And i < maxLen - 1
-        builder->dllNames[baseOff + i] = src[i]
+        dst[baseOff + i] = src[i]
         i = i + 1
     Wend
-    builder->dllNames[baseOff + i] = 0
+    dst[baseOff + i] = 0
 End Sub
 
-Sub IbCopyToFuncName(builder As *ImportBuilder, baseOff As Long, src As *Byte, maxLen As Long)
+Function IbNameEqAt(buf As *Byte, baseOff As Long, name As *Byte) As Long
     Dim i As Long
-    i = 0
-    While src[i] <> 0 And i < maxLen - 1
-        builder->funcNames[baseOff + i] = src[i]
-        i = i + 1
-    Wend
-    builder->funcNames[baseOff + i] = 0
-End Sub
-
-Sub IbCopyToStrValue(builder As *ImportBuilder, baseOff As Long, src As *Byte, maxLen As Long)
-    Dim i As Long
-    i = 0
-    While src[i] <> 0 And i < maxLen - 1
-        builder->strValues[baseOff + i] = src[i]
-        i = i + 1
-    Wend
-    builder->strValues[baseOff + i] = 0
-End Sub
-
-Function IbDllNameEq(builder As *ImportBuilder, dIdx As Long, name As *Byte) As Long
-    Dim off As Long
-    Dim i As Long
-    off = dIdx * IB_NAME_LEN
     i = 0
     Do
-        If builder->dllNames[off + i] <> name[i] Then
-            IbDllNameEq = 0
+        If buf[baseOff + i] <> name[i] Then
+            IbNameEqAt = 0
             Exit Function
         End If
-        If builder->dllNames[off + i] = 0 Then
-            IbDllNameEq = 1
+        If buf[baseOff + i] = 0 Then
+            IbNameEqAt = 1
             Exit Function
         End If
         i = i + 1
     Loop
+End Function
+
+Function IbNameLenAt(buf As *Byte, baseOff As Long) As Long
+    Dim n As Long
+    n = 0
+    While buf[baseOff + n] <> 0
+        n = n + 1
+    Wend
+    IbNameLenAt = n
+End Function
+
+Function IbDllNameEq(builder As *ImportBuilder, dIdx As Long, name As *Byte) As Long
+    IbDllNameEq = IbNameEqAt(g_ibDllNames, dIdx * IB_NAME_LEN, name)
 End Function
 
 Function IbFuncNameEq(builder As *ImportBuilder, dIdx As Long, fIdx As Long, name As *Byte) As Long
-    Dim off As Long
-    Dim i As Long
-    off = IbFuncSlot(dIdx, fIdx) * IB_NAME_LEN
-    i = 0
-    Do
-        If builder->funcNames[off + i] <> name[i] Then
-            IbFuncNameEq = 0
-            Exit Function
-        End If
-        If builder->funcNames[off + i] = 0 Then
-            IbFuncNameEq = 1
-            Exit Function
-        End If
-        i = i + 1
-    Loop
+    IbFuncNameEq = IbNameEqAt(g_ibFuncNames, IbFuncSlot(builder, dIdx, fIdx) * IB_NAME_LEN, name)
 End Function
 
 Function IbStrValueEq(builder As *ImportBuilder, sIdx As Long, name As *Byte) As Long
-    Dim off As Long
-    Dim i As Long
-    off = sIdx * IB_STR_LEN
-    i = 0
-    Do
-        If builder->strValues[off + i] <> name[i] Then
-            IbStrValueEq = 0
-            Exit Function
-        End If
-        If builder->strValues[off + i] = 0 Then
-            IbStrValueEq = 1
-            Exit Function
-        End If
-        i = i + 1
-    Loop
+    IbStrValueEq = IbNameEqAt(g_ibStrValues, sIdx * IB_STR_LEN, name)
 End Function
 
 Function IbDllNameLen(builder As *ImportBuilder, dIdx As Long) As Long
-    Dim off As Long
-    Dim n As Long
-    off = dIdx * IB_NAME_LEN
-    n = 0
-    While builder->dllNames[off + n] <> 0
-        n = n + 1
-    Wend
-    IbDllNameLen = n
+    IbDllNameLen = IbNameLenAt(g_ibDllNames, dIdx * IB_NAME_LEN)
 End Function
 
 Function IbFuncNameLen(builder As *ImportBuilder, dIdx As Long, fIdx As Long) As Long
-    Dim off As Long
-    Dim n As Long
-    off = IbFuncSlot(dIdx, fIdx) * IB_NAME_LEN
-    n = 0
-    While builder->funcNames[off + n] <> 0
-        n = n + 1
-    Wend
-    IbFuncNameLen = n
+    IbFuncNameLen = IbNameLenAt(g_ibFuncNames, IbFuncSlot(builder, dIdx, fIdx) * IB_NAME_LEN)
 End Function
 
 Function IbStrValueLen(builder As *ImportBuilder, sIdx As Long) As Long
-    Dim off As Long
-    Dim n As Long
-    off = sIdx * IB_STR_LEN
-    n = 0
-    While builder->strValues[off + n] <> 0
-        n = n + 1
-    Wend
-    IbStrValueLen = n
+    IbStrValueLen = IbNameLenAt(g_ibStrValues, sIdx * IB_STR_LEN)
+End Function
+
+Sub IbFreeHeaps()
+    If g_ibFuncCount <> NULL Then free(g_ibFuncCount)
+    If g_ibDllNames <> NULL Then free(g_ibDllNames)
+    If g_ibFuncNames <> NULL Then free(g_ibFuncNames)
+    If g_ibStrValues <> NULL Then free(g_ibStrValues)
+    If g_ibFuncIatRva <> NULL Then free(g_ibFuncIatRva)
+    If g_ibFuncHintRva <> NULL Then free(g_ibFuncHintRva)
+    If g_ibDllIatRva <> NULL Then free(g_ibDllIatRva)
+    If g_ibDllIltRva <> NULL Then free(g_ibDllIltRva)
+    If g_ibDllNameRva <> NULL Then free(g_ibDllNameRva)
+    If g_ibStrRva <> NULL Then free(g_ibStrRva)
+    g_ibFuncCount = NULL
+    g_ibDllNames = NULL
+    g_ibFuncNames = NULL
+    g_ibStrValues = NULL
+    g_ibFuncIatRva = NULL
+    g_ibFuncHintRva = NULL
+    g_ibDllIatRva = NULL
+    g_ibDllIltRva = NULL
+    g_ibDllNameRva = NULL
+    g_ibStrRva = NULL
+End Sub
+
+Sub IbFree(builder As *ImportBuilder)
+    IbFreeHeaps()
+    If builder <> NULL Then free(builder)
+End Sub
+
+Function IbAllocTables(builder As *ImportBuilder) As Long
+    Dim slots As Long
+    IbAllocTables = 0
+    slots = IbFuncSlots(builder)
+    g_ibFuncCount = calloc(BytesN(builder->dllCap, SizeOf(Long)))
+    g_ibDllNames = calloc(BytesN(builder->dllCap, IB_NAME_LEN))
+    g_ibFuncNames = calloc(BytesN(slots, IB_NAME_LEN))
+    g_ibStrValues = calloc(BytesN(builder->stringCap, IB_STR_LEN))
+    g_ibFuncIatRva = calloc(BytesN(slots, SizeOf(DWord)))
+    g_ibFuncHintRva = calloc(BytesN(slots, SizeOf(DWord)))
+    g_ibDllIatRva = calloc(BytesN(builder->dllCap, SizeOf(DWord)))
+    g_ibDllIltRva = calloc(BytesN(builder->dllCap, SizeOf(DWord)))
+    g_ibDllNameRva = calloc(BytesN(builder->dllCap, SizeOf(DWord)))
+    g_ibStrRva = calloc(BytesN(builder->stringCap, SizeOf(DWord)))
+    If g_ibFuncCount = NULL Or g_ibDllNames = NULL Or g_ibFuncNames = NULL Or g_ibStrValues = NULL Or g_ibFuncIatRva = NULL Or g_ibFuncHintRva = NULL Or g_ibDllIatRva = NULL Or g_ibDllIltRva = NULL Or g_ibDllNameRva = NULL Or g_ibStrRva = NULL Then
+        IbFreeHeaps()
+        Exit Function
+    End If
+    IbAllocTables = 1
 End Function
 
 Sub IbInit(builder As *ImportBuilder)
     ZeroMem(builder, SizeOf(ImportBuilder))
+    IbFreeHeaps()
+    builder->dllCap = DYN_INIT
+    builder->funcCapPerDll = DYN_INIT
+    builder->stringCap = DYN_INIT
+    If IbAllocTables(builder) = 0 Then
+        Print "error: out of memory (ImportBuilder)"
+    End If
 End Sub
+
+Function IbGrowDllCap(builder As *ImportBuilder) As Long
+    Dim newCap As Long
+    Dim oldCap As Long
+    Dim oldSlots As Long
+    Dim newSlots As Long
+    Dim p As *Byte
+
+    IbGrowDllCap = 0
+    oldCap = builder->dllCap
+    newCap = oldCap * 2
+    If newCap <= oldCap Then Exit Function
+    oldSlots = oldCap * builder->funcCapPerDll
+    newSlots = newCap * builder->funcCapPerDll
+
+    p = MemGrow(g_ibFuncCount, BytesN(oldCap, SizeOf(Long)), BytesN(newCap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_ibFuncCount = p
+    p = MemGrow(g_ibDllNames, BytesN(oldCap, IB_NAME_LEN), BytesN(newCap, IB_NAME_LEN))
+    If p = NULL Then Exit Function
+    g_ibDllNames = p
+    p = MemGrow(g_ibDllIatRva, BytesN(oldCap, SizeOf(DWord)), BytesN(newCap, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibDllIatRva = p
+    p = MemGrow(g_ibDllIltRva, BytesN(oldCap, SizeOf(DWord)), BytesN(newCap, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibDllIltRva = p
+    p = MemGrow(g_ibDllNameRva, BytesN(oldCap, SizeOf(DWord)), BytesN(newCap, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibDllNameRva = p
+    p = MemGrow(g_ibFuncNames, BytesN(oldSlots, IB_NAME_LEN), BytesN(newSlots, IB_NAME_LEN))
+    If p = NULL Then Exit Function
+    g_ibFuncNames = p
+    p = MemGrow(g_ibFuncIatRva, BytesN(oldSlots, SizeOf(DWord)), BytesN(newSlots, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibFuncIatRva = p
+    p = MemGrow(g_ibFuncHintRva, BytesN(oldSlots, SizeOf(DWord)), BytesN(newSlots, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibFuncHintRva = p
+    builder->dllCap = newCap
+    IbGrowDllCap = 1
+End Function
+
+Function IbGrowFuncCap(builder As *ImportBuilder) As Long
+    Dim oldPer As Long
+    Dim newPer As Long
+    Dim newSlots As Long
+    Dim p As *Byte
+    Dim d As Long
+    Dim f As Long
+    Dim oldOff As Long
+    Dim newOff As Long
+    Dim k As Long
+    Dim oldNames As *Byte
+    Dim oldIat As *DWord
+    Dim oldHint As *DWord
+    Dim fc As *Long
+    Dim oldFc As Long
+
+    IbGrowFuncCap = 0
+    oldPer = builder->funcCapPerDll
+    newPer = oldPer * 2
+    If newPer <= oldPer Then Exit Function
+    newSlots = builder->dllCap * newPer
+
+    oldNames = g_ibFuncNames
+    oldIat = g_ibFuncIatRva
+    oldHint = g_ibFuncHintRva
+    p = calloc(BytesN(newSlots, IB_NAME_LEN))
+    If p = NULL Then Exit Function
+    g_ibFuncNames = p
+    p = calloc(BytesN(newSlots, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibFuncIatRva = p
+    p = calloc(BytesN(newSlots, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibFuncHintRva = p
+
+    fc = g_ibFuncCount
+    d = 0
+    While d < builder->dllCount
+        oldFc = fc[d]
+        f = 0
+        While f < oldFc
+            oldOff = (d * oldPer + f) * IB_NAME_LEN
+            newOff = (d * newPer + f) * IB_NAME_LEN
+            k = 0
+            While k < IB_NAME_LEN
+                g_ibFuncNames[newOff + k] = oldNames[oldOff + k]
+                k = k + 1
+            Wend
+            g_ibFuncIatRva[d * newPer + f] = oldIat[d * oldPer + f]
+            g_ibFuncHintRva[d * newPer + f] = oldHint[d * oldPer + f]
+            f = f + 1
+        Wend
+        d = d + 1
+    Wend
+    free(oldNames)
+    free(oldIat)
+    free(oldHint)
+    builder->funcCapPerDll = newPer
+    IbGrowFuncCap = 1
+End Function
+
+Function IbGrowStringCap(builder As *ImportBuilder) As Long
+    Dim newCap As Long
+    Dim p As *Byte
+    IbGrowStringCap = 0
+    newCap = builder->stringCap * 2
+    If newCap <= builder->stringCap Then Exit Function
+    p = MemGrow(g_ibStrValues, BytesN(builder->stringCap, IB_STR_LEN), BytesN(newCap, IB_STR_LEN))
+    If p = NULL Then Exit Function
+    g_ibStrValues = p
+    p = MemGrow(g_ibStrRva, BytesN(builder->stringCap, SizeOf(DWord)), BytesN(newCap, SizeOf(DWord)))
+    If p = NULL Then Exit Function
+    g_ibStrRva = p
+    builder->stringCap = newCap
+    IbGrowStringCap = 1
+End Function
 
 Function IbAddImport(builder As *ImportBuilder, dllName As *Byte, funcName As *Byte) As Long
     Dim i As Long
@@ -200,33 +322,42 @@ Function IbAddImport(builder As *ImportBuilder, dllName As *Byte, funcName As *B
     Dim fIdx As Long
     Dim gIdx As Long
     Dim off As Long
+    Dim fc As *Long
 
     IbAddImport = -1
+    fc = g_ibFuncCount
+    If fc = NULL Then Exit Function
     gIdx = 0
     For i = 0 To builder->dllCount - 1
         If IbDllNameEq(builder, i, dllName) <> 0 Then
-            For j = 0 To builder->funcCount[i] - 1
+            For j = 0 To fc[i] - 1
                 If IbFuncNameEq(builder, i, j, funcName) <> 0 Then
                     IbAddImport = gIdx + j
                     Exit Function
                 End If
             Next
-            If builder->funcCount[i] >= IB_MAX_FUNC Then Exit Function
-            fIdx = builder->funcCount[i]
-            off = IbFuncSlot(i, fIdx) * IB_NAME_LEN
-            IbCopyToFuncName(builder, off, funcName, IB_NAME_LEN)
-            builder->funcCount[i] = fIdx + 1
+            If fc[i] >= builder->funcCapPerDll Then
+                If IbGrowFuncCap(builder) = 0 Then Exit Function
+                fc = g_ibFuncCount
+            End If
+            fIdx = fc[i]
+            off = IbFuncSlot(builder, i, fIdx) * IB_NAME_LEN
+            IbCopyBytes(g_ibFuncNames, off, funcName, IB_NAME_LEN)
+            fc[i] = fIdx + 1
             IbAddImport = gIdx + fIdx
             Exit Function
         End If
-        gIdx = gIdx + builder->funcCount[i]
+        gIdx = gIdx + fc[i]
     Next
 
-    If builder->dllCount >= IB_MAX_DLL Then Exit Function
+    If builder->dllCount >= builder->dllCap Then
+        If IbGrowDllCap(builder) = 0 Then Exit Function
+        fc = g_ibFuncCount
+    End If
     dIdx = builder->dllCount
-    IbCopyToBuilderName(builder, dIdx * IB_NAME_LEN, dllName, IB_NAME_LEN)
-    IbCopyToFuncName(builder, IbFuncSlot(dIdx, 0) * IB_NAME_LEN, funcName, IB_NAME_LEN)
-    builder->funcCount[dIdx] = 1
+    IbCopyBytes(g_ibDllNames, dIdx * IB_NAME_LEN, dllName, IB_NAME_LEN)
+    IbCopyBytes(g_ibFuncNames, IbFuncSlot(builder, dIdx, 0) * IB_NAME_LEN, funcName, IB_NAME_LEN)
+    fc[dIdx] = 1
     builder->dllCount = dIdx + 1
     IbAddImport = gIdx
 End Function
@@ -243,9 +374,11 @@ Function IbAddString(builder As *ImportBuilder, strVal As *Byte) As Long
     Next
 
     IbAddString = -1
-    If builder->stringCount >= IB_MAX_STRING Then Exit Function
+    If builder->stringCount >= builder->stringCap Then
+        If IbGrowStringCap(builder) = 0 Then Exit Function
+    End If
     sIdx = builder->stringCount
-    IbCopyToStrValue(builder, sIdx * IB_STR_LEN, strVal, IB_STR_LEN)
+    IbCopyBytes(g_ibStrValues, sIdx * IB_STR_LEN, strVal, IB_STR_LEN)
     builder->stringCount = sIdx + 1
     IbAddString = sIdx
 End Function
@@ -254,14 +387,16 @@ Function IbGetIatRva(builder As *ImportBuilder, dllName As *Byte, funcName As *B
     Dim i As Long
     Dim j As Long
     Dim slot As Long
+    Dim fc As *Long
 
     IbGetIatRva = 0
+    fc = g_ibFuncCount
     For i = 0 To builder->dllCount - 1
         If IbDllNameEq(builder, i, dllName) <> 0 Then
-            For j = 0 To builder->funcCount[i] - 1
+            For j = 0 To fc[i] - 1
                 If IbFuncNameEq(builder, i, j, funcName) <> 0 Then
-                    slot = IbFuncSlot(i, j)
-                    IbGetIatRva = builder->funcIatRva[slot]
+                    slot = IbFuncSlot(builder, i, j)
+                    IbGetIatRva = g_ibFuncIatRva[slot]
                     Exit Function
                 End If
             Next
@@ -273,42 +408,31 @@ End Function
 Function IbGetStringRva(builder As *ImportBuilder, strId As Long) As DWord
     IbGetStringRva = 0
     If strId < 0 Or strId >= builder->stringCount Then Exit Function
-    IbGetStringRva = builder->strRva[strId]
+    IbGetStringRva = g_ibStrRva[strId]
 End Function
 
 Sub IbWriteNameBytes(outBuf As *Byte, dstOff As DWord, builder As *ImportBuilder, srcKind As Long, idx1 As Long, idx2 As Long)
-    ' srcKind: 0=dll, 1=func, 2=string
     Dim i As Long
     Dim off As Long
     Dim b As Byte
+    Dim src As *Byte
     If srcKind = 0 Then
+        src = g_ibDllNames
         off = idx1 * IB_NAME_LEN
-        i = 0
-        Do
-            b = builder->dllNames[off + i]
-            outBuf[dstOff + i] = b
-            If b = 0 Then Exit Sub
-            i = i + 1
-        Loop
     ElseIf srcKind = 1 Then
-        off = IbFuncSlot(idx1, idx2) * IB_NAME_LEN
-        i = 0
-        Do
-            b = builder->funcNames[off + i]
-            outBuf[dstOff + i] = b
-            If b = 0 Then Exit Sub
-            i = i + 1
-        Loop
+        src = g_ibFuncNames
+        off = IbFuncSlot(builder, idx1, idx2) * IB_NAME_LEN
     Else
+        src = g_ibStrValues
         off = idx1 * IB_STR_LEN
-        i = 0
-        Do
-            b = builder->strValues[off + i]
-            outBuf[dstOff + i] = b
-            If b = 0 Then Exit Sub
-            i = i + 1
-        Loop
     End If
+    i = 0
+    Do
+        b = src[off + i]
+        outBuf[dstOff + i] = b
+        If b = 0 Then Exit Sub
+        i = i + 1
+    Loop
 End Sub
 
 Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByRef totalSize As DWord)
@@ -322,16 +446,18 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
     Dim nameOff As DWord
     Dim slot As Long
     Dim slotW As Long
+    Dim fc As *Long
 
     cur = 0
     slotW = TyPtrSize()
+    fc = g_ibFuncCount
 
     builder->iatRva = baseRva
     For i = 0 To builder->dllCount - 1
-        builder->dllIatRva[i] = baseRva + cur
-        For j = 0 To builder->funcCount[i] - 1
-            slot = IbFuncSlot(i, j)
-            builder->funcIatRva[slot] = baseRva + cur
+        g_ibDllIatRva[i] = baseRva + cur
+        For j = 0 To fc[i] - 1
+            slot = IbFuncSlot(builder, i, j)
+            g_ibFuncIatRva[slot] = baseRva + cur
             cur = cur + slotW
         Next
         cur = cur + slotW
@@ -344,15 +470,15 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
     cur = cur + builder->idtSize
 
     For i = 0 To builder->dllCount - 1
-        builder->dllIltRva[i] = baseRva + cur
-        cur = cur + (builder->funcCount[i] + 1) * slotW
+        g_ibDllIltRva[i] = baseRva + cur
+        cur = cur + (fc[i] + 1) * slotW
     Next
 
     For i = 0 To builder->dllCount - 1
-        For j = 0 To builder->funcCount[i] - 1
+        For j = 0 To fc[i] - 1
             cur = IbAlign2(cur)
-            slot = IbFuncSlot(i, j)
-            builder->funcHintRva[slot] = baseRva + cur
+            slot = IbFuncSlot(builder, i, j)
+            g_ibFuncHintRva[slot] = baseRva + cur
             n = IbFuncNameLen(builder, i, j)
             hintSz = 2 + n + 1
             cur = cur + hintSz
@@ -361,14 +487,13 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
 
     For i = 0 To builder->dllCount - 1
         cur = IbAlign2(cur)
-        builder->dllNameRva[i] = baseRva + cur
+        g_ibDllNameRva[i] = baseRva + cur
         n = IbDllNameLen(builder, i)
         cur = cur + n + 1
     Next
 
     For i = 0 To builder->stringCount - 1
-        ' AB 互換: [dd 長さ][データ][0]。RVA はデータ先頭
-        builder->strRva[i] = baseRva + cur + 4
+        g_ibStrRva[i] = baseRva + cur + 4
         n = IbStrValueLen(builder, i)
         cur = cur + 4 + n + 1
     Next
@@ -378,43 +503,43 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
     ZeroMem(outBuf, cur)
 
     For i = 0 To builder->dllCount - 1
-        For j = 0 To builder->funcCount[i] - 1
-            slot = IbFuncSlot(i, j)
-            PutDword(outBuf, builder->funcIatRva[slot] - baseRva, builder->funcHintRva[slot])
+        For j = 0 To fc[i] - 1
+            slot = IbFuncSlot(builder, i, j)
+            PutDword(outBuf, g_ibFuncIatRva[slot] - baseRva, g_ibFuncHintRva[slot])
         Next
     Next
 
     For i = 0 To builder->dllCount - 1
         nameOff = idtOff + i * 20
-        PutDword(outBuf, nameOff + 0, builder->dllIltRva[i])
-        PutDword(outBuf, nameOff + 12, builder->dllNameRva[i])
-        PutDword(outBuf, nameOff + 16, builder->dllIatRva[i])
+        PutDword(outBuf, nameOff + 0, g_ibDllIltRva[i])
+        PutDword(outBuf, nameOff + 12, g_ibDllNameRva[i])
+        PutDword(outBuf, nameOff + 16, g_ibDllIatRva[i])
     Next
 
     For i = 0 To builder->dllCount - 1
-        iltOff = builder->dllIltRva[i] - baseRva
-        For j = 0 To builder->funcCount[i] - 1
-            slot = IbFuncSlot(i, j)
-            PutDword(outBuf, iltOff + j * slotW, builder->funcHintRva[slot])
+        iltOff = g_ibDllIltRva[i] - baseRva
+        For j = 0 To fc[i] - 1
+            slot = IbFuncSlot(builder, i, j)
+            PutDword(outBuf, iltOff + j * slotW, g_ibFuncHintRva[slot])
         Next
     Next
 
     For i = 0 To builder->dllCount - 1
-        For j = 0 To builder->funcCount[i] - 1
-            slot = IbFuncSlot(i, j)
-            nameOff = builder->funcHintRva[slot] - baseRva
+        For j = 0 To fc[i] - 1
+            slot = IbFuncSlot(builder, i, j)
+            nameOff = g_ibFuncHintRva[slot] - baseRva
             PutWord(outBuf, nameOff, 0)
             IbWriteNameBytes(outBuf, nameOff + 2, builder, 1, i, j)
         Next
     Next
 
     For i = 0 To builder->dllCount - 1
-        nameOff = builder->dllNameRva[i] - baseRva
+        nameOff = g_ibDllNameRva[i] - baseRva
         IbWriteNameBytes(outBuf, nameOff, builder, 0, i, 0)
     Next
 
     For i = 0 To builder->stringCount - 1
-        nameOff = builder->strRva[i] - baseRva - 4
+        nameOff = g_ibStrRva[i] - baseRva - 4
         n = IbStrValueLen(builder, i)
         PutDword(outBuf, nameOff, n)
         IbWriteNameBytes(outBuf, nameOff + 4, builder, 2, i, 0)

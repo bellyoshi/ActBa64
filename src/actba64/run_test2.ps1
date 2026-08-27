@@ -1,4 +1,4 @@
-# run_test2.ps1 - actba64 で test/ をコンパイル & 実行
+﻿# run_test2.ps1 - actba64 で test/ をコンパイル & 実行
 #
 # 使い方:
 #   .\run_test2.ps1                 # bin\stage1\actba64.exe（既定）
@@ -98,19 +98,20 @@ function Get-Meta([string]$path) {
     $skip32 = $false
     $stdin = @()
     foreach ($line in (Get-Content -LiteralPath $path -Encoding Default -ErrorAction Stop)) {
-        if ($line -match "^\s*'\s*Expect\s*:\s*(-?\d+)\s*$") {
+        # Single-quoted regex: Windows PowerShell 5.1 treats [01] inside "..." as a type name.
+        if ($line -match '^\s*''\s*Expect\s*:\s*(-?\d+)\s*$') {
             $expect = [int]$Matches[1]
         }
-        if ($line -match "^\s*'\s*Gui\s*:\s*([01])\s*$") {
+        if ($line -match '^\s*''\s*Gui\s*:\s*([01])\s*$') {
             $gui = [int]$Matches[1]
         }
-        if ($line -match "(?i)^\s*'\s*Target\s*:\s*actba64\s*$") {
+        if ($line -match '(?i)^\s*''\s*Target\s*:\s*actba64\s*$') {
             $target = $true
         }
-        if ($line -match "(?i)^\s*'\s*Skip32\s*:\s*1\s*$") {
+        if ($line -match '(?i)^\s*''\s*Skip32\s*:\s*1\s*$') {
             $skip32 = $true
         }
-        if ($line -match "^\s*'\s*Stdin\s*:\s?(.*)$") {
+        if ($line -match '^\s*''\s*Stdin\s*:\s?(.*)$') {
             $stdin += $Matches[1]
         }
     }
@@ -247,7 +248,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         if (-not $exited) {
             try { $p.Kill() } catch {}
             $stats.fail++
-            Add-Result $name "FAIL" "timeout (${TimeoutSec}s) expect=$($meta.Expect)"
+            Add-Result $name "FAIL" ("timeout ({0}s) expect={1}" -f $TimeoutSec, $meta.Expect)
         } else {
             $actual = $p.ExitCode
             if ($actual -eq $meta.Expect) {

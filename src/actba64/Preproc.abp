@@ -4,12 +4,12 @@
 
 Const PP_MAX_DEPTH = 16
 Const PP_LINE_MAX = 512
-Const PP_ONCE_MAX = 256
 Const PP_ONCE_PATH = 512
 
 ' include-once / #USEWINDOW / #n88basic (module Dims: stage0 Type field limit)
 Dim g_ppOnce As *Byte
 Dim g_ppOnceCount As Long
+Dim g_ppOnceCap As Long
 Dim g_ppUseWindow As Long
 Dim g_ppN88Basic As Long
 
@@ -211,7 +211,8 @@ End Function
 Function PpStateInit() As Long
     Dim buf As *Byte
     PpStateInit = 0
-    buf = calloc(BytesN(PP_ONCE_MAX, PP_ONCE_PATH))
+    g_ppOnceCap = DYN_INIT
+    buf = calloc(BytesN(g_ppOnceCap, PP_ONCE_PATH))
     If buf = NULL Then Exit Function
     g_ppOnce = buf
     g_ppOnceCount = 0
@@ -224,6 +225,7 @@ Sub PpStateFree()
     If g_ppOnce <> NULL Then free(g_ppOnce)
     g_ppOnce = NULL
     g_ppOnceCount = 0
+    g_ppOnceCap = 0
 End Sub
 
 Sub PpOnceReset()
@@ -265,9 +267,19 @@ Sub PpOnceAdd(path As *Byte)
     Dim dst As *Byte
     Dim off As Long
     Dim j As Long
+    Dim newCap As Long
+    Dim p As *Byte
     buf = g_ppOnce
     If buf = NULL Then Exit Sub
-    If g_ppOnceCount >= PP_ONCE_MAX Then Exit Sub
+    If g_ppOnceCount >= g_ppOnceCap Then
+        newCap = g_ppOnceCap * 2
+        If newCap <= g_ppOnceCap Then Exit Sub
+        p = MemGrow(g_ppOnce, BytesN(g_ppOnceCap, PP_ONCE_PATH), BytesN(newCap, PP_ONCE_PATH))
+        If p = NULL Then Exit Sub
+        g_ppOnce = p
+        g_ppOnceCap = newCap
+        buf = g_ppOnce
+    End If
     off = g_ppOnceCount * PP_ONCE_PATH
     dst = VarPtr(buf[off])
     j = 0
@@ -977,7 +989,6 @@ Function PpPrependDefaults(src As *Byte) As *Byte
     PpPrependDefaults = head
 End Function
 
-Const PJ_MAX_SOURCES = 64
 Const PJ_PATH_LEN = 260
 
 Function PpPathEndsWithPj(path As *Byte) As Long
@@ -1185,11 +1196,6 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
                 inSource = 0
             Else
                 If PpTrimCopy(VarPtr(line), n, VarPtr(name), PJ_PATH_LEN) > 0 Then
-                    If nSrc >= PJ_MAX_SOURCES Then
-                        free(pj)
-                        free(dst)
-                        Exit Function
-                    End If
                     full[0] = 0
                     If (name[1] = 58) Or (name[0] = 92) Or (name[0] = 47) Then
                         lstrcpy(VarPtr(full), VarPtr(name))
