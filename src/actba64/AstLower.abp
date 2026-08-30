@@ -1356,25 +1356,41 @@ End Sub
 
 ' 32bit stdcall: ecx=arg0, edx=arg1 をスタックへ積んで呼ぶ。64bit は既に rcx/rdx。
 Sub LowEmitCallLab2(list As *IrList, lab As Long)
+    Dim stk As Long
     If TyIs32() <> 0 Then
         IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
         IrEmit(list, OP_PUSH_RAX, 0, 0)
         IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
         IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
+    stk = LowCallStk(2)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
     End If
     IrEmit(list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(list, stk)
 End Sub
 
 ' 32bit stdcall: ecx=arg0, edx=arg1, eax=arg2。64bit は rcx/rdx/r8。
 Sub LowEmitCallLab3(list As *IrList, lab As Long)
+    Dim stk As Long
     If TyIs32() <> 0 Then
         IrEmit(list, OP_PUSH_RAX, 0, 0)
         IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
         IrEmit(list, OP_PUSH_RAX, 0, 0)
         IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
         IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
     End If
     IrEmit(list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(list, stk)
 End Sub
 
 Sub LowEmitApiImm1(list As *IrList, dllKind As Long, apiName As *Byte, imm As DWord)
@@ -6331,7 +6347,9 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 LowFreeAstBufs()
                 Exit Function
             End If
-            nodes[stmt].extra = labFn
+            ' extra は Parser が書いた戻り型のまま残す（lab は funcLabs）。
+            ' extra を lab で上書きすると TY_STRING/TY_DOUBLE と衝突し、
+            ' String 戻りが Double 変換されたり GC ルートから外れる。
         End If
         stmt = nodes[stmt].nxt
     Wend
@@ -6401,7 +6419,14 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
             frame = LowAlign16(ctx.frameUsed + &H28 + &H2000)
             If frame < &H28 Then frame = &H28
             g_funcEndLab = LowNewLab(VarPtr(ctx))
-            IrEmit(list, OP_LABEL, nodes[stmt].extra, 0)
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            labFn = LowFindFunc(VarPtr(ctx), VarPtr(nm))
+            If labFn < 0 Then
+                Print "error: missing function label '" + MakeStr(VarPtr(nm)) + "'"
+                LowFreeAstBufs()
+                Exit Function
+            End If
+            IrEmit(list, OP_LABEL, labFn, 0)
             IrEmit(list, OP_ENTER, frame, 0)
             offs = ctx.offs
             pi = 0
@@ -6441,6 +6466,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 Exit Function
             End If
             IrEmit(list, OP_LABEL, g_funcEndLab, 0)
+            LowEmitLocalClassDtors(VarPtr(ctx))
+            LowEmitStrCollectSafepoint(VarPtr(ctx))
             If retBuf[0] <> 0 Then
                 pi = LowFindSym(VarPtr(ctx), VarPtr(retBuf))
                 If pi < 0 Then
@@ -6449,8 +6476,6 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                 End If
                 IrEmit(list, OP_LOAD_LOCAL, offs[pi], 0)
             End If
-            LowEmitLocalClassDtors(VarPtr(ctx))
-            LowEmitStrCollectSafepoint(VarPtr(ctx))
             LowEmitLeaveN(list, nFlags)
             ctx.inFunc = 0
             g_funcEndLab = -1
