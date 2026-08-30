@@ -55,7 +55,7 @@ Print a +_
 | `#include "path"` | ファイル挿入（深さ上限あり） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -163,9 +163,9 @@ PAINT (x, y), color1 [, color2]
 |---|---|---|---|
 | `Byte` | 1 | 1 | |
 | `Word` | 2 | 2 | |
-| `Single` | 4 | 4 | サイズのみ（演算は未対応） |
+| `Single` | 4 | 4 | サイズと格納。演算は千分率経由が中心 |
 | `Long` / `DWord` / `Integer` | 4 | 4 | 別名あり |
-| `Double` | 8 | **8** | IEEE 相当の 8 バイト枠（演算は限定） |
+| `Double` | 8 | **8** | IEEE 倍精度。64bit は加減乗除・比較。`-actba32` は SSE 未実装 |
 | `HANDLE` / `HWND` 等 | 4 | **8** | 64bit は `VoidPtr` / `*T`（`HFILE` は 4 のまま） |
 | `*T` | 4 | **8** | ポインタ |
 | `String` | ポインタ相当 (4) | ポインタ相当 (**8**) | 長さプレフィックス付きバイト列（AB4.20 互換） |
@@ -245,7 +245,7 @@ End Sub
 - ネストした `Sub`/`Function` は不可
 - `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT に載せる）
 
-### 3.3 Class（フェーズ1）
+### 3.3 Class
 
 ```
 Class Counter
@@ -279,9 +279,11 @@ x = c.GetValue()
 - コンストラクタ `Sub ClassName(...)` → `Dim obj As ClassName(args)` で自動呼出
 - デストラクタ `Sub ~ClassName()` → 局所は手続き末尾、モジュール大域は終了前に呼出
 - ctor/dtor 省略時は空の無引数版を暗黙生成
-- メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（`RCX=Me`）
+- メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=Me`、32bit は stdcall の第1引数）
+- `Inherits` / `Virtual` / vtable 呼び出しは **部分対応**（COM / D3D11 向け。本体なし `Virtual Function|Sub` と継承先へのスロットコピー）
+- `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
 
-**未対応（フェーズ2以降）:** `Inherits` / `Virtual` / VTable / `New` / `Delete` / メンバ実体クラスの自動 ctor・dtor / アクセス制御の厳密検査
+**未対応:** `New` / `Delete` 演算子、`Super.Method`、メンバ実体クラスの自動 ctor・dtor、アクセス制御の厳密検査
 
 ---
 
@@ -312,17 +314,21 @@ While 式
     ...
 Wend
 
-For i = 式 To 式
+For i = 式 To 式 [Step 式]
     ...
 Next
 
-Do
+Do [While 式 | Until 式]
     ...
-Loop
+Loop [While 式 | Until 式]
+
+With 式
+    .field = ...
+End With
 
 Print 式
 Print 式;
-Input 変数          ' actba64: String のみ。stdin から1行
+Input 変数          ' String / Long / Byte / Single / Double。stdin から1行
 Sleep(ミリ秒)       ' 待ち中もウインドウメッセージを処理
 End
 ExitProcess(式)
@@ -333,13 +339,14 @@ ExitProcess(式)
 | `If` / `ElseIf` / 単行 If | ○ |
 | `Select Case` | ○ |
 | `While` / `Wend` | ○ |
-| `For ... To ... Next` | ○（**Step なし**） |
-| `Do ... Loop` | ○（裸） |
-| `Exit Do` / `Exit While` | ○ |
-| `Exit For` | ○ |
+| `For ... To ... [Step] Next` | ○（負の Step 可） |
+| `Do ... Loop` | ○（`While` / `Until` を先頭または末尾に可） |
+| `With ... End With` | ○（ネスト可） |
+| `Exit Do` / `Exit While` / `Exit For` | ○ |
 | `Print` | ○ |
-| `Input` | ○（**String のみ**） |
+| `Input` | ○（プロンプト文字列なし。数値は十進変換） |
 | `Sleep(ms)` | ○（メッセージポンプ付き・default） |
+| `InsMenu` | ○（内部で `InsertMenuA`） |
 | `LINE` / `CIRCLE` / `LOCATE` / `PAINT`（N88 文） | ○（`#n88basic`） |
 
 ---
@@ -351,20 +358,21 @@ ExitProcess(式)
 優先順位（高い順）: `As` キャスト → `^` → 単項 `-` → `* / \ Mod` → `+ - &` → `<< >>` → 関係 → `Not` → `And` → `Or` → `Xor`。  
 `* / \` どうし、および `+ -` どうしは同優先で左から右へ評価。関係演算の値は真=`-1` / 偽=`0`。
 
-| 演算 | actba64 | actba32 |
-|---|---|---|
-| `+ - *`（整数） | ○ | ○ |
-| 文字列 `+` / `&`（連結・同義） | ○ | ○ |
-| 単項 `-` / `Not` | ○ | ○ |
-| `= <> >< < > <= >=` | ○（値は -1/0。文字列は辞書順） | ○ |
-| `And` / `Or` / `Xor` | ○（ビット。条件の And/Or は短絡） | ○ |
-| `\` `/`（整数除算） | ○（Long では同義） | ○ |
-| `Mod` | ○ | ○ |
-| `<<` / `>>`（`>>` は符号付き） | ○ | ○ |
-| `^`（整数累乗） | ○ | ○ |
-| `expr As Type`（切捨てキャスト） | ○（String へ/からは不可） | ○ |
-| `+= -= *= /= \= <<= >>=` / `Mod=` `And=` `Or=` `Xor=` | ○ | ○ |
-| `++` / `--` | ○ | ○ |
+| 演算 | 対応 |
+|---|---|
+| `+ - *`（整数） | ○ |
+| `+ - * /`（`Double`、64bit） | ○（IEEE。`-actba32` は SSE 未実装） |
+| 文字列 `+` / `&`（連結・同義） | ○ |
+| 単項 `-` / `Not` | ○ |
+| `= <> >< < > <= >=` | ○（値は -1/0。文字列は辞書順。`Double` 比較は 64bit） |
+| `And` / `Or` / `Xor` | ○（ビット。条件の And/Or は短絡） |
+| `\` `/`（整数除算） | ○（Long では同義） |
+| `Mod` | ○ |
+| `<<` / `>>`（`>>` は符号付き） | ○ |
+| `^`（整数累乗） | ○ |
+| `expr As Type`（切捨てキャスト） | ○（String へ/からは不可） |
+| `+= -= *= /= \= <<= >>=` / `Mod=` `And=` `Or=` `Xor=` | ○ |
+| `++` / `--` | ○ |
 
 文字列の関係演算は辞書順（`lstrcmpA`）。長さが違い途中まで一致したら短い方が小さい。  
 `As` は例: `&H12345678 As Word` → `&H5678`。`#strict` 自体は未実装（警告なし）。
@@ -431,7 +439,8 @@ memcpy(dst, src, n)
 
 ### 7.2 自動 Include
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣、その親、カレントの `Include\` を順に探す。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣、その親、カレントの `Include\` を順に探す。  
+`UnicodeApi.sbp`（Unicode 版 API の `Declare Lib`）は Preproc が別途挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
 | ディレクティブ | 挿入される idx |
@@ -455,7 +464,7 @@ Print SinDeg(30)      ' ≒ 500
 `Sin` / `Cos` / `Tan` / `SinDeg` / `CosDeg` / `Atn` / `Exp` /
 `DegToRad` / `RadToDeg`
 
-※ actba64 はネストした関数呼び出しが壊れるため、ライブラリ内は一時変数経由。ユーザーコードでもネストは避けること。
+`Space$(n)` は `Space.abp` から常時利用可。ネストした関数呼び出しは対応する。複雑な入れ子は一時変数経由が安全。
 
 サンプル: `src/actba64/samples/math_test.abp`
 
@@ -493,6 +502,7 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 | `Long` | 4 | 4（LP64 ではない） |
 | 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop） |
 | `Declare Lib` | ○ | ○ |
+| `Double` 演算 | ○（SSE） | 未（テストはスキップ） |
 | N88 `LINE`/`CIRCLE` 文 | ○ | ○ |
 
 `#PLATFORM=32` は AB4.20 の stage0 ホスト用で、この切替とは無関係です。
@@ -501,9 +511,9 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 
 ## 10. 非対応（意図的）
 
-- ActiveBasic 全互換、イベント / COM（`Class` のフェーズ1は [§3.3](#33-classフェーズ1)。`Inherits` / `Virtual` / `New` は未対応）
-- 汎用の浮動小数点演算（`Double` / `Single` はサイズと格納枠のみ。`CIRCLE` の角度・比率リテラルは千分率）
-- `GoTo` / `With` / `ReDim`
+- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` / `Super` は未対応）
+- `Single` の汎用演算。`Double` の演算は **64bit のみ**（`-actba32` は SSE 未実装）。N88 角度・`Math.abp` は千分率
+- `GoTo` / `GoSub` / `Continue` / `ReDim` / `Enum`
 - ネスト手続き
 - リソース（`#RESOURCE`）埋め込み
 - 高度な最適化
@@ -561,6 +571,7 @@ End
 - ドキュメント一覧: [index.md](./index.md)
 - ビルド: [build.md](./build.md)
 - ActiveBasic との相違: [different.md](./different.md)
+- 未実装メモ: [todo.md](./todo.md)
 - エディタ向け actba64 リファレンス: [src/projecteditor/help/actba64_ref.html](../src/projecteditor/help/actba64_ref.html)（ヘルプメニュー / F1）
 - N88 図形サンプル: [src/actba64/samples/n88_shapes.abp](../src/actba64/samples/n88_shapes.abp)
 - Math サンプル: [src/actba64/samples/math_test.abp](../src/actba64/samples/math_test.abp)
