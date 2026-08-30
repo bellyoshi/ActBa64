@@ -1,0 +1,76 @@
+' Target: actba64
+' GUI: WM_CREATE で GetModuleFileName + MakeStr + CreateFile（EditorBuild_LoadTarget 相当）
+#USEWINDOW=1
+
+Function ExeDir$() As String
+    Dim buf As *Byte
+    Dim n As Long
+    Dim i As Long
+    Dim lastSlash As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+    ExeDir$ = ""
+    buf = malloc(260)
+    If buf = 0 Then Exit Function
+    n = GetModuleFileName(NULL, buf, 260)
+    If n <= 0 Then
+        free(buf)
+        Exit Function
+    End If
+    lastSlash = -1
+    bp = VarPtr(tmp)
+    For i = 0 To n - 1
+        bp[0] = buf[i]
+        tmp = tmp And &HFF
+        If tmp = 92 Or tmp = 47 Then lastSlash = i
+    Next
+    If lastSlash >= 0 Then
+        buf[lastSlash + 1] = 0
+        ExeDir$ = MakeStr(buf)
+        ExeDir$ = Mid$(ExeDir$, 1, lastSlash + 1)
+    End If
+    free(buf)
+End Function
+
+Function WndProc(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    Select Case message
+        Case WM_CREATE
+            Dim dir As String
+            Dim path As String
+            Dim s As String
+            dir = ExeDir$()
+            path = dir + "editor.target"
+            s = ""
+            SetWindowText(hWnd, "editor - loaddir")
+        Case WM_DESTROY
+            PostQuitMessage(0)
+        Case Else
+            WndProc = DefWindowProc(hWnd, message, wParam, lParam)
+            Exit Function
+    End Select
+    WndProc = 0
+End Function
+
+Dim wc As WNDCLASSEX
+FillMemory(VarPtr(wc), Len(wc), 0)
+wc.cbSize = Len(wc)
+wc.hInstance = GetModuleHandle(0)
+wc.style = CS_HREDRAW Or CS_VREDRAW
+wc.hCursor = LoadCursor(NULL, MAKEINTRESOURCE(IDC_ARROW))
+wc.lpszClassName = "NORMAL0"
+wc.lpfnWndProc = AddressOf(WndProc)
+wc.hbrBackground = CreateSolidBrush(GetSysColor(COLOR_3DFACE))
+RegisterClassEx(wc)
+
+CreateWindowEx(&H00000000, "NORMAL0", "editor", &H10cf0000, -2147483648, -2147483648, 495, 367, 0, 0, GetModuleHandle(0), 0)
+
+Dim msg As MSG
+Dim r As Long
+Do
+    r = GetMessage(msg, 0, 0, 0)
+    If r = 0 Then Exit Do
+    If r = -1 Then Exit Do
+    TranslateMessage(msg)
+    DispatchMessage(msg)
+Loop
+End
