@@ -11,11 +11,10 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 | パス | 内容 |
 |---|---|
 | `src/Include` | 標準ヘッダ（コンパイラ / エディタ共通） |
-| `src/actba64` | コンパイラ（Lexer → Parser → AST → IR → 機械語 + PE） |
+| `src/actba64` | コンパイラ（Lexer → Parser → AST → IR は共通。機械語と PE だけ 64 / `-actba32` で分岐） |
 | `src/projecteditor` | エディタ |
 | `release/` | 配布一式（`build.ps1` が生成。git 管理外） |
-| `src/actba32` | 旧 32bit ツールチェーン（参照用。ブートストラップには使わない） |
-| `src/prototype*` | 開発途中の試作 |
+| `src/prototype*` | 開発途中の試作（旧 abc / アセンブラ / リンカ。現行ツールチェーンではない） |
 | `docs/` | ドキュメント（[一覧](docs/index.md)） |
 
 ## ドキュメント
@@ -23,6 +22,7 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 - [ビルド手順](docs/build.md)
 - [言語仕様](docs/language.md)
 - [ActiveBasic との相違](docs/different.md)
+- [未実装メモ](docs/todo.md)
 - エディタ向けリファレンス: [src/projecteditor/help/actba64_ref.html](src/projecteditor/help/actba64_ref.html)（F1）
 
 ## ビルド

@@ -10,6 +10,7 @@ ActiveBasic 互換サブセットコンパイラ（完全互換ではない）�
 | [language.md](./language.md) | 言語仕様（ソース・構文・型・標準ライブラリ、32/64 ターゲット） |
 | [build.md](./build.md) | ビルド手順（AB4.20 stage0 → 自己ホスト → リリース一式） |
 | [different.md](./different.md) | ActiveBasic との相違点（非対応・改良点・今後の予定） |
+| [todo.md](./todo.md) | 未実装・今後の作業メモ |
 
 エディタ向けリファレンス（F1）: [src/projecteditor/help/actba64_ref.html](../src/projecteditor/help/actba64_ref.html)
 
@@ -23,7 +24,4 @@ ActiveBasic 互換サブセットコンパイラ（完全互換ではない）�
 
 ## ソース側の関連文書
 
-| 文書 | 内容 |
-|---|---|
-| [src/actba32/README.md](../src/actba32/README.md) | 旧 32bit ツールチェーン（参照用） |
-| [src/actba32/abc-spec.md](../src/actba32/abc-spec.md) | 旧 abc 中間段の仕様 |
+旧 `actba32` / `abc` / `abassembler` / `ablinker` は廃止済み。32bit 出力は `actba64 -actba32`（共通 IR → x86 + PE32）。試作は `src/prototype*`。

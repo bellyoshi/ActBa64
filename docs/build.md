@@ -1,6 +1,6 @@
 # ビルド手順
 
-ActBa64 は **1 本のコンパイラ** `actba64.exe` です。既定は PE32+ / AMD64、`-actba32` で PE32 / i386 を出します。
+ActBa64 は **1 本のコンパイラ** `actba64.exe` です。Lexer → Parser → AST → IR まで共通で、機械語と PE だけ分岐します。既定は PE32+ / AMD64、`-actba32` で PE32 / i386 を出します（中間 `.asm` / `.obj` は出さない）。
 
 ブートストラップ:
 

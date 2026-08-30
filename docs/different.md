@@ -79,7 +79,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 |---|---|---|
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 行は受理するが**無視**（警告なし） |
 | `Input` | `Input "prompt", variable` または `Input variable` | **`Input variable` のみ**（プロンプト文字列なし）。`String` / `Long` / `Byte` / `Single` / `Double` に代入可 |
-| `Single` / `Double` | IEEE 浮動小数点演算 | **格納サイズのみ**（4/8 バイト）。演算は整数中心。小数リテラル・N88 角度は**千分率固定小数**（`1.5` → 1500）。三角関数等は `Math.abp` |
+| `Single` / `Double` | IEEE 浮動小数点演算 | **`Double` は 64bit で加減乗除・比較**（IEEE）。`Single` は格納と Input 変換が中心。小数リテラル・N88 角度は**千分率固定小数**（`1.5` → 1500）も併用。三角関数等は `Math.abp`。`-actba32` では SSE 未実装のため `Double` 演算テストはスキップ |
 | `Const` | `Const name = expr` および `Const name(arglist) = expr`（マクロ関数） | 整数・文字列リテラル中心。複雑な定数式・マクロ関数は制限あり |
 | `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New`/`Delete` 演算子なし。`Protected` は受理するが **Public と同等**。メソッドはマングル名 + 暗黙 `Me` |
 | `For` … `Next` | `For c = start To end [Step step]`、`Exit For` | **Step / Exit For 対応**（[language.md §4](./language.md#4-文) 参照） |
@@ -89,7 +89,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / `Left$` / `Mid$` / `Right$` / `Str$` / `VarPtr` / `StrPtr` / `AddressOf` / `SizeOf` / `MakeStr` / `RGB` / `LOWORD` は組込**。`InStr` / `Hex$` / `Val` / `Trim$` 等は **`StrUtils.abp` 等のライブラリ**（自動挿入されない） |
-| 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp`（千分率固定小数）**。ネストした関数呼び出し式は actba64 で壊れる場合あり |
+| 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp`（千分率固定小数）**。ネストした関数呼び出しは対応（複雑な入れ子は一時変数経由が安全） |
 | メモリ | `malloc` / `calloc` / `realloc` / `free` | `malloc` / `free` / `memcpy` / `FillMemory`。**`calloc` は `HeapAlloc` へマップ**。`realloc` なし |
 | `GetByte` 等 / `SetWord` 等 | ポインタ経由の読み書き | 組み込みなし（自前でポインタ参照） |
 | `HIBYTE` / `HIWORD` / `MAKELONG` 等 | ビット分解・合成マクロ | 組み込みなし（`LOWORD` のみ組込） |
@@ -142,10 +142,10 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `With` … `End With` | 構造体メンバを `.Member` で省略、ネスト可 | **実装済み** |
 | `ByRef` / `ByVal` | 既定は値渡し。`ByRef p As Type` で参照渡し | **実装済み** |
 | `TypeDef` | `TypeDef newtype = basetype`（型エイリアス） | **実装済み** |
-| `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（Class はフェーズ1+） |
+| `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（`Inherits` / `Virtual` は部分対応） |
 | `#include` | `"path"` / `<path>` で `.sbp` 取り込み | **`#include "path"`**（`.abp`） |
 | 行継続 `_` | 行末 `_` で次行と連結 | **実装済み** |
-| `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **actba64 のみ**（actba32 は非対応） |
+| `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **実装済み**（32/64 とも IAT） |
 
 ### 入出力・文字列・メモリ（組み込み）
 
@@ -164,7 +164,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 
 | 関数 | ActiveBasic 仕様 | ActBa64 |
 |---|---|---|
-| `Abs` / `Sgn` / `Sqr` / `Sin` / `Cos` / `Tan` / `Atn` / `Exp` / `Log` / `Int` / `Fix` | 浮動小数数学 | **千分率固定小数**版（自動 Include） |
+| `Abs` / `Sgn` / `Sqr` / `Sin` / `Cos` / `Tan` / `Atn` / `Exp` / `Log` / `Int` / `Fix` | 浮動小数数学 | **千分率固定小数**版（自動 Include）。`Log` / `Int` / `Fix` は未 |
 
 ---
 
@@ -183,7 +183,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `GoSub` / `Return` | `*ラベル` 付きサブルーチン | 関数 `Return` とは別 |
 | `Enum` | 列挙型定義 | |
 | `Let` | 明示代入（省略可） | 優先度低 |
-| `Class` 拡張 | `New`/`Delete`、`Super`、厳密 `Protected`、メンバ Class の自動 ctor/dtor | `Inherits`/`Virtual` は部分対応済 |
+| `Class` 拡張 | `New`/`Delete`、`Super`、厳密 `Protected`、メンバ Class の自動 ctor/dtor | `Inherits`/`Virtual` は COM/vtable 向けに部分対応済 |
 
 ### ファイル I/O
 

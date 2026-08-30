@@ -1,6 +1,6 @@
 # abassembler: `too many Const`
 
-Cursor チャットからの記録（2026-07-27）。`abassembler` 結合時に abc が定数上限で失敗した件。
+（履歴）Cursor チャットからの記録（2026-07-27）。当時の `abc` / `abassembler` 結合時に定数上限で失敗した件。現行の `actba64` とは無関係（旧ツールチェーンは廃止）。
 
 ## 症状
 
