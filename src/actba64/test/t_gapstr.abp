@@ -1,0 +1,123 @@
+' GetLineText 相当: Function As Byte + malloc コピー + MakeStr/Mid$
+' ギャップを行の途中へ動かしても論理文字列が切れないこと
+' Expect: 0
+' Target: actba64
+#console
+
+Type TB
+    buffer As *Byte
+    gap_start As Long
+    gap_end As Long
+    capacity As Long
+End Type
+
+Dim g As TB
+
+Function GetB(ByVal logicalIndex As Long) As Byte
+    Dim rightLen As Long
+    Dim tmp As Byte
+    Dim bp As *Byte
+
+    GetB = 0
+    rightLen = g.capacity - g.gap_end
+    If logicalIndex < 0 Then Exit Function
+    If logicalIndex >= g.gap_start + rightLen Then Exit Function
+    bp = VarPtr(tmp)
+    If logicalIndex < g.gap_start Then
+        bp[0] = g.buffer[logicalIndex]
+    Else
+        bp[0] = g.buffer[g.gap_end + (logicalIndex - g.gap_start)]
+    End If
+    GetB = tmp
+End Function
+
+Function LineFrom$(ByVal s As Long, ByVal e As Long) As String
+    Dim n As Long
+    Dim i As Long
+    Dim out As *Byte
+    Dim tmp As String
+
+    LineFrom$ = ""
+    If e < s Then Exit Function
+    n = e - s
+    If n <= 0 Then Exit Function
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+    For i = 0 To n - 1
+        out[i] = GetB(s + i)
+    Next
+    out[n] = 0
+    tmp = MakeStr(out)
+    LineFrom$ = Mid$(tmp, 1, n)
+    free(out)
+End Function
+
+Sub MoveTo(ByVal newIndex As Long)
+    Dim tmp As Long
+    Dim bp As *Byte
+    bp = VarPtr(tmp)
+    If newIndex = g.gap_start Then Exit Sub
+    If newIndex < g.gap_start Then
+        While g.gap_start > newIndex
+            g.gap_end = g.gap_end - 1
+            g.gap_start = g.gap_start - 1
+            bp[0] = g.buffer[g.gap_start]
+            g.buffer[g.gap_end] = bp[0]
+        Wend
+    Else
+        While g.gap_start < newIndex
+            bp[0] = g.buffer[g.gap_end]
+            g.buffer[g.gap_start] = bp[0]
+            g.gap_start = g.gap_start + 1
+            g.gap_end = g.gap_end + 1
+        Wend
+    End If
+End Sub
+
+Dim i As Long
+Dim s As String
+
+g.capacity = 16
+g.buffer = malloc(16)
+g.gap_start = 0
+g.gap_end = 16
+
+i = 0
+While i < 16
+    g.buffer[i] = 0
+    i = i + 1
+Wend
+
+s = "Hello"
+i = 0
+While i < 5
+    g.buffer[g.gap_start] = Asc(Mid$(s, i + 1, 1))
+    g.gap_start = g.gap_start + 1
+    i = i + 1
+Wend
+
+If LineFrom$(0, 5) <> "Hello" Then
+    ExitProcess(1)
+End If
+
+MoveTo(2)
+If LineFrom$(0, 5) <> "Hello" Then
+    ExitProcess(2)
+End If
+If Len(LineFrom$(0, 5)) <> 5 Then
+    ExitProcess(3)
+End If
+
+MoveTo(0)
+If LineFrom$(0, 5) <> "Hello" Then
+    ExitProcess(4)
+End If
+
+MoveTo(5)
+If LineFrom$(0, 5) <> "Hello" Then
+    ExitProcess(5)
+End If
+
+free(g.buffer)
+ExitProcess(0)
+End
