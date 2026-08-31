@@ -2072,10 +2072,14 @@ Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
         cur = stk[sp]
         While cur >= 0
             k = nodes[cur].kind
-            If k = AST_PRINT Or k = AST_INPUT Or k = AST_CALL Then
+            If k = AST_PRINT Or k = AST_INPUT Then
                 LowAstNeedsStrGc = 1
                 Exit Function
             End If
+            ' 呼び出しは見ない。Hl_MidBytes$ / GetLinePrefix$ も本体の Mid$ は
+            ' callee 側にあり、ここで CALL を確保扱いすると描画 While が毎トークン
+            ' Collect し、行末の String が conservative 漏れで欠ける。
+            ' 引数式の Cat / Mid$ は left を辿って拾う。
             If k = AST_BINOP Then
                 If nodes[cur].num = BOP_CAT Then
                     LowAstNeedsStrGc = 1
@@ -2142,7 +2146,12 @@ Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' ループ条件・本体（必要なら第3引数）が確保するときだけセーフポイントを出す。
+' MAIN（メッセージループ等）は毎回集める。描画中の入れ子では集めない。
 Sub LowMaybeLoopStrCollect(ctx As *LowerCtx, a As Long, b As Long, c As Long)
+    If ctx->inFunc = 0 Then
+        LowEmitStrCollectSafepoint(ctx)
+        Exit Sub
+    End If
     If LowAstNeedsStrGc(ctx, a) <> 0 Then
         LowEmitStrCollectSafepoint(ctx)
         Exit Sub
@@ -2154,6 +2163,11 @@ Sub LowMaybeLoopStrCollect(ctx As *LowerCtx, a As Long, b As Long, c As Long)
     If LowAstNeedsStrGc(ctx, c) <> 0 Then
         LowEmitStrCollectSafepoint(ctx)
     End If
+End Sub
+
+' eax 書き込みで rax 上位を 0 にする（Long 添字をポインタ加算する前）
+Sub LowEmitZxEax(list As *IrList)
+    IrEmit(list, OP_AND_EAX_IMM, -1, 0)
 End Sub
 
 ' rax = String ptr → eax = Len（NULL→0）。[ptr-4] の下位31bit
@@ -3754,6 +3768,7 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
                     Exit Function
                 End If
                 If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+                LowEmitZxEax(list)
                 If esz <> 1 Then
                     IrEmit(list, OP_MOV_ECX, esz, 0)
                     IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
@@ -3766,6 +3781,7 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
                 ' pointer field: *Long は index*4、それ以外（*Byte 等）はバイト添字
                 esz = LowPtrFieldElemSize(fieldTy)
                 If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+                LowEmitZxEax(list)
                 If esz <> 1 Then
                     IrEmit(list, OP_MOV_ECX, esz, 0)
                     IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
@@ -3787,6 +3803,7 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
             Exit Function
         End If
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        LowEmitZxEax(list)
         If vTy = TY_PTR_UDT Then
             ti = vTypeIdx
             tsizes = tt->typeSizes
@@ -6258,6 +6275,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     Dim pi As Long
     Dim j As Long
     Dim offs As *Long
+    Dim argTys As *Long
+    Dim argBrs As *Long
     Dim ty As Long
     Dim bound As Long
     Dim nbytes As Long
@@ -6567,6 +6586,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
             IrEmit(list, OP_LABEL, labFn, 0)
             IrEmit(list, OP_ENTER, frame, 0)
             offs = ctx.offs
+            argTys = ctx.types
+            argBrs = ctx.byRefs
             pi = 0
             param = nodes[stmt].left
             While param >= 0
@@ -6585,6 +6606,15 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     ' LowAddSym が付けた precise root を実オフセットへ付け替える
                     LowRetargetFnPreciseRoot(offs[pi], 48 + (pi - 4) * 8)
                     offs[pi] = 48 + (pi - 4) * 8
+                End If
+                If TyIs32() = 0 Then
+                    If argTys[pi] = TY_LONG Or argTys[pi] = TY_BYTE Then
+                        If argBrs[pi] = 0 Then
+                            IrEmit(list, OP_LOAD_LOCAL, offs[pi], 0)
+                            LowEmitZxEax(list)
+                            IrEmit(list, OP_STORE_LOCAL, offs[pi], 0)
+                        End If
+                    End If
                 End If
                 pi = pi + 1
                 param = nodes[param].nxt

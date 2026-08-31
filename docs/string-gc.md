@@ -249,11 +249,11 @@ CALL StrCollect
 
 | 地点 | 理由 |
 |---|---|
-| `For` / `While` / `Do` のループ先頭（本体または条件が String を確保しうるときだけ） | ループ内の Cat / `Mid$` / 関数呼び出しが上限まで塊を増やすのを防ぐ。バイト走査だけの `For` では出さない |
+| `For` / `While` / `Do` のループ先頭 | **MAIN** では毎回。関数内は本体または条件が Cat / `Mid$` / `Chr$` 等を含むときだけ。`GetLinePrefix$` のような関数呼び出しでは出さない（描画 While で行末の String を落とすため） |
 | `Print` / `Input` のあと | 一時 String を回収 |
 | モジュール MAIN 終了直前 | プロセス終了前の掃除（その後すぐ `ExitProcess`） |
 
-関数エピローグでは Collect しない。`Mid$` や `Hl_Lower$` のような入れ子の終了時に、呼び出し元の `String` が conservative 走査から漏れて `HeapFree` されるのを避けるため。確保した一時値は、確保を含む外側のループ先頭か MAIN 終了で回収する。
+関数エピローグでは Collect しない。`Mid$` や `Hl_Lower$` のような入れ子の終了時に、呼び出し元の `String` が conservative 走査から漏れて `HeapFree` されるのを避けるため。GUI ではメッセージループ（MAIN の `Do`）の先頭で回収する。関数内の一時値は、その関数自身が Cat / `Mid$` を含むループを持つか、MAIN に戻ったあとで回収する。
 
 ---
 

@@ -1,0 +1,140 @@
+' ギャップバッファ相当: カーソル移動のあと論理文字列が変わらないこと
+' Expect: 0
+' Target: actba64
+#console
+
+Type TB
+    buffer As *Byte
+    gap_start As Long
+    gap_end As Long
+    capacity As Long
+End Type
+
+Dim g As TB
+
+Function GetB(ByVal logicalIndex As Long) As Long
+    Dim rightLen As Long
+    Dim tmp As Byte
+    Dim bp As *Byte
+
+    GetB = 0
+    rightLen = g.capacity - g.gap_end
+    If logicalIndex < 0 Then Exit Function
+    If logicalIndex >= g.gap_start + rightLen Then Exit Function
+    bp = VarPtr(tmp)
+    If logicalIndex < g.gap_start Then
+        bp[0] = g.buffer[logicalIndex]
+    Else
+        bp[0] = g.buffer[g.gap_end + (logicalIndex - g.gap_start)]
+    End If
+    GetB = tmp
+End Function
+
+Function Logical$() As String
+    Dim n As Long
+    Dim i As Long
+    Dim r As String
+    Logical$ = ""
+    n = g.gap_start + (g.capacity - g.gap_end)
+    r = ""
+    i = 0
+    While i < n
+        r = r + Chr$(GetB(i))
+        i = i + 1
+    Wend
+    Logical$ = r
+End Function
+
+Sub MoveTo(ByVal newIndex As Long)
+    Dim tmp As Long
+    Dim bp As *Byte
+    bp = VarPtr(tmp)
+    If newIndex = g.gap_start Then Exit Sub
+    If newIndex < g.gap_start Then
+        While g.gap_start > newIndex
+            g.gap_end = g.gap_end - 1
+            g.gap_start = g.gap_start - 1
+            bp[0] = g.buffer[g.gap_start]
+            g.buffer[g.gap_end] = bp[0]
+        Wend
+    Else
+        While g.gap_start < newIndex
+            bp[0] = g.buffer[g.gap_end]
+            g.buffer[g.gap_start] = bp[0]
+            g.gap_start = g.gap_start + 1
+            g.gap_end = g.gap_end + 1
+        Wend
+    End If
+End Sub
+
+Dim i As Long
+Dim s As String
+
+If SizeOf(TB) < 20 Then
+    ExitProcess(10)
+End If
+
+g.capacity = 16
+g.buffer = malloc(16)
+g.gap_start = 0
+g.gap_end = 16
+
+i = 0
+While i < 16
+    g.buffer[i] = 0
+    i = i + 1
+Wend
+
+' "Hello" を先頭から挿入（ギャップ先頭へ 1 バイトずつ）
+s = "Hello"
+i = 0
+While i < 5
+    g.buffer[g.gap_start] = Asc(Mid$(s, i + 1, 1))
+    g.gap_start = g.gap_start + 1
+    i = i + 1
+Wend
+
+If Logical$() <> "Hello" Then
+    ExitProcess(1)
+End If
+If g.gap_end <> 16 Then
+    ExitProcess(2)
+End If
+
+MoveTo(0)
+If Logical$() <> "Hello" Then
+    ExitProcess(3)
+End If
+If g.gap_start <> 0 Then
+    ExitProcess(4)
+End If
+
+MoveTo(5)
+If Logical$() <> "Hello" Then
+    ExitProcess(5)
+End If
+
+MoveTo(2)
+If Logical$() <> "Hello" Then
+    ExitProcess(6)
+End If
+If GetB(0) <> 72 Then
+    ExitProcess(7)
+End If
+If GetB(4) <> 111 Then
+    ExitProcess(8)
+End If
+
+' 隣の Long が潰れていないこと
+g.gap_start = 3
+g.gap_end = 10
+If g.gap_start <> 3 Then
+    ExitProcess(9)
+End If
+If g.gap_end <> 10 Then
+    ExitProcess(11)
+End If
+
+free(g.buffer)
+ExitProcess(0)
+End
