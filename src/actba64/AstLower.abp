@@ -1912,6 +1912,18 @@ Sub LowAppendFnPreciseRoot(off As Long)
     g_fnPreciseRootCount = g_fnPreciseRootCount + 1
 End Sub
 
+Sub LowRetargetFnPreciseRoot(oldOff As Long, newOff As Long)
+    Dim i As Long
+    If g_fnPreciseRoots = NULL Then Exit Sub
+    i = 0
+    While i < g_fnPreciseRootCount
+        If g_fnPreciseRoots[i] = oldOff Then
+            g_fnPreciseRoots[i] = newOff
+        End If
+        i = i + 1
+    Wend
+End Sub
+
 Sub LowAppendFnPreciseStringArr(baseOff As Long, nbytes As Long)
     Dim j As Long
     Dim n As Long
@@ -2034,6 +2046,114 @@ Sub LowEmitStrCollectSafepoint(ctx As *LowerCtx)
     If g_rtStrCollectLab < 0 Then Exit Sub
     LowEmitPreciseLocalMarks(ctx)
     IrEmit(ctx->list, OP_CALL_LAB, g_rtStrCollectLab, 0)
+End Sub
+
+' 部分木が String を新たに確保しうるか。
+' 再帰しない（関数フレームが ~8KB のため、ElseIf 連鎖や長い文リストでスタックを尽くす）。
+Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim k As Long
+    Dim bi As Long
+    Dim cur As Long
+    Dim sp As Long
+    Dim n As Long
+    Dim stk(255) As Long
+
+    LowAstNeedsStrGc = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    If ast = NULL Then Exit Function
+    nodes = ast->nodes
+    stk[0] = idx
+    sp = 1
+    While sp > 0
+        sp = sp - 1
+        cur = stk[sp]
+        While cur >= 0
+            k = nodes[cur].kind
+            If k = AST_PRINT Or k = AST_INPUT Or k = AST_CALL Then
+                LowAstNeedsStrGc = 1
+                Exit Function
+            End If
+            If k = AST_BINOP Then
+                If nodes[cur].num = BOP_CAT Then
+                    LowAstNeedsStrGc = 1
+                    Exit Function
+                End If
+            End If
+            If k = AST_BUILTIN Then
+                bi = nodes[cur].num
+                If bi = BI_LEFT Or bi = BI_MID Or bi = BI_STR Or bi = BI_MAKESTR Or bi = BI_CHR Or bi = BI_RIGHT Then
+                    LowAstNeedsStrGc = 1
+                    Exit Function
+                End If
+            End If
+            If k = AST_FOR Then
+                n = nodes[cur].num
+                If n >= 0 Then
+                    If sp >= 255 Then
+                        LowAstNeedsStrGc = 1
+                        Exit Function
+                    End If
+                    stk[sp] = n
+                    sp = sp + 1
+                End If
+                n = nodes[cur].strId
+                If n >= 0 Then
+                    If sp >= 255 Then
+                        LowAstNeedsStrGc = 1
+                        Exit Function
+                    End If
+                    stk[sp] = n
+                    sp = sp + 1
+                End If
+            End If
+            n = nodes[cur].left
+            If n >= 0 Then
+                If sp >= 255 Then
+                    LowAstNeedsStrGc = 1
+                    Exit Function
+                End If
+                stk[sp] = n
+                sp = sp + 1
+            End If
+            n = nodes[cur].right
+            If n >= 0 Then
+                If sp >= 255 Then
+                    LowAstNeedsStrGc = 1
+                    Exit Function
+                End If
+                stk[sp] = n
+                sp = sp + 1
+            End If
+            n = nodes[cur].extra
+            If n >= 0 Then
+                If sp >= 255 Then
+                    LowAstNeedsStrGc = 1
+                    Exit Function
+                End If
+                stk[sp] = n
+                sp = sp + 1
+            End If
+            cur = nodes[cur].nxt
+        Wend
+    Wend
+End Function
+
+' ループ条件・本体（必要なら第3引数）が確保するときだけセーフポイントを出す。
+Sub LowMaybeLoopStrCollect(ctx As *LowerCtx, a As Long, b As Long, c As Long)
+    If LowAstNeedsStrGc(ctx, a) <> 0 Then
+        LowEmitStrCollectSafepoint(ctx)
+        Exit Sub
+    End If
+    If LowAstNeedsStrGc(ctx, b) <> 0 Then
+        LowEmitStrCollectSafepoint(ctx)
+        Exit Sub
+    End If
+    If LowAstNeedsStrGc(ctx, c) <> 0 Then
+        LowEmitStrCollectSafepoint(ctx)
+    End If
 End Sub
 
 ' rax = String ptr → eax = Len（NULL→0）。[ptr-4] の下位31bit
@@ -3304,8 +3424,18 @@ Function LowTyNbytes(ty As Long) As Long
         LowTyNbytes = 4
     ElseIf ty = TY_STRING Then
         LowTyNbytes = TyPtrSize()
+    ElseIf ty = TY_PTR_BYTE Or ty = TY_PTR_LONG Or ty = TY_PTR_UDT Then
+        LowTyNbytes = TyPtrSize()
     Else
         LowTyNbytes = 4
+    End If
+End Function
+
+Function LowPtrFieldElemSize(fieldTy As Long) As Long
+    If fieldTy = FIELDTY_PTR_LONG Then
+        LowPtrFieldElemSize = 4
+    Else
+        LowPtrFieldElemSize = 1
     End If
 End Function
 
@@ -3447,6 +3577,7 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
     Dim foff As Long
     Dim fsz As Long
     Dim fcnt As Long
+    Dim fieldTy As Long
     Dim ti As Long
     Dim esz As Long
     Dim tsizes As *Long
@@ -3611,7 +3742,7 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
                 Exit Function
             End If
             ti = vTypeIdx
-            If TyFindField(tt, ti, VarPtr(fname), foff, fsz, fcnt) = 0 Then
+            If TyFindFieldEx(tt, ti, VarPtr(fname), foff, fsz, fcnt, fieldTy) = 0 Then
                 ctx->err = 1
                 Exit Function
             End If
@@ -3631,9 +3762,14 @@ Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
                 If LowAddr(ctx, base) = 0 Then Exit Function
                 IrEmit(list, OP_POP_RCX, 0, 0)
                 IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-            ElseIf fsz = 8 Then
-                ' pointer field (*Byte etc.): load ptr + byte index
+            ElseIf fsz = TyPtrSize() Then
+                ' pointer field: *Long は index*4、それ以外（*Byte 等）はバイト添字
+                esz = LowPtrFieldElemSize(fieldTy)
                 If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+                If esz <> 1 Then
+                    IrEmit(list, OP_MOV_ECX, esz, 0)
+                    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+                End If
                 IrEmit(list, OP_PUSH_RAX, 0, 0)
                 If LowExpr(ctx, base) = 0 Then Exit Function
                 IrEmit(list, OP_POP_RCX, 0, 0)
@@ -3992,6 +4128,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim foff As Long
     Dim fsz As Long
     Dim fcnt As Long
+    Dim fieldTy As Long
     Dim ti As Long
     Dim sz As Long
     Dim base As Long
@@ -4126,14 +4263,14 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
                 Exit Function
             End If
             ti = vTypeIdx
-            If TyFindField(tt, ti, VarPtr(name), foff, fsz, fcnt) = 0 Then
+            If TyFindFieldEx(tt, ti, VarPtr(name), foff, fsz, fcnt, fieldTy) = 0 Then
                 ctx->err = 1
                 Exit Function
             End If
             If fcnt > 1 Then
                 LowLoadSized(list, fsz)
-            ElseIf fsz = 8 Then
-                LowLoadSized(list, 1)
+            ElseIf fsz = TyPtrSize() Then
+                LowLoadSized(list, LowPtrFieldElemSize(fieldTy))
             Else
                 ctx->err = 1
                 Exit Function
@@ -5312,6 +5449,7 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
     Dim foff As Long
     Dim fsz As Long
     Dim fcnt As Long
+    Dim fieldTy As Long
     Dim ti As Long
     Dim fname(63) As Byte
     Dim base As Long
@@ -5500,14 +5638,14 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
                         Exit Function
                     End If
                     ti = vTypeIdx
-                    If TyFindField(tt, ti, VarPtr(fname), foff, fsz, fcnt) = 0 Then
+                    If TyFindFieldEx(tt, ti, VarPtr(fname), foff, fsz, fcnt, fieldTy) = 0 Then
                         ctx->err = 1
                         Exit Function
                     End If
                     If fcnt > 1 Then
                         LowStoreSized(ctx->list, fsz)
-                    ElseIf fsz = 8 Then
-                        LowStoreSized(ctx->list, 1)
+                    ElseIf fsz = TyPtrSize() Then
+                        LowStoreSized(ctx->list, LowPtrFieldElemSize(fieldTy))
                     Else
                         ctx->err = 1
                         Exit Function
@@ -5808,29 +5946,29 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         cond = nodes[idx].left
         If doMode = DO_WHILE_TOP Then
             IrEmit(ctx->list, OP_LABEL, labTop, 0)
-            LowEmitStrCollectSafepoint(ctx)
+            LowMaybeLoopStrCollect(ctx, cond, nodes[idx].right, -1)
             If LowJumpIfFalse(ctx, cond, labEnd) = 0 Then Exit Function
             If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
             IrEmit(ctx->list, OP_JMP, labTop, 0)
         ElseIf doMode = DO_UNTIL_TOP Then
             IrEmit(ctx->list, OP_LABEL, labTop, 0)
-            LowEmitStrCollectSafepoint(ctx)
+            LowMaybeLoopStrCollect(ctx, cond, nodes[idx].right, -1)
             If LowJumpIfTrue(ctx, cond, labEnd) = 0 Then Exit Function
             If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
             IrEmit(ctx->list, OP_JMP, labTop, 0)
         ElseIf doMode = DO_WHILE_BOTTOM Then
             IrEmit(ctx->list, OP_LABEL, labTop, 0)
-            LowEmitStrCollectSafepoint(ctx)
+            LowMaybeLoopStrCollect(ctx, cond, nodes[idx].right, -1)
             If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
             If LowJumpIfTrue(ctx, cond, labTop) = 0 Then Exit Function
         ElseIf doMode = DO_UNTIL_BOTTOM Then
             IrEmit(ctx->list, OP_LABEL, labTop, 0)
-            LowEmitStrCollectSafepoint(ctx)
+            LowMaybeLoopStrCollect(ctx, cond, nodes[idx].right, -1)
             If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
             If LowJumpIfFalse(ctx, cond, labTop) = 0 Then Exit Function
         Else
             IrEmit(ctx->list, OP_LABEL, labTop, 0)
-            LowEmitStrCollectSafepoint(ctx)
+            LowMaybeLoopStrCollect(ctx, cond, nodes[idx].right, -1)
             If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
             IrEmit(ctx->list, OP_JMP, labTop, 0)
         End If
@@ -5843,7 +5981,7 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         saveWhile = g_whileEndLab
         g_whileEndLab = labEnd
         IrEmit(ctx->list, OP_LABEL, labTop, 0)
-        LowEmitStrCollectSafepoint(ctx)
+        LowMaybeLoopStrCollect(ctx, nodes[idx].left, nodes[idx].right, -1)
         If LowJumpIfFalse(ctx, nodes[idx].left, labEnd) = 0 Then Exit Function
         If LowStmtList(ctx, nodes[idx].right) = 0 Then Exit Function
         IrEmit(ctx->list, OP_JMP, labTop, 0)
@@ -5875,7 +6013,7 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
             End If
         End If
         IrEmit(ctx->list, OP_LABEL, labTop, 0)
-        LowEmitStrCollectSafepoint(ctx)
+        LowMaybeLoopStrCollect(ctx, nodes[idx].extra, nodes[idx].num, stepIdx)
         LowEmitLoadOff(ctx->list, vOff, vGlob)
         IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
         If LowExpr(ctx, nodes[idx].extra) = 0 Then Exit Function
@@ -6444,6 +6582,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
                     IrEmit(list, OP_STORE_LOCAL_R9, offs[pi], 0)
                 Else
                     ' stack arg already at [rbp+0x30+(pi-4)*8]
+                    ' LowAddSym が付けた precise root を実オフセットへ付け替える
+                    LowRetargetFnPreciseRoot(offs[pi], 48 + (pi - 4) * 8)
                     offs[pi] = 48 + (pi - 4) * 8
                 End If
                 pi = pi + 1
@@ -6467,7 +6607,8 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
             End If
             IrEmit(list, OP_LABEL, g_funcEndLab, 0)
             LowEmitLocalClassDtors(VarPtr(ctx))
-            LowEmitStrCollectSafepoint(VarPtr(ctx))
+            ' エピローグでは Collect しない。入れ子の Mid$ / Lower$ 終了時に
+            ' 呼び出し元の String が conservative 漏れで解放されるのを防ぐ。
             If retBuf[0] <> 0 Then
                 pi = LowFindSym(VarPtr(ctx), VarPtr(retBuf))
                 If pi < 0 Then

@@ -416,10 +416,10 @@ memcpy(dst, src, n)
 - `StrPtr(s)` はデータ先頭（恒等）。`MakeStr(p)` は NUL 終端 `BytePtr` から長さ付き String を複製
 - 連結・`Left$` / `Mid$` 等は都度ヒープ確保
 - 内容比較は長さ付き辞書順（埋め込み NUL 対応）
-- **actba64 の String ヒープ**はハイブリッド GC（代入時の自動 `StrFree` はしない）:
+- **actba64 の String ヒープ**はハイブリッド GC（代入時の自動 `StrFree` はしない）。設計・BSS レイアウト・セーフポイントは [string-gc.md](./string-gc.md):
   - **Precise**: `String` / `String` 配列のグローバル・ローカルスロットをコンパイル時に root 登録し、セーフポイントで無条件マーク
   - **Conservative**: ユーザ globals とスタックをポインタ幅刻み走査し、ヒープタグ付き登録ブロックのみマーク
-  - 確保は `StrHeapAlloc`、回収は `StrCollect`（ループ頭・`Print`/`Input` 後・関数終了前など）
+  - 確保は `StrHeapAlloc`、回収は `StrCollect`（String を確保しうるループ頭・`Print`/`Input` 後・MAIN 終了前。関数エピローグでは走らない）
   - UDT 内の String メンバは型表で区別できないため precise root 未登録（conservative 走査に依存）
 - `InStr` / `Lower$` などは **言語組み込みではなく** ライブラリ `.abp` として提供される場合がある
 
