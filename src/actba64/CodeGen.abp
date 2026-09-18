@@ -127,21 +127,9 @@ Sub IrCollect(list As *IrList, builder As *ImportBuilder)
     Next
 End Sub
 
-Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord)
+Function CgInitFixups() As Long
     Dim i As Long
-    Dim n As Long
-    Dim opv As Long
-    Dim ops As *IrOp
-    Dim tmp(255) As Byte
-    Dim dll(31) As Byte
-    Dim iatRva As DWord
-    Dim strRva As DWord
-    Dim li As Long
-    Dim at As Long
-    Dim rel As Long
-    Dim nextRip As Long
-    Dim globOff As DWord
-
+    CgInitFixups = 0
     If g_cgLabOff <> NULL Then free(g_cgLabOff)
     If g_cgFix <> NULL Then free(g_cgFix)
     g_cgLabCap = DYN_INIT
@@ -155,262 +143,21 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
         g_cgFix = NULL
         g_cgLabCap = 0
         g_cgFixCap = 0
-        Exit Sub
+        Exit Function
     End If
     For i = 0 To g_cgLabCap - 1
         g_cgLabOff[i] = -1
     Next
     g_cgNFix = 0
+    CgInitFixups = 1
+End Function
 
-    ops = list->ops
-    n = list->count
-
-    For i = 0 To n - 1
-        opv = ops[i].op
-        If opv = OP_ENTER Then
-            EmitEnter(cb, ops[i].arg1)
-        ElseIf opv = OP_LEAVE Then
-            EmitLeaveRet(cb)
-            If ops[i].arg1 <> 0 Then
-                ' 64-bit ignores stdcall pop (Microsoft x64)
-            End If
-        ElseIf opv = OP_XOR_ECX Then
-            EmitXorEcx(cb)
-        ElseIf opv = OP_XOR_R9D Then
-            EmitXorR9d(cb)
-        ElseIf opv = OP_LEA_RDX_STR Then
-            strRva = IbGetStringRva(builder, ops[i].strId)
-            EmitLeaRdxRip(cb, strRva, TEXT_RVA)
-        ElseIf opv = OP_LEA_R8_STR Then
-            strRva = IbGetStringRva(builder, ops[i].strId)
-            EmitLeaR8Rip(cb, strRva, TEXT_RVA)
-        ElseIf opv = OP_LEA_RAX_STR Then
-            strRva = IbGetStringRva(builder, ops[i].strId)
-            EmitLeaRaxRip(cb, strRva, TEXT_RVA)
-        ElseIf opv = OP_MOV_RCX_RAX Then
-            EmitMovRcxRax(cb)
-        ElseIf opv = OP_MOV_RDX_RAX Then
-            EmitMovRdxRax(cb)
-        ElseIf opv = OP_MOV_R8_RAX Then
-            EmitMovR8Rax(cb)
-        ElseIf opv = OP_MOVZX_EAX_BYTE Then
-            EmitMovzxEaxByteRax(cb)
-        ElseIf opv = OP_TEST_RAX Then
-            EmitTestRax(cb)
-        ElseIf opv = OP_XOR_EAX Then
-            EmitXorEax(cb)
-        ElseIf opv = OP_LEA_LOCAL Then
-            EmitLeaLocal(cb, ops[i].arg1)
-        ElseIf opv = OP_ADD_RAX_RCX Then
-            EmitAddRaxRcx(cb)
-        ElseIf opv = OP_LOADZX_BYTE_RAX Then
-            EmitLoadzxByteRax(cb)
-        ElseIf opv = OP_STORE_BYTE_RAX_CL Then
-            EmitStoreByteRaxCl(cb)
-        ElseIf opv = OP_ADD_RAX_IMM Then
-            EmitAddRaxImm(cb, ops[i].arg1)
-        ElseIf opv = OP_LOADZX_WORD_RAX Then
-            EmitLoadzxWordRax(cb)
-        ElseIf opv = OP_STORE_WORD_RAX_CX Then
-            EmitStoreWordRaxCx(cb)
-        ElseIf opv = OP_LOAD_DWORD_RAX Then
-            EmitLoadDwordRax(cb)
-        ElseIf opv = OP_STORE_DWORD_RAX_ECX Then
-            EmitStoreDwordRaxEcx(cb)
-        ElseIf opv = OP_LOAD_QWORD_RAX Then
-            EmitLoadQwordRax(cb)
-        ElseIf opv = OP_LOAD_PTR Then
-            EmitLoadQwordRax(cb)
-        ElseIf opv = OP_STORE_QWORD_RAX_RCX Then
-            EmitStoreQwordRaxRcx(cb)
-        ElseIf opv = OP_STORE_PTR Then
-            EmitStoreQwordRaxRcx(cb)
-        ElseIf opv = OP_SHL_ECX_2 Then
-            EmitByte(cb, &HC1)
-            EmitByte(cb, &HE1)
-            EmitByte(cb, 2)
-        ElseIf opv = OP_AND_EAX_ECX Then
-            EmitAndEaxEcx(cb)
-        ElseIf opv = OP_OR_EAX_ECX Then
-            EmitOrEaxEcx(cb)
-        ElseIf opv = OP_NEG_EAX Then
-            EmitNegEax(cb)
-        ElseIf opv = OP_SUB_EAX_ECX Then
-            EmitSubEaxEcx(cb)
-        ElseIf opv = OP_POP_RDX Then
-            EmitPopRdx(cb)
-        ElseIf opv = OP_XCHG_RAX_RCX Then
-            EmitXchgRaxRcx(cb)
-        ElseIf opv = OP_MOV_ECX Then
-            EmitMovEcxImm(cb, ops[i].arg1)
-        ElseIf opv = OP_MOV_EAX_IMM Then
-            EmitMovEaxImm(cb, ops[i].arg1)
-        ElseIf opv = OP_LOAD_LOCAL Then
-            EmitLoadLocal(cb, ops[i].arg1)
-        ElseIf opv = OP_STORE_LOCAL Then
-            EmitStoreLocal(cb, ops[i].arg1)
-        ElseIf opv = OP_PUSH_RAX Then
-            EmitPushRax(cb)
-        ElseIf opv = OP_POP_RCX Then
-            EmitPopRcx(cb)
-        ElseIf opv = OP_ADD_EAX_ECX Then
-            EmitAddEaxEcx(cb)
-        ElseIf opv = OP_IMUL_EAX_ECX Then
-            EmitImulEaxEcx(cb)
-        ElseIf opv = OP_MOV_ECX_EAX Then
-            EmitMovEcxEax(cb)
-        ElseIf opv = OP_CMP_ECX_EAX Then
-            EmitCmpEcxEax(cb)
-        ElseIf opv = OP_CMP_RCX_RAX Then
-            EmitCmpRcxRax(cb)
-        ElseIf opv = OP_TEST_EAX Then
-            EmitTestEax(cb)
-        ElseIf opv = OP_INC_LOCAL Then
-            EmitIncLocal(cb, ops[i].arg1)
-        ElseIf opv = OP_STORE_LOCAL_ECX Then
-            EmitStoreLocalEcx(cb, ops[i].arg1)
-        ElseIf opv = OP_STORE_LOCAL_EDX Then
-            EmitStoreLocalEdx(cb, ops[i].arg1)
-        ElseIf opv = OP_MOV_EDX_IMM Then
-            EmitMovEdxImm(cb, ops[i].arg1)
-        ElseIf opv = OP_MOV_EDX_EAX Then
-            EmitMovEdxEax(cb)
-        ElseIf opv = OP_CALL_LAB Then
-            at = EmitCallRel32(cb)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_CALL_RAX Then
-            EmitCallRax(cb)
-        ElseIf opv = OP_LEA_RAX_LAB Then
-            at = EmitLeaRaxLabRel32(cb)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_LEA_RAX_GLOB Then
-            at = EmitLeaRaxLabRel32(cb)
-            globOff = ops[i].arg1
-            nextRip = at + 4
-            rel = (dataRva + globOff) - (TEXT_RVA + nextRip)
-            If at >= 0 And at + 4 <= cb->capacity Then
-                PutDword(cb->buf, at, rel)
-            End If
-        ElseIf opv = OP_SHL_ECX_3 Then
-            EmitShlEcx3(cb)
-        ElseIf opv = OP_POP_RAX Then
-            EmitPopRax(cb)
-        ElseIf opv = OP_POP_R8 Then
-            EmitPopR8(cb)
-        ElseIf opv = OP_MOV_RAX_R8 Then
-            EmitMovRaxR8(cb)
-        ElseIf opv = OP_SUB_RSP Then
-            EmitSubRsp(cb, ops[i].arg1)
-        ElseIf opv = OP_ADD_RSP Then
-            EmitAddRsp(cb, ops[i].arg1)
-        ElseIf opv = OP_STORE_RSP_RAX Then
-            EmitStoreRspRax(cb, ops[i].arg1)
-        ElseIf opv = OP_LOAD_RSP_RAX Then
-            EmitLoadRspRax(cb, ops[i].arg1)
-        ElseIf opv = OP_MOV_R9_RAX Then
-            EmitMovR9Rax(cb)
-        ElseIf opv = OP_STORE_LOCAL_R8 Then
-            EmitStoreLocalR8(cb, ops[i].arg1)
-        ElseIf opv = OP_STORE_LOCAL_R9 Then
-            EmitStoreLocalR9(cb, ops[i].arg1)
-        ElseIf opv = OP_XOR_EDX Then
-            EmitXorEdx(cb)
-        ElseIf opv = OP_DIV_ECX Then
-            EmitDivEcx(cb)
-        ElseIf opv = OP_MOV_EAX_EDX Then
-            EmitMovEaxEdx(cb)
-        ElseIf opv = OP_XOR_EAX_ECX Then
-            EmitXorEaxEcx(cb)
-        ElseIf opv = OP_NOT_EAX Then
-            EmitNotEax(cb)
-        ElseIf opv = OP_SHL_EAX_CL Then
-            EmitShlEaxCl(cb)
-        ElseIf opv = OP_SAR_EAX_CL Then
-            EmitSarEaxCl(cb)
-        ElseIf opv = OP_IMUL_EAX_EDX Then
-            EmitImulEaxEdx(cb)
-        ElseIf opv = OP_DEC_ECX Then
-            EmitDecEcx(cb)
-        ElseIf opv = OP_TEST_ECX Then
-            EmitTestEcx(cb)
-        ElseIf opv = OP_AND_EAX_IMM Then
-            EmitAndEaxImm(cb, ops[i].arg1)
-        ElseIf opv = OP_CVT_I32_TO_SS Then
-            EmitCvtI32ToSs(cb)
-        ElseIf opv = OP_CVT_I32_TO_SD Then
-            EmitCvtI32ToSd(cb)
-        ElseIf opv = OP_CVT_SS_TO_SD Then
-            EmitCvtSsToSd(cb)
-        ElseIf opv = OP_ADD_SD Then
-            EmitAddSd(cb)
-        ElseIf opv = OP_SUB_SD Then
-            EmitSubSd(cb)
-        ElseIf opv = OP_MUL_SD Then
-            EmitMulSd(cb)
-        ElseIf opv = OP_DIV_SD Then
-            EmitDivSd(cb)
-        ElseIf opv = OP_UCOMISD Then
-            EmitUcomisd(cb)
-        ElseIf opv = OP_NEG_SD Then
-            EmitNegSd(cb)
-        ElseIf opv = OP_CVT_SD_TO_I32 Then
-            EmitCvtSdToI32(cb)
-        ElseIf opv = OP_LABEL Then
-            li = ops[i].arg1
-            If CgEnsureLabIdx(li) <> 0 Then
-                g_cgLabOff[li] = cb->size
-            End If
-        ElseIf opv = OP_JMP Then
-            at = EmitJmpRel32(cb)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JZ Or opv = OP_JE Then
-            at = EmitJccRel32(cb, &H84)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JNZ Or opv = OP_JNE Then
-            at = EmitJccRel32(cb, &H85)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JL Then
-            at = EmitJccRel32(cb, &H8C)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JLE Then
-            at = EmitJccRel32(cb, &H8E)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JG Then
-            at = EmitJccRel32(cb, &H8F)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JGE Then
-            at = EmitJccRel32(cb, &H8D)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JB Then
-            at = EmitJccRel32(cb, &H82)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JAE Then
-            at = EmitJccRel32(cb, &H83)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JBE Then
-            at = EmitJccRel32(cb, &H86)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_JA Then
-            at = EmitJccRel32(cb, &H87)
-            CgPushFix(at, ops[i].arg1, IR_FIX_REL32)
-        ElseIf opv = OP_MOV_RAX_GS8 Then
-            EmitMovRaxGs8(cb)
-        ElseIf opv = OP_MOV_R8_RSP Then
-            EmitMovR8Rsp(cb)
-        ElseIf opv = OP_CMP_R8_RAX Then
-            EmitCmpR8Rax(cb)
-        ElseIf opv = OP_ADD_R8_IMM Then
-            EmitAddR8Imm8(cb, ops[i].arg1)
-        ElseIf opv = OP_CALL_API Then
-            IrDllNameOf(ops[i].arg1, VarPtr(dll))
-            IrCopyStrAt(list, i, VarPtr(tmp))
-            iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(tmp))
-            EmitCallRip(cb, iatRva, TEXT_RVA)
-        ElseIf opv = OP_RET Then
-            EmitRet(cb)
-        End If
-    Next
-
+Sub CgApplyFixups(cb As *CodeBuffer)
+    Dim i As Long
+    Dim li As Long
+    Dim at As Long
+    Dim rel As Long
+    Dim nextRip As Long
     For i = 0 To g_cgNFix - 1
         li = g_cgFix[i].lab
         at = g_cgFix[i].at
@@ -431,4 +178,317 @@ Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, da
     g_cgLabCap = 0
     g_cgFixCap = 0
     g_cgNFix = 0
+End Sub
+
+Function CgTryEmitA(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) As Long
+    Dim opv As Long
+    Dim strRva As DWord
+    CgTryEmitA = 0
+    opv = op->op
+    If opv = OP_ENTER Then
+        EmitEnter(cb, op->arg1)
+    ElseIf opv = OP_LEAVE Then
+        EmitLeaveRet(cb)
+        If op->arg1 <> 0 Then
+            ' 64-bit ignores stdcall pop (Microsoft x64)
+        End If
+    ElseIf opv = OP_XOR_ECX Then
+        EmitXorEcx(cb)
+    ElseIf opv = OP_XOR_R9D Then
+        EmitXorR9d(cb)
+    ElseIf opv = OP_LEA_RDX_STR Then
+        strRva = IbGetStringRva(builder, op->strId)
+        EmitLeaRdxRip(cb, strRva, TEXT_RVA)
+    ElseIf opv = OP_LEA_R8_STR Then
+        strRva = IbGetStringRva(builder, op->strId)
+        EmitLeaR8Rip(cb, strRva, TEXT_RVA)
+    ElseIf opv = OP_LEA_RAX_STR Then
+        strRva = IbGetStringRva(builder, op->strId)
+        EmitLeaRaxRip(cb, strRva, TEXT_RVA)
+    ElseIf opv = OP_MOV_RCX_RAX Then
+        EmitMovRcxRax(cb)
+    ElseIf opv = OP_MOV_RDX_RAX Then
+        EmitMovRdxRax(cb)
+    ElseIf opv = OP_MOV_R8_RAX Then
+        EmitMovR8Rax(cb)
+    ElseIf opv = OP_MOVZX_EAX_BYTE Then
+        EmitMovzxEaxByteRax(cb)
+    ElseIf opv = OP_TEST_RAX Then
+        EmitTestRax(cb)
+    ElseIf opv = OP_XOR_EAX Then
+        EmitXorEax(cb)
+    ElseIf opv = OP_LEA_LOCAL Then
+        EmitLeaLocal(cb, op->arg1)
+    ElseIf opv = OP_ADD_RAX_RCX Then
+        EmitAddRaxRcx(cb)
+    ElseIf opv = OP_LOADZX_BYTE_RAX Then
+        EmitLoadzxByteRax(cb)
+    ElseIf opv = OP_STORE_BYTE_RAX_CL Then
+        EmitStoreByteRaxCl(cb)
+    ElseIf opv = OP_ADD_RAX_IMM Then
+        EmitAddRaxImm(cb, op->arg1)
+    ElseIf opv = OP_LOADZX_WORD_RAX Then
+        EmitLoadzxWordRax(cb)
+    ElseIf opv = OP_STORE_WORD_RAX_CX Then
+        EmitStoreWordRaxCx(cb)
+    ElseIf opv = OP_LOAD_DWORD_RAX Then
+        EmitLoadDwordRax(cb)
+    ElseIf opv = OP_STORE_DWORD_RAX_ECX Then
+        EmitStoreDwordRaxEcx(cb)
+    ElseIf opv = OP_LOAD_QWORD_RAX Then
+        EmitLoadQwordRax(cb)
+    ElseIf opv = OP_LOAD_PTR Then
+        EmitLoadQwordRax(cb)
+    ElseIf opv = OP_STORE_QWORD_RAX_RCX Then
+        EmitStoreQwordRaxRcx(cb)
+    ElseIf opv = OP_STORE_PTR Then
+        EmitStoreQwordRaxRcx(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitA = 1
+End Function
+
+Function CgTryEmitB(cb As *CodeBuffer, op As *IrOp, dataRva As DWord) As Long
+    Dim opv As Long
+    Dim at As Long
+    Dim rel As Long
+    Dim nextRip As Long
+    Dim globOff As DWord
+    CgTryEmitB = 0
+    opv = op->op
+    If opv = OP_SHL_ECX_2 Then
+        EmitByte(cb, &HC1)
+        EmitByte(cb, &HE1)
+        EmitByte(cb, 2)
+    ElseIf opv = OP_AND_EAX_ECX Then
+        EmitAndEaxEcx(cb)
+    ElseIf opv = OP_OR_EAX_ECX Then
+        EmitOrEaxEcx(cb)
+    ElseIf opv = OP_NEG_EAX Then
+        EmitNegEax(cb)
+    ElseIf opv = OP_SUB_EAX_ECX Then
+        EmitSubEaxEcx(cb)
+    ElseIf opv = OP_POP_RDX Then
+        EmitPopRdx(cb)
+    ElseIf opv = OP_XCHG_RAX_RCX Then
+        EmitXchgRaxRcx(cb)
+    ElseIf opv = OP_MOV_ECX Then
+        EmitMovEcxImm(cb, op->arg1)
+    ElseIf opv = OP_MOV_EAX_IMM Then
+        EmitMovEaxImm(cb, op->arg1)
+    ElseIf opv = OP_LOAD_LOCAL Then
+        EmitLoadLocal(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL Then
+        EmitStoreLocal(cb, op->arg1)
+    ElseIf opv = OP_PUSH_RAX Then
+        EmitPushRax(cb)
+    ElseIf opv = OP_POP_RCX Then
+        EmitPopRcx(cb)
+    ElseIf opv = OP_ADD_EAX_ECX Then
+        EmitAddEaxEcx(cb)
+    ElseIf opv = OP_IMUL_EAX_ECX Then
+        EmitImulEaxEcx(cb)
+    ElseIf opv = OP_MOV_ECX_EAX Then
+        EmitMovEcxEax(cb)
+    ElseIf opv = OP_CMP_ECX_EAX Then
+        EmitCmpEcxEax(cb)
+    ElseIf opv = OP_CMP_RCX_RAX Then
+        EmitCmpRcxRax(cb)
+    ElseIf opv = OP_TEST_EAX Then
+        EmitTestEax(cb)
+    ElseIf opv = OP_INC_LOCAL Then
+        EmitIncLocal(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL_ECX Then
+        EmitStoreLocalEcx(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL_EDX Then
+        EmitStoreLocalEdx(cb, op->arg1)
+    ElseIf opv = OP_MOV_EDX_IMM Then
+        EmitMovEdxImm(cb, op->arg1)
+    ElseIf opv = OP_MOV_EDX_EAX Then
+        EmitMovEdxEax(cb)
+    ElseIf opv = OP_CALL_LAB Then
+        at = EmitCallRel32(cb)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_CALL_RAX Then
+        EmitCallRax(cb)
+    ElseIf opv = OP_LEA_RAX_LAB Then
+        at = EmitLeaRaxLabRel32(cb)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_LEA_RAX_GLOB Then
+        at = EmitLeaRaxLabRel32(cb)
+        globOff = op->arg1
+        nextRip = at + 4
+        rel = (dataRva + globOff) - (TEXT_RVA + nextRip)
+        If at >= 0 And at + 4 <= cb->capacity Then
+            PutDword(cb->buf, at, rel)
+        End If
+    Else
+        Exit Function
+    End If
+    CgTryEmitB = 1
+End Function
+
+Function CgTryEmitC(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    CgTryEmitC = 0
+    opv = op->op
+    If opv = OP_SHL_ECX_3 Then
+        EmitShlEcx3(cb)
+    ElseIf opv = OP_POP_RAX Then
+        EmitPopRax(cb)
+    ElseIf opv = OP_POP_R8 Then
+        EmitPopR8(cb)
+    ElseIf opv = OP_MOV_RAX_R8 Then
+        EmitMovRaxR8(cb)
+    ElseIf opv = OP_SUB_RSP Then
+        EmitSubRsp(cb, op->arg1)
+    ElseIf opv = OP_ADD_RSP Then
+        EmitAddRsp(cb, op->arg1)
+    ElseIf opv = OP_STORE_RSP_RAX Then
+        EmitStoreRspRax(cb, op->arg1)
+    ElseIf opv = OP_LOAD_RSP_RAX Then
+        EmitLoadRspRax(cb, op->arg1)
+    ElseIf opv = OP_MOV_R9_RAX Then
+        EmitMovR9Rax(cb)
+    ElseIf opv = OP_STORE_LOCAL_R8 Then
+        EmitStoreLocalR8(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL_R9 Then
+        EmitStoreLocalR9(cb, op->arg1)
+    ElseIf opv = OP_XOR_EDX Then
+        EmitXorEdx(cb)
+    ElseIf opv = OP_DIV_ECX Then
+        EmitDivEcx(cb)
+    ElseIf opv = OP_MOV_EAX_EDX Then
+        EmitMovEaxEdx(cb)
+    ElseIf opv = OP_XOR_EAX_ECX Then
+        EmitXorEaxEcx(cb)
+    ElseIf opv = OP_NOT_EAX Then
+        EmitNotEax(cb)
+    ElseIf opv = OP_SHL_EAX_CL Then
+        EmitShlEaxCl(cb)
+    ElseIf opv = OP_SAR_EAX_CL Then
+        EmitSarEaxCl(cb)
+    ElseIf opv = OP_IMUL_EAX_EDX Then
+        EmitImulEaxEdx(cb)
+    ElseIf opv = OP_DEC_ECX Then
+        EmitDecEcx(cb)
+    ElseIf opv = OP_TEST_ECX Then
+        EmitTestEcx(cb)
+    ElseIf opv = OP_AND_EAX_IMM Then
+        EmitAndEaxImm(cb, op->arg1)
+    ElseIf opv = OP_CVT_I32_TO_SS Then
+        EmitCvtI32ToSs(cb)
+    ElseIf opv = OP_CVT_I32_TO_SD Then
+        EmitCvtI32ToSd(cb)
+    ElseIf opv = OP_CVT_SS_TO_SD Then
+        EmitCvtSsToSd(cb)
+    ElseIf opv = OP_ADD_SD Then
+        EmitAddSd(cb)
+    ElseIf opv = OP_SUB_SD Then
+        EmitSubSd(cb)
+    ElseIf opv = OP_MUL_SD Then
+        EmitMulSd(cb)
+    ElseIf opv = OP_DIV_SD Then
+        EmitDivSd(cb)
+    ElseIf opv = OP_UCOMISD Then
+        EmitUcomisd(cb)
+    ElseIf opv = OP_NEG_SD Then
+        EmitNegSd(cb)
+    ElseIf opv = OP_CVT_SD_TO_I32 Then
+        EmitCvtSdToI32(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitC = 1
+End Function
+
+Function CgTryEmitD(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, i As Long) As Long
+    Dim ops As *IrOp
+    Dim op As *IrOp
+    Dim opv As Long
+    Dim tmp(255) As Byte
+    Dim dll(31) As Byte
+    Dim iatRva As DWord
+    Dim li As Long
+    Dim at As Long
+    CgTryEmitD = 0
+    ops = list->ops
+    op = VarPtr(ops[i])
+    opv = op->op
+    If opv = OP_LABEL Then
+        li = op->arg1
+        If CgEnsureLabIdx(li) <> 0 Then
+            g_cgLabOff[li] = cb->size
+        End If
+    ElseIf opv = OP_JMP Then
+        at = EmitJmpRel32(cb)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JZ Or opv = OP_JE Then
+        at = EmitJccRel32(cb, &H84)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JNZ Or opv = OP_JNE Then
+        at = EmitJccRel32(cb, &H85)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JL Then
+        at = EmitJccRel32(cb, &H8C)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JLE Then
+        at = EmitJccRel32(cb, &H8E)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JG Then
+        at = EmitJccRel32(cb, &H8F)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JGE Then
+        at = EmitJccRel32(cb, &H8D)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JB Then
+        at = EmitJccRel32(cb, &H82)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JAE Then
+        at = EmitJccRel32(cb, &H83)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JBE Then
+        at = EmitJccRel32(cb, &H86)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_JA Then
+        at = EmitJccRel32(cb, &H87)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_MOV_RAX_GS8 Then
+        EmitMovRaxGs8(cb)
+    ElseIf opv = OP_MOV_R8_RSP Then
+        EmitMovR8Rsp(cb)
+    ElseIf opv = OP_CMP_R8_RAX Then
+        EmitCmpR8Rax(cb)
+    ElseIf opv = OP_ADD_R8_IMM Then
+        EmitAddR8Imm8(cb, op->arg1)
+    ElseIf opv = OP_CALL_API Then
+        IrDllNameOf(op->arg1, VarPtr(dll))
+        IrCopyStrAt(list, i, VarPtr(tmp))
+        iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(tmp))
+        EmitCallRip(cb, iatRva, TEXT_RVA)
+    ElseIf opv = OP_RET Then
+        EmitRet(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitD = 1
+End Function
+
+Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord)
+    Dim i As Long
+    Dim n As Long
+    Dim ops As *IrOp
+
+    If CgInitFixups() = 0 Then Exit Sub
+    ops = list->ops
+    n = list->count
+    For i = 0 To n - 1
+        If CgTryEmitA(cb, VarPtr(ops[i]), builder) <> 0 Then
+        ElseIf CgTryEmitB(cb, VarPtr(ops[i]), dataRva) <> 0 Then
+        ElseIf CgTryEmitC(cb, VarPtr(ops[i])) <> 0 Then
+        ElseIf CgTryEmitD(list, cb, builder, i) <> 0 Then
+        End If
+    Next
+    CgApplyFixups(cb)
 End Sub

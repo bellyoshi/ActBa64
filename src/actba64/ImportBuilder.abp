@@ -435,23 +435,14 @@ Sub IbWriteNameBytes(outBuf As *Byte, dstOff As DWord, builder As *ImportBuilder
     Loop
 End Sub
 
-Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByRef totalSize As DWord)
-    Dim cur As DWord
+Sub IbLayoutIat(builder As *ImportBuilder, baseRva As DWord, ByRef cur As DWord)
     Dim i As Long
     Dim j As Long
-    Dim n As Long
-    Dim hintSz As DWord
-    Dim idtOff As DWord
-    Dim iltOff As DWord
-    Dim nameOff As DWord
     Dim slot As Long
     Dim slotW As Long
     Dim fc As *Long
-
-    cur = 0
     slotW = TyPtrSize()
     fc = g_ibFuncCount
-
     builder->iatRva = baseRva
     For i = 0 To builder->dllCount - 1
         g_ibDllIatRva[i] = baseRva + cur
@@ -463,17 +454,31 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
         cur = cur + slotW
     Next
     builder->iatSize = cur
+End Sub
 
+Sub IbLayoutIdtIlt(builder As *ImportBuilder, baseRva As DWord, ByRef cur As DWord)
+    Dim i As Long
+    Dim slotW As Long
+    Dim fc As *Long
+    slotW = TyPtrSize()
+    fc = g_ibFuncCount
     builder->idtRva = baseRva + cur
     builder->idtSize = (builder->dllCount + 1) * 20
-    idtOff = cur
     cur = cur + builder->idtSize
-
     For i = 0 To builder->dllCount - 1
         g_ibDllIltRva[i] = baseRva + cur
         cur = cur + (fc[i] + 1) * slotW
     Next
+End Sub
 
+Sub IbLayoutNames(builder As *ImportBuilder, baseRva As DWord, ByRef cur As DWord)
+    Dim i As Long
+    Dim j As Long
+    Dim n As Long
+    Dim hintSz As DWord
+    Dim slot As Long
+    Dim fc As *Long
+    fc = g_ibFuncCount
     For i = 0 To builder->dllCount - 1
         For j = 0 To fc[i] - 1
             cur = IbAlign2(cur)
@@ -484,38 +489,34 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
             cur = cur + hintSz
         Next
     Next
-
     For i = 0 To builder->dllCount - 1
         cur = IbAlign2(cur)
         g_ibDllNameRva[i] = baseRva + cur
         n = IbDllNameLen(builder, i)
         cur = cur + n + 1
     Next
-
     For i = 0 To builder->stringCount - 1
         g_ibStrRva[i] = baseRva + cur + 4
         n = IbStrValueLen(builder, i)
         cur = cur + 4 + n + 1
     Next
+End Sub
 
-    builder->totalSize = cur
-    totalSize = cur
-    ZeroMem(outBuf, cur)
-
+Sub IbWriteIatIlt(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte)
+    Dim i As Long
+    Dim j As Long
+    Dim slot As Long
+    Dim slotW As Long
+    Dim iltOff As DWord
+    Dim fc As *Long
+    slotW = TyPtrSize()
+    fc = g_ibFuncCount
     For i = 0 To builder->dllCount - 1
         For j = 0 To fc[i] - 1
             slot = IbFuncSlot(builder, i, j)
             PutDword(outBuf, g_ibFuncIatRva[slot] - baseRva, g_ibFuncHintRva[slot])
         Next
     Next
-
-    For i = 0 To builder->dllCount - 1
-        nameOff = idtOff + i * 20
-        PutDword(outBuf, nameOff + 0, g_ibDllIltRva[i])
-        PutDword(outBuf, nameOff + 12, g_ibDllNameRva[i])
-        PutDword(outBuf, nameOff + 16, g_ibDllIatRva[i])
-    Next
-
     For i = 0 To builder->dllCount - 1
         iltOff = g_ibDllIltRva[i] - baseRva
         For j = 0 To fc[i] - 1
@@ -523,7 +524,27 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
             PutDword(outBuf, iltOff + j * slotW, g_ibFuncHintRva[slot])
         Next
     Next
+End Sub
 
+Sub IbWriteIdt(builder As *ImportBuilder, idtOff As DWord, outBuf As *Byte)
+    Dim i As Long
+    Dim nameOff As DWord
+    For i = 0 To builder->dllCount - 1
+        nameOff = idtOff + i * 20
+        PutDword(outBuf, nameOff + 0, g_ibDllIltRva[i])
+        PutDword(outBuf, nameOff + 12, g_ibDllNameRva[i])
+        PutDword(outBuf, nameOff + 16, g_ibDllIatRva[i])
+    Next
+End Sub
+
+Sub IbWriteNamePool(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte)
+    Dim i As Long
+    Dim j As Long
+    Dim n As Long
+    Dim nameOff As DWord
+    Dim slot As Long
+    Dim fc As *Long
+    fc = g_ibFuncCount
     For i = 0 To builder->dllCount - 1
         For j = 0 To fc[i] - 1
             slot = IbFuncSlot(builder, i, j)
@@ -532,16 +553,33 @@ Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByR
             IbWriteNameBytes(outBuf, nameOff + 2, builder, 1, i, j)
         Next
     Next
-
     For i = 0 To builder->dllCount - 1
         nameOff = g_ibDllNameRva[i] - baseRva
         IbWriteNameBytes(outBuf, nameOff, builder, 0, i, 0)
     Next
-
     For i = 0 To builder->stringCount - 1
         nameOff = g_ibStrRva[i] - baseRva - 4
         n = IbStrValueLen(builder, i)
         PutDword(outBuf, nameOff, n)
         IbWriteNameBytes(outBuf, nameOff + 4, builder, 2, i, 0)
     Next
+End Sub
+
+Sub IbFinalize(builder As *ImportBuilder, baseRva As DWord, outBuf As *Byte, ByRef totalSize As DWord)
+    Dim cur As DWord
+    Dim idtOff As DWord
+
+    cur = 0
+    IbLayoutIat(builder, baseRva, cur)
+    idtOff = cur
+    IbLayoutIdtIlt(builder, baseRva, cur)
+    IbLayoutNames(builder, baseRva, cur)
+
+    builder->totalSize = cur
+    totalSize = cur
+    ZeroMem(outBuf, cur)
+
+    IbWriteIatIlt(builder, baseRva, outBuf)
+    IbWriteIdt(builder, idtOff, outBuf)
+    IbWriteNamePool(builder, baseRva, outBuf)
 End Sub

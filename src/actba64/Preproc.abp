@@ -854,18 +854,106 @@ Function PpLoadIdxExpanded(idxPath As *Byte) As *Byte
     PpLoadIdxExpanded = part
 End Function
 
+Function PpConcatHead(ByRef head As *Byte, ByRef headLen As Long, part As *Byte) As Long
+    Dim nxt As *Byte
+    Dim partLen As Long
+    PpConcatHead = 0
+    If part = NULL Then
+        free(head)
+        Exit Function
+    End If
+    partLen = lstrlen(part)
+    nxt = PpConcatText(head, headLen, part, partLen)
+    free(head)
+    free(part)
+    If nxt = NULL Then Exit Function
+    head = nxt
+    headLen = headLen + partLen
+    PpConcatHead = 1
+End Function
+
+Function PpAppendIdxPath(ByRef head As *Byte, ByRef headLen As Long, idxPath As *Byte) As Long
+    Dim part As *Byte
+    PpAppendIdxPath = 0
+    part = PpLoadIdxExpanded(idxPath)
+    If PpConcatHead(head, headLen, part) = 0 Then Exit Function
+    PpAppendIdxPath = 1
+End Function
+
+Function PpAppendDefaultChunk(ByRef head As *Byte, ByRef headLen As Long) As Long
+    Dim idxPath(511) As Byte
+    PpAppendDefaultChunk = 0
+    If PpFindDefaultIdx(VarPtr(idxPath)) = 0 Then
+        Print "warning: not found: Include\default\default.idx"
+        PpAppendDefaultChunk = 1
+        Exit Function
+    End If
+    If PpAppendIdxPath(head, headLen, VarPtr(idxPath)) = 0 Then Exit Function
+    PpAppendDefaultChunk = 1
+End Function
+
+Function PpAppendUnicodeChunk(ByRef head As *Byte, ByRef headLen As Long) As Long
+    Dim idxPath(511) As Byte
+    PpAppendUnicodeChunk = 1
+    If PpFindUnicodeApi(VarPtr(idxPath)) = 0 Then Exit Function
+    If PpAppendIdxPath(head, headLen, VarPtr(idxPath)) = 0 Then
+        PpAppendUnicodeChunk = 0
+        Exit Function
+    End If
+End Function
+
+Function PpAppendConsoleChunk(ByRef head As *Byte, ByRef headLen As Long) As Long
+    Dim idxPath(511) As Byte
+    PpAppendConsoleChunk = 0
+    If PpFindConsoleIdx(VarPtr(idxPath)) = 0 Then
+        Print "warning: not found: Include\console\console.idx"
+        PpAppendConsoleChunk = 1
+        Exit Function
+    End If
+    If PpAppendIdxPath(head, headLen, VarPtr(idxPath)) = 0 Then Exit Function
+    PpAppendConsoleChunk = 1
+End Function
+
+Function PpAppendN88Chunk(ByRef head As *Byte, ByRef headLen As Long) As Long
+    Dim idxPath(511) As Byte
+    PpAppendN88Chunk = 0
+    If PpFindN88BasicIdx(VarPtr(idxPath)) = 0 Then
+        Print "warning: not found: Include\N88BASIC\n88basic.idx"
+        PpAppendN88Chunk = 1
+        Exit Function
+    End If
+    If PpAppendIdxPath(head, headLen, VarPtr(idxPath)) = 0 Then Exit Function
+    PpAppendN88Chunk = 1
+End Function
+
+Function PpAppendN88Foot(ByRef head As *Byte, ByRef headLen As Long) As Long
+    Dim foot(31) As Byte
+    Dim footLen As Long
+    Dim nxt As *Byte
+    PpAppendN88Foot = 0
+    foot[0] = 13
+    foot[1] = 10
+    lstrcpy(VarPtr(foot[2]), "N88_Run()")
+    footLen = lstrlen(VarPtr(foot))
+    foot[footLen] = 13
+    footLen = footLen + 1
+    foot[footLen] = 10
+    footLen = footLen + 1
+    foot[footLen] = 0
+    nxt = PpConcatText(head, headLen, VarPtr(foot), footLen)
+    free(head)
+    If nxt = NULL Then Exit Function
+    head = nxt
+    PpAppendN88Foot = 1
+End Function
+
 ' Include\default を常時先頭へ。#console / #n88basic / #prompt なら各 idx も挿入。
 ' #n88basic / #prompt 時は GUI サブシステムを有効化し、末尾に N88_Run() を付ける。
 Function PpPrependDefaults(src As *Byte) As *Byte
-    Dim idxPath(511) As Byte
     Dim head As *Byte
-    Dim part As *Byte
     Dim nxt As *Byte
-    Dim foot(31) As Byte
     Dim headLen As Long
-    Dim partLen As Long
     Dim srcLen As Long
-    Dim footLen As Long
     Dim wantCon As Long
     Dim wantN88 As Long
     Dim kCon(15) As Byte
@@ -891,75 +979,13 @@ Function PpPrependDefaults(src As *Byte) As *Byte
     head[0] = 0
     headLen = 0
 
-    If PpFindDefaultIdx(VarPtr(idxPath)) = 0 Then
-        Print "warning: not found: Include\default\default.idx"
-    Else
-        part = PpLoadIdxExpanded(VarPtr(idxPath))
-        If part = NULL Then
-            free(head)
-            Exit Function
-        End If
-        partLen = lstrlen(part)
-        nxt = PpConcatText(head, headLen, part, partLen)
-        free(head)
-        free(part)
-        If nxt = NULL Then Exit Function
-        head = nxt
-        headLen = headLen + partLen
-    End If
-
-    ' WideChar API（Declare Lib）。actba64 のみ
-    If PpFindUnicodeApi(VarPtr(idxPath)) <> 0 Then
-        part = PpLoadIdxExpanded(VarPtr(idxPath))
-        If part = NULL Then
-            free(head)
-            Exit Function
-        End If
-        partLen = lstrlen(part)
-        nxt = PpConcatText(head, headLen, part, partLen)
-        free(head)
-        free(part)
-        If nxt = NULL Then Exit Function
-        head = nxt
-        headLen = headLen + partLen
-    End If
-
+    If PpAppendDefaultChunk(head, headLen) = 0 Then Exit Function
+    If PpAppendUnicodeChunk(head, headLen) = 0 Then Exit Function
     If wantCon <> 0 Then
-        If PpFindConsoleIdx(VarPtr(idxPath)) = 0 Then
-            Print "warning: not found: Include\console\console.idx"
-        Else
-            part = PpLoadIdxExpanded(VarPtr(idxPath))
-            If part = NULL Then
-                free(head)
-                Exit Function
-            End If
-            partLen = lstrlen(part)
-            nxt = PpConcatText(head, headLen, part, partLen)
-            free(head)
-            free(part)
-            If nxt = NULL Then Exit Function
-            head = nxt
-            headLen = headLen + partLen
-        End If
+        If PpAppendConsoleChunk(head, headLen) = 0 Then Exit Function
     End If
-
     If wantN88 <> 0 Then
-        If PpFindN88BasicIdx(VarPtr(idxPath)) = 0 Then
-            Print "warning: not found: Include\N88BASIC\n88basic.idx"
-        Else
-            part = PpLoadIdxExpanded(VarPtr(idxPath))
-            If part = NULL Then
-                free(head)
-                Exit Function
-            End If
-            partLen = lstrlen(part)
-            nxt = PpConcatText(head, headLen, part, partLen)
-            free(head)
-            free(part)
-            If nxt = NULL Then Exit Function
-            head = nxt
-            headLen = headLen + partLen
-        End If
+        If PpAppendN88Chunk(head, headLen) = 0 Then Exit Function
     End If
 
     srcLen = lstrlen(src)
@@ -970,20 +996,7 @@ Function PpPrependDefaults(src As *Byte) As *Byte
     headLen = headLen + srcLen
 
     If wantN88 <> 0 Then
-        ' 末尾でメッセージループ（End なら N88_End が先に処理）
-        foot[0] = 13
-        foot[1] = 10
-        lstrcpy(VarPtr(foot[2]), "N88_Run()")
-        footLen = lstrlen(VarPtr(foot))
-        foot[footLen] = 13
-        footLen = footLen + 1
-        foot[footLen] = 10
-        footLen = footLen + 1
-        foot[footLen] = 0
-        nxt = PpConcatText(head, headLen, VarPtr(foot), footLen)
-        free(head)
-        If nxt = NULL Then Exit Function
-        head = nxt
+        If PpAppendN88Foot(head, headLen) = 0 Then Exit Function
     End If
 
     PpPrependDefaults = head
@@ -1120,6 +1133,97 @@ Function PpTrimCopy(line As *Byte, n As Long, dst As *Byte, dstMax As Long) As L
     PpTrimCopy = j
 End Function
 
+Sub PpJoinSrcPath(dir As *Byte, name As *Byte, full As *Byte)
+    full[0] = 0
+    If (name[1] = 58) Or (name[0] = 92) Or (name[0] = 47) Then
+        lstrcpy(full, name)
+    Else
+        lstrcpy(full, dir)
+        lstrcat(full, name)
+    End If
+End Sub
+
+Function PpAppendOneSource(dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, name As *Byte) As Long
+    Dim full(511) As Byte
+    Dim src As *Byte
+    Dim srcSize As Long
+    Dim expanded As *Byte
+    Dim expLen As Long
+    Dim hdr(63) As Byte
+    Dim crlf(3) As Byte
+    PpAppendOneSource = 0
+    PpJoinSrcPath(dir, name, VarPtr(full))
+    If PpOnceHas(VarPtr(full)) <> 0 Then
+        PpAppendOneSource = 1
+        Exit Function
+    End If
+    src = LoadFile(VarPtr(full), srcSize)
+    If src = NULL Then Exit Function
+    PpOnceAdd(VarPtr(full))
+    expanded = ExpandIncludes(src, srcSize, VarPtr(full))
+    free(src)
+    If expanded = NULL Then Exit Function
+    lstrcpy(VarPtr(hdr), "' ---- ")
+    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then
+        free(expanded)
+        Exit Function
+    End If
+    If PpAppend(dst, dstLen, dstCap, name, lstrlen(name)) = 0 Then
+        free(expanded)
+        Exit Function
+    End If
+    lstrcpy(VarPtr(hdr), " ----")
+    hdr[5] = 13
+    hdr[6] = 10
+    hdr[7] = 0
+    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then
+        free(expanded)
+        Exit Function
+    End If
+    expLen = lstrlen(expanded)
+    If PpAppend(dst, dstLen, dstCap, expanded, expLen) = 0 Then
+        free(expanded)
+        Exit Function
+    End If
+    crlf[0] = 13
+    crlf[1] = 10
+    If PpAppend(dst, dstLen, dstCap, VarPtr(crlf), 2) = 0 Then
+        free(expanded)
+        Exit Function
+    End If
+    free(expanded)
+    PpAppendOneSource = 1
+End Function
+
+Function PpHandleSourceLoop(line As *Byte, n As Long, ByRef inSource As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, ByRef nSrc As Long) As Long
+    Dim j As Long
+    Dim c As Long
+    Dim name(259) As Byte
+    PpHandleSourceLoop = 1
+    If PpLineIsSourceHeader(line, n) <> 0 Then
+        inSource = 1
+        Exit Function
+    End If
+    If inSource = 0 Then Exit Function
+    j = 0
+    While j < n
+        c = line[j]
+        If c <> 32 And c <> 9 Then Exit While
+        j = j + 1
+    Wend
+    If j < n And line[j] = 35 Then
+        inSource = 0
+        Exit Function
+    End If
+    If PpTrimCopy(line, n, VarPtr(name), PJ_PATH_LEN) > 0 Then
+        If PpAppendOneSource(dst, dstLen, dstCap, dir, VarPtr(name)) = 0 Then
+            PpHandleSourceLoop = 0
+            Exit Function
+        End If
+        nSrc = nSrc + 1
+    End If
+End Function
+
 Function CombinePjSources(pjPath As *Byte) As *Byte
     Dim pj As *Byte
     Dim pjSize As Long
@@ -1128,19 +1232,12 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
     Dim n As Long
     Dim c As Long
     Dim line(511) As Byte
-    Dim name(259) As Byte
-    Dim full(511) As Byte
     Dim dir(511) As Byte
     Dim inSource As Long
     Dim dst As *Byte
     Dim dstLen As Long
     Dim dstCap As Long
-    Dim src As *Byte
-    Dim srcSize As Long
-    Dim expanded As *Byte
-    Dim expLen As Long
     Dim nSrc As Long
-    Dim hdr(63) As Byte
     Dim j As Long
     Dim uwVal As Long
 
@@ -1183,84 +1280,10 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
             g_ppUseWindow = uwVal
         End If
 
-        If PpLineIsSourceHeader(VarPtr(line), n) <> 0 Then
-            inSource = 1
-        ElseIf inSource <> 0 Then
-            j = 0
-            While j < n
-                c = line[j]
-                If c <> 32 And c <> 9 Then Exit While
-                j = j + 1
-            Wend
-            If j < n And line[j] = 35 Then
-                inSource = 0
-            Else
-                If PpTrimCopy(VarPtr(line), n, VarPtr(name), PJ_PATH_LEN) > 0 Then
-                    full[0] = 0
-                    If (name[1] = 58) Or (name[0] = 92) Or (name[0] = 47) Then
-                        lstrcpy(VarPtr(full), VarPtr(name))
-                    Else
-                        lstrcpy(VarPtr(full), VarPtr(dir))
-                        lstrcat(VarPtr(full), VarPtr(name))
-                    End If
-                    If PpOnceHas(VarPtr(full)) = 0 Then
-                        src = LoadFile(VarPtr(full), srcSize)
-                        If src = NULL Then
-                            free(pj)
-                            free(dst)
-                            Exit Function
-                        End If
-                        PpOnceAdd(VarPtr(full))
-                        expanded = ExpandIncludes(src, srcSize, VarPtr(full))
-                        free(src)
-                        If expanded = NULL Then
-                            free(pj)
-                            free(dst)
-                            Exit Function
-                        End If
-                        lstrcpy(VarPtr(hdr), "' ---- ")
-                        If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then
-                            free(expanded)
-                            free(pj)
-                            free(dst)
-                            Exit Function
-                        End If
-                        If PpAppend(dst, dstLen, dstCap, VarPtr(name), lstrlen(VarPtr(name))) = 0 Then
-                            free(expanded)
-                            free(pj)
-                            free(dst)
-                            Exit Function
-                        End If
-                        lstrcpy(VarPtr(hdr), " ----")
-                        hdr[5] = 13
-                        hdr[6] = 10
-                        hdr[7] = 0
-                        If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then
-                            free(expanded)
-                            free(pj)
-                            free(dst)
-                            Exit Function
-                        End If
-                        expLen = lstrlen(expanded)
-                        If PpAppend(dst, dstLen, dstCap, expanded, expLen) = 0 Then
-                            free(expanded)
-                            free(pj)
-                            free(dst)
-                            Exit Function
-                        End If
-                        line[0] = 13
-                        line[1] = 10
-                        If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then
-                            free(expanded)
-                            free(pj)
-                            free(dst)
-                            Exit Function
-                        End If
-                        free(expanded)
-                    End If
-                    nSrc = nSrc + 1
-                End If
-            End If
+        If PpHandleSourceLoop(VarPtr(line), n, inSource, dst, dstLen, dstCap, VarPtr(dir), nSrc) = 0 Then
+            free(pj)
+            free(dst)
+            Exit Function
         End If
         If i < pjSize And pj[i] = 13 Then i = i + 1
         If i < pjSize And pj[i] = 10 Then i = i + 1
