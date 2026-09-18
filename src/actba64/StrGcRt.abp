@@ -80,39 +80,9 @@ Sub LowEmitRtStrHeapAllocBody(ctx As *LowerCtx)
 End Sub
 
 ' StrGcMarkPrecise / StrGcMarkConservative 共通: rcx=ptr, extra=-56 に 0=precise 1=conservative
-Sub LowEmitRtStrGcMarkBody(ctx As *LowerCtx, labId As Long, requireTag As Long)
+Sub LowEmitRtStrGcMarkLoop(ctx As *LowerCtx, labLoop As Long, labDone As Long, labNext As Long, labHit As Long, labMark As Long, gcCount As Long, gcBlocks As Long, gcMarks As Long)
     Dim list As *IrList
-    Dim labLoop As Long
-    Dim labDone As Long
-    Dim labNext As Long
-    Dim labHit As Long
-    Dim labMark As Long
-    Dim gcCount As Long
-    Dim gcBlocks As Long
-    Dim gcMarks As Long
-
-    If labId < 0 Then Exit Sub
-    gcCount = g_gcBaseOff + GC_HDR_COUNT
-    gcBlocks = g_gcBaseOff + GC_HDR_BLOCKS
-    gcMarks = g_gcBaseOff + GC_HDR_MARKS
     list = ctx->list
-    labLoop = LowNewLab(ctx)
-    labDone = LowNewLab(ctx)
-    labNext = LowNewLab(ctx)
-    labHit = LowNewLab(ctx)
-    labMark = LowNewLab(ctx)
-
-    IrEmit(list, OP_LABEL, labId, 0)
-    IrEmit(list, OP_ENTER, 88, 0)
-    LowEmitCaptureArg0(list, -8)
-    IrEmit(list, OP_MOV_EAX_IMM, requireTag, 0)
-    IrEmit(list, OP_STORE_LOCAL, -56, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
-    IrEmit(list, OP_TEST_RAX, 0, 0)
-    IrEmit(list, OP_JZ, labDone, 0)
-    IrEmit(list, OP_XOR_EAX, 0, 0)
-    IrEmit(list, OP_STORE_LOCAL, -16, 0)
-
     IrEmit(list, OP_LABEL, labLoop, 0)
     IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
         IrEmit(list, OP_LOAD_PTR, 0, 0)
@@ -191,6 +161,42 @@ Sub LowEmitRtStrGcMarkBody(ctx As *LowerCtx, labId As Long, requireTag As Long)
     LowEmitLeaveN(list, 1)
 End Sub
 
+Sub LowEmitRtStrGcMarkBody(ctx As *LowerCtx, labId As Long, requireTag As Long)
+    Dim list As *IrList
+    Dim labLoop As Long
+    Dim labDone As Long
+    Dim labNext As Long
+    Dim labHit As Long
+    Dim labMark As Long
+    Dim gcCount As Long
+    Dim gcBlocks As Long
+    Dim gcMarks As Long
+
+    If labId < 0 Then Exit Sub
+    gcCount = g_gcBaseOff + GC_HDR_COUNT
+    gcBlocks = g_gcBaseOff + GC_HDR_BLOCKS
+    gcMarks = g_gcBaseOff + GC_HDR_MARKS
+    list = ctx->list
+    labLoop = LowNewLab(ctx)
+    labDone = LowNewLab(ctx)
+    labNext = LowNewLab(ctx)
+    labHit = LowNewLab(ctx)
+    labMark = LowNewLab(ctx)
+
+    IrEmit(list, OP_LABEL, labId, 0)
+    IrEmit(list, OP_ENTER, 88, 0)
+    LowEmitCaptureArg0(list, -8)
+    IrEmit(list, OP_MOV_EAX_IMM, requireTag, 0)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+
+    LowEmitRtStrGcMarkLoop(ctx, labLoop, labDone, labNext, labHit, labMark, gcCount, gcBlocks, gcMarks)
+End Sub
+
 Sub LowEmitRtStrGcPreciseBody(ctx As *LowerCtx)
     LowEmitRtStrGcMarkBody(ctx, g_rtStrGcPreciseLab, 0)
 End Sub
@@ -199,6 +205,134 @@ Sub LowEmitRtStrGcConsBody(ctx As *LowerCtx)
     ' タグ無しでも登録塊の範囲に入ればマークする。StrPtr の内部ポインタと、
     ' ヘッダ書き込み前の窓を conservative で落とさないため。
     LowEmitRtStrGcMarkBody(ctx, g_rtStrGcConsLab, 0)
+End Sub
+
+Sub LowEmitRtStrCollectSweep(ctx As *LowerCtx, labSweep As Long, labSweepDone As Long, labSweepNext As Long, labClr As Long, labClrDone As Long, gcCount As Long, gcBlocks As Long, gcMarks As Long)
+    Dim list As *IrList
+    list = ctx->list
+    IrEmit(list, OP_LABEL, labSweep, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JL, labSweepDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labSweepDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JNZ, labSweepNext, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    LowEmitHeapFreeRax(list)
+
+    ' last = count-1. blocks[i] = blocks[last]; marks[i] = marks[last]; count--
+    ' 以前は POP が余ってスタックが壊れ、2 回目の HeapFree で止まっていた。
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -48, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_STORE_PTR, 0, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_STORE_PTR, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labSweepDone, 0)
+    IrEmit(list, OP_JMP, labSweep, 0)
+
+    IrEmit(list, OP_LABEL, labSweepNext, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labSweep, 0)
+    IrEmit(list, OP_LABEL, labSweepDone, 0)
+    LowEmitRtStrCollectClr(ctx, labClr, labClrDone, gcCount, gcMarks)
+End Sub
+
+Sub LowEmitRtStrCollectClr(ctx As *LowerCtx, labClr As Long, labClrDone As Long, gcCount As Long, gcMarks As Long)
+    Dim list As *IrList
+    list = ctx->list
+
+    ' マークは次の Safepoint の PreciseLocalMarks のあとで使うので、掃き出し後に消す。
+    ' 以前は Collect 先頭で消しており、呼ぶ直前のローカル String マークが全部消えていた。
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LABEL, labClr, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labClrDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_XOR_ECX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labClr, 0)
+    IrEmit(list, OP_LABEL, labClrDone, 0)
+
+    LowEmitLeaveN(list, 0)
 End Sub
 
 Sub LowEmitRtStrCollectBody(ctx As *LowerCtx)
@@ -301,7 +435,12 @@ Sub LowEmitRtStrCollectBody(ctx As *LowerCtx)
     IrEmit(list, OP_STORE_LOCAL, -24, 0)
     IrEmit(list, OP_JMP, labGlob, 0)
     IrEmit(list, OP_LABEL, labGlobDone, 0)
+    LowEmitRtStrCollectStk(ctx, labStk, labStkDone, labCons, labSweep, labSweepDone, labSweepNext, labClr, labClrDone, gcCount, gcBlocks, gcMarks)
+End Sub
 
+Sub LowEmitRtStrCollectStk(ctx As *LowerCtx, labStk As Long, labStkDone As Long, labCons As Long, labSweep As Long, labSweepDone As Long, labSweepNext As Long, labClr As Long, labClrDone As Long, gcCount As Long, gcBlocks As Long, gcMarks As Long)
+    Dim list As *IrList
+    list = ctx->list
     IrEmit(list, OP_MOV_R8_RSP, 0, 0)
     IrEmit(list, OP_MOV_RAX_R8, 0, 0)
     IrEmit(list, OP_STORE_LOCAL, -32, 0)
@@ -325,121 +464,5 @@ Sub LowEmitRtStrCollectBody(ctx As *LowerCtx)
         IrEmit(list, OP_LOAD_PTR, 0, 0)
     IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
     IrEmit(list, OP_STORE_LOCAL, -40, 0)
-    IrEmit(list, OP_LABEL, labSweep, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_TEST_RAX, 0, 0)
-    IrEmit(list, OP_JL, labSweepDone, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
-        IrEmit(list, OP_LOAD_PTR, 0, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
-    IrEmit(list, OP_JGE, labSweepDone, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
-    IrEmit(list, OP_TEST_RAX, 0, 0)
-    IrEmit(list, OP_JNZ, labSweepNext, 0)
-
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_SHL_ECX_3, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
-    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-        IrEmit(list, OP_LOAD_PTR, 0, 0)
-    LowEmitHeapFreeRax(list)
-
-    ' last = count-1. blocks[i] = blocks[last]; marks[i] = marks[last]; count--
-    ' 以前は POP が余ってスタックが壊れ、2 回目の HeapFree で止まっていた。
-    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
-        IrEmit(list, OP_LOAD_PTR, 0, 0)
-    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
-    IrEmit(list, OP_STORE_LOCAL, -48, 0)
-
-    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_SHL_ECX_3, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
-    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-        IrEmit(list, OP_LOAD_PTR, 0, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_SHL_ECX_3, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
-    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-        IrEmit(list, OP_STORE_PTR, 0, 0)
-
-    IrEmit(list, OP_LOAD_LOCAL, -48, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
-
-    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
-        IrEmit(list, OP_LOAD_PTR, 0, 0)
-    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-        IrEmit(list, OP_STORE_PTR, 0, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
-        IrEmit(list, OP_LOAD_PTR, 0, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
-    IrEmit(list, OP_JGE, labSweepDone, 0)
-    IrEmit(list, OP_JMP, labSweep, 0)
-
-    IrEmit(list, OP_LABEL, labSweepNext, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
-    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
-    IrEmit(list, OP_STORE_LOCAL, -40, 0)
-    IrEmit(list, OP_JMP, labSweep, 0)
-    IrEmit(list, OP_LABEL, labSweepDone, 0)
-
-    ' マークは次の Safepoint の PreciseLocalMarks のあとで使うので、掃き出し後に消す。
-    ' 以前は Collect 先頭で消しており、呼ぶ直前のローカル String マークが全部消えていた。
-    IrEmit(list, OP_XOR_EAX, 0, 0)
-    IrEmit(list, OP_STORE_LOCAL, -8, 0)
-    IrEmit(list, OP_LABEL, labClr, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
-        IrEmit(list, OP_LOAD_PTR, 0, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
-    IrEmit(list, OP_JGE, labClrDone, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
-    IrEmit(list, OP_POP_RCX, 0, 0)
-    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-    IrEmit(list, OP_XOR_ECX, 0, 0)
-    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
-    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
-    IrEmit(list, OP_STORE_LOCAL, -8, 0)
-    IrEmit(list, OP_JMP, labClr, 0)
-    IrEmit(list, OP_LABEL, labClrDone, 0)
-
-    LowEmitLeaveN(list, 0)
+    LowEmitRtStrCollectSweep(ctx, labSweep, labSweepDone, labSweepNext, labClr, labClrDone, gcCount, gcBlocks, gcMarks)
 End Sub
