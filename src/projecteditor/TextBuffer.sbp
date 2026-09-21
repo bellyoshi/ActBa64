@@ -1,90 +1,230 @@
 Const TEXTBUF_INITIAL_GAP = 1024
 Const LINEOFF_INITIAL_CAP = 64
 
-Type TextBuffer
+Dim g_strComp As String
+Dim g_selAnchor As Long
+
+Class LineOffsetTable
+    Public
+    offsets As *Long
+    count As Long
+    capacity As Long
+
+    Sub LineOffsetTable()
+        offsets = 0
+        count = 0
+        capacity = 0
+    End Sub
+
+    Sub ~LineOffsetTable()
+        Me->Destroy()
+    End Sub
+
+    Sub EnsureCap(ByVal need As Long)
+        Dim newCap As Long
+        Dim newBuf As *Long
+        Dim nCopy As Long
+
+        If offsets <> 0 And need <= capacity Then Exit Sub
+
+        newCap = capacity
+        If newCap <= 0 Then newCap = LINEOFF_INITIAL_CAP
+        While newCap < need
+            newCap = newCap * 2
+        Wend
+
+        newBuf = malloc(newCap * 4)
+        If newBuf = 0 Then Exit Sub
+
+        If offsets <> 0 Then
+            nCopy = count
+            If nCopy > 0 Then
+                memcpy(newBuf, offsets, nCopy * 4)
+            End If
+            free(offsets)
+        End If
+
+        offsets = newBuf
+        capacity = newCap
+    End Sub
+
+    Sub Init()
+        Dim p As *Long
+        If offsets <> 0 Then
+            free(offsets)
+            offsets = 0
+        End If
+        count = 0
+        capacity = 0
+        Me->EnsureCap(LINEOFF_INITIAL_CAP)
+        p = offsets
+        p[0] = 0
+        count = 1
+    End Sub
+
+    Sub Destroy()
+        If offsets <> 0 Then
+            free(offsets)
+            offsets = 0
+        End If
+        count = 0
+        capacity = 0
+    End Sub
+End Class
+
+Class TextBuffer
+    Public
     buffer As *Byte
     gap_start As Long
     gap_end As Long
     capacity As Long
-End Type
 
-Type LineOffsetTable
-    offsets As *Long
-    count As Long
-    capacity As Long
-End Type
+    Sub TextBuffer()
+        buffer = 0
+        gap_start = 0
+        gap_end = 0
+        capacity = 0
+    End Sub
+
+    Sub ~TextBuffer()
+        Me->Destroy()
+    End Sub
+
+    Function DocLen() As Long
+        DocLen = gap_start + (capacity - gap_end)
+    End Function
+
+    Function GetByte(ByVal logicalIndex As Long) As Long
+        Dim rightLen As Long
+        Dim tmp As Byte
+        Dim bp As *Byte
+        Dim p As *Byte
+
+        GetByte = 0
+        p = buffer
+        rightLen = capacity - gap_end
+        If logicalIndex < 0 Then Exit Function
+        If logicalIndex >= gap_start + rightLen Then Exit Function
+
+        bp = VarPtr(tmp)
+        If logicalIndex < gap_start Then
+            bp[0] = p[logicalIndex]
+        Else
+            bp[0] = p[gap_end + (logicalIndex - gap_start)]
+        End If
+        GetByte = tmp
+    End Function
+
+    Sub Init()
+        If buffer <> 0 Then
+            free(buffer)
+        End If
+        capacity = TEXTBUF_INITIAL_GAP
+        buffer = malloc(capacity)
+        gap_start = 0
+        gap_end = capacity
+    End Sub
+
+    Sub EnsureInit()
+        If buffer = 0 Then
+            Me->Init()
+        End If
+    End Sub
+
+    Sub Destroy()
+        If buffer <> 0 Then
+            free(buffer)
+            buffer = 0
+        End If
+        gap_start = 0
+        gap_end = 0
+        capacity = 0
+    End Sub
+
+    Sub GrowGap()
+        Dim newCap As Long
+        Dim newBuf As *Byte
+        Dim rightLen As Long
+        Dim newGapEnd As Long
+        Dim p As *Byte
+
+        p = buffer
+        rightLen = capacity - gap_end
+        newCap = capacity * 2
+        If newCap < capacity + TEXTBUF_INITIAL_GAP Then
+            newCap = capacity + TEXTBUF_INITIAL_GAP
+        End If
+
+        newBuf = malloc(newCap)
+        If newBuf = 0 Then Exit Sub
+
+        If gap_start > 0 Then
+            memcpy(newBuf, p, gap_start)
+        End If
+
+        newGapEnd = newCap - rightLen
+        If rightLen > 0 Then
+            memcpy(VarPtr(newBuf[newGapEnd]), VarPtr(p[gap_end]), rightLen)
+        End If
+
+        free(p)
+        buffer = newBuf
+        gap_end = newGapEnd
+        capacity = newCap
+    End Sub
+
+    Sub MoveCursorTo(ByVal newIndex As Long)
+        Dim nDoc As Long
+        Dim tmp As Long
+        Dim bp As *Byte
+        Dim p As *Byte
+
+        Me->EnsureInit()
+
+        nDoc = Me->DocLen()
+        If newIndex < 0 Then newIndex = 0
+        If newIndex > nDoc Then newIndex = nDoc
+
+        If newIndex = gap_start Then Exit Sub
+
+        bp = VarPtr(tmp)
+        p = buffer
+
+        If newIndex < gap_start Then
+            While gap_start > newIndex
+                gap_end = gap_end - 1
+                gap_start = gap_start - 1
+                bp[0] = p[gap_start]
+                p[gap_end] = bp[0]
+            Wend
+        Else
+            While gap_start < newIndex
+                bp[0] = p[gap_end]
+                p[gap_start] = bp[0]
+                gap_start = gap_start + 1
+                gap_end = gap_end + 1
+            Wend
+        End If
+    End Sub
+End Class
 
 Dim g_textBuf As TextBuffer
 Dim g_lineOff As LineOffsetTable
-Dim g_strComp As String
-Dim g_selAnchor As Long
 
 Sub LineOff_EnsureCap(ByVal need As Long)
-    Dim newCap As Long
-    Dim newBuf As *Long
-    Dim nCopy As Long
-
-    If g_lineOff.offsets <> 0 And need <= g_lineOff.capacity Then Exit Sub
-
-    newCap = g_lineOff.capacity
-    If newCap <= 0 Then newCap = LINEOFF_INITIAL_CAP
-    While newCap < need
-        newCap = newCap * 2
-    Wend
-
-    newBuf = malloc(newCap * 4)
-    If newBuf = 0 Then Exit Sub
-
-    If g_lineOff.offsets <> 0 Then
-        nCopy = g_lineOff.count
-        If nCopy > 0 Then
-            memcpy(newBuf, g_lineOff.offsets, nCopy * 4)
-        End If
-        free(g_lineOff.offsets)
-    End If
-
-    g_lineOff.offsets = newBuf
-    g_lineOff.capacity = newCap
+    g_lineOff.EnsureCap(need)
 End Sub
 
 Sub LineOff_Init()
-    If g_lineOff.offsets <> 0 Then
-        free(g_lineOff.offsets)
-        g_lineOff.offsets = 0
-    End If
-    g_lineOff.count = 0
-    g_lineOff.capacity = 0
-    LineOff_EnsureCap(LINEOFF_INITIAL_CAP)
-    g_lineOff.offsets[0] = 0
-    g_lineOff.count = 1
+    g_lineOff.Init()
 End Sub
 
 Sub LineOff_Destroy()
-    If g_lineOff.offsets <> 0 Then
-        free(g_lineOff.offsets)
-        g_lineOff.offsets = 0
-    End If
-    g_lineOff.count = 0
-    g_lineOff.capacity = 0
+    g_lineOff.Destroy()
 End Sub
 
 Function TextBuf_GetByte(ByVal logicalIndex As Long) As Byte
-    Dim rightLen As Long
-    Dim tmp As Byte
-    Dim bp As *Byte
-
-    TextBuf_GetByte = 0
-    rightLen = g_textBuf.capacity - g_textBuf.gap_end
-    If logicalIndex < 0 Then Exit Function
-    If logicalIndex >= g_textBuf.gap_start + rightLen Then Exit Function
-
-    bp = VarPtr(tmp)
-    If logicalIndex < g_textBuf.gap_start Then
-        bp[0] = g_textBuf.buffer[logicalIndex]
-    Else
-        bp[0] = g_textBuf.buffer[g_textBuf.gap_end + (logicalIndex - g_textBuf.gap_start)]
-    End If
-    TextBuf_GetByte = tmp
+    TextBuf_GetByte = g_textBuf.GetByte(logicalIndex)
 End Function
 
 Sub TextBuf_RebuildLineOffsets()
@@ -455,15 +595,9 @@ Function TextBuf_GetTextBeforeCursorOnLine$() As String
 End Function
 
 Sub InitTextBuffer()
-    If g_textBuf.buffer <> 0 Then
-        free(g_textBuf.buffer)
-    End If
-    g_textBuf.capacity = TEXTBUF_INITIAL_GAP
-    g_textBuf.buffer = malloc(g_textBuf.capacity)
-    g_textBuf.gap_start = 0
-    g_textBuf.gap_end = g_textBuf.capacity
+    g_textBuf.Init()
     g_selAnchor = -1
-    LineOff_Init()
+    g_lineOff.Init()
 End Sub
 
 Sub TextBuf_EnsureInit()
@@ -473,45 +607,13 @@ Sub TextBuf_EnsureInit()
 End Sub
 
 Sub TextBuf_Destroy()
-    If g_textBuf.buffer <> 0 Then
-        free(g_textBuf.buffer)
-        g_textBuf.buffer = 0
-    End If
-    g_textBuf.gap_start = 0
-    g_textBuf.gap_end = 0
-    g_textBuf.capacity = 0
+    g_textBuf.Destroy()
     g_strComp = ""
-    LineOff_Destroy()
+    g_lineOff.Destroy()
 End Sub
 
 Sub TextBuf_GrowGap()
-    Dim newCap As Long
-    Dim newBuf As *Byte
-    Dim rightLen As Long
-    Dim newGapEnd As Long
-
-    rightLen = g_textBuf.capacity - g_textBuf.gap_end
-    newCap = g_textBuf.capacity * 2
-    If newCap < g_textBuf.capacity + TEXTBUF_INITIAL_GAP Then
-        newCap = g_textBuf.capacity + TEXTBUF_INITIAL_GAP
-    End If
-
-    newBuf = malloc(newCap)
-    If newBuf = 0 Then Exit Sub
-
-    If g_textBuf.gap_start > 0 Then
-        memcpy(newBuf, g_textBuf.buffer, g_textBuf.gap_start)
-    End If
-
-    newGapEnd = newCap - rightLen
-    If rightLen > 0 Then
-        memcpy(VarPtr(newBuf[newGapEnd]), VarPtr(g_textBuf.buffer[g_textBuf.gap_end]), rightLen)
-    End If
-
-    free(g_textBuf.buffer)
-    g_textBuf.buffer = newBuf
-    g_textBuf.gap_end = newGapEnd
-    g_textBuf.capacity = newCap
+    g_textBuf.GrowGap()
 End Sub
 
 Sub TextBuf_InsertChar(ByVal c As Long)
@@ -627,35 +729,7 @@ Function TextBuf_NextCharBytes() As Long
 End Function
 
 Sub TextBuf_MoveCursorTo(ByVal newIndex As Long)
-    Dim docLen As Long
-    Dim tmp As Long
-    Dim bp As *Byte
-
-    TextBuf_EnsureInit()
-
-    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
-    If newIndex < 0 Then newIndex = 0
-    If newIndex > docLen Then newIndex = docLen
-
-    If newIndex = g_textBuf.gap_start Then Exit Sub
-
-    bp = VarPtr(tmp)
-
-    If newIndex < g_textBuf.gap_start Then
-        While g_textBuf.gap_start > newIndex
-            g_textBuf.gap_end = g_textBuf.gap_end - 1
-            g_textBuf.gap_start = g_textBuf.gap_start - 1
-            bp[0] = g_textBuf.buffer[g_textBuf.gap_start]
-            g_textBuf.buffer[g_textBuf.gap_end] = bp[0]
-        Wend
-    Else
-        While g_textBuf.gap_start < newIndex
-            bp[0] = g_textBuf.buffer[g_textBuf.gap_end]
-            g_textBuf.buffer[g_textBuf.gap_start] = bp[0]
-            g_textBuf.gap_start = g_textBuf.gap_start + 1
-            g_textBuf.gap_end = g_textBuf.gap_end + 1
-        Wend
-    End If
+    g_textBuf.MoveCursorTo(newIndex)
 End Sub
 
 Sub TextBuf_MoveCursorLeft()
@@ -732,7 +806,7 @@ End Sub
 
 Function TextBuf_Len() As Long
     TextBuf_EnsureInit()
-    TextBuf_Len = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+    TextBuf_Len = g_textBuf.DocLen()
 End Function
 
 Function TextBuf_GetConfirmed$() As String
