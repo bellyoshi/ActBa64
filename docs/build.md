@@ -34,15 +34,14 @@ ActiveBasic 4.20 で `actba64.pj` をビルドし、`bin\stage0\actba64.exe` に
 | stage0 | AB4.20 で作った 32bit ホスト `actba64.exe` |
 | stage1 | stage0 が `actba64.pj` を **64bit** でビルド |
 | stage2 | stage1 で自己コンパイル |
-| stage3 | stage2 で再コンパイル |
-| 比較 | stage2 と stage3 の SHA256 一致 |
+| 比較 | stage1 と stage2 の SHA256 一致 |
 
 ```powershell
 cd src\actba64
 .\build.ps1                 # Include を stage0 へコピー + 全段階 + 比較
 .\build.ps1 -SkipCopy       # Include コピーをスキップ
 .\build.ps1 -Stage1Only     # stage1 まで
-.\build.ps1 -SkipStage1     # 既存 stage1 を使い stage2/stage3 のみ
+.\build.ps1 -SkipStage1     # 既存 stage1 を使い stage2 のみ
 .\build.ps1 -SkipCompare    # バイナリ比較をスキップ
 ```
 
@@ -123,7 +122,7 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 | 症状 | 対処 |
 |---|---|
 | `stage0 missing: ...\actba64.exe` | AB4.20 で `actba64.pj` を `bin\stage0\` にビルドする |
-| stage2 vs stage3 が DIFF | ソース変更直後など。`-SkipCompare` で継続し原因を調査 |
+| stage1 vs stage2 が DIFF | ソース変更直後など。`-SkipCompare` で継続し原因を調査 |
 | テストで `linker not found` | 先に `.\build.ps1`（または `-Rebuild`） |
 | `ProjectEditor RAD file missing` | `Callback.wbp` / `MakeWindow.wbp` を `src\projecteditor\` に置く |
 | `copy failed ... release\ProjectEditor.exe` | エディタを終了してから再実行 |
