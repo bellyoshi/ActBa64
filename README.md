@@ -11,7 +11,7 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 | パス | 内容 |
 |---|---|
 | `src/Include` | 標準ヘッダ（コンパイラ / エディタ共通） |
-| `src/actba64` | コンパイラ（Lexer → Parser → AST → IR は共通。機械語と PE だけ 64 / `-actba32` で分岐） |
+| `src/actba64` | コンパイラ（Lexer → Parser → AST → IR は共通。機械語と PE だけ 64 / `-actba32` で分岐）。Parser / AstLower / Preproc は関数単位で分割（[規約](docs/coding.md): ファイル目標 400 / 上限 1000、関数 10 行以内） |
 | `src/projecteditor` | エディタ |
 | `release/` | 配布一式（`build.ps1` が生成。git 管理外） |
 | `src/prototype*` | 開発途中の試作（旧 abc / アセンブラ / リンカ。現行ツールチェーンではない） |
@@ -20,6 +20,7 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 ## ドキュメント
 
 - [ビルド手順](docs/build.md)
+- [コーディング規約](docs/coding.md)（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**）
 - [言語仕様](docs/language.md)（ファイル I/O: Open / Close / Input # / Write / Field / Get # / Put #）
 - [ActiveBasic との相違](docs/different.md)
 - [未実装メモ](docs/todo.md)

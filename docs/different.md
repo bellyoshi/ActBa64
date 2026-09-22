@@ -121,7 +121,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 
 - **DirectX 9 の代わりに DirectX 11 を採用**
   - `Class` vtable から COM（`ID3D11Device` 等）を呼び出せる。
-  - サンプル: [`src/actba64/samples/dxsample/`](../src/actba64/samples/dxsample/)（`d3d11.sbp`、`dx_d3d11.sbp` に `dx_Init` / `dx_Render` / `dx_Quit`）。
+  - サンプル: [`src/actba64/samples/dxsample/`](../src/actba64/samples/dxsample/)（共通ヘッダ [`src/Include/d3d11/d3d11.sbp`](../src/Include/d3d11/d3d11.sbp)、各サンプルの `dx_d3d11.sbp` に `dx_Init` / `dx_Render` / `dx_Quit`）。
   - BasicHelp の DirectX 章の利用パターン（初期化 → メッセージループ内描画 → 終了）を D3D11 上で再現していく。
 
 ### 文字列（長さプレフィックス）

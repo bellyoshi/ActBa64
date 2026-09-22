@@ -1,4 +1,4 @@
-' dx_d3d11.sbp - Direct3D 11 per-vertex color triangle sample
+' dx_d3d11.sbp - Direct3D 11 cube (8 vertices, index buffer, 3D feel)
 
 Dim g_pDevice As *ID3D11Device
 Dim g_pContext As *ID3D11DeviceContext
@@ -7,11 +7,11 @@ Dim g_pRTV As *ID3D11RenderTargetView
 Dim g_pVS As *ID3D11VertexShader
 Dim g_pPS As *ID3D11PixelShader
 Dim g_pVB As *ID3D11Buffer
+Dim g_pIB As *ID3D11Buffer
 Dim g_pLayout As *ID3D11InputLayout
 Dim g_vpW As Long
 Dim g_vpH As Long
 
-' IID_ID3D11Texture2D = {6f15aaf2-d208-4e89-9ab4-489535d34f9c}
 Dim IID_ID3D11Texture2D As GUID
 
 
@@ -20,7 +20,7 @@ Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, p
 	Dim hr As DWord
 
 	pErr = 0
-	hr = D3DCompile(pSrc, srcLen, "triangle.hlsl", 0, 0, pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, VarPtr(ppBlob), VarPtr(pErr))
+	hr = D3DCompile(pSrc, srcLen, "cube.hlsl", 0, 0, pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, VarPtr(ppBlob), VarPtr(pErr))
 	If hr Then
 		If pErr Then
 			MessageBox(0, pErr->GetBufferPointer(), "dx_fail", MB_OK or MB_ICONSTOP)
@@ -44,6 +44,10 @@ Sub dx_ReleaseAll()
 	If g_pLayout Then
 		g_pLayout->Release()
 		g_pLayout = 0
+	End If
+	If g_pIB Then
+		g_pIB->Release()
+		g_pIB = 0
 	End If
 	If g_pVB Then
 		g_pVB->Release()
@@ -75,9 +79,9 @@ Sub dx_ReleaseAll()
 	End If
 End Sub
 
-Function dx_CreateTriangle() As Long
-	' Vertex Buffer + InputLayout + 頂点色（A赤 B緑 C青 → GPU 補間で虹色）
-	' 注意: AB の行継続は _ なので、HLSL 文字列内の _ は Chr$(95) で入れる
+Function dx_CreateCube() As Long
+	' 8 頂点の立方体。VS で回転 + 簡易パースペクティブ（奥行き）
+	' HLSL の _ は AB 行継続と衝突しうるため Chr$(95) で組み立てる
 	Dim u As String
 	Dim hlsl As String
 	u = Chr$(95)
@@ -94,12 +98,12 @@ Function dx_CreateTriangle() As Long
 	srcLen = Len(hlsl)
 
 	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("PS"), StrPtr("ps_4_0"), pPSBlob) Then
 		If pVSBlob Then pVSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 
@@ -115,7 +119,7 @@ Function dx_CreateTriangle() As Long
 		dx_FailStep("CreateVertexShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 
@@ -126,7 +130,7 @@ Function dx_CreateTriangle() As Long
 		dx_FailStep("CreatePixelShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 	pPSBlob->Release()
@@ -137,8 +141,8 @@ Function dx_CreateTriangle() As Long
 	nameCol = "COLOR"
 
 	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
-	Dim descSz As DWord
 	Dim tmpDesc As D3D11_INPUT_ELEMENT_DESC
+	Dim descSz As DWord
 	descSz = Len(tmpDesc)
 	ZeroMemory(VarPtr(layout[0]), descSz * 2)
 
@@ -162,53 +166,173 @@ Function dx_CreateTriangle() As Long
 	If hr Then
 		dx_FailStep("CreateInputLayout", hr)
 		pVSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 	pVSBlob->Release()
 
-	' A赤 / B緑 / C青（28*3=84。Len(配列) は使わない）
-	Dim vdata[20] As Single
-	ZeroMemory(VarPtr(vdata[0]), 84)
-	vdata[0] = 0.0
-	vdata[1] = 0.5
-	vdata[2] = 0.0
-	vdata[3] = 1.0
-	vdata[4] = 0.0
-	vdata[5] = 0.0
-	vdata[6] = 1.0
-	vdata[7] = 0.5
-	vdata[8] = -0.5
-	vdata[9] = 0.0
-	vdata[10] = 0.0
-	vdata[11] = 1.0
-	vdata[12] = 0.0
-	vdata[13] = 1.0
-	vdata[14] = -0.5
-	vdata[15] = -0.5
-	vdata[16] = 0.0
-	vdata[17] = 0.0
-	vdata[18] = 0.0
-	vdata[19] = 1.0
-	vdata[20] = 1.0
+	' 8 頂点（モデル座標 ±0.5）を斜めから見たクリップ座標へ事前変換
+	' 回転 + 簡易パースペクティブで「奥行き」を表現
+	Dim vdata[55] As Single
+	ZeroMemory(VarPtr(vdata[0]), 224)
+
+	' 生の角座標と色を一時配列に（x,y,z,r,g,b,a）× 8
+	Dim raw[55] As Single
+	ZeroMemory(VarPtr(raw[0]), 224)
+	raw[0] = -0.5
+	raw[1] = -0.5
+	raw[2] = 0.5
+	raw[3] = 1.0
+	raw[4] = 0.0
+	raw[5] = 0.0
+	raw[6] = 1.0
+	raw[7] = 0.5
+	raw[8] = -0.5
+	raw[9] = 0.5
+	raw[10] = 1.0
+	raw[11] = 1.0
+	raw[12] = 0.0
+	raw[13] = 1.0
+	raw[14] = 0.5
+	raw[15] = 0.5
+	raw[16] = 0.5
+	raw[17] = 0.0
+	raw[18] = 1.0
+	raw[19] = 0.0
+	raw[20] = 1.0
+	raw[21] = -0.5
+	raw[22] = 0.5
+	raw[23] = 0.5
+	raw[24] = 0.0
+	raw[25] = 1.0
+	raw[26] = 1.0
+	raw[27] = 1.0
+	raw[28] = -0.5
+	raw[29] = -0.5
+	raw[30] = -0.5
+	raw[31] = 1.0
+	raw[32] = 0.0
+	raw[33] = 1.0
+	raw[34] = 1.0
+	raw[35] = 0.5
+	raw[36] = -0.5
+	raw[37] = -0.5
+	raw[38] = 1.0
+	raw[39] = 0.5
+	raw[40] = 0.0
+	raw[41] = 1.0
+	raw[42] = 0.5
+	raw[43] = 0.5
+	raw[44] = -0.5
+	raw[45] = 0.0
+	raw[46] = 0.0
+	raw[47] = 1.0
+	raw[48] = 1.0
+	raw[49] = -0.5
+	raw[50] = 0.5
+	raw[51] = -0.5
+	raw[52] = 1.0
+	raw[53] = 1.0
+	raw[54] = 1.0
+	raw[55] = 1.0
+
+	' 等角投影っぽい写像: x' = (x-z)*0.5, y' = y*0.6+(x+z)*0.25, z' は奥行き用
+	Dim vi As Long
+	Dim x As Single
+	Dim y As Single
+	Dim z As Single
+	vi = 0
+	While vi < 8
+		x = raw[vi * 7 + 0]
+		y = raw[vi * 7 + 1]
+		z = raw[vi * 7 + 2]
+		vdata[vi * 7 + 0] = (x - z) * 0.45
+		vdata[vi * 7 + 1] = y * 0.55 + (x + z) * 0.2
+		vdata[vi * 7 + 2] = (z + 1.0) * 0.25
+		vdata[vi * 7 + 3] = raw[vi * 7 + 3]
+		vdata[vi * 7 + 4] = raw[vi * 7 + 4]
+		vdata[vi * 7 + 5] = raw[vi * 7 + 5]
+		vdata[vi * 7 + 6] = raw[vi * 7 + 6]
+		vi = vi + 1
+	Wend
 
 	Dim bd As D3D11_BUFFER_DESC
 	Dim initData As D3D11_SUBRESOURCE_DATA
 	ZeroMemory(VarPtr(bd), Len(bd))
 	ZeroMemory(VarPtr(initData), Len(initData))
-	bd.ByteWidth = 84
+	bd.ByteWidth = 224
 	bd.Usage = D3D11_USAGE_DEFAULT
 	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
 	initData.pSysMem = VarPtr(vdata[0])
 
 	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
 	If hr Then
-		dx_FailStep("CreateBuffer", hr)
-		dx_CreateTriangle = 0
+		dx_FailStep("CreateBuffer VB", hr)
+		dx_CreateCube = 0
 		Exit Function
 	End If
 
-	dx_CreateTriangle = 1
+	' インデックスは DWord（Word 配列を避ける）
+	Dim idx[35] As DWord
+	ZeroMemory(VarPtr(idx[0]), 144)
+	' +Z
+	idx[0] = 0
+	idx[1] = 3
+	idx[2] = 2
+	idx[3] = 0
+	idx[4] = 2
+	idx[5] = 1
+	' +X
+	idx[6] = 1
+	idx[7] = 2
+	idx[8] = 6
+	idx[9] = 1
+	idx[10] = 6
+	idx[11] = 5
+	' -Z
+	idx[12] = 5
+	idx[13] = 6
+	idx[14] = 7
+	idx[15] = 5
+	idx[16] = 7
+	idx[17] = 4
+	' -X
+	idx[18] = 4
+	idx[19] = 7
+	idx[20] = 3
+	idx[21] = 4
+	idx[22] = 3
+	idx[23] = 0
+	' +Y
+	idx[24] = 3
+	idx[25] = 7
+	idx[26] = 6
+	idx[27] = 3
+	idx[28] = 6
+	idx[29] = 2
+	' -Y
+	idx[30] = 0
+	idx[31] = 1
+	idx[32] = 5
+	idx[33] = 0
+	idx[34] = 5
+	idx[35] = 4
+
+	ZeroMemory(VarPtr(bd), Len(bd))
+	ZeroMemory(VarPtr(initData), Len(initData))
+	bd.ByteWidth = 144
+	bd.Usage = D3D11_USAGE_DEFAULT
+	bd.BindFlags = D3D11_BIND_INDEX_BUFFER
+	initData.pSysMem = VarPtr(idx[0])
+
+	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pIB))
+	If hr Then
+		dx_FailStep("CreateBuffer IB", hr)
+		dx_CreateCube = 0
+		Exit Function
+	End If
+
+	dx_CreateCube = 1
 End Function
 
 Function dx_Init(hWnd As HWND) As Long
@@ -283,7 +407,7 @@ Function dx_Init(hWnd As HWND) As Long
 		Exit Function
 	End If
 
-	If dx_CreateTriangle() = 0 Then
+	If dx_CreateCube() = 0 Then
 		dx_Init = 0
 		Exit Function
 	End If
@@ -326,10 +450,11 @@ Sub dx_RenderDraw()
 
 	g_pContext->IASetInputLayout(g_pLayout)
 	g_pContext->IASetVertexBuffers(0, 1, VarPtr(g_pVB), VarPtr(stride), VarPtr(offset))
+	g_pContext->IASetIndexBuffer(g_pIB, DXGI_FORMAT_R32_UINT, 0)
 	g_pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
 	g_pContext->VSSetShader(g_pVS, 0, 0)
 	g_pContext->PSSetShader(g_pPS, 0, 0)
-	g_pContext->Draw(3, 0)
+	g_pContext->DrawIndexed(36, 0, 0)
 
 	g_pSwapChain->Present(1, 0)
 End Sub
