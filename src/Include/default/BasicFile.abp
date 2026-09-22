@@ -1,0 +1,368 @@
+' BasicFile.abp — ファイル I/O ランタイム（default 常時読込）
+'
+' BaFileOpen(path, mode, num)
+'   mode: 0=all(R/W) 1=Input 2=Output 3=Append
+' BaFileClose(num)  num=0 で全閉
+' BaFileInput$(num) 順次フィールド
+' BaFileField(num, fieldLen)  ランダム用フィールド長
+' BaFileGet$(num, rec) / BaFilePut(num, rec, data)
+' BaFileWriteItem / BaFileWriteComma / BaFileWriteNl
+'   num=0 は標準出力（Write 文）
+'
+' Chr$+While は使わない。
+
+Const BA_FILE_MAX = 16
+Const BA_MODE_ALL = 0
+Const BA_MODE_INPUT = 1
+Const BA_MODE_OUTPUT = 2
+Const BA_MODE_APPEND = 3
+
+Dim g_baOpen(16) As Long
+Dim g_baBuf(16) As String
+Dim g_baPos(16) As Long
+Dim g_baH(16) As Long
+Dim g_baField(16) As Long
+
+Function BaFileValidNum(num As Long) As Long
+    If num < 1 Then
+        BaFileValidNum = 0
+    ElseIf num > BA_FILE_MAX Then
+        BaFileValidNum = 0
+    Else
+        BaFileValidNum = 1
+    End If
+End Function
+
+Sub BaFileClearSlot(num As Long)
+    Dim h As Long
+    If BaFileValidNum(num) = 0 Then Exit Sub
+    h = g_baH(num)
+    If h <> 0 Then
+        If h <> INVALID_HANDLE_VALUE Then
+            CloseHandle(h)
+        End If
+    End If
+    g_baH(num) = 0
+    g_baBuf(num) = ""
+    g_baPos(num) = 1
+    g_baField(num) = 0
+    g_baOpen(num) = 0
+End Sub
+
+Function BaFileLoadBuf(path As String) As String
+    Dim hFile As Long
+    Dim fsiz As Long
+    Dim nRead As Long
+    Dim p As *Byte
+
+    BaFileLoadBuf = ""
+    hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    fsiz = GetFileSize(hFile, 0)
+    If fsiz < 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    p = malloc(fsiz + 1)
+    If p = 0 Then
+        CloseHandle(hFile)
+        Exit Function
+    End If
+    If fsiz > 0 Then
+        ReadFile(hFile, p, fsiz, VarPtr(nRead), 0)
+    End If
+    CloseHandle(hFile)
+    p[fsiz] = 0
+    BaFileLoadBuf = MakeStr(p)
+    free(p)
+End Function
+
+Sub BaFileOpen(path As String, mode As Long, num As Long)
+    Dim h As Long
+    Dim access As Long
+    Dim disp As Long
+    Dim share As Long
+    Dim t As String
+
+    If BaFileValidNum(num) = 0 Then Exit Sub
+    BaFileClearSlot(num)
+
+    If mode = BA_MODE_INPUT Then
+        t = BaFileLoadBuf(path)
+        g_baBuf(num) = t
+        g_baPos(num) = 1
+        g_baH(num) = 0
+        g_baOpen(num) = 1
+        Exit Sub
+    End If
+
+    share = FILE_SHARE_READ
+    If mode = BA_MODE_OUTPUT Then
+        access = GENERIC_WRITE
+        disp = CREATE_ALWAYS
+        share = 0
+    ElseIf mode = BA_MODE_APPEND Then
+        access = GENERIC_WRITE
+        disp = OPEN_ALWAYS
+        share = 0
+    Else
+        access = GENERIC_READ Or GENERIC_WRITE
+        disp = OPEN_ALWAYS
+        share = FILE_SHARE_READ
+    End If
+
+    h = CreateFile(StrPtr(path), access, share, 0, disp, FILE_ATTRIBUTE_NORMAL, 0)
+    If h = INVALID_HANDLE_VALUE Then
+        g_baOpen(num) = 0
+        Exit Sub
+    End If
+    If mode = BA_MODE_APPEND Then
+        SetFilePointer(h, 0, 0, FILE_END)
+    End If
+    g_baH(num) = h
+    g_baBuf(num) = ""
+    g_baPos(num) = 1
+    g_baOpen(num) = 1
+End Sub
+
+Sub BaFileClose(num As Long)
+    Dim i As Long
+    If num = 0 Then
+        i = 1
+        While i <= BA_FILE_MAX
+            BaFileClearSlot(i)
+            i = i + 1
+        Wend
+        Exit Sub
+    End If
+    BaFileClearSlot(num)
+End Sub
+
+Function BaFilePeek(num As Long) As Long
+    Dim buf As String
+    Dim pos As Long
+    Dim t As String
+    BaFilePeek = -1
+    If BaFileValidNum(num) = 0 Then Exit Function
+    If g_baOpen(num) = 0 Then Exit Function
+    buf = g_baBuf(num)
+    pos = g_baPos(num)
+    If pos < 1 Then Exit Function
+    If pos > Len(buf) Then Exit Function
+    t = Mid$(buf, pos, 1)
+    BaFilePeek = Asc(t)
+End Function
+
+Sub BaFileSkipWs(num As Long)
+    Dim c As Long
+    Do
+        c = BaFilePeek(num)
+        If c < 0 Then Exit Sub
+        If c <> 32 Then
+            If c <> 9 Then Exit Sub
+        End If
+        g_baPos(num) = g_baPos(num) + 1
+    Loop
+End Sub
+
+Function BaFileInput$(num As Long) As String
+    Dim c As Long
+    Dim s As String
+    Dim t As String
+
+    BaFileInput$ = ""
+    If BaFileValidNum(num) = 0 Then Exit Function
+    If g_baOpen(num) = 0 Then Exit Function
+
+    BaFileSkipWs(num)
+    c = BaFilePeek(num)
+    If c < 0 Then Exit Function
+
+    s = ""
+    If c = 34 Then
+        g_baPos(num) = g_baPos(num) + 1
+        Do
+            c = BaFilePeek(num)
+            If c < 0 Then Exit Do
+            If c = 34 Then
+                g_baPos(num) = g_baPos(num) + 1
+                Exit Do
+            End If
+            t = Mid$(g_baBuf(num), g_baPos(num), 1)
+            s = s + t
+            g_baPos(num) = g_baPos(num) + 1
+        Loop
+    Else
+        Do
+            c = BaFilePeek(num)
+            If c < 0 Then Exit Do
+            If c = 44 Then Exit Do
+            If c = 13 Then Exit Do
+            If c = 10 Then Exit Do
+            t = Mid$(g_baBuf(num), g_baPos(num), 1)
+            s = s + t
+            g_baPos(num) = g_baPos(num) + 1
+        Loop
+    End If
+
+    c = BaFilePeek(num)
+    If c = 44 Then
+        g_baPos(num) = g_baPos(num) + 1
+    ElseIf c = 13 Then
+        g_baPos(num) = g_baPos(num) + 1
+        c = BaFilePeek(num)
+        If c = 10 Then
+            g_baPos(num) = g_baPos(num) + 1
+        End If
+    ElseIf c = 10 Then
+        g_baPos(num) = g_baPos(num) + 1
+    End If
+
+    BaFileInput$ = s
+End Function
+
+Sub BaFileField(num As Long, fieldLen As Long)
+    If BaFileValidNum(num) = 0 Then Exit Sub
+    If g_baOpen(num) = 0 Then Exit Sub
+    If fieldLen < 0 Then
+        g_baField(num) = 0
+    Else
+        g_baField(num) = fieldLen
+    End If
+End Sub
+
+Function BaFileGet$(num As Long, rec As Long) As String
+    Dim flen As Long
+    Dim off As Long
+    Dim h As Long
+    Dim nRead As Long
+    Dim p As *Byte
+    Dim t As String
+    Dim pad As String
+
+    BaFileGet$ = ""
+    If BaFileValidNum(num) = 0 Then Exit Function
+    If g_baOpen(num) = 0 Then Exit Function
+    If rec < 1 Then Exit Function
+    flen = g_baField(num)
+    If flen <= 0 Then Exit Function
+
+    h = g_baH(num)
+    If h <> 0 Then
+        If h = INVALID_HANDLE_VALUE Then Exit Function
+        off = (rec - 1) * flen
+        SetFilePointer(h, off, 0, FILE_BEGIN)
+        p = malloc(flen + 1)
+        If p = 0 Then Exit Function
+        nRead = 0
+        ReadFile(h, p, flen, VarPtr(nRead), 0)
+        If nRead < 0 Then
+            free(p)
+            Exit Function
+        End If
+        If nRead < flen Then
+            ' pad unread with spaces
+            While nRead < flen
+                p[nRead] = 32
+                nRead = nRead + 1
+            Wend
+        End If
+        p[flen] = 0
+        BaFileGet$ = MakeStr(p)
+        free(p)
+        Exit Function
+    End If
+
+    ' Input モード: バッファから
+    off = (rec - 1) * flen + 1
+    t = Mid$(g_baBuf(num), off, flen)
+    If Len(t) < flen Then
+        pad = Space$(flen - Len(t))
+        t = t + pad
+    End If
+    BaFileGet$ = t
+End Function
+
+Sub BaFilePut(num As Long, rec As Long, data As String)
+    Dim flen As Long
+    Dim off As Long
+    Dim h As Long
+    Dim nWritten As Long
+    Dim s As String
+    Dim pad As String
+    Dim n As Long
+
+    If BaFileValidNum(num) = 0 Then Exit Sub
+    If g_baOpen(num) = 0 Then Exit Sub
+    If rec < 1 Then Exit Sub
+    flen = g_baField(num)
+    If flen <= 0 Then Exit Sub
+
+    s = data
+    n = Len(s)
+    If n < flen Then
+        pad = Space$(flen - n)
+        s = s + pad
+    ElseIf n > flen Then
+        s = Left$(s, flen)
+    End If
+
+    h = g_baH(num)
+    If h = 0 Then Exit Sub
+    If h = INVALID_HANDLE_VALUE Then Exit Sub
+    off = (rec - 1) * flen
+    SetFilePointer(h, off, 0, FILE_BEGIN)
+    WriteFile(h, StrPtr(s), flen, VarPtr(nWritten), 0)
+End Sub
+
+Sub BaFileWriteRaw(num As Long, s As String)
+    Dim h As Long
+    Dim n As Long
+    Dim nWritten As Long
+    Dim std As Long
+
+    n = Len(s)
+    If n <= 0 Then Exit Sub
+
+    If num = 0 Then
+        std = GetStdHandle(&HFFFFFFF5)
+        WriteFile(std, StrPtr(s), n, VarPtr(nWritten), 0)
+        Exit Sub
+    End If
+    If BaFileValidNum(num) = 0 Then Exit Sub
+    If g_baOpen(num) = 0 Then Exit Sub
+    h = g_baH(num)
+    If h = 0 Then Exit Sub
+    If h = INVALID_HANDLE_VALUE Then Exit Sub
+    WriteFile(h, StrPtr(s), n, VarPtr(nWritten), 0)
+End Sub
+
+Sub BaFileWriteItem(num As Long, s As String)
+    BaFileWriteRaw(num, s)
+End Sub
+
+Sub BaFileWriteComma(num As Long)
+    BaFileWriteRaw(num, ",")
+End Sub
+
+Sub BaFileWriteNl(num As Long)
+    Dim buf(3) As Byte
+    Dim h As Long
+    Dim nWritten As Long
+    Dim std As Long
+
+    buf[0] = 13
+    buf[1] = 10
+    buf[2] = 0
+    If num = 0 Then
+        std = GetStdHandle(&HFFFFFFF5)
+        WriteFile(std, VarPtr(buf), 2, VarPtr(nWritten), 0)
+        Exit Sub
+    End If
+    If BaFileValidNum(num) = 0 Then Exit Sub
+    If g_baOpen(num) = 0 Then Exit Sub
+    h = g_baH(num)
+    If h = 0 Then Exit Sub
+    If h = INVALID_HANDLE_VALUE Then Exit Sub
+    WriteFile(h, VarPtr(buf), 2, VarPtr(nWritten), 0)
+End Sub

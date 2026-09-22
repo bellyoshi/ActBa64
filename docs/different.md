@@ -43,19 +43,19 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 
 ### ファイル I/O（言語命令）
 
-BasicHelp の BASIC ファイル命令は未実装。代わりに WinAPI（`CreateFileA` / `ReadFile` / `WriteFile` 等）を `Declare` または IAT 解決で利用可能。
+`Open` / `Close` / `Input #` / `Write` / `Field` / `Get #` / `Put #` は `BasicFile.abp` で対応（番号 1..16）。`Print #` と `Eof` / `Loc` / `Lof` は未実装。WinAPI（`CreateFileA` / `ReadFile` / `WriteFile` 等）でも代替可。
 
-| 項目 | ActiveBasic 仕様 (BasicHelp) |
-|---|---|
-| `Open` | `Open filename$ [For Input/Output/Append] As number` |
-| `Close` | `Close [#filenumber]` |
-| `Print #` | `Print #FileNumber, data [, ...]` |
-| `Input #` | `Input #filenumber, variable [, ...]` |
-| `Write` | `Write [#filenumber, ] [data, ...]`（`,` 区切り） |
-| `Get#` / `Put#` | `Get/Put #filenumber, recode, StrBuffer`（`Field` 必須） |
-| `Field` | `Field #filenumber, fieldbyte`（ランダムファイル） |
-| `Eof` / `Loc` / `Lof` | ファイル状態・位置 |
-| `rc` ファイル取り込み | リソース埋め込み |
+| 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
+|---|---|---|
+| `Open` | `Open filename$ [For Input/Output/Append] As number` | ○（`As #n` 可。パス式は `As` キャストなし） |
+| `Close` | `Close [#filenumber]` | ○（省略で全閉） |
+| `Print #` | `Print #FileNumber, data [, ...]` | 未（`Write #` で代替可） |
+| `Input #` | `Input #filenumber, variable [, ...]` | ○（カンマ／改行区切りフィールド） |
+| `Write` | `Write [#filenumber, ] [data, ...]`（`,` 区切り） | ○ |
+| `Get#` / `Put#` | `Get/Put #filenumber, recode, StrBuffer`（`Field` 必須） | ○ |
+| `Field` | `Field #filenumber, fieldbyte`（ランダムファイル） | ○ |
+| `Eof` / `Loc` / `Lof` | ファイル状態・位置 | 未 |
+| `rc` ファイル取り込み | リソース埋め込み | 未 |
 
 ### GUI・対話・マルチメディア命令
 
@@ -189,10 +189,11 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Open` / `Close` | ファイル番号で入出力チャネル | WinAPI で代替可 |
-| `Print #` / `Input #` | ファイル番号付き I/O | |
-| `Field` / `Get` / `Put` | ランダムファイル・レコード単位 | |
-| `Write` | カンマ区切り出力 | |
+| `Open` / `Close` | ファイル番号で入出力チャネル | ○（`BasicFile.abp`、1..16） |
+| `Input #` | ファイル番号付き入力 | ○ |
+| `Write` | カンマ区切り出力（画面／ファイル） | ○ |
+| `Field` / `Get #` / `Put #` | ランダムファイル | ○ |
+| `Print #` | ファイル番号付き Print | 未 |
 | `Eof` / `Loc` / `Lof` | ファイル状態 | |
 | `rc` ファイル取り込み | リソース | |
 

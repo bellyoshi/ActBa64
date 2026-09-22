@@ -55,7 +55,7 @@ Print a +_
 | `#include "path"` | ファイル挿入（深さ上限あり） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -329,6 +329,13 @@ End With
 Print 式
 Print 式;
 Input 変数          ' String / Long / Byte / Single / Double。stdin から1行
+Input #番号, 変数 [, ...]  ' ファイルからフィールド読み取り
+Open パス [For Input|Output|Append] As [#]番号
+Close [[#]番号]     ' 省略時は全クローズ
+Field #番号, バイト長
+Get #番号, レコード, 文字列変数
+Put #番号, レコード, 式
+Write [#番号,] [式 [, ...]] [;]  ' カンマ区切り。番号省略は標準出力
 Sleep(ミリ秒)       ' 待ち中もウインドウメッセージを処理
 End
 ExitProcess(式)
@@ -345,6 +352,9 @@ ExitProcess(式)
 | `Exit Do` / `Exit While` / `Exit For` | ○ |
 | `Print` | ○ |
 | `Input` | ○（プロンプト文字列なし。数値は十進変換） |
+| `Open` / `Close` / `Input #` | ○（`BasicFile.abp`。番号 1..16） |
+| `Field` / `Get #` / `Put #` | ○（ランダム。`Open ... As` + Field 長） |
+| `Write` | ○（画面または `#番号`。カンマ区切り） |
 | `Sleep(ms)` | ○（メッセージポンプ付き・default） |
 | `InsMenu` | ○（内部で `InsertMenuA`） |
 | `LINE` / `CIRCLE` / `LOCATE` / `PAINT`（N88 文） | ○（`#n88basic`） |
@@ -440,7 +450,7 @@ memcpy(dst, src, n)
 
 ### 7.2 自動 Include
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣、その親、カレントの `Include\` を順に探す。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣、その親、カレントの `Include\` を順に探す。  
 `UnicodeApi.sbp`（Unicode 版 API の `Declare Lib`）は Preproc が別途挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
@@ -467,7 +477,64 @@ Print SinDeg(30)      ' ≒ 500
 
 `Space$(n)` は `Space.abp` から常時利用可。ネストした関数呼び出しは対応する。複雑な入れ子は一時変数経由が安全。
 
+`StrD$(d As Double)` は `DoubleStr.abp` から常時利用可。`Print` が Double 式を表示するとき自動で呼ばれる（64bit）。
+
 サンプル: `src/actba64/samples/math_test.abp`
+
+### 7.4 ファイル I/O（`BasicFile.abp`）
+
+番号は **1..16**。実体は [`src/Include/default/BasicFile.abp`](../src/Include/default/BasicFile.abp)（`default.idx` で常時挿入）。
+
+#### Open / Close
+
+```
+Open パス [For Input | Output | Append] As [#]番号
+Close [[#]番号]          ' 省略時は 1..16 をすべて閉じる
+```
+
+| `For` | 動作 |
+|---|---|
+| （省略） | 読み書き（ランダム向け。`OPEN_ALWAYS`） |
+| `Input` | 読み取り専用。内容をメモリバッファへ（`Input #` 用） |
+| `Output` | 書き込み専用（新規作成） |
+| `Append` | 追記（末尾へシーク） |
+
+パス式の直後に文の `As` が続くため、パス側では **`As` キャストを解釈しない**（`Open path As 1` 可）。
+
+#### Input #（順次）
+
+```
+Input #番号, 変数 [, 変数 ...]
+```
+
+カンマ／改行区切りの次フィールドを読む。変数は `String` / `Long` / `Byte` / `Single` / `Double`（数値は stdin `Input` と同じ変換）。
+
+#### Field / Get # / Put #（ランダム）
+
+```
+Field #番号, フィールド長バイト
+Get #番号, レコード番号, 文字列変数   ' レコードは 1 始まり
+Put #番号, レコード番号, 式           ' 短い文字列は空白パディング、長い分は切り詰め
+```
+
+`Open ... As`（`For` 省略）で開いたうえで `Field` する。オフセットは `(レコード - 1) * フィールド長`。
+
+#### Write
+
+```
+Write [#番号,] [式 [, 式 ...]] [;]
+```
+
+- `#番号` なし → 標準出力
+- 値の区切りは **カンマ**（`Print` とは異なる）
+- 末尾 `;` なしなら CRLF を付ける
+- 数値は `Str$` / `StrD$` で文字列化してから出力
+
+#### 未対応
+
+`Print #`、`Eof` / `Loc` / `Lof`、`Field` の割り当て変数形式（BasicHelp の拡張形）は未実装。
+
+回帰テスト例: `src/actba64/test/t_open_close.abp`、`t_input_hash*.abp`、`t_field_get_put.abp`、`t_write_file.abp`
 
 ---
 
@@ -478,7 +545,7 @@ Print SinDeg(30)      ' ≒ 500
 ### 8.1 共通でよく使うもの（kernel32）
 
 `ExitProcess`, `GetCommandLineA`, `lstrlenA`, `lstrcpyA`, `lstrcatA`,  
-`CreateFileA`, `ReadFile`, `WriteFile`, `CloseHandle`, `GetFileSize`,  
+`CreateFileA`, `ReadFile`, `WriteFile`, `CloseHandle`, `GetFileSize`, `SetFilePointer`,  
 `GetFileAttributesA`, `GetProcessHeap`, `HeapAlloc`, `HeapFree`, `GetStdHandle`
 
 ### 8.2 `Declare` やマップで足しやすいもの
@@ -518,6 +585,8 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 - `GoTo` / `GoSub` / `Continue` / `ReDim` / `Enum`
 - ネスト手続き
 - リソース（`#RESOURCE`）埋め込み
+- `Print #`（ファイル番号付き Print。`Write #` で代替可）
+- `Eof` / `Loc` / `Lof`
 - 高度な最適化
 
 ---
@@ -527,7 +596,25 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 ```
 #console
 
-Print "Hello"
+Dim s As String
+Open "data.txt" For Input As 1
+Input #1, s
+Close 1
+Print s
+ExitProcess(0)
+```
+
+```
+#console
+
+Dim buf As String
+Open "read.txt" As #1
+Open "write.txt" As #2
+Field #1, 10
+Field #2, 10
+Get #1, 1, buf
+Put #2, 1, buf
+Close
 ExitProcess(0)
 ```
 

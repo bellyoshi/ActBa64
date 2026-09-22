@@ -37,13 +37,14 @@
 
 | 項目 | メモ |
 |---|---|
-| `Open` / `Close` / `Print #` / `Input #` | WinAPI で代替可 |
-| `Field` / `Get` / `Put` / `Write` | |
+| `Print #` | 未。`Write #` で代替可 |
 | `Eof` / `Loc` / `Lof` | |
 | `InStr` / `Hex$` / `Val` / `Trim$` | `StrUtils.abp` 等（手動 Include） |
 | `realloc` | `calloc` は `HeapAlloc` マップ済 |
 | `ELM` | |
 | `HIBYTE` / `HIWORD` / `MAKELONG` 等 | `LOWORD` のみ組込 |
+
+済（`BasicFile.abp`）: `Open` / `Close` / `Input #` / `Write` / `Field` / `Get #` / `Put #`
 
 ## GUI・Win32・マルチメディア
 
