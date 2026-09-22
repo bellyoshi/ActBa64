@@ -20,10 +20,11 @@
 # テスト対象: test\*.abp / test\*.pj のうち ' Target: actba64 があるもの
 #   ' Expect: N        … 終了コード期待値（省略時 0）
 #   ' Gui: 1           … 対話 UI 想定（MessageBox 等）。既定では SKIP（-IncludeGui で有効）
+#                        自動判定: #USEWINDOW=1 / ファイル名 _pe_gui*
 #   ' Target: actba64  … このランナーの対象（必須）
 #   ' Skip32: 1        … -Actba32 時はスキップ（ポインタ幅に依存する SizeOf 等）
 # スキップ内訳は Summary 直後に表示。残りはビルド不能（no Target）・pj 包含・GUI・32bit 制限。
-# Print はコンソール WriteFile（Gui 自動判定なし）
+# Print はコンソール WriteFile（上記ルール以外の GUI 自動判定なし）
 # .pj の #SOURCE に載る .abp は単独ビルドしない
 
 param(
@@ -96,6 +97,7 @@ function Get-Meta([string]$path) {
     $target = $false
     $skip32 = $false
     $stdin = @()
+    $base = [System.IO.Path]::GetFileName($path)
     foreach ($line in (Get-Content -LiteralPath $path -Encoding Default -ErrorAction Stop)) {
         # Single-quoted regex: Windows PowerShell 5.1 treats [01] inside "..." as a type name.
         if ($line -match '^\s*''\s*Expect\s*:\s*(-?\d+)\s*$') {
@@ -113,9 +115,16 @@ function Get-Meta([string]$path) {
         if ($line -match '^\s*''\s*Stdin\s*:\s?(.*)$') {
             $stdin += $Matches[1]
         }
+        if ($line -match '(?i)^\s*#USEWINDOW\s*=\s*1\s*$') {
+            if ($null -eq $gui) { $gui = 1 }
+        }
     }
     if ($null -eq $gui) {
-        $gui = 0
+        if ($base -match '(?i)^_pe_gui') {
+            $gui = 1
+        } else {
+            $gui = 0
+        }
     }
     return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin }
 }
