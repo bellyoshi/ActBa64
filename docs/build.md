@@ -47,6 +47,19 @@ cd src\actba64
 
 成功時の主成果物: `bin\stage2\actba64.exe`
 
+### コンパイラソースの分割
+
+長大だった Parser / AstLower / Preproc は関数境界で分割している。行数の目標・上限は [coding.md](./coding.md)（ファイル **目標 400 / 上限 1000**、関数 **10 行以内**）。
+
+`actba64.pj` の `#SOURCE`（および単体ホスト用 `actba64.idx`）で複数 `.abp` を結合する。
+
+| 接頭辞 | 役割 | 主なファイル |
+|---|---|---|
+| `Parser*` | トークン → AST | `Parser` / `ParserExpr` / `ParserStmtIO` / `ParserN88` / `ParserDim` / `ParserClass` / `ParserCtrl` / `ParserDriver` |
+| `AstLower*` | AST → IR（`AstToIr`） | `AstLower` / `AstLowerApi` / `AstLowerRt` / `AstLowerAddr` / `AstLowerExpr` / `AstLowerExprOps` / `AstLowerStmt` / `AstLowerStmtCtrl` / `AstLowerDriver` |
+| `Preproc*` | `#include` / `.pj` 結合 | `Preproc` / `PreprocPj` |
+
+`#SOURCE` の順序どおりに連結されるため、分割ファイル間で共有の `Type` / `Dim` / 手続きを参照できる。
 使い方:
 
 ```text

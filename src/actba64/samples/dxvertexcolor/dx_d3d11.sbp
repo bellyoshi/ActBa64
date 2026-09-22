@@ -26,7 +26,7 @@ Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, p
 			MessageBox(0, pErr->GetBufferPointer(), "dx_fail", MB_OK or MB_ICONSTOP)
 			pErr->Release()
 		Else
-			MessageBox(0, "D3DCompile failed (no blob). Check d3dcompiler_47.dll.", "dx_fail", MB_OK or MB_ICONSTOP)
+			MessageBox(0, "D3DCompile failed. Check d3dcompiler_47.dll.", "dx_fail", MB_OK or MB_ICONSTOP)
 		End If
 	End If
 	dx_CompileShader = hr
@@ -76,12 +76,15 @@ Sub dx_ReleaseAll()
 End Sub
 
 Function dx_CreateTriangle() As Long
-	' 位置 + 頂点色。VS が COLOR を渡し、ラスタライザが補間する
+	' Vertex Buffer + InputLayout + 頂点色（A赤 B緑 C青 → GPU 補間で虹色）
+	' 注意: AB の行継続は _ なので、HLSL 文字列内の _ は Chr$(95) で入れる
+	Dim u As String
 	Dim hlsl As String
-	hlsl = "struct VS_IN{float3 pos:POSITION;float4 col:COLOR;};"
-	hlsl = hlsl + "struct VS_OUT{float4 pos:SV_POSITION;float4 col:COLOR;};"
-	hlsl = hlsl + "VS_OUT VS(VS_IN i){VS_OUT o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
-	hlsl = hlsl + "float4 PS(VS_OUT i):SV_Target{return i.col;}"
+	u = Chr$(95)
+	hlsl = "struct VS" + u + "IN{float3 pos:POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "struct VS" + u + "OUT{float4 pos:SV" + u + "POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "VS" + u + "OUT VS(VS" + u + "IN i){VS" + u + "OUT o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
+	hlsl = hlsl + "float4 PS(VS" + u + "OUT i):SV" + u + "Target{return i.col;}"
 
 	Dim pVSBlob As *ID3DBlob
 	Dim pPSBlob As *ID3DBlob
@@ -128,32 +131,34 @@ Function dx_CreateTriangle() As Long
 	End If
 	pPSBlob->Release()
 
-	' InputLayout: POSITION (float3) + COLOR (float4)
 	Dim namePos As String
 	Dim nameCol As String
 	namePos = "POSITION"
 	nameCol = "COLOR"
 
-	Dim layout As D3D11_INPUT_LAYOUT2
-	ZeroMemory(VarPtr(layout), Len(layout))
+	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
+	Dim descSz As DWord
+	Dim tmpDesc As D3D11_INPUT_ELEMENT_DESC
+	descSz = Len(tmpDesc)
+	ZeroMemory(VarPtr(layout[0]), descSz * 2)
 
-	layout.e0.SemanticName = StrPtr(namePos)
-	layout.e0.SemanticIndex = 0
-	layout.e0.Format = DXGI_FORMAT_R32G32B32_FLOAT
-	layout.e0.InputSlot = 0
-	layout.e0.AlignedByteOffset = 0
-	layout.e0.InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
-	layout.e0.InstanceDataStepRate = 0
+	layout[0].SemanticName = StrPtr(namePos)
+	layout[0].SemanticIndex = 0
+	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
+	layout[0].InputSlot = 0
+	layout[0].AlignedByteOffset = 0
+	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout[0].InstanceDataStepRate = 0
 
-	layout.e1.SemanticName = StrPtr(nameCol)
-	layout.e1.SemanticIndex = 0
-	layout.e1.Format = DXGI_FORMAT_R32G32B32A32_FLOAT
-	layout.e1.InputSlot = 0
-	layout.e1.AlignedByteOffset = 12
-	layout.e1.InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
-	layout.e1.InstanceDataStepRate = 0
+	layout[1].SemanticName = StrPtr(nameCol)
+	layout[1].SemanticIndex = 0
+	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
+	layout[1].InputSlot = 0
+	layout[1].AlignedByteOffset = 12
+	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout[1].InstanceDataStepRate = 0
 
-	hr = g_pDevice->CreateInputLayout(VarPtr(layout), 2, vsCode, vsLen, VarPtr(g_pLayout))
+	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, vsCode, vsLen, VarPtr(g_pLayout))
 	If hr Then
 		dx_FailStep("CreateInputLayout", hr)
 		pVSBlob->Release()
@@ -162,7 +167,7 @@ Function dx_CreateTriangle() As Long
 	End If
 	pVSBlob->Release()
 
-	' 頂点: A赤 / B緑 / C青 — Single 配列で 84 バイト固定（Len(配列) は使わない）
+	' A赤 / B緑 / C青（28*3=84。Len(配列) は使わない）
 	Dim vdata[20] As Single
 	ZeroMemory(VarPtr(vdata[0]), 84)
 	vdata[0] = 0.0

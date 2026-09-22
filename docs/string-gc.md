@@ -2,12 +2,14 @@
 
 コンパイラが実行ファイルへ埋め込む **文字列専用のハイブリッド GC** の設計と実装。言語仕様側の要約は [language.md §6](./language.md) を参照。
 
-対象ソース:
+対象ソース（AstLower 系は分割済み。一覧は [build.md](./build.md#コンパイラソースの分割)）:
 
 | 役割 | ファイル |
 |---|---|
 | 確保・マーク・掃き出しの本体 | [`src/actba64/StrGcRt.abp`](../src/actba64/StrGcRt.abp) |
-| ルート登録・セーフポイント・文字列ランタイム | [`src/actba64/AstLower.abp`](../src/actba64/AstLower.abp) |
+| GC 定数・`LowerCtx` | [`src/actba64/AstLower.abp`](../src/actba64/AstLower.abp) |
+| precise ルート登録 | [`src/actba64/AstLowerApi.abp`](../src/actba64/AstLowerApi.abp) |
+| セーフポイント・Collect 呼出 | [`src/actba64/AstLowerRt.abp`](../src/actba64/AstLowerRt.abp) |
 | `cmp rcx,rax` / `mov rax, gs:[8]` | [`src/actba64/IR.abp`](../src/actba64/IR.abp) / [`Emiter.abp`](../src/actba64/Emiter.abp) / [`CodeGen.abp`](../src/actba64/CodeGen.abp) |
 
 C ランタイムや別 DLL は使わない。`HeapAlloc` / `HeapFree`（`kernel32`）だけを呼び、マーク表は PE の BSS（グローバル領域の末尾）に置く。
@@ -118,7 +120,7 @@ g_gSize     = g_gSize + GC_REGION_SIZE   ' 38928
 3. `count < 4096` なら `blocks[count] = base`、`count++`。
 4. rax = base を返す（ユーザポインタへの `+4` は Cat 等が行う）。
 
-呼び出し側（いずれも `AstLower.abp`）:
+呼び出し側（`AstLowerRt.abp` ほか式・文 lowering）:
 
 - `Cat` / `Mid$` / `Str$` / `MakeStr` / `Input` ランタイム
 - 式中の `Chr$`（6 バイト確保、ヘッダ `&H80000001`）
@@ -161,7 +163,7 @@ for i in 0 .. count-1:
 
 ### 6.2 Precise: グローバル
 
-MAIN 先頭で [`LowEmitGcPreciseRootsInit`](../src/actba64/AstLower.abp) が、コンパイル時に集めた BSS オフセットを `precise_roots[]` へ書き、個数を `precise_count` に入れる。
+MAIN 先頭で [`LowEmitGcPreciseRootsInit`](../src/actba64/AstLowerRt.abp) が、コンパイル時に集めた BSS オフセットを `precise_roots[]` へ書き、個数を `precise_count` に入れる。
 
 `StrCollect` は各オフセットについて:
 
@@ -174,7 +176,7 @@ StrGcMarkPrecise(p)
 
 ### 6.3 Precise: ローカル
 
-関数ごとに `g_fnPreciseRoots[]`（フレームオフセット）を持つ。セーフポイント直前の [`LowEmitPreciseLocalMarks`](../src/actba64/AstLower.abp) が、Collect の **前** に:
+関数ごとに `g_fnPreciseRoots[]`（フレームオフセット）を持つ。セーフポイント直前の [`LowEmitPreciseLocalMarks`](../src/actba64/AstLowerRt.abp) が、Collect の **前** に:
 
 ```
 LOAD_LOCAL off
@@ -190,7 +192,7 @@ CALL StrGcMarkPrecise
 - 関数の戻り値スロットも通常のローカルと同じ（名前は関数名）
 - **ByRef String 引数は登録しない**（スロットはポインタのポインタ）
 
-x64 の第 5 引数以降は `LowAddSym` 時点の負オフセットから、実在の `[rbp+0x30+(i-4)*8]` へ [`LowRetargetFnPreciseRoot`](../src/actba64/AstLower.abp) で付け替える。付け替えないと、存在しないスタックスロットをマークして戻り String を落とす。
+x64 の第 5 引数以降は `LowAddSym` 時点の負オフセットから、実在の `[rbp+0x30+(i-4)*8]` へ [`LowRetargetFnPreciseRoot`](../src/actba64/AstLowerApi.abp) で付け替える。付け替えないと、存在しないスタックスロットをマークして戻り String を落とす。
 
 非引数ローカルは関数入口で 0 初期化。未初期化のゴミを String ポインタとしてマークしないため。
 
@@ -236,7 +238,7 @@ BSS の marks は起動時 0。次サイクルは「ローカル precise マー�
 
 ## 8. セーフポイント（いつ集めるか）
 
-[`LowEmitStrCollectSafepoint`](../src/actba64/AstLower.abp):
+[`LowEmitStrCollectSafepoint`](../src/actba64/AstLowerRt.abp):
 
 ```
 LowEmitPreciseLocalMarks(ctx)
