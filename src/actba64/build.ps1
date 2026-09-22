@@ -4,8 +4,7 @@
 #           （bin\stage0\actba64.exe。#PLATFORM=32 は AB4.20 用で、出力ターゲットではない）
 #   stage0 -> stage1: stage0 の actba64 で 64bit actba64.exe をビルド（-actba32 なし）
 #   stage1 -> stage2: 自己コンパイル
-#   stage2 -> stage3: 再コンパイル
-#   stage2 vs stage3: バイナリ一致（自己ホスト固定点）
+#   stage1 vs stage2: バイナリ一致（自己ホスト固定点）
 #
 # 使い方:
 #   .\build.ps1
@@ -87,13 +86,13 @@ function Invoke-Actba64Build([string]$driverStage, [string]$outStage) {
     Write-Host ("OK: {0} ({1} bytes, {2}s)" -f $outPath, $fi.Length, [math]::Round($sw.Elapsed.TotalSeconds, 2))
 }
 
-# If stage0 is missing/too old (e.g. SYM_MAX=512), promote stage2/stage3/stage1 into stage0.
+# If stage0 is missing/too old (e.g. SYM_MAX=512), promote stage2/stage1 into stage0.
 function Ensure-CapableStage0 {
     $stage0Exe = Join-Path $Stage0 $ExeName
     Ensure-Dir $Stage0
 
     function Get-FallbackDriver {
-        foreach ($cand in @("stage2", "stage3", "stage1")) {
+        foreach ($cand in @("stage2", "stage1")) {
             $p = Join-Path (Get-StageDir $cand) $ExeName
             if (-not (Test-Actba64Driver $p)) { continue }
             if ((Test-Path -LiteralPath $stage0Exe) -and ((Resolve-Path $p).Path -eq (Resolve-Path $stage0Exe).Path)) {
@@ -139,7 +138,7 @@ Rebuild actba64.pj with ActiveBasic 4.20 into bin\stage0\actba64.exe
         Write-Error @"
 stage0 cannot compile current sources: $stage0Exe
 $joined
-Need a newer self-hosted binary in bin\stage1|stage2|stage3, or rebuild stage0 with AB4.20 after raising limits.
+Need a newer self-hosted binary in bin\stage1|stage2, or rebuild stage0 with AB4.20 after raising limits.
 "@
         exit 2
     }
@@ -217,10 +216,9 @@ if ($Stage1Only) {
 }
 
 Invoke-Actba64Build -driverStage "stage1" -outStage "stage2"
-Invoke-Actba64Build -driverStage "stage2" -outStage "stage3"
 
 if (-not $SkipCompare) {
-    Compare-StageExes "stage2" "stage3"
+    Compare-StageExes "stage1" "stage2"
 }
 
 Write-Host ""
