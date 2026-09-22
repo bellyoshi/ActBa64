@@ -1,7 +1,253 @@
 ' ===================================================
-'  AstLowerExpr - expression lowering (num..call intrin)
+'  AstLowerExpr - expression lowering
 ' ===================================================
 
+Function LowAddrIndex(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+    Dim base As Long
+
+    LowAddrIndex = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_CALL Then
+        LowAddrIndex = LowAddrArrayCall(ctx, idx)
+        Exit Function
+    End If
+    base = nodes[idx].left
+    If nodes[base].kind = AST_MEMBER Then
+        LowAddrIndex = LowAddrIndexMember(ctx, idx)
+        Exit Function
+    End If
+    LowAddrIndex = LowAddrIndexBase(ctx, idx)
+End Function
+
+Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+
+    LowAddr = 0
+    If idx < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_VAR Then
+        LowAddr = LowAddrVar(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_MEMBER Then
+        LowAddr = LowAddrMember(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_INDEX Or k = AST_CALL Then
+        LowAddr = LowAddrIndex(ctx, idx)
+        Exit Function
+    End If
+    ctx->err = 1
+End Function
+
+
+
+' 配列名を *Byte 等へ渡すとき先頭アドレスに減衰する
+Function LowExprArg(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+
+    LowExprArg = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_BYTE_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_LONG_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_DOUBLE_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_SINGLE_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_UDT_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_STRING_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+        End If
+    End If
+    LowExprArg = LowExpr(ctx, idx)
+End Function
+
+' WinAPI へ UDT 変数を渡すときはアドレス渡し（LPRECT 等）
+Function LowArgIsUdtVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+
+    LowArgIsUdtVar = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy = TY_UDT Then LowArgIsUdtVar = 1
+End Function
+
+Function LowCallUseAddr(ctx As *LowerCtx, argNode As Long, byBits As Long, bit As Long, isApi As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowCallUseAddr = 0
+    If argNode < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[argNode].num <> 0 Then Exit Function
+    LowCallUseAddr = LowUseArgAddr(ctx, nodes[argNode].left, byBits, bit, isApi)
+End Function
+
+Function LowUseArgAddr(ctx As *LowerCtx, idx As Long, byBits As Long, bit As Long, isApi As Long) As Long
+    Dim v As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowUseArgAddr = 0
+    If idx >= 0 Then
+        ast = ctx->ast
+        nodes = ast->nodes
+        If nodes[idx].kind = AST_BUILTIN Then
+            If nodes[idx].num = BI_VARPTR Or nodes[idx].num = BI_STRPTR Then
+                Exit Function
+            End If
+        End If
+    End If
+    v = byBits And bit
+    If v <> 0 Then
+        LowUseArgAddr = 1
+        Exit Function
+    End If
+    If isApi = 0 Then Exit Function
+    If LowArgIsUdtVar(ctx, idx) <> 0 Then LowUseArgAddr = 1
+End Function
+
+Function LowRecvClassTi(ctx As *LowerCtx, recvIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+    Dim tt As *TypeTable
+
+    LowRecvClassTi = -1
+    If recvIdx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[recvIdx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, recvIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy <> TY_UDT And vTy <> TY_PTR_UDT Then Exit Function
+    tt = ast->types
+    If TyIsClass(tt, vTypeIdx) = 0 Then Exit Function
+    LowRecvClassTi = vTypeIdx
+End Function
+
+Function LowRecvIsPtr(ctx As *LowerCtx, recvIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+
+    LowRecvIsPtr = 0
+    If recvIdx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[recvIdx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, recvIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy = TY_PTR_UDT Then LowRecvIsPtr = 1
+End Function
+
+Sub LowMangleClass(className As *Byte, member As *Byte, dst As *Byte)
+    lstrcpy(dst, className)
+    lstrcat(dst, "_")
+    lstrcat(dst, member)
+End Sub
+
+Sub LowEmitOneClassDtor(ctx As *LowerCtx, ti As Long, vOff As Long, vGlob As Long)
+    Dim mangled(127) As Byte
+    Dim kDtor(7) As Byte
+    Dim lab As Long
+    Dim tt As *TypeTable
+    Dim j As Long
+    Dim stk As Long
+    Dim names As *Byte
+    Dim ast As *Ast
+
+    If ti < 0 Then Exit Sub
+    ast = ctx->ast
+    tt = ast->types
+    If TyIsClass(tt, ti) = 0 Then Exit Sub
+    lstrcpy(VarPtr(kDtor), "Dtor")
+    j = ti * 48
+    names = tt->typeNames
+    LowMangleClass(VarPtr(names[j]), VarPtr(kDtor), VarPtr(mangled))
+    lab = LowFindFunc(ctx, VarPtr(mangled))
+    If lab < 0 Then Exit Sub
+    stk = LowCallStk(1)
+    If stk > 0 Then
+        IrEmit(ctx->list, OP_SUB_RSP, stk, 0)
+    End If
+    LowEmitLeaOff(ctx->list, vOff, vGlob)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(ctx->list, 1)
+    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(ctx->list, stk)
+End Sub
+
+Sub LowEmitLocalClassDtors(ctx As *LowerCtx)
+    Dim i As Long
+    Dim types As *Long
+    Dim typeIdxs As *Long
+    Dim offs As *Long
+
+    types = ctx->types
+    typeIdxs = ctx->typeIdxs
+    offs = ctx->offs
+    i = ctx->symCount - 1
+    While i >= 0
         If types[i] = TY_UDT Then
             LowEmitOneClassDtor(ctx, typeIdxs[i], offs[i], 0)
         End If
@@ -730,220 +976,3 @@ Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArg
     LowExprCallMethodInvoke = 1
 End Function
 
-Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
-    Dim stackPad(2047) As Byte
-    Dim nodes As *AstNode
-    Dim ast As *Ast
-    Dim name(63) As Byte
-    Dim buf(255) As Byte
-    Dim list As *IrList
-    Dim lab As Long
-    Dim nArgs As Long
-    Dim vals As *Long
-    Dim tt As *TypeTable
-    Dim ti As Long
-    Dim args(15) As Long
-    Dim argi As Long
-    Dim argn As Long
-    Dim stk As Long
-    Dim j As Long
-    Dim useAddr As Long
-    Dim names As *Byte
-
-    LowExprCallMethod = 0
-    ast = ctx->ast
-    list = ctx->list
-    nodes = ast->nodes
-    tt = ast->types
-    AstCopyStr(ast, idx, VarPtr(name))
-    ' obj.Method(...) / p->Method(...) — right=receiver, left=user args, str=short name
-    ti = LowRecvClassTi(ctx, nodes[idx].right)
-    If ti < 0 Then
-        Print "error: method call on non-class"
-        ctx->err = 1
-        Exit Function
-    End If
-    tt = ast->types
-    j = ti * 48
-    names = tt->typeNames
-    nArgs = nodes[idx].num + 1
-    If nArgs > 16 Then
-        ctx->err = 1
-        Exit Function
-    End If
-    args[0] = -1
-    argi = 1
-    argn = nodes[idx].left
-    While argn >= 0
-        If argi >= 16 Then
-            ctx->err = 1
-            Exit Function
-        End If
-        args[argi] = argn
-        argi = argi + 1
-        argn = nodes[argn].nxt
-    Wend
-    If argi <> nArgs Then
-        ctx->err = 1
-        Exit Function
-    End If
-    stk = LowCallStk(nArgs)
-    IrEmit(list, OP_SUB_RSP, stk, 0)
-    ' user args 1..n-1 into home/stack; this (rcx) set last
-    argi = 1
-    While argi < nArgs
-        useAddr = LowCallUseAddr(ctx, args[argi], 0, 0, 1)
-        If useAddr <> 0 Then
-            If LowAddr(ctx, nodes[args[argi]].left) = 0 Then Exit Function
-        Else
-            If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
-        End If
-        IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
-        argi = argi + 1
-    Wend
-    If TyIs32() = 0 Then
-    If nArgs >= 4 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
-        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
-    End If
-    If nArgs >= 3 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
-        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
-    End If
-    If nArgs >= 2 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
-        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
-    End If
-    End If
-    ' Me: 値クラスはアドレス、*Class はポインタ値
-    If LowRecvIsPtr(ctx, nodes[idx].right) <> 0 Then
-        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-    Else
-        If LowAddr(ctx, nodes[idx].right) = 0 Then Exit Function
-    End If
-    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
-    If TyIs32() = 0 Then
-        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-    End If
-    If LowExprCallMethodInvoke(ctx, idx, ti, nArgs, stk) = 0 Then Exit Function
-    LowExprCallMethod = 1
-End Function
-
-Function LowExprCallMemOp(ctx As *LowerCtx, idx As Long) As Long
-    Dim stackPad(2047) As Byte
-    Dim nodes As *AstNode
-    Dim ast As *Ast
-    Dim name(63) As Byte
-    Dim buf(255) As Byte
-    Dim list As *IrList
-    Dim sLen(15) As Byte
-    Dim args(15) As Long
-    Dim argi As Long
-    Dim argn As Long
-    Dim stk As Long
-
-    LowExprCallMemOp = -1
-    ast = ctx->ast
-    list = ctx->list
-    nodes = ast->nodes
-    AstCopyStr(ast, idx, VarPtr(name))
-    lstrcpy(VarPtr(buf), "memcpy")
-    If LowNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argi = 0
-        argn = nodes[idx].left
-        While argn >= 0
-            If argi >= 16 Then
-                ctx->err = 1
-                Exit Function
-            End If
-            args[argi] = argn
-            argi = argi + 1
-            argn = nodes[argn].nxt
-        Wend
-        If argi <> 3 Then
-            ctx->err = 1
-            Exit Function
-        End If
-        stk = LowCallStk(3)
-        If stk > 0 Then
-            IrEmit(list, OP_SUB_RSP, stk, 0)
-        End If
-        If LowExpr(ctx, nodes[args[0]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
-        If LowExpr(ctx, nodes[args[1]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize(), 0)
-        If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize() + TyPtrSize(), 0)
-        LowEmitLoadRegArgs(list, 3)
-        lstrcpy(VarPtr(sLen), "RtlMoveMemory")
-        IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
-        LowEmitCallFinish(list, stk)
-        LowExprCallMemOp = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(buf), "fillmemory")
-    If LowNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argi = 0
-        argn = nodes[idx].left
-        While argn >= 0
-            If argi >= 16 Then
-                ctx->err = 1
-                Exit Function
-            End If
-            args[argi] = argn
-            argi = argi + 1
-            argn = nodes[argn].nxt
-        Wend
-        If argi <> 3 Then
-            ctx->err = 1
-            Exit Function
-        End If
-        stk = LowCallStk(3)
-        If stk > 0 Then
-            IrEmit(list, OP_SUB_RSP, stk, 0)
-        End If
-        If LowExpr(ctx, nodes[args[0]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
-        If LowExpr(ctx, nodes[args[1]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize(), 0)
-        If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize() + TyPtrSize(), 0)
-        LowEmitLoadRegArgs(list, 3)
-        lstrcpy(VarPtr(sLen), "RtlFillMemory")
-        IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
-        LowEmitCallFinish(list, stk)
-        LowExprCallMemOp = 1
-        Exit Function
-    End If
-End Function
-
-Function LowExprCallIntrin(ctx As *LowerCtx, idx As Long) As Long
-    Dim stackPad(2047) As Byte
-    Dim nodes As *AstNode
-    Dim ast As *Ast
-    Dim name(63) As Byte
-    Dim buf(255) As Byte
-    Dim list As *IrList
-    Dim argn As Long
-    Dim r As Long
-
-    LowExprCallIntrin = -1
-    ast = ctx->ast
-    list = ctx->list
-    nodes = ast->nodes
-    AstCopyStr(ast, idx, VarPtr(name))
-    lstrcpy(VarPtr(buf), "free")
-    If LowNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argn = nodes[idx].left
-        If argn >= 0 Then
-            If nodes[argn].kind = AST_ARG Then argn = nodes[argn].left
-        End If
-        If LowExpr(ctx, argn) = 0 Then Exit Function
-        LowEmitHeapFreeRax(list)
-        LowExprCallIntrin = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(buf), "malloc")
-    If LowNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argn = nodes[idx].left
-        If argn >= 0 Then

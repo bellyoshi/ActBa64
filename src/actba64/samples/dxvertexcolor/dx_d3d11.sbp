@@ -32,6 +32,14 @@ Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, p
 	dx_CompileShader = hr
 End Function
 
+Sub dx_FailStep(stepName As String, hr As DWord)
+	Dim msg As String
+	msg = stepName
+	msg = msg + " hr="
+	msg = msg + Str$(hr)
+	MessageBox(0, msg, "dx_fail", MB_OK or MB_ICONSTOP)
+End Sub
+
 Sub dx_ReleaseAll()
 	If g_pLayout Then
 		g_pLayout->Release()
@@ -68,6 +76,8 @@ Sub dx_ReleaseAll()
 End Sub
 
 Function dx_CreateTriangle() As Long
+	MessageBox(0, "enter CreateTriangle", "dx_fail", MB_OK)
+
 	' 位置 + 頂点色。VS が COLOR を渡し、ラスタライザが補間する
 	Dim hlsl As String
 	hlsl = "struct VS_IN{float3 pos:POSITION;float4 col:COLOR;};"
@@ -101,6 +111,7 @@ Function dx_CreateTriangle() As Long
 	vsLen = pVSBlob->GetBufferSize()
 	hr = g_pDevice->CreateVertexShader(vsCode, vsLen, 0, VarPtr(g_pVS))
 	If hr Then
+		dx_FailStep("CreateVertexShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
 		dx_CreateTriangle = 0
@@ -110,87 +121,86 @@ Function dx_CreateTriangle() As Long
 	psCode = pPSBlob->GetBufferPointer()
 	psLen = pPSBlob->GetBufferSize()
 	hr = g_pDevice->CreatePixelShader(psCode, psLen, 0, VarPtr(g_pPS))
-	pPSBlob->Release()
 	If hr Then
+		dx_FailStep("CreatePixelShader", hr)
+		pVSBlob->Release()
+		pPSBlob->Release()
+		dx_CreateTriangle = 0
+		Exit Function
+	End If
+	pPSBlob->Release()
+
+	' InputLayout: POSITION (float3) + COLOR (float4)
+	Dim namePos As String
+	Dim nameCol As String
+	namePos = "POSITION"
+	nameCol = "COLOR"
+
+	Dim layout As D3D11_INPUT_LAYOUT2
+	ZeroMemory(VarPtr(layout), Len(layout))
+
+	layout.e0.SemanticName = StrPtr(namePos)
+	layout.e0.SemanticIndex = 0
+	layout.e0.Format = DXGI_FORMAT_R32G32B32_FLOAT
+	layout.e0.InputSlot = 0
+	layout.e0.AlignedByteOffset = 0
+	layout.e0.InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout.e0.InstanceDataStepRate = 0
+
+	layout.e1.SemanticName = StrPtr(nameCol)
+	layout.e1.SemanticIndex = 0
+	layout.e1.Format = DXGI_FORMAT_R32G32B32A32_FLOAT
+	layout.e1.InputSlot = 0
+	layout.e1.AlignedByteOffset = 12
+	layout.e1.InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout.e1.InstanceDataStepRate = 0
+
+	hr = g_pDevice->CreateInputLayout(VarPtr(layout), 2, vsCode, vsLen, VarPtr(g_pLayout))
+	If hr Then
+		dx_FailStep("CreateInputLayout", hr)
 		pVSBlob->Release()
 		dx_CreateTriangle = 0
 		Exit Function
 	End If
-
-	' InputLayout: POSITION (float3) + COLOR (float4)
-	' SemanticName は CreateInputLayout 呼び出しまで有効な必要がある
-	Dim semPos As String
-	Dim semCol As String
-	semPos = "POSITION"
-	semCol = "COLOR"
-
-	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
-	ZeroMemory(VarPtr(layout[0]), Len(layout))
-	layout[0].SemanticName = StrPtr(semPos)
-	layout[0].SemanticIndex = 0
-	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
-	layout[0].InputSlot = 0
-	layout[0].AlignedByteOffset = 0
-	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
-	layout[0].InstanceDataStepRate = 0
-
-	layout[1].SemanticName = StrPtr(semCol)
-	layout[1].SemanticIndex = 0
-	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
-	layout[1].InputSlot = 0
-	layout[1].AlignedByteOffset = 12
-	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
-	layout[1].InstanceDataStepRate = 0
-
-	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, vsCode, vsLen, VarPtr(g_pLayout))
 	pVSBlob->Release()
-	If hr Then
-		dx_CreateTriangle = 0
-		Exit Function
-	End If
 
-	' 頂点 A=赤 / B=緑 / C=青（時計回り = D3D11 デフォルト前面）
-	Dim verts[2] As SimpleVertex
-	ZeroMemory(VarPtr(verts[0]), Len(verts))
-
-	' A: 上 = 赤
-	verts[0].x = 0.0
-	verts[0].y = 0.5
-	verts[0].z = 0.0
-	verts[0].r = 1.0
-	verts[0].g = 0.0
-	verts[0].b = 0.0
-	verts[0].a = 1.0
-
-	' B: 右下 = 緑
-	verts[1].x = 0.5
-	verts[1].y = -0.5
-	verts[1].z = 0.0
-	verts[1].r = 0.0
-	verts[1].g = 1.0
-	verts[1].b = 0.0
-	verts[1].a = 1.0
-
-	' C: 左下 = 青
-	verts[2].x = -0.5
-	verts[2].y = -0.5
-	verts[2].z = 0.0
-	verts[2].r = 0.0
-	verts[2].g = 0.0
-	verts[2].b = 1.0
-	verts[2].a = 1.0
+	' 頂点: A赤 / B緑 / C青 — Single 配列で 84 バイト固定（Len(配列) は使わない）
+	Dim vdata[20] As Single
+	ZeroMemory(VarPtr(vdata[0]), 84)
+	vdata[0] = 0.0
+	vdata[1] = 0.5
+	vdata[2] = 0.0
+	vdata[3] = 1.0
+	vdata[4] = 0.0
+	vdata[5] = 0.0
+	vdata[6] = 1.0
+	vdata[7] = 0.5
+	vdata[8] = -0.5
+	vdata[9] = 0.0
+	vdata[10] = 0.0
+	vdata[11] = 1.0
+	vdata[12] = 0.0
+	vdata[13] = 1.0
+	vdata[14] = -0.5
+	vdata[15] = -0.5
+	vdata[16] = 0.0
+	vdata[17] = 0.0
+	vdata[18] = 0.0
+	vdata[19] = 1.0
+	vdata[20] = 1.0
 
 	Dim bd As D3D11_BUFFER_DESC
 	Dim initData As D3D11_SUBRESOURCE_DATA
 	ZeroMemory(VarPtr(bd), Len(bd))
 	ZeroMemory(VarPtr(initData), Len(initData))
-	bd.ByteWidth = Len(verts)
+	bd.ByteWidth = 84
 	bd.Usage = D3D11_USAGE_DEFAULT
 	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
-	initData.pSysMem = VarPtr(verts[0])
+	initData.pSysMem = VarPtr(vdata[0])
 
 	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
 	If hr Then
+		dx_FailStep("CreateBuffer", hr)
 		dx_CreateTriangle = 0
 		Exit Function
 	End If
@@ -271,7 +281,6 @@ Function dx_Init(hWnd As HWND) As Long
 	End If
 
 	If dx_CreateTriangle() = 0 Then
-		MessageBox(hWnd, "CreateTriangle resources failed.", "Error", MB_OK or MB_ICONSTOP)
 		dx_Init = 0
 		Exit Function
 	End If
@@ -294,7 +303,6 @@ Sub dx_RenderClear()
 	clearColor[2] = 0.20
 	clearColor[3] = 1.0
 
-	' D3D11_VIEWPORT を Single[6] で渡す（Clear はビューポート無視、Draw は必須）
 	vp[0] = 0.0
 	vp[1] = 0.0
 	vp[2] = g_vpW
@@ -310,7 +318,6 @@ End Sub
 Sub dx_RenderDraw()
 	Dim stride As DWord
 	Dim offset As DWord
-	' SimpleVertex = float3 + float4 = 28 bytes
 	stride = 28
 	offset = 0
 
