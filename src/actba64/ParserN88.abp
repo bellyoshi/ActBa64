@@ -1,0 +1,578 @@
+' ===================================================
+'  ParserN88 - N88 BASIC graphics stmts
+' ===================================================
+
+Function ParseN88BoxMode(p As *Parser) As Long
+    Dim kB(3) As Byte
+    Dim kBf(3) As Byte
+    ParseN88BoxMode = 0
+    lstrcpy(VarPtr(kBf), "bf")
+    If ParseIdentIs(p, VarPtr(kBf)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseN88BoxMode = 2
+        Exit Function
+    End If
+    lstrcpy(VarPtr(kB), "b")
+    If ParseIdentIs(p, VarPtr(kB)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseN88BoxMode = 1
+    End If
+End Function
+
+Function ParseN88XyPair(p As *Parser, ByRef e1 As Long, ByRef e2 As Long) As Long
+    ParseN88XyPair = 0
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    e1 = ParseExpr(p)
+    If e1 < 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e2 = ParseExpr(p)
+    If e2 < 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    ParseN88XyPair = 1
+End Function
+
+Function ParseN88LineOpts(p As *Parser, ByRef e5 As Long, ByRef mode As Long) As Long
+    Dim m As Long
+
+    ParseN88LineOpts = 0
+    e5 = -1
+    mode = 0
+    If ParseTokKind(p) <> TK_COMMA Then
+        ParseN88LineOpts = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    m = ParseN88BoxMode(p)
+    If m <> 0 Then
+        mode = m
+    ElseIf ParseTokKind(p) = TK_COMMA Then
+        p->pos = p->pos + 1
+        mode = ParseN88BoxMode(p)
+        If mode = 0 Then
+            p->err = 1
+            Exit Function
+        End If
+    Else
+        e5 = ParseExpr(p)
+        If e5 < 0 Then Exit Function
+        If ParseTokKind(p) = TK_COMMA Then
+            p->pos = p->pos + 1
+            mode = ParseN88BoxMode(p)
+            If mode = 0 Then
+                p->err = 1
+                Exit Function
+            End If
+        End If
+    End If
+    ParseN88LineOpts = 1
+End Function
+
+' LINE [(x1,y1)]-(x2,y2)[,color][,B|BF]
+' → Line(sx,sy,ex,ey,color,mode) または LineCont(ex,ey,color,mode)
+Function ParseN88LineStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(15) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim e3 As Long
+    Dim e4 As Long
+    Dim e5 As Long
+    Dim e6 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+    Dim useLp As Long
+    Dim mode As Long
+
+    ParseN88LineStmt = -1
+    p->pos = p->pos + 1
+    useLp = 0
+    e1 = -1
+    e2 = -1
+    mode = 0
+    If ParseTokKind(p) = TK_MINUS Then
+        useLp = 1
+        p->pos = p->pos + 1
+    Else
+        If ParseN88XyPair(p, e1, e2) = 0 Then Exit Function
+        If ParseExpect(p, TK_MINUS) = 0 Then Exit Function
+    End If
+    If ParseN88XyPair(p, e3, e4) = 0 Then Exit Function
+    If ParseN88LineOpts(p, e5, mode) = 0 Then Exit Function
+    ast = p->ast
+    If e5 < 0 Then
+        e5 = ParseMakeNum(ast, 7)
+        If e5 < 0 Then Exit Function
+    End If
+    e6 = ParseMakeNum(ast, mode)
+    If e6 < 0 Then Exit Function
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If useLp = 0 Then
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e6) = 0 Then Exit Function
+        lstrcpy(VarPtr(name), "Line")
+    Else
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+        If ParseLinkArg(ast, arg0, nPrev, nArgs, e6) = 0 Then Exit Function
+        lstrcpy(VarPtr(name), "LineCont")
+    End If
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88LineStmt = nCall
+End Function
+
+' 千分率リテラル/整数 → milli。空なら 0 を返し ok=0
+' 負号があれば neg=1（絶対値を返す）
+Function ParseN88Milli(p As *Parser, ByRef outV As Long, ByRef neg As Long) As Long
+    Dim sign As Long
+    Dim v As Long
+
+    ParseN88Milli = 0
+    outV = 0
+    neg = 0
+    sign = 1
+    If ParseTokKind(p) = TK_MINUS Then
+        sign = -1
+        neg = 1
+        p->pos = p->pos + 1
+    End If
+    If ParseTokKind(p) = TK_FLOAT Then
+        v = ParseTokNum(p)
+        p->pos = p->pos + 1
+        outV = v
+        If sign < 0 Then
+            ' 値は絶対値で保持
+        End If
+        ParseN88Milli = 1
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_NUMBER Then
+        v = ParseTokNum(p)
+        p->pos = p->pos + 1
+        outV = v * 1000
+        ParseN88Milli = 1
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_IDENT Or ParseTokKind(p) = TK_LPAREN Then
+        ' 式（整数）。角度/比率は整数ラジアン×1000 とみなす
+        v = ParseExpr(p)
+        If v < 0 Then
+            ParseN88Milli = -1
+            Exit Function
+        End If
+        ' 実行時値は式のまま渡せず AST 化が必要 → ここでは非対応、エラー
+        p->err = 1
+        ParseN88Milli = -1
+        Exit Function
+    End If
+    ' 空スロット
+    If sign < 0 Then
+        p->err = 1
+        ParseN88Milli = -1
+    End If
+End Function
+
+Function ParseN88CircleCenter(p As *Parser, ByRef e1 As Long, ByRef e2 As Long, ByRef flags As Long) As Long
+    Dim kStep(7) As Byte
+
+    ParseN88CircleCenter = 0
+    lstrcpy(VarPtr(kStep), "step")
+    If ParseIdentIs(p, VarPtr(kStep)) <> 0 Then
+        p->pos = p->pos + 1
+        flags = flags Or 8
+        If ParseN88XyPair(p, e1, e2) = 0 Then Exit Function
+    ElseIf ParseTokKind(p) = TK_LPAREN Then
+        If ParseN88XyPair(p, e1, e2) = 0 Then Exit Function
+    Else
+        flags = flags Or 16
+        e1 = ParseMakeNum(p->ast, 0)
+        e2 = ParseMakeNum(p->ast, 0)
+        If e1 < 0 Or e2 < 0 Then Exit Function
+    End If
+    ParseN88CircleCenter = 1
+End Function
+
+Function ParseN88CircleF(p As *Parser, ByRef flags As Long, ByRef circCol2 As Long) As Long
+    Dim kF(3) As Byte
+
+    ParseN88CircleF = 0
+    lstrcpy(VarPtr(kF), "f")
+    p->pos = p->pos + 1
+    flags = flags Or 1
+    If ParseTokKind(p) = TK_COMMA Then
+        p->pos = p->pos + 1
+        If ParseTokKind(p) = TK_STRING Then
+            p->pos = p->pos + 1
+        ElseIf ParseTokKind(p) = TK_COMMA Or ParseIdentIs(p, VarPtr(kF)) <> 0 Then
+        ElseIf ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_IDENT Then
+            circCol2 = ParseExpr(p)
+            If circCol2 < 0 Then Exit Function
+        End If
+    End If
+    ParseN88CircleF = 1
+End Function
+
+Function ParseN88CircleMilliSlot(p As *Parser, ByRef slot As Long, ByRef flags As Long, ByRef startM As Long, ByRef hasStart As Long, ByRef endM As Long, ByRef hasEnd As Long, ByRef aspectM As Long) As Long
+    Dim mv As Long
+    Dim neg As Long
+    Dim r As Long
+
+    ParseN88CircleMilliSlot = 0
+    If slot = 1 Then
+        r = ParseN88Milli(p, mv, neg)
+        If r <= 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        startM = mv
+        hasStart = 1
+        If neg <> 0 Then flags = flags Or 2
+        slot = 2
+    ElseIf slot = 2 Then
+        r = ParseN88Milli(p, mv, neg)
+        If r <= 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        endM = mv
+        hasEnd = 1
+        If neg <> 0 Then flags = flags Or 4
+        slot = 3
+    ElseIf slot = 3 Then
+        r = ParseN88Milli(p, mv, neg)
+        If r <= 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        aspectM = mv
+        If aspectM <= 0 Then aspectM = 1000
+        slot = 4
+    Else
+        p->err = 1
+        Exit Function
+    End If
+    ParseN88CircleMilliSlot = 1
+End Function
+
+Function ParseN88CircleOpts(p As *Parser, ByRef flags As Long, ByRef circCol As Long, ByRef circCol2 As Long, ByRef startM As Long, ByRef endM As Long, ByRef aspectM As Long) As Long
+    Dim kF(3) As Byte
+    Dim slot As Long
+    Dim hasStart As Long
+    Dim hasEnd As Long
+
+    ParseN88CircleOpts = 0
+    lstrcpy(VarPtr(kF), "f")
+    slot = 0
+    hasStart = 0
+    hasEnd = 0
+    Do
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p->pos = p->pos + 1
+        If ParseIdentIs(p, VarPtr(kF)) <> 0 Then
+            If ParseN88CircleF(p, flags, circCol2) = 0 Then Exit Function
+            Exit Do
+        End If
+        If ParseTokKind(p) = TK_COMMA Then
+            slot = slot + 1
+        ElseIf slot = 0 Then
+            If ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_IDENT Then
+                circCol = ParseExpr(p)
+                If circCol < 0 Then Exit Function
+                slot = 1
+            Else
+                slot = slot + 1
+                Exit Do
+            End If
+        ElseIf ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_FLOAT Or ParseTokKind(p) = TK_MINUS Then
+            If ParseN88CircleMilliSlot(p, slot, flags, startM, hasStart, endM, hasEnd, aspectM) = 0 Then Exit Function
+        Else
+            slot = slot + 1
+            Exit Do
+        End If
+    Loop
+    If hasStart = 0 And hasEnd = 0 Then
+        startM = 0
+        endM = 0
+    ElseIf hasStart <> 0 And hasEnd = 0 Then
+        endM = 6283
+    ElseIf hasStart = 0 And hasEnd <> 0 Then
+        startM = 0
+    End If
+    ParseN88CircleOpts = 1
+End Function
+
+' CIRCLE [[(x,y)]|[STEP(x,y)]] ,r [,color][,start][,end][,aspect][,F[,color2]]
+' → Circle(cx,cy,r,color,startM,endM,aspectM,flags)
+' flags: 1=F  2=startNeg  4=endNeg  8=STEP  16=center=LP
+Function ParseN88CircleStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(7) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim e3 As Long
+    Dim e4 As Long
+    Dim e5 As Long
+    Dim e6 As Long
+    Dim e7 As Long
+    Dim e8 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+    Dim flags As Long
+    Dim circCol As Long
+    Dim startM As Long
+    Dim endM As Long
+    Dim aspectM As Long
+    Dim circCol2 As Long
+
+    ParseN88CircleStmt = -1
+    p->pos = p->pos + 1
+    flags = 0
+    e1 = -1
+    e2 = -1
+    circCol = -1
+    startM = 0
+    endM = 6283
+    aspectM = 1000
+    circCol2 = -1
+    If ParseN88CircleCenter(p, e1, e2, flags) = 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e3 = ParseExpr(p)
+    If e3 < 0 Then Exit Function
+    If ParseN88CircleOpts(p, flags, circCol, circCol2, startM, endM, aspectM) = 0 Then Exit Function
+    ast = p->ast
+    If circCol < 0 Then
+        e4 = ParseMakeNum(ast, 7)
+    Else
+        e4 = circCol
+    End If
+    If e4 < 0 Then Exit Function
+    If circCol2 < 0 Then
+        e8 = e4
+    Else
+        e8 = circCol2
+    End If
+    e5 = ParseMakeNum(ast, startM)
+    e6 = ParseMakeNum(ast, endM)
+    e7 = ParseMakeNum(ast, aspectM)
+    If e5 < 0 Or e6 < 0 Or e7 < 0 Then Exit Function
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e6) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e7) = 0 Then Exit Function
+    e5 = ParseMakeNum(ast, flags)
+    If e5 < 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e5) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e8) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "Circle")
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88CircleStmt = nCall
+End Function
+
+Function ParseN88CircleOrAssign(p As *Parser) As Long
+    Dim save As Long
+    Dim ok As Long
+    Dim kStep(7) As Byte
+
+    ParseN88CircleOrAssign = -1
+    save = p->pos
+    ok = 0
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(kStep), "step")
+    If ParseIdentIs(p, VarPtr(kStep)) <> 0 Then
+        ok = 1
+    ElseIf ParseTokKind(p) = TK_COMMA Then
+        ok = 1
+    ElseIf ParseTokKind(p) = TK_LPAREN Then
+        p->pos = p->pos + 1
+        If ParseExpr(p) >= 0 Then
+            If ParseTokKind(p) = TK_COMMA Then
+                p->pos = p->pos + 1
+                If ParseExpr(p) >= 0 Then
+                    If ParseTokKind(p) = TK_RPAREN Then
+                        p->pos = p->pos + 1
+                        If ParseTokKind(p) = TK_COMMA Then
+                            ok = 1
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End If
+    p->pos = save
+    p->err = 0
+    If ok <> 0 Then
+        ParseN88CircleOrAssign = ParseN88CircleStmt(p)
+    Else
+        ParseN88CircleOrAssign = ParseAssignStmt(p)
+    End If
+End Function
+
+' n88: Line...-(...) または Line-(...) なら専用、否则は通常
+Function ParseN88LineOrAssign(p As *Parser) As Long
+    Dim save As Long
+    Dim ok As Long
+
+    ParseN88LineOrAssign = -1
+    save = p->pos
+    ok = 0
+    p->pos = p->pos + 1
+    If ParseTokKind(p) = TK_MINUS Then
+        ok = 1
+    ElseIf ParseTokKind(p) = TK_LPAREN Then
+        p->pos = p->pos + 1
+        If ParseExpr(p) >= 0 Then
+            If ParseTokKind(p) = TK_COMMA Then
+                p->pos = p->pos + 1
+                If ParseExpr(p) >= 0 Then
+                    If ParseTokKind(p) = TK_RPAREN Then
+                        p->pos = p->pos + 1
+                        If ParseTokKind(p) = TK_MINUS Then
+                            ok = 1
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End If
+    p->pos = save
+    p->err = 0
+    If ok <> 0 Then
+        ParseN88LineOrAssign = ParseN88LineStmt(p)
+    Else
+        ParseN88LineOrAssign = ParseAssignStmt(p)
+    End If
+End Function
+
+' LOCATE x,y | LOCATE(x,y) → Locate(x,y)
+Function ParseN88LocateStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(15) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+
+    ParseN88LocateStmt = -1
+    p->pos = p->pos + 1
+    If ParseTokKind(p) = TK_LPAREN Then
+        p->pos = p->pos + 1
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+        e2 = ParseExpr(p)
+        If e2 < 0 Then Exit Function
+        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    Else
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+        e2 = ParseExpr(p)
+        If e2 < 0 Then Exit Function
+    End If
+
+    ast = p->ast
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "Locate")
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88LocateStmt = nCall
+End Function
+
+' PAINT (x,y), color1 [, color2] → Paint(x,y,color1,color2)
+Function ParseN88PaintStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nCall As Long
+    Dim name(15) As Byte
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim e3 As Long
+    Dim e4 As Long
+    Dim arg0 As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+
+    ParseN88PaintStmt = -1
+    p->pos = p->pos + 1
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    e1 = ParseExpr(p)
+    If e1 < 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e2 = ParseExpr(p)
+    If e2 < 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    e3 = ParseExpr(p)
+    If e3 < 0 Then Exit Function
+    e4 = -1
+    If ParseTokKind(p) = TK_COMMA Then
+        p->pos = p->pos + 1
+        e4 = ParseExpr(p)
+        If e4 < 0 Then Exit Function
+    End If
+
+    ast = p->ast
+    If e4 < 0 Then
+        e4 = e3
+    End If
+
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e1) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e2) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e3) = 0 Then Exit Function
+    If ParseLinkArg(ast, arg0, nPrev, nArgs, e4) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "Paint")
+    nCall = AstAddNode(ast, AST_CALL)
+    If nCall < 0 Then Exit Function
+    AstSetStr(ast, nCall, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nCall].left = arg0
+    nodes[nCall].right = -1
+    nodes[nCall].num = nArgs
+    ParseN88PaintStmt = nCall
+End Function
+
