@@ -55,7 +55,7 @@ Print a +_
 | `#include "path"` | ファイル挿入（深さ上限あり） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -137,7 +137,7 @@ PAINT (x, y), color1 [, color2]
 ```
 
 - `LOCATE` 後の `Print` は窓上の文字位置へ描画（`;` なしなら次行へ）
-- 数値の `Print` は `Str$` 相当で文字列化してから描画
+- 数値の `Print` は `Str$`（Long）／`StrD$`（Double、64bit）で文字列化してから描画
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
 
 色番号（0..7、N88 8 色）:
@@ -388,6 +388,7 @@ Asc(s)
 Left$(s, n) / Right$(s, n) / Mid$(s, start[, len])
 Chr$(n) / Chr(n)
 Str$(n)
+StrD$(d)                 ' Double → 文字列（Include\default\DoubleStr.abp）
 StrPtr(s)
 MakeStr(p As *Byte)
 RGB(r, g, b)
@@ -439,7 +440,7 @@ memcpy(dst, src, n)
 
 ### 7.2 自動 Include
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣、その親、カレントの `Include\` を順に探す。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣、その親、カレントの `Include\` を順に探す。  
 `UnicodeApi.sbp`（Unicode 版 API の `Declare Lib`）は Preproc が別途挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
