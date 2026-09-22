@@ -329,32 +329,15 @@ Function CgTryEmitB(cb As *CodeBuffer, op As *IrOp, dataRva As DWord) As Long
     CgTryEmitB = 1
 End Function
 
-Function CgTryEmitC(cb As *CodeBuffer, op As *IrOp) As Long
+' x64 / i386 でエンコードが同じ OP（算術・SSE など）
+Function CgTryEmitSharedC(cb As *CodeBuffer, op As *IrOp) As Long
     Dim opv As Long
-    CgTryEmitC = 0
+    CgTryEmitSharedC = 0
     opv = op->op
     If opv = OP_SHL_ECX_3 Then
         EmitShlEcx3(cb)
     ElseIf opv = OP_POP_RAX Then
         EmitPopRax(cb)
-    ElseIf opv = OP_POP_R8 Then
-        EmitPopR8(cb)
-    ElseIf opv = OP_MOV_RAX_R8 Then
-        EmitMovRaxR8(cb)
-    ElseIf opv = OP_SUB_RSP Then
-        EmitSubRsp(cb, op->arg1)
-    ElseIf opv = OP_ADD_RSP Then
-        EmitAddRsp(cb, op->arg1)
-    ElseIf opv = OP_STORE_RSP_RAX Then
-        EmitStoreRspRax(cb, op->arg1)
-    ElseIf opv = OP_LOAD_RSP_RAX Then
-        EmitLoadRspRax(cb, op->arg1)
-    ElseIf opv = OP_MOV_R9_RAX Then
-        EmitMovR9Rax(cb)
-    ElseIf opv = OP_STORE_LOCAL_R8 Then
-        EmitStoreLocalR8(cb, op->arg1)
-    ElseIf opv = OP_STORE_LOCAL_R9 Then
-        EmitStoreLocalR9(cb, op->arg1)
     ElseIf opv = OP_XOR_EDX Then
         EmitXorEdx(cb)
     ElseIf opv = OP_DIV_ECX Then
@@ -400,21 +383,15 @@ Function CgTryEmitC(cb As *CodeBuffer, op As *IrOp) As Long
     Else
         Exit Function
     End If
-    CgTryEmitC = 1
+    CgTryEmitSharedC = 1
 End Function
 
-Function CgTryEmitD(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, i As Long) As Long
-    Dim ops As *IrOp
-    Dim op As *IrOp
+' LABEL / 分岐 / RET（x64・i386 共通）
+Function CgTryEmitSharedCtrl(cb As *CodeBuffer, op As *IrOp) As Long
     Dim opv As Long
-    Dim tmp(255) As Byte
-    Dim dll(31) As Byte
-    Dim iatRva As DWord
     Dim li As Long
     Dim at As Long
-    CgTryEmitD = 0
-    ops = list->ops
-    op = VarPtr(ops[i])
+    CgTryEmitSharedCtrl = 0
     opv = op->op
     If opv = OP_LABEL Then
         li = op->arg1
@@ -454,7 +431,62 @@ Function CgTryEmitD(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilde
     ElseIf opv = OP_JA Then
         at = EmitJccRel32(cb, &H87)
         CgPushFix(at, op->arg1, IR_FIX_REL32)
-    ElseIf opv = OP_MOV_RAX_GS8 Then
+    ElseIf opv = OP_RET Then
+        EmitRet(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitSharedCtrl = 1
+End Function
+
+Function CgTryEmitC(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    CgTryEmitC = 0
+    If CgTryEmitSharedC(cb, op) <> 0 Then
+        CgTryEmitC = 1
+        Exit Function
+    End If
+    opv = op->op
+    If opv = OP_POP_R8 Then
+        EmitPopR8(cb)
+    ElseIf opv = OP_MOV_RAX_R8 Then
+        EmitMovRaxR8(cb)
+    ElseIf opv = OP_SUB_RSP Then
+        EmitSubRsp(cb, op->arg1)
+    ElseIf opv = OP_ADD_RSP Then
+        EmitAddRsp(cb, op->arg1)
+    ElseIf opv = OP_STORE_RSP_RAX Then
+        EmitStoreRspRax(cb, op->arg1)
+    ElseIf opv = OP_LOAD_RSP_RAX Then
+        EmitLoadRspRax(cb, op->arg1)
+    ElseIf opv = OP_MOV_R9_RAX Then
+        EmitMovR9Rax(cb)
+    ElseIf opv = OP_STORE_LOCAL_R8 Then
+        EmitStoreLocalR8(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL_R9 Then
+        EmitStoreLocalR9(cb, op->arg1)
+    Else
+        Exit Function
+    End If
+    CgTryEmitC = 1
+End Function
+
+Function CgTryEmitD(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, i As Long) As Long
+    Dim ops As *IrOp
+    Dim op As *IrOp
+    Dim opv As Long
+    Dim tmp(255) As Byte
+    Dim dll(31) As Byte
+    Dim iatRva As DWord
+    CgTryEmitD = 0
+    ops = list->ops
+    op = VarPtr(ops[i])
+    If CgTryEmitSharedCtrl(cb, op) <> 0 Then
+        CgTryEmitD = 1
+        Exit Function
+    End If
+    opv = op->op
+    If opv = OP_MOV_RAX_GS8 Then
         EmitMovRaxGs8(cb)
     ElseIf opv = OP_MOV_R8_RSP Then
         EmitMovR8Rsp(cb)
@@ -467,8 +499,6 @@ Function CgTryEmitD(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilde
         IrCopyStrAt(list, i, VarPtr(tmp))
         iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(tmp))
         EmitCallRip(cb, iatRva, TEXT_RVA)
-    ElseIf opv = OP_RET Then
-        EmitRet(cb)
     Else
         Exit Function
     End If
