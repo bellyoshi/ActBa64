@@ -6575,6 +6575,7 @@ Function LowStmtPrint(ctx As *LowerCtx, idx As Long) As Long
     Dim offs As *Long
     Dim lab As Long
     Dim labStr As Long
+    Dim exprTy As Long
     Dim tt As *TypeTable
     Dim typeIdxs As *Long
     Dim byRefs As *Long
@@ -6607,10 +6608,22 @@ Function LowStmtPrint(ctx As *LowerCtx, idx As Long) As Long
         Else
             vTy = -1
         End If
+        exprTy = LowExprType(ctx, nodes[idx].left)
         If vTy = TY_BYTE_ARR Then
             If LowExprArg(ctx, nodes[idx].left) = 0 Then Exit Function
         ElseIf vTy = TY_PTR_BYTE Then
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        ElseIf LowIsStringExpr(ctx, nodes[idx].left) = 0 And exprTy = TY_DOUBLE And TyIs32() = 0 Then
+            ' Double → Include\default\DoubleStr.abp の StrD$（IEEE ビットは rcx 経由）
+            lstrcpy(VarPtr(name), "StrD$")
+            lab = LowFindFunc(ctx, VarPtr(name))
+            If lab < 0 Then
+                Print "error: missing 'StrD$' (Include\default\DoubleStr.abp)"
+                ctx->err = 1
+                Exit Function
+            End If
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
         ElseIf LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
             labStr = LowEnsureRtStr(ctx)
             If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
