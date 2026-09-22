@@ -45,7 +45,11 @@ cd src\actba64
 .\build.ps1
 .\run_test2.ps1 stage2
 .\run_test2.ps1 stage2 -Actba32
+# GUI 系（既定 SKIP）を含めるときだけ:
+.\run_test2.ps1 stage2 -IncludeGui
 ```
+
+詳細・メタデータ・スキップ規則は [docs/build.md](docs/build.md) の「回帰テスト」を参照。
 
 ## 使い方
 

@@ -504,6 +504,7 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 | `Declare Lib` | ○ | ○ |
 | `Double` 演算 | ○（SSE） | 未（テストはスキップ） |
 | N88 `LINE`/`CIRCLE` 文 | ○ | ○ |
+| `SizeOf`（ポインタを含む UDT） | ポインタ 8 バイト込み | ポインタ 4 バイト込み（期待サイズを 64bit 決め打ちしない） |
 
 `#PLATFORM=32` は AB4.20 の stage0 ホスト用で、この切替とは無関係です。
 
@@ -575,4 +576,4 @@ End
 - エディタ向け actba64 リファレンス: [src/projecteditor/help/actba64_ref.html](../src/projecteditor/help/actba64_ref.html)（ヘルプメニュー / F1）
 - N88 図形サンプル: [src/actba64/samples/n88_shapes.abp](../src/actba64/samples/n88_shapes.abp)
 - Math サンプル: [src/actba64/samples/math_test.abp](../src/actba64/samples/math_test.abp)
-- 回帰テスト: `src/actba64/test/`（`' Target: actba64`。`run_test2.ps1` と `run_test2.ps1 -Actba32`）
+- 回帰テスト: `src/actba64/test/`（`' Target: actba64`。`run_test2.ps1` / `-Actba32`）。GUI 系は既定 SKIP（`-IncludeGui`）。詳細は [build.md](./build.md)
