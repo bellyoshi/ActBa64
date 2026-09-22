@@ -1,0 +1,814 @@
+' ===================================================
+'  AstLowerAddr - types / address / class dtor
+' ===================================================
+
+
+    IrEmit(list, OP_LABEL, g_rtStrFreeLab, 0)
+    IrEmit(list, OP_ENTER, 32, 0)
+    LowEmitCaptureArg0(list, -8)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    LowEmitHeapFreeRax(list)
+    IrEmit(list, OP_LABEL, labDone, 0)
+    LowEmitLeaveN(list, 1)
+End Sub
+
+Function LowTyNbytes(ty As Long) As Long
+    If ty = TY_BYTE Then
+        LowTyNbytes = 1
+    ElseIf ty = TY_DOUBLE Then
+        LowTyNbytes = 8
+    ElseIf ty = TY_SINGLE Then
+        LowTyNbytes = 4
+    ElseIf ty = TY_STRING Then
+        LowTyNbytes = TyPtrSize()
+    ElseIf ty = TY_PTR_BYTE Or ty = TY_PTR_LONG Or ty = TY_PTR_UDT Then
+        LowTyNbytes = TyPtrSize()
+    Else
+        LowTyNbytes = 4
+    End If
+End Function
+
+Function LowPtrFieldElemSize(fieldTy As Long) As Long
+    If fieldTy = FIELDTY_PTR_LONG Then
+        LowPtrFieldElemSize = 4
+    Else
+        LowPtrFieldElemSize = 1
+    End If
+End Function
+
+Sub LowLoadSized(list As *IrList, sz As Long)
+    If sz = 1 Then
+        IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    ElseIf sz = 2 Then
+        IrEmit(list, OP_LOADZX_WORD_RAX, 0, 0)
+    ElseIf sz = 4 Then
+        IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    ElseIf sz = 8 Then
+        IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    Else
+        IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    End If
+End Sub
+
+Sub LowStoreSized(list As *IrList, sz As Long)
+    If sz = 1 Then
+        IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    ElseIf sz = 2 Then
+        IrEmit(list, OP_STORE_WORD_RAX_CX, 0, 0)
+    ElseIf sz = 4 Then
+        IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+    ElseIf sz = 8 Then
+        IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+    Else
+        IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+    End If
+End Sub
+
+' Address of lvalue -> rax
+' AST_MEMBER ノードが指すフィールドの UDT 型インデックス（ネスト解決用）
+Function LowMemberFieldType(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim tt As *TypeTable
+    Dim base As Long
+    Dim name(63) As Byte
+    Dim fname(63) As Byte
+    Dim ti As Long
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim fieldTy As Long
+    Dim off As Long
+    Dim ty As Long
+    Dim typeIdx As Long
+    Dim byRef As Long
+    Dim isGlob As Long
+
+    LowMemberFieldType = -1
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind <> AST_MEMBER Then Exit Function
+    tt = ast->types
+    base = nodes[idx].left
+    AstCopyStr(ast, idx, VarPtr(fname))
+    If nodes[base].kind = AST_MEMBER Then
+        ti = LowMemberFieldType(ctx, base)
+    ElseIf nodes[base].kind = AST_VAR Then
+        AstCopyStr(ast, base, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+        ti = vTypeIdx
+    Else
+        Exit Function
+    End If
+    If ti < 0 Then Exit Function
+    If TyFindFieldEx(tt, ti, VarPtr(fname), foff, fsz, fcnt, fieldTy) = 0 Then Exit Function
+    LowMemberFieldType = fieldTy
+End Function
+
+' Byte size of the field addressed by an AST_MEMBER (supports nesting).
+Function LowMemberFieldSize(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim tt As *TypeTable
+    Dim base As Long
+    Dim name(63) As Byte
+    Dim fname(63) As Byte
+    Dim ti As Long
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim fieldTy As Long
+
+    LowMemberFieldSize = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind <> AST_MEMBER Then Exit Function
+    tt = ast->types
+    base = nodes[idx].left
+    AstCopyStr(ast, idx, VarPtr(fname))
+    If nodes[base].kind = AST_MEMBER Then
+        ti = LowMemberFieldType(ctx, base)
+    ElseIf nodes[base].kind = AST_VAR Then
+        AstCopyStr(ast, base, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+        ti = vTypeIdx
+    ElseIf nodes[base].kind = AST_INDEX Then
+        AstCopyStr(ast, nodes[base].left, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+        ti = vTypeIdx
+    Else
+        Exit Function
+    End If
+    If ti < 0 Then Exit Function
+    If TyFindFieldEx(tt, ti, VarPtr(fname), foff, fsz, fcnt, fieldTy) = 0 Then Exit Function
+    LowMemberFieldSize = fsz
+End Function
+
+Function LowAddrVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim name(63) As Byte
+
+    LowAddrVar = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If vByRef <> 0 Then
+        LowEmitLoadOff(list, vOff, vGlob)
+    Else
+        LowEmitLeaOff(list, vOff, vGlob)
+    End If
+    LowAddrVar = 1
+End Function
+
+Function LowAddrMember(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim name(63) As Byte
+    Dim fname(63) As Byte
+    Dim base As Long
+    Dim tt As *TypeTable
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim ti As Long
+
+    LowAddrMember = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    tt = ast->types
+    base = nodes[idx].left
+    AstCopyStr(ast, idx, VarPtr(fname))
+    If nodes[base].kind = AST_MEMBER Then
+        ' nested: a.b.c — address of a.b then + offset(c)
+        If LowAddr(ctx, base) = 0 Then Exit Function
+        ti = LowMemberFieldType(ctx, base)
+        If ti < 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+    ElseIf nodes[base].kind = AST_INDEX Then
+        If LowAddr(ctx, base) = 0 Then Exit Function
+        AstCopyStr(ast, nodes[base].left, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        ti = vTypeIdx
+    ElseIf nodes[base].kind = AST_VAR Then
+        AstCopyStr(ast, base, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        ti = vTypeIdx
+        If nodes[idx].num <> 0 Then
+            LowEmitLoadOff(list, vOff, vGlob)
+        ElseIf vTy = TY_PTR_UDT Then
+            LowEmitLoadOff(list, vOff, vGlob)
+        Else
+            LowEmitLeaOff(list, vOff, vGlob)
+        End If
+    Else
+        ctx->err = 1
+        Exit Function
+    End If
+    If TyFindField(tt, ti, VarPtr(fname), foff, fsz, fcnt) = 0 Then
+        ' With 対象が UDT でないとき .x は基底のまま（p.x → p）
+        LowAddrMember = 1
+        Exit Function
+    End If
+    If foff <> 0 Then
+        IrEmit(list, OP_ADD_RAX_IMM, foff, 0)
+    End If
+    LowAddrMember = 1
+End Function
+
+Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim name(63) As Byte
+    Dim nArgs As Long
+    Dim tt As *TypeTable
+    Dim ti As Long
+    Dim esz As Long
+    Dim tsizes As *Long
+    Dim ix As Long
+
+    LowAddrArrayCall = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    tt = ast->types
+    nArgs = nodes[idx].num
+    If nArgs <> 1 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If vTy <> TY_BYTE_ARR Then
+        If vTy <> TY_LONG_ARR Then
+            If vTy <> TY_STRING_ARR Then
+                If vTy <> TY_DOUBLE_ARR Then
+                    If vTy <> TY_SINGLE_ARR Then
+                        If vTy <> TY_UDT_ARR Then
+                            ctx->err = 1
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End If
+    ' index expr is left of CALL (AST_ARG wrapper)
+    ix = nodes[idx].left
+    If ix >= 0 Then
+        If nodes[ix].kind = AST_ARG Then ix = nodes[ix].left
+    End If
+    If LowExpr(ctx, ix) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    LowEmitLeaOff(list, vOff, vGlob)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    If vTy = TY_STRING_ARR Then
+        LowEmitScalePtr(list)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    ElseIf vTy = TY_DOUBLE_ARR Then
+        IrEmit(list, OP_SHL_ECX_3, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+        ' Long/DWord/Single = 4 bytes（WinAPI の UINT* 等と互換）
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_MOV_ECX, 4, 0)
+        IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    ElseIf vTy = TY_UDT_ARR Then
+        ti = vTypeIdx
+        tsizes = tt->typeSizes
+        esz = tsizes[ti]
+        If esz <= 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If esz = 1 Then
+            IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        Else
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            IrEmit(list, OP_MOV_ECX, esz, 0)
+            IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        End If
+    Else
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    End If
+    LowAddrArrayCall = 1
+End Function
+
+Function LowAddrIndexMember(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim name(63) As Byte
+    Dim fname(63) As Byte
+    Dim base As Long
+    Dim tt As *TypeTable
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim fieldTy As Long
+    Dim ti As Long
+    Dim esz As Long
+    Dim ix As Long
+
+    LowAddrIndexMember = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    tt = ast->types
+    base = nodes[idx].left
+    AstCopyStr(ast, base, VarPtr(fname))
+    ix = nodes[base].left
+    If nodes[ix].kind = AST_INDEX Then
+        AstCopyStr(ast, nodes[ix].left, VarPtr(name))
+    ElseIf nodes[ix].kind = AST_VAR Then
+        AstCopyStr(ast, ix, VarPtr(name))
+    Else
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    ti = vTypeIdx
+    If TyFindFieldEx(tt, ti, VarPtr(fname), foff, fsz, fcnt, fieldTy) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If fcnt > 1 Then
+        ' UDT array field: &field[0] + index * elemSize
+        esz = fsz
+        If esz <= 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        LowEmitZxEax(list)
+        If esz <> 1 Then
+            IrEmit(list, OP_MOV_ECX, esz, 0)
+            IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+        End If
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        If LowAddr(ctx, base) = 0 Then Exit Function
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    ElseIf fsz = TyPtrSize() Then
+        ' pointer field: *Long は index*4、それ以外（*Byte 等）はバイト添字
+        esz = LowPtrFieldElemSize(fieldTy)
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        LowEmitZxEax(list)
+        If esz <> 1 Then
+            IrEmit(list, OP_MOV_ECX, esz, 0)
+            IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+        End If
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        If LowExpr(ctx, base) = 0 Then Exit Function
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    Else
+        ctx->err = 1
+        Exit Function
+    End If
+    LowAddrIndexMember = 1
+End Function
+
+Function LowAddrIndexArr(ctx As *LowerCtx, list As *IrList, tt As *TypeTable, vOff As Long, vTy As Long, vTypeIdx As Long, vGlob As Long) As Long
+    Dim ti As Long
+    Dim esz As Long
+    Dim tsizes As *Long
+
+    LowAddrIndexArr = 0
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If vTy = TY_BYTE_ARR Then
+        LowEmitLeaOff(list, vOff, vGlob)
+    ElseIf vTy = TY_STRING_ARR Then
+        LowEmitLeaOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        LowEmitScalePtr(list)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        LowAddrIndexArr = 1
+        Exit Function
+    ElseIf vTy = TY_DOUBLE_ARR Then
+        LowEmitLeaOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_SHL_ECX_3, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        LowAddrIndexArr = 1
+        Exit Function
+    ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+        LowEmitLeaOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_MOV_ECX, 4, 0)
+        IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        LowAddrIndexArr = 1
+        Exit Function
+    ElseIf vTy = TY_UDT_ARR Then
+        ti = vTypeIdx
+        tsizes = tt->typeSizes
+        esz = tsizes[ti]
+        If esz <= 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        LowEmitLeaOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        If esz = 1 Then
+            IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        Else
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+            IrEmit(list, OP_MOV_ECX, esz, 0)
+            IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+            IrEmit(list, OP_POP_RCX, 0, 0)
+            IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        End If
+        LowAddrIndexArr = 1
+        Exit Function
+    ElseIf vTy = TY_PTR_BYTE Then
+        LowEmitLoadOff(list, vOff, vGlob)
+    Else
+        ctx->err = 1
+        Exit Function
+    End If
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    LowAddrIndexArr = 1
+End Function
+
+Function LowAddrIndexBase(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim name(63) As Byte
+    Dim base As Long
+    Dim tt As *TypeTable
+    Dim ti As Long
+    Dim esz As Long
+    Dim tsizes As *Long
+
+    LowAddrIndexBase = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    tt = ast->types
+    base = nodes[idx].left
+    AstCopyStr(ast, base, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    LowEmitZxEax(list)
+    If vTy = TY_PTR_UDT Then
+        ti = vTypeIdx
+        tsizes = tt->typeSizes
+        esz = tsizes[ti]
+        If esz <= 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        IrEmit(list, OP_MOV_ECX, esz, 0)
+        IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        LowEmitLoadOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        LowAddrIndexBase = 1
+        Exit Function
+    End If
+    If vTy = TY_PTR_LONG Then
+        IrEmit(list, OP_MOV_ECX, 4, 0)
+        IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        LowEmitLoadOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+        LowAddrIndexBase = 1
+        Exit Function
+    End If
+    LowAddrIndexBase = LowAddrIndexArr(ctx, list, tt, vOff, vTy, vTypeIdx, vGlob)
+End Function
+
+Function LowAddrIndex(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+    Dim base As Long
+
+    LowAddrIndex = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_CALL Then
+        LowAddrIndex = LowAddrArrayCall(ctx, idx)
+        Exit Function
+    End If
+    base = nodes[idx].left
+    If nodes[base].kind = AST_MEMBER Then
+        LowAddrIndex = LowAddrIndexMember(ctx, idx)
+        Exit Function
+    End If
+    LowAddrIndex = LowAddrIndexBase(ctx, idx)
+End Function
+
+Function LowAddr(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+
+    LowAddr = 0
+    If idx < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_VAR Then
+        LowAddr = LowAddrVar(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_MEMBER Then
+        LowAddr = LowAddrMember(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_INDEX Or k = AST_CALL Then
+        LowAddr = LowAddrIndex(ctx, idx)
+        Exit Function
+    End If
+    ctx->err = 1
+End Function
+
+
+
+' 配列名を *Byte 等へ渡すとき先頭アドレスに減衰する
+Function LowExprArg(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+
+    LowExprArg = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_BYTE_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_LONG_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_DOUBLE_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_SINGLE_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_UDT_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+            If vTy = TY_STRING_ARR Then
+                LowExprArg = LowAddr(ctx, idx)
+                Exit Function
+            End If
+        End If
+    End If
+    LowExprArg = LowExpr(ctx, idx)
+End Function
+
+' WinAPI へ UDT 変数を渡すときはアドレス渡し（LPRECT 等）
+Function LowArgIsUdtVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+
+    LowArgIsUdtVar = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy = TY_UDT Then LowArgIsUdtVar = 1
+End Function
+
+Function LowCallUseAddr(ctx As *LowerCtx, argNode As Long, byBits As Long, bit As Long, isApi As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowCallUseAddr = 0
+    If argNode < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[argNode].num <> 0 Then Exit Function
+    LowCallUseAddr = LowUseArgAddr(ctx, nodes[argNode].left, byBits, bit, isApi)
+End Function
+
+Function LowUseArgAddr(ctx As *LowerCtx, idx As Long, byBits As Long, bit As Long, isApi As Long) As Long
+    Dim v As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowUseArgAddr = 0
+    If idx >= 0 Then
+        ast = ctx->ast
+        nodes = ast->nodes
+        If nodes[idx].kind = AST_BUILTIN Then
+            If nodes[idx].num = BI_VARPTR Or nodes[idx].num = BI_STRPTR Then
+                Exit Function
+            End If
+        End If
+    End If
+    v = byBits And bit
+    If v <> 0 Then
+        LowUseArgAddr = 1
+        Exit Function
+    End If
+    If isApi = 0 Then Exit Function
+    If LowArgIsUdtVar(ctx, idx) <> 0 Then LowUseArgAddr = 1
+End Function
+
+Function LowRecvClassTi(ctx As *LowerCtx, recvIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+    Dim tt As *TypeTable
+
+    LowRecvClassTi = -1
+    If recvIdx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[recvIdx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, recvIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy <> TY_UDT And vTy <> TY_PTR_UDT Then Exit Function
+    tt = ast->types
+    If TyIsClass(tt, vTypeIdx) = 0 Then Exit Function
+    LowRecvClassTi = vTypeIdx
+End Function
+
+Function LowRecvIsPtr(ctx As *LowerCtx, recvIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+
+    LowRecvIsPtr = 0
+    If recvIdx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[recvIdx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, recvIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy = TY_PTR_UDT Then LowRecvIsPtr = 1
+End Function
+
+Sub LowMangleClass(className As *Byte, member As *Byte, dst As *Byte)
+    lstrcpy(dst, className)
+    lstrcat(dst, "_")
+    lstrcat(dst, member)
+End Sub
+
+Sub LowEmitOneClassDtor(ctx As *LowerCtx, ti As Long, vOff As Long, vGlob As Long)
+    Dim mangled(127) As Byte
+    Dim kDtor(7) As Byte
+    Dim lab As Long
+    Dim tt As *TypeTable
+    Dim j As Long
+    Dim stk As Long
+    Dim names As *Byte
+    Dim ast As *Ast
+
+    If ti < 0 Then Exit Sub
+    ast = ctx->ast
+    tt = ast->types
+    If TyIsClass(tt, ti) = 0 Then Exit Sub
+    lstrcpy(VarPtr(kDtor), "Dtor")
+    j = ti * 48
+    names = tt->typeNames
+    LowMangleClass(VarPtr(names[j]), VarPtr(kDtor), VarPtr(mangled))
+    lab = LowFindFunc(ctx, VarPtr(mangled))
+    If lab < 0 Then Exit Sub
+    stk = LowCallStk(1)
+    If stk > 0 Then
+        IrEmit(ctx->list, OP_SUB_RSP, stk, 0)
+    End If
+    LowEmitLeaOff(ctx->list, vOff, vGlob)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(ctx->list, 1)
+    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(ctx->list, stk)
+End Sub
+
+Sub LowEmitLocalClassDtors(ctx As *LowerCtx)
+    Dim i As Long
+    Dim types As *Long
+    Dim typeIdxs As *Long
+    Dim offs As *Long
+
+    types = ctx->types
+    typeIdxs = ctx->typeIdxs
+    offs = ctx->offs
+    i = ctx->symCount - 1
+    While i >= 0

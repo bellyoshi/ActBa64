@@ -1,0 +1,864 @@
+' ===================================================
+'  AstLowerStmt - Dim / Assign / Print / File IO stmts
+' ===================================================
+
+    Dim k As Long
+
+    ' 薄いディスパッチ: 巨大フレームの LowStmtHeavy を入れ子にしない
+    LowStmt = 0
+    If idx < 0 Then
+        LowStmt = 1
+        Exit Function
+    End If
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_IF Then
+        LowStmt = LowStmtIf(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_CALL Then
+        LowStmt = LowExpr(ctx, idx)
+        Exit Function
+    End If
+    If k = AST_EXITFUNC Then
+        If g_funcEndLab < 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        IrEmit(ctx->list, OP_JMP, g_funcEndLab, 0)
+        LowStmt = 1
+        Exit Function
+    End If
+    LowStmt = LowStmtHeavy(ctx, idx)
+End Function
+
+Function LowStmtDimCtor(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim tt As *TypeTable
+    Dim ti As Long
+    Dim fname(63) As Byte
+    Dim args(15) As Long
+    Dim argi As Long
+    Dim argn As Long
+    Dim nArgs As Long
+    Dim stk As Long
+    Dim j As Long
+    Dim kCtor(7) As Byte
+    Dim names As *Byte
+
+    LowStmtDimCtor = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    AstCopyStr(ast, idx, VarPtr(name))
+    If nodes[idx].num <> TY_UDT Then
+        Exit Function
+    End If
+    ti = nodes[idx].extra
+    If ti < 0 Then Exit Function
+    If TyIsClass(tt, ti) = 0 Then Exit Function
+    j = ti * 48
+    lstrcpy(VarPtr(kCtor), "Ctor")
+    names = tt->typeNames
+    LowMangleClass(VarPtr(names[j]), VarPtr(kCtor), VarPtr(name))
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        Print "error: missing ctor '" + MakeStr(VarPtr(name)) + "'"
+        ctx->err = 1
+        Exit Function
+    End If
+    nArgs = 1
+    argn = nodes[idx].right
+    While argn >= 0
+        If nodes[argn].kind <> AST_ARG Then Exit While
+        nArgs = nArgs + 1
+        argn = nodes[argn].nxt
+    Wend
+    If nodes[idx].right >= 0 Then
+        If nodes[nodes[idx].right].kind <> AST_ARG Then
+            nArgs = -1
+        End If
+    End If
+    If nArgs <= 0 Then Exit Function
+    stk = LowCallStk(nArgs)
+    If stk > 0 Then
+        IrEmit(ctx->list, OP_SUB_RSP, stk, 0)
+    End If
+    argi = 1
+    argn = nodes[idx].right
+    While argn >= 0 And argi < 16
+        If nodes[argn].kind <> AST_ARG Then Exit While
+        args[argi] = argn
+        argi = argi + 1
+        argn = nodes[argn].nxt
+    Wend
+    argi = 1
+    While argi < nArgs
+        If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
+        IrEmit(ctx->list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
+        argi = argi + 1
+    Wend
+    AstCopyStr(ast, idx, VarPtr(fname))
+    If LowLookupVar(ctx, VarPtr(fname), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    LowEmitLeaOff(ctx->list, vOff, vGlob)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(ctx->list, nArgs)
+    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(ctx->list, stk)
+    LowStmtDimCtor = 1
+End Function
+
+Function LowStmtDim(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+
+    LowStmtDim = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowStmtDimCtor(ctx, idx) <> 0 Then
+        LowStmtDim = 1
+        Exit Function
+    End If
+    If ctx->err <> 0 Then Exit Function
+    If nodes[idx].right >= 0 Then
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If vTy = TY_SINGLE Then
+            LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+        ElseIf vTy = TY_DOUBLE Then
+            LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+        Else
+            LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, vTy)
+        End If
+        LowEmitStoreOff(ctx->list, vOff, vGlob)
+    End If
+    LowStmtDim = 1
+End Function
+
+
+Function LowStmtAssignIndexStore(ctx As *LowerCtx, leftIdx As Long, leftK As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim tt As *TypeTable
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim fieldTy As Long
+    Dim ti As Long
+    Dim fname(63) As Byte
+    Dim base As Long
+    Dim ix As Long
+
+    LowStmtAssignIndexStore = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    If leftK = AST_CALL Then
+        AstCopyStr(ast, leftIdx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+                IrEmit(ctx->list, OP_STORE_PTR, 0, 0)
+            ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+                LowStoreSized(ctx->list, 4)
+            Else
+                IrEmit(ctx->list, OP_STORE_BYTE_RAX_CL, 0, 0)
+            End If
+        Else
+            IrEmit(ctx->list, OP_STORE_BYTE_RAX_CL, 0, 0)
+        End If
+    Else
+        base = nodes[leftIdx].left
+        If nodes[base].kind = AST_MEMBER Then
+            AstCopyStr(ast, base, VarPtr(fname))
+            ix = nodes[base].left
+            If nodes[ix].kind = AST_INDEX Then
+                AstCopyStr(ast, nodes[ix].left, VarPtr(name))
+            ElseIf nodes[ix].kind = AST_VAR Then
+                AstCopyStr(ast, ix, VarPtr(name))
+            Else
+                ctx->err = 1
+                Exit Function
+            End If
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+                ctx->err = 1
+                Exit Function
+            End If
+            ti = vTypeIdx
+            If TyFindFieldEx(tt, ti, VarPtr(fname), foff, fsz, fcnt, fieldTy) = 0 Then
+                ctx->err = 1
+                Exit Function
+            End If
+            If fcnt > 1 Then
+                LowStoreSized(ctx->list, fsz)
+            ElseIf fsz = TyPtrSize() Then
+                LowStoreSized(ctx->list, LowPtrFieldElemSize(fieldTy))
+            Else
+                ctx->err = 1
+                Exit Function
+            End If
+        Else
+            AstCopyStr(ast, base, VarPtr(name))
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+                    IrEmit(ctx->list, OP_STORE_PTR, 0, 0)
+                ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
+                    LowStoreSized(ctx->list, 4)
+                ElseIf vTy = TY_PTR_LONG Then
+                    LowStoreSized(ctx->list, 4)
+                Else
+                    IrEmit(ctx->list, OP_STORE_BYTE_RAX_CL, 0, 0)
+                End If
+            Else
+                IrEmit(ctx->list, OP_STORE_BYTE_RAX_CL, 0, 0)
+            End If
+        End If
+    End If
+    LowStmtAssignIndexStore = 1
+End Function
+
+Function LowStmtAssignIndex(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim leftK As Long
+    Dim leftIdx As Long
+    Dim base As Long
+
+    LowStmtAssignIndex = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    leftIdx = nodes[idx].left
+    leftK = nodes[leftIdx].kind
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    If leftK = AST_CALL Then
+        AstCopyStr(ast, leftIdx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_SINGLE_ARR Then
+                LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+            ElseIf vTy = TY_DOUBLE_ARR Then
+                LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+            End If
+        End If
+    Else
+        base = nodes[leftIdx].left
+        If nodes[base].kind = AST_VAR Then
+            AstCopyStr(ast, base, VarPtr(name))
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_SINGLE_ARR Then
+                    LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+                ElseIf vTy = TY_DOUBLE_ARR Then
+                    LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+                End If
+            End If
+        End If
+    End If
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    If LowAddr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+    If LowStmtAssignIndexStore(ctx, leftIdx, leftK) = 0 Then Exit Function
+    LowStmtAssignIndex = 1
+End Function
+
+Function LowStmtAssignMember(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim leftIdx As Long
+    Dim fsz As Long
+    Dim base As Long
+
+    LowStmtAssignMember = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    leftIdx = nodes[idx].left
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    If LowAddr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+    fsz = LowMemberFieldSize(ctx, leftIdx)
+    If fsz <= 0 Then
+        AstCopyStr(ast, leftIdx, VarPtr(name))
+        base = nodes[leftIdx].left
+        If nodes[base].kind = AST_VAR Then
+            AstCopyStr(ast, base, VarPtr(name))
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                fsz = LowTyNbytes(vTy)
+            End If
+        End If
+    End If
+    If fsz <= 0 Then
+        AstCopyStr(ast, leftIdx, VarPtr(name))
+        Print "error: bad member field '" + MakeStr(VarPtr(name)) + "'"
+        ctx->err = 1
+        Exit Function
+    End If
+    LowStoreSized(ctx->list, fsz)
+    LowStmtAssignMember = 1
+End Function
+
+Function LowStmtAssignVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+
+    LowStmtAssignVar = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    AstCopyStr(ast, nodes[idx].left, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        Print "error: assign to undefined '" + MakeStr(VarPtr(name)) + "'"
+        ctx->err = 1
+        Exit Function
+    End If
+    If vTy = TY_SINGLE Then
+        LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+    ElseIf vTy = TY_DOUBLE Then
+        LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+    Else
+        LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, vTy)
+    End If
+    If vByRef <> 0 Then
+        IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+        LowEmitLoadOff(ctx->list, vOff, vGlob)
+        IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+        IrEmit(ctx->list, OP_STORE_PTR, 0, 0)
+    ElseIf vTy = TY_STRING Then
+        LowEmitStoreString(ctx, vOff, vGlob)
+    Else
+        LowEmitStoreOff(ctx->list, vOff, vGlob)
+    End If
+    LowStmtAssignVar = 1
+End Function
+
+Function LowStmtAssign(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim leftK As Long
+    Dim leftIdx As Long
+
+    LowStmtAssign = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    leftIdx = nodes[idx].left
+    leftK = nodes[leftIdx].kind
+    If leftK = AST_INDEX Or leftK = AST_CALL Then
+        LowStmtAssign = LowStmtAssignIndex(ctx, idx)
+    ElseIf leftK = AST_MEMBER Then
+        LowStmtAssign = LowStmtAssignMember(ctx, idx)
+    ElseIf leftK = AST_VAR Then
+        LowStmtAssign = LowStmtAssignVar(ctx, idx)
+    Else
+        ctx->err = 1
+    End If
+End Function
+
+
+Function LowStmtInsMenu(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim offs As *Long
+    Dim tt As *TypeTable
+    Dim typeIdxs As *Long
+    Dim byRefs As *Long
+    Dim types As *Long
+    Dim list As *IrList
+    Dim args(15) As Long
+    Dim argi As Long
+    Dim argn As Long
+    Dim nArgs As Long
+    Dim stk As Long
+    Dim labSub As Long
+    Dim labDone As Long
+    Dim sApi(31) As Byte
+
+    LowStmtInsMenu = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    typeIdxs = ctx->typeIdxs
+    list = ctx->list
+    offs = ctx->offs
+    types = ctx->types
+    byRefs = ctx->byRefs
+
+        ' InsertMenuA(hMenu, pos, flags, uIDNewItem, lpNewItem)
+        list = ctx->list
+        argi = 0
+        argn = nodes[idx].left
+        While argn >= 0
+            If argi >= 16 Then
+                ctx->err = 1
+                Exit Function
+            End If
+            args[argi] = argn
+            argi = argi + 1
+            argn = nodes[argn].nxt
+        Wend
+        nArgs = argi
+        If nArgs < 3 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        stk = 48
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+        ' lpNewItem（第5引数）
+        If nArgs >= 4 Then
+            If LowExpr(ctx, nodes[args[3]].left) = 0 Then Exit Function
+        Else
+            IrEmit(list, OP_XOR_EAX, 0, 0)
+        End If
+        IrEmit(list, OP_STORE_RSP_RAX, 32, 0)
+        If nArgs >= 6 Then
+            ' hSubMenu <> 0 なら uIDNewItem = hSubMenu かつ MF_POPUP
+            labSub = LowNewLab(ctx)
+            labDone = LowNewLab(ctx)
+            If LowExpr(ctx, nodes[args[5]].left) = 0 Then Exit Function
+            IrEmit(list, OP_PUSH_RAX, 0, 0)
+            IrEmit(list, OP_TEST_RAX, 0, 0)
+            IrEmit(list, OP_JNZ, labSub, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[4]].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+            IrEmit(list, OP_JMP, labDone, 0)
+            IrEmit(list, OP_LABEL, labSub, 0)
+            IrEmit(list, OP_POP_RAX, 0, 0)
+            IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
+            IrEmit(list, OP_MOV_ECX, LOW_MF_POPUP, 0)
+            IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+            IrEmit(list, OP_LABEL, labDone, 0)
+        Else
+            If nArgs >= 5 Then
+                If LowExpr(ctx, nodes[args[4]].left) = 0 Then Exit Function
+            Else
+                IrEmit(list, OP_XOR_EAX, 0, 0)
+            End If
+            IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+            If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
+            If nArgs = 3 Then
+                IrEmit(list, OP_MOV_ECX, LOW_MF_SEPARATOR, 0)
+                IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+            End If
+            IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+        End If
+        If LowExpr(ctx, nodes[args[1]].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+        If LowExpr(ctx, nodes[args[0]].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+        lstrcpy(VarPtr(sApi), "InsertMenuA")
+        IrEmitStr(list, OP_CALL_API, IR_DLL_USER32, VarPtr(sApi))
+        LowEmitCallFinish(list, stk)
+        LowStmtInsMenu = 1
+End Function
+
+Function LowStmtPrint(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim offs As *Long
+    Dim lab As Long
+    Dim labStr As Long
+    Dim exprTy As Long
+    Dim tt As *TypeTable
+    Dim typeIdxs As *Long
+    Dim byRefs As *Long
+    Dim types As *Long
+    Dim list As *IrList
+
+    LowStmtPrint = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    typeIdxs = ctx->typeIdxs
+    list = ctx->list
+    offs = ctx->offs
+    types = ctx->types
+    byRefs = ctx->byRefs
+
+        If LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
+            If nodes[idx].left >= 0 Then
+                If nodes[nodes[idx].left].kind = AST_VAR Then
+                    AstCopyStr(ctx->ast, nodes[idx].left, VarPtr(name))
+                    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+                        vTy = -1
+                    End If
+                Else
+                    vTy = -1
+                End If
+            Else
+                vTy = -1
+            End If
+        Else
+            vTy = -1
+        End If
+        exprTy = LowExprType(ctx, nodes[idx].left)
+        If vTy = TY_BYTE_ARR Then
+            If LowExprArg(ctx, nodes[idx].left) = 0 Then Exit Function
+        ElseIf vTy = TY_PTR_BYTE Then
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        ElseIf LowIsStringExpr(ctx, nodes[idx].left) = 0 And exprTy = TY_DOUBLE And TyIs32() = 0 Then
+            ' Double → Include\default\DoubleStr.abp の StrD$（IEEE ビットは rcx 経由）
+            lstrcpy(VarPtr(name), "StrD$")
+            lab = LowFindFunc(ctx, VarPtr(name))
+            If lab < 0 Then
+                Print "error: missing 'StrD$' (Include\default\DoubleStr.abp)"
+                ctx->err = 1
+                Exit Function
+            End If
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
+        ElseIf LowIsStringExpr(ctx, nodes[idx].left) = 0 Then
+            labStr = LowEnsureRtStr(ctx)
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+            LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), labStr)
+        Else
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        End If
+        If PpIsN88Basic() <> 0 Then
+            lstrcpy(VarPtr(name), "N88_Print")
+            If nodes[idx].num <> 0 Then
+                lstrcpy(VarPtr(name), "N88_PrintStay")
+            End If
+            lab = LowFindFunc(ctx, VarPtr(name))
+            If lab < 0 Then
+                Print "error: missing '" + MakeStr(VarPtr(name)) + "'"
+                ctx->err = 1
+                Exit Function
+            End If
+            IrEmit(ctx->list, OP_SUB_RSP, LowCallStk(1), 0)
+            IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+            LowEmitLoadRegArgs(ctx->list, 1)
+            IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+            LowEmitCallFinish(ctx->list, LowCallStk(1))
+        Else
+            lab = LowEnsureRtPrint(ctx)
+            LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
+        End If
+        LowEmitStrCollectSafepoint(ctx)
+        LowStmtPrint = 1
+End Function
+
+Function LowStmtInput(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim offs As *Long
+    Dim lab As Long
+    Dim tt As *TypeTable
+    Dim typeIdxs As *Long
+    Dim byRefs As *Long
+    Dim types As *Long
+    Dim list As *IrList
+
+    LowStmtInput = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    typeIdxs = ctx->typeIdxs
+    list = ctx->list
+    offs = ctx->offs
+    types = ctx->types
+    byRefs = ctx->byRefs
+
+        ' Input var ― String はそのまま、数値型は十進整数へ変換
+        If nodes[idx].left < 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If nodes[nodes[idx].left].kind <> AST_VAR Then
+            ctx->err = 1
+            Exit Function
+        End If
+        AstCopyStr(ast, nodes[idx].left, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If vTy <> TY_STRING And vTy <> TY_LONG And vTy <> TY_BYTE And vTy <> TY_DOUBLE And vTy <> TY_SINGLE Then
+            Print "error: Input needs String or numeric variable"
+            ctx->err = 1
+            Exit Function
+        End If
+        lab = LowEnsureRtInput(ctx)
+        IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+        If vTy <> TY_STRING Then
+            If vTy = TY_SINGLE Or vTy = TY_DOUBLE Then
+                lab = LowEnsureRtValMilli(ctx)
+            Else
+                lab = LowEnsureRtVal(ctx)
+            End If
+            LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+            If vTy = TY_SINGLE Then
+                lab = LowEnsureRtMilliToSingle(ctx)
+                LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+            ElseIf vTy = TY_DOUBLE Then
+                lab = LowEnsureRtMilliToDouble(ctx)
+                LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+            End If
+        End If
+        If vByRef <> 0 Then
+            IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+            LowEmitLoadOff(ctx->list, vOff, vGlob)
+            IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+            IrEmit(ctx->list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+        ElseIf vTy = TY_STRING Then
+            LowEmitStoreString(ctx, vOff, vGlob)
+        Else
+            LowEmitStoreOff(ctx->list, vOff, vGlob)
+        End If
+        LowEmitStrCollectSafepoint(ctx)
+        LowStmtInput = 1
+End Function
+
+Function LowStmtOpen(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim mode As Long
+    Dim list As *IrList
+
+    LowStmtOpen = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    mode = nodes[idx].num
+    lstrcpy(VarPtr(name), "BaFileOpen")
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        Print "error: missing 'BaFileOpen' (Include\default\BasicFile.abp)"
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, mode, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_POP_RDX, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+    Else
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+        IrEmit(list, OP_POP_RAX, 0, 0)
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+    End If
+    LowEmitCallLab3(list, lab)
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtOpen = 1
+End Function
+
+Function LowStmtClose(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim list As *IrList
+
+    LowStmtClose = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    lstrcpy(VarPtr(name), "BaFileClose")
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        Print "error: missing 'BaFileClose' (Include\default\BasicFile.abp)"
+        ctx->err = 1
+        Exit Function
+    End If
+    If nodes[idx].left < 0 Then
+        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+    Else
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    End If
+    LowEmitCall1Rax(list, 0, 0, VarPtr(name), lab)
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtClose = 1
+End Function
+
+Function LowStmtFInputOne(ctx As *LowerCtx, varIdx As Long, labIn As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim list As *IrList
+
+    LowStmtFInputOne = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    If nodes[varIdx].kind <> AST_VAR Then
+        ctx->err = 1
+        Exit Function
+    End If
+    AstCopyStr(ast, varIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If vTy <> TY_STRING And vTy <> TY_LONG And vTy <> TY_BYTE And vTy <> TY_DOUBLE And vTy <> TY_SINGLE Then
+        Print "error: Input # needs String or numeric variable"
+        ctx->err = 1
+        Exit Function
+    End If
+    ' rax = file number（呼び出し側が再設定）
+    LowEmitCall1Rax(list, 0, 0, 0, labIn)
+    If vTy <> TY_STRING Then
+        If vTy = TY_SINGLE Or vTy = TY_DOUBLE Then
+            lab = LowEnsureRtValMilli(ctx)
+        Else
+            lab = LowEnsureRtVal(ctx)
+        End If
+        LowEmitCall1Rax(list, 0, 0, 0, lab)
+        If vTy = TY_SINGLE Then
+            lab = LowEnsureRtMilliToSingle(ctx)
+            LowEmitCall1Rax(list, 0, 0, 0, lab)
+        ElseIf vTy = TY_DOUBLE Then
+            lab = LowEnsureRtMilliToDouble(ctx)
+            LowEmitCall1Rax(list, 0, 0, 0, lab)
+        End If
+    End If
+    If vByRef <> 0 Then
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        LowEmitLoadOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+    ElseIf vTy = TY_STRING Then
+        LowEmitStoreString(ctx, vOff, vGlob)
+    Else
+        LowEmitStoreOff(list, vOff, vGlob)
+    End If
+    LowStmtFInputOne = 1
+End Function
+
+Function LowStmtFInput(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim list As *IrList
+    Dim cur As Long
+
+    LowStmtFInput = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    lstrcpy(VarPtr(name), "BaFileInput$")
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        Print "error: missing 'BaFileInput$' (Include\default\BasicFile.abp)"
+        ctx->err = 1
+        Exit Function
+    End If
+    If nodes[idx].left < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    cur = nodes[idx].right
+    While cur >= 0
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        If LowStmtFInputOne(ctx, cur, lab) = 0 Then Exit Function
+        cur = nodes[cur].nxt
+    Wend
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtFInput = 1
+End Function
+
+Function LowEmitToStringRax(ctx As *LowerCtx, exprIdx As Long) As Long
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim ety As Long
+
+    LowEmitToStringRax = 0
+    If LowIsStringExpr(ctx, exprIdx) <> 0 Then
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+        LowEmitToStringRax = 1
+        Exit Function
+    End If
+    ety = LowExprType(ctx, exprIdx)
+    If ety = TY_DOUBLE And TyIs32() = 0 Then
+        lstrcpy(VarPtr(name), "StrD$")
+        lab = LowFindFunc(ctx, VarPtr(name))
+        If lab < 0 Then
+            Print "error: missing 'StrD$'"
+            ctx->err = 1
+            Exit Function
+        End If
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
+    Else
+        lab = LowEnsureRtStr(ctx)
