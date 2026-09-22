@@ -1,0 +1,858 @@
+' ===================================================
+'  AstLowerApi - labels / API map / call emit
+' ===================================================
+
+    End If
+End Function
+
+Function LowNewLab(ctx As *LowerCtx) As Long
+    Dim id As Long
+    id = ctx->nextLab
+    ctx->nextLab = id + 1
+    LowNewLab = id
+End Function
+
+' 既知 kernel32 API 名へ正規化（小文字比較）。成功時 apiOut に正式名を書く
+Function LowKernelApiHit(name As *Byte, key As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiHit = 0
+    If LowNameEq(name, key) = 0 Then Exit Function
+    lstrcpy(apiOut, exp)
+    LowKernelApiHit = 1
+End Function
+
+Function LowKernelApiHit2(name As *Byte, key1 As *Byte, key2 As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiHit2 = 0
+    If LowNameEq(name, key1) <> 0 Then
+        lstrcpy(apiOut, exp)
+        LowKernelApiHit2 = 1
+        Exit Function
+    End If
+    If LowNameEq(name, key2) <> 0 Then
+        lstrcpy(apiOut, exp)
+        LowKernelApiHit2 = 1
+    End If
+End Function
+
+Function LowMapKernelApiFile(name As *Byte, apiOut As *Byte) As Long
+    Dim k(31) As Byte
+
+    LowMapKernelApiFile = 0
+    lstrcpy(VarPtr(k), "createfile")
+    If LowKernelApiHit2(name, VarPtr(k), "createfilea", "CreateFileA", apiOut) <> 0 Then
+        LowMapKernelApiFile = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "closehandle")
+    If LowKernelApiHit(name, VarPtr(k), "CloseHandle", apiOut) <> 0 Then
+        LowMapKernelApiFile = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "getfilesize")
+    If LowKernelApiHit(name, VarPtr(k), "GetFileSize", apiOut) <> 0 Then
+        LowMapKernelApiFile = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "readfile")
+    If LowKernelApiHit(name, VarPtr(k), "ReadFile", apiOut) <> 0 Then
+        LowMapKernelApiFile = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "writefile")
+    If LowKernelApiHit(name, VarPtr(k), "WriteFile", apiOut) <> 0 Then
+        LowMapKernelApiFile = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "getfileattributes")
+    If LowKernelApiHit2(name, VarPtr(k), "getfileattributesa", "GetFileAttributesA", apiOut) <> 0 Then
+        LowMapKernelApiFile = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "getcommandline")
+    If LowKernelApiHit2(name, VarPtr(k), "getcommandlinea", "GetCommandLineA", apiOut) <> 0 Then
+        LowMapKernelApiFile = 1
+        Exit Function
+    End If
+End Function
+
+Function LowMapKernelApiStr(name As *Byte, apiOut As *Byte) As Long
+    Dim k(31) As Byte
+
+    LowMapKernelApiStr = 0
+    lstrcpy(VarPtr(k), "lstrlen")
+    If LowKernelApiHit2(name, VarPtr(k), "lstrlena", "lstrlenA", apiOut) <> 0 Then
+        LowMapKernelApiStr = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "lstrcpy")
+    If LowKernelApiHit2(name, VarPtr(k), "lstrcpya", "lstrcpyA", apiOut) <> 0 Then
+        LowMapKernelApiStr = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "lstrcat")
+    If LowKernelApiHit2(name, VarPtr(k), "lstrcata", "lstrcatA", apiOut) <> 0 Then
+        LowMapKernelApiStr = 1
+        Exit Function
+    End If
+End Function
+
+Function LowMapKernelApiHeap(name As *Byte, apiOut As *Byte) As Long
+    Dim k(31) As Byte
+
+    LowMapKernelApiHeap = 0
+    lstrcpy(VarPtr(k), "getprocessheap")
+    If LowKernelApiHit(name, VarPtr(k), "GetProcessHeap", apiOut) <> 0 Then
+        LowMapKernelApiHeap = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "heapalloc")
+    If LowKernelApiHit(name, VarPtr(k), "HeapAlloc", apiOut) <> 0 Then
+        LowMapKernelApiHeap = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "heapfree")
+    If LowKernelApiHit(name, VarPtr(k), "HeapFree", apiOut) <> 0 Then
+        LowMapKernelApiHeap = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "getstdhandle")
+    If LowKernelApiHit(name, VarPtr(k), "GetStdHandle", apiOut) <> 0 Then
+        LowMapKernelApiHeap = 1
+        Exit Function
+    End If
+End Function
+
+Function LowMapKernelApi(name As *Byte, apiOut As *Byte) As Long
+    LowMapKernelApi = 0
+    If LowMapKernelApiFile(name, apiOut) <> 0 Then
+        LowMapKernelApi = 1
+        Exit Function
+    End If
+    If LowMapKernelApiStr(name, apiOut) <> 0 Then
+        LowMapKernelApi = 1
+        Exit Function
+    End If
+    If LowMapKernelApiHeap(name, apiOut) <> 0 Then
+        LowMapKernelApi = 1
+    End If
+End Function
+
+Function LowFindFunc(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim labs As *Long
+    Dim off As Long
+    LowFindFunc = -1
+    names = ctx->funcNames
+    labs = ctx->funcLabs
+    i = 0
+    While i < ctx->funcCount
+        off = i * SYM_NAME_LEN
+        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+            LowFindFunc = labs[i]
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowFindFuncByRefs(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim bys As *Long
+    Dim off As Long
+    LowFindFuncByRefs = 0
+    names = ctx->funcNames
+    bys = ctx->funcByRefs
+    i = 0
+    While i < ctx->funcCount
+        off = i * SYM_NAME_LEN
+        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+            LowFindFuncByRefs = bys[i]
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowAddFunc(ctx As *LowerCtx, name As *Byte, lab As Long, byRefBits As Long) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim labs As *Long
+    Dim bys As *Long
+    Dim j As Long
+    Dim off As Long
+
+    LowAddFunc = 0
+    If LowEnsureFuncCap(ctx) = 0 Then
+        Print "error: out of memory (functions)"
+        ctx->err = 1
+        Exit Function
+    End If
+    i = ctx->funcCount
+    names = ctx->funcNames
+    labs = ctx->funcLabs
+    bys = ctx->funcByRefs
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    labs[i] = lab
+    bys[i] = byRefBits
+    ctx->funcCount = i + 1
+    LowAddFunc = 1
+End Function
+
+' ---- Declare Lib テーブル ----
+
+Function LowFindDecl(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindDecl = -1
+    names = ctx->declNames
+    i = 0
+    While i < ctx->declCount
+        off = i * SYM_NAME_LEN
+        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+            LowFindDecl = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowAddDecl(ctx As *LowerCtx, name As *Byte, api As *Byte, dllKind As Long, byRefBits As Long) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim apis As *Byte
+    Dim dlls As *Long
+    Dim bys As *Long
+    Dim j As Long
+    Dim off As Long
+
+    LowAddDecl = 0
+    If LowEnsureDeclCap(ctx) = 0 Then
+        Print "error: out of memory (Declare)"
+        ctx->err = 1
+        Exit Function
+    End If
+    i = ctx->declCount
+    names = ctx->declNames
+    apis = ctx->declApiNames
+    dlls = ctx->declDlls
+    bys = ctx->declByRefs
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    j = 0
+    While api[j] <> 0 And j < SYM_NAME_LEN - 1
+        apis[off + j] = api[j]
+        j = j + 1
+    Wend
+    apis[off + j] = 0
+    dlls[i] = dllKind
+    bys[i] = byRefBits
+    ctx->declCount = i + 1
+    LowAddDecl = 1
+End Function
+
+Sub LowDeclApiName(ctx As *LowerCtx, di As Long, dst As *Byte)
+    Dim apis As *Byte
+    Dim off As Long
+    Dim j As Long
+    apis = ctx->declApiNames
+    off = di * SYM_NAME_LEN
+    j = 0
+    While apis[off + j] <> 0 And j < SYM_NAME_LEN - 1
+        dst[j] = apis[off + j]
+        j = j + 1
+    Wend
+    dst[j] = 0
+End Sub
+
+' actba64 のセルフホスト構文は *Long 仮引数を扱えないため *Byte で受ける
+Sub LowFreeDecl4(a As *Byte, b As *Byte, c As *Byte, d As *Byte)
+    If a <> NULL Then free(a)
+    If b <> NULL Then free(b)
+    If c <> NULL Then free(c)
+    If d <> NULL Then free(d)
+End Sub
+
+Sub LowFree1(p As *Byte)
+    If p <> NULL Then free(p)
+End Sub
+
+' AstToIr エラー時のバッファ一括解放（行数削減; 引数は g_fb*）
+Sub LowFreeAstBufs()
+    LowFree1(g_fb0)
+    LowFree1(g_fb1)
+    LowFree1(g_fb2)
+    LowFree1(g_fb3)
+    LowFree1(g_fb4)
+    LowFree1(g_fb5)
+    LowFree1(g_fb6)
+    LowFree1(g_fb7)
+    LowFree1(g_fb8)
+    LowFree1(g_fb9)
+    LowFree1(g_fb10)
+    LowFree1(g_fb11)
+    LowFree1(g_fb12)
+    LowFree1(g_fb13)
+    LowFree1(g_fb14)
+    LowFree1(g_fb15)
+    LowFreeDecl4(g_fb16, g_fb17, g_fb18, g_fb19)
+    g_fb0 = NULL
+    g_fb1 = NULL
+    g_fb2 = NULL
+    g_fb3 = NULL
+    g_fb4 = NULL
+    g_fb5 = NULL
+    g_fb6 = NULL
+    g_fb7 = NULL
+    g_fb8 = NULL
+    g_fb9 = NULL
+    g_fb10 = NULL
+    g_fb11 = NULL
+    g_fb12 = NULL
+    g_fb13 = NULL
+    g_fb14 = NULL
+    g_fb15 = NULL
+    g_fb16 = NULL
+    g_fb17 = NULL
+    g_fb18 = NULL
+    g_fb19 = NULL
+    g_gNames = NULL
+    g_gOffs = NULL
+    g_gTypes = NULL
+    g_gTypeIdxs = NULL
+    If g_preciseRoots <> NULL Then free(g_preciseRoots)
+    If g_fnPreciseRoots <> NULL Then free(g_fnPreciseRoots)
+    If g_gNbytes <> NULL Then free(g_gNbytes)
+    g_preciseRoots = NULL
+    g_fnPreciseRoots = NULL
+    g_gNbytes = NULL
+End Sub
+
+Function LowAlign16(n As Long) As Long
+    LowAlign16 = (n + 15) And (0 - 16)
+End Function
+
+Function LowCallStk(nArgs As Long) As Long
+    Dim stk As Long
+    If TyIs32() <> 0 Then
+        LowCallStk = nArgs * 4
+        Exit Function
+    End If
+    stk = 32
+    If nArgs > 4 Then
+        stk = stk + (nArgs - 4) * 8
+    End If
+    LowCallStk = (stk + 15) And (0 - 16)
+End Function
+
+Sub LowEmitLoadRegArgs(list As *IrList, nArgs As Long)
+    Dim ps As Long
+    If TyIs32() <> 0 Then Exit Sub
+    ps = 8
+    If nArgs >= 4 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
+        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+    End If
+    If nArgs >= 3 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    End If
+    If nArgs >= 2 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    End If
+    If nArgs >= 1 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 0, 0)
+        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    End If
+End Sub
+
+Sub LowEmitCallFinish(list As *IrList, stk As Long)
+    If TyIs32() <> 0 Then Exit Sub
+    If stk <= 0 Then Exit Sub
+    IrEmit(list, OP_ADD_RSP, stk, 0)
+End Sub
+
+' rax already holds arg0
+Sub LowEmitCall1Rax(list As *IrList, isApi As Long, dllKind As Long, apiName As *Byte, lab As Long)
+    Dim stk As Long
+    stk = LowCallStk(1)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(list, 1)
+    If isApi <> 0 Then
+        IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    Else
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+    End If
+    LowEmitCallFinish(list, stk)
+End Sub
+
+' 32bit stdcall: ecx=arg0, edx=arg1 をスタックへ積んで呼ぶ。64bit は既に rcx/rdx。
+Sub LowEmitCallLab2(list As *IrList, lab As Long)
+    Dim stk As Long
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
+    stk = LowCallStk(2)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+' 32bit stdcall: ecx=arg0, edx=arg1, eax=arg2。64bit は rcx/rdx/r8。
+Sub LowEmitCallLab3(list As *IrList, lab As Long)
+    Dim stk As Long
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+Sub LowEmitApiImm1(list As *IrList, dllKind As Long, apiName As *Byte, imm As DWord)
+    Dim stk As Long
+    stk = LowCallStk(1)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_MOV_EAX_IMM, imm, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(list, 1)
+    IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+Sub LowEmitCaptureArg0(list As *IrList, disp As Long)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_LOAD_LOCAL, 8, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    Else
+        IrEmit(list, OP_STORE_LOCAL_ECX, disp, 0)
+    End If
+End Sub
+
+Sub LowEmitCaptureArg1(list As *IrList, disp As Long)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_LOAD_LOCAL, 12, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    Else
+        IrEmit(list, OP_STORE_LOCAL_EDX, disp, 0)
+    End If
+End Sub
+
+Sub LowEmitCaptureArg2(list As *IrList, disp As Long)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_LOAD_LOCAL, 16, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    Else
+        IrEmit(list, OP_MOV_RAX_R8, 0, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    End If
+End Sub
+
+Sub LowEmitLeaveN(list As *IrList, nArgs As Long)
+    Dim n As Long
+    n = 0
+    If TyIs32() <> 0 Then
+        n = nArgs * 4
+    End If
+    IrEmit(list, OP_LEAVE, n, 0)
+End Sub
+
+Sub LowEmitScalePtr(list As *IrList)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_SHL_ECX_2, 0, 0)
+    Else
+        IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    End If
+End Sub
+
+Function LowStrLen(s As *Byte) As Long
+    Dim n As Long
+    n = 0
+    While s[n] <> 0
+        n = n + 1
+    Wend
+    LowStrLen = n
+End Function
+
+Sub LowStrCat(dst As *Byte, a As *Byte, b As *Byte, maxLen As Long)
+    Dim i As Long
+    Dim j As Long
+    i = 0
+    While a[i] <> 0 And i < maxLen - 1
+        dst[i] = a[i]
+        i = i + 1
+    Wend
+    j = 0
+    While b[j] <> 0 And i < maxLen - 1
+        dst[i] = b[j]
+        i = i + 1
+        j = j + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub LowStrLeft(dst As *Byte, s As *Byte, n As Long, maxLen As Long)
+    Dim i As Long
+    Dim ln As Long
+    ln = LowStrLen(s)
+    If n < 0 Then n = 0
+    If n > ln Then n = ln
+    If n > maxLen - 1 Then n = maxLen - 1
+    i = 0
+    While i < n
+        dst[i] = s[i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub LowStrMid(dst As *Byte, s As *Byte, start1 As Long, count As Long, maxLen As Long)
+    Dim ln As Long
+    Dim idx As Long
+    Dim i As Long
+    Dim take As Long
+    ln = LowStrLen(s)
+    If start1 < 1 Then start1 = 1
+    idx = start1 - 1
+    If idx > ln Then idx = ln
+    If count < 0 Then
+        take = ln - idx
+    Else
+        take = count
+    End If
+    If idx + take > ln Then take = ln - idx
+    If take < 0 Then take = 0
+    If take > maxLen - 1 Then take = maxLen - 1
+    i = 0
+    While i < take
+        dst[i] = s[idx + i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub LowIntToStr(dst As *Byte, v As Long, maxLen As Long)
+    Dim neg As Long
+    Dim n As Long
+    Dim tmp(31) As Byte
+    Dim i As Long
+    Dim j As Long
+    Dim d As Long
+
+    If maxLen < 2 Then
+        dst[0] = 0
+        Exit Sub
+    End If
+    neg = 0
+    n = v
+    If n < 0 Then
+        neg = 1
+        n = 0 - n
+    End If
+    If n = 0 Then
+        dst[0] = 48
+        dst[1] = 0
+        Exit Sub
+    End If
+    i = 0
+    While n > 0
+        d = n
+        While d >= 10
+            d = d - 10
+        Wend
+        tmp[i] = d + 48
+        i = i + 1
+        ' n = n / 10
+        j = 0
+        While n >= 10
+            n = n - 10
+            j = j + 1
+        Wend
+        n = j
+    Wend
+    j = 0
+    If neg <> 0 Then
+        If j < maxLen - 1 Then
+            dst[j] = 45
+            j = j + 1
+        End If
+    End If
+    While i > 0
+        i = i - 1
+        If j < maxLen - 1 Then
+            dst[j] = tmp[i]
+            j = j + 1
+        End If
+    Wend
+    dst[j] = 0
+End Sub
+
+' Fold const string expression into dst. Returns 1 on success.
+Function LowConstStr(ast As *Ast, idx As Long, dst As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim a(63) As Byte
+    Dim b(63) As Byte
+    Dim n As Long
+    Dim start1 As Long
+    Dim count As Long
+    Dim bi As Long
+    Dim rIdx As Long
+    Dim eIdx As Long
+
+    LowConstStr = 0
+    If idx < 0 Then Exit Function
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_STRING Then
+        AstCopyStr(ast, idx, dst)
+        LowConstStr = 1
+    ElseIf nodes[idx].kind = AST_BINOP Then
+        If nodes[idx].num = BOP_ADD Or nodes[idx].num = BOP_CAT Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
+            If LowConstStr(ast, nodes[idx].right, VarPtr(b)) = 0 Then Exit Function
+            LowStrCat(dst, VarPtr(a), VarPtr(b), 64)
+            LowConstStr = 1
+        End If
+    ElseIf nodes[idx].kind = AST_BUILTIN Then
+        bi = nodes[idx].num
+        If bi = BI_LEFT Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
+            rIdx = nodes[idx].right
+            If rIdx < 0 Then Exit Function
+            If nodes[rIdx].kind <> AST_NUM Then Exit Function
+            n = nodes[rIdx].num
+            LowStrLeft(dst, VarPtr(a), n, 64)
+            LowConstStr = 1
+        ElseIf bi = BI_MID Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
+            rIdx = nodes[idx].right
+            If rIdx < 0 Then Exit Function
+            If nodes[rIdx].kind <> AST_NUM Then Exit Function
+            start1 = nodes[rIdx].num
+            count = -1
+            eIdx = nodes[idx].extra
+            If eIdx >= 0 Then
+                If nodes[eIdx].kind <> AST_NUM Then Exit Function
+                count = nodes[eIdx].num
+            End If
+            LowStrMid(dst, VarPtr(a), start1, count, 64)
+            LowConstStr = 1
+        ' BI_STR: const-fold はホスト ByRef/バッファで不安定なため実行時 Str$ に任せる
+        End If
+    End If
+End Function
+
+Function LowConstInt(ast As *Ast, idx As Long, ByRef outV As Long) As Long
+    Dim nodes As *AstNode
+    Dim buf(63) As Byte
+    Dim bi As Long
+
+    LowConstInt = 0
+    If idx < 0 Then Exit Function
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_NUM Then
+        If nodes[idx].extra = AST_NUM_MILLI Then Exit Function
+        If nodes[idx].extra = 1 Then Exit Function
+        outV = nodes[idx].num
+        LowConstInt = 1
+    ElseIf nodes[idx].kind = AST_BUILTIN Then
+        bi = nodes[idx].num
+        If bi = BI_LEN Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(buf)) = 0 Then Exit Function
+            outV = LowStrLen(VarPtr(buf))
+            LowConstInt = 1
+        ElseIf bi = BI_ASC Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(buf)) = 0 Then Exit Function
+            outV = buf[0]
+            LowConstInt = 1
+        End If
+    End If
+End Function
+
+Sub LowEmitExitEax(ctx As *LowerCtx)
+    Dim sExit(15) As Byte
+    lstrcpy(VarPtr(sExit), "ExitProcess")
+    LowEmitCall1Rax(ctx->list, 1, IR_DLL_KERNEL32, VarPtr(sExit), 0)
+End Sub
+
+Sub LowEmitExitImm(ctx As *LowerCtx, code As DWord)
+    Dim sExit(15) As Byte
+    lstrcpy(VarPtr(sExit), "ExitProcess")
+    IrEmit(ctx->list, OP_MOV_EAX_IMM, code, 0)
+    LowEmitCall1Rax(ctx->list, 1, IR_DLL_KERNEL32, VarPtr(sExit), 0)
+End Sub
+
+' Nested API call. 64-bit allocates shadow space; 32-bit stdcall uses regs already set via stack in emit32.
+Sub LowEmitApiCallShadow(list As *IrList, dllKind As Long, apiName As *Byte)
+    Dim stk As Long
+    stk = LowCallStk(0)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+' rax = byte count; HeapAlloc(GetProcessHeap(), flags, rax)
+Sub LowEmitHeapAllocRax(list As *IrList, flags As DWord)
+    Dim stk As Long
+    Dim sApi(15) As Byte
+    Dim ps As Long
+    ps = TyPtrSize()
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, flags, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
+    LowEmitLoadRegArgs(list, 3)
+    lstrcpy(VarPtr(sApi), "HeapAlloc")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    LowEmitCallFinish(list, stk)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+End Sub
+
+' rax = block; HeapFree(GetProcessHeap(), 0, rax)
+Sub LowEmitHeapFreeRax(list As *IrList)
+    Dim stk As Long
+    Dim sApi(15) As Byte
+    Dim ps As Long
+    ps = TyPtrSize()
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
+    LowEmitLoadRegArgs(list, 3)
+    lstrcpy(VarPtr(sApi), "HeapFree")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    LowEmitCallFinish(list, stk)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+End Sub
+
+Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+    Dim si As Long
+    Dim name(63) As Byte
+    Dim bi As Long
+    Dim off As Long
+    Dim ty As Long
+    Dim typeIdx As Long
+    Dim byRef As Long
+    Dim isGlob As Long
+
+    LowIsStringExpr = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_STRING Then
+        LowIsStringExpr = 1
+        Exit Function
+    End If
+    If k = AST_BINOP Then
+        If nodes[idx].num = BOP_ADD Or nodes[idx].num = BOP_CAT Then
+            If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Then
+                LowIsStringExpr = 1
+                Exit Function
+            End If
+            If LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then
+                LowIsStringExpr = 1
+                Exit Function
+            End If
+        End If
+        Exit Function
+    End If
+    If k = AST_BUILTIN Then
+        bi = nodes[idx].num
+        If bi = BI_LEFT Or bi = BI_MID Or bi = BI_RIGHT Then
+            LowIsStringExpr = 1
+        End If
+        If bi = BI_CHR Then
+            LowIsStringExpr = 1
+        End If
+        If bi = BI_STR Then
+            LowIsStringExpr = 1
+        End If
+        If bi = BI_MAKESTR Then
+            LowIsStringExpr = 1
+        End If
+        Exit Function
+    End If
+    If k = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowFindStrConst(ctx, VarPtr(name)) >= 0 Then
+            LowIsStringExpr = 1
+            Exit Function
+        End If
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_STRING Then LowIsStringExpr = 1
+        End If
+        Exit Function
+    End If
+    If k = AST_CALL Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_STRING_ARR Then
+                If nodes[idx].num = 1 Then LowIsStringExpr = 1
+            End If
+        Else
+            If LowFindFunc(ctx, VarPtr(name)) >= 0 Then
+                si = 0
+                While name[si] <> 0
+                    si = si + 1
+                Wend
+                If si > 0 Then
