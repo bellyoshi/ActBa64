@@ -5,8 +5,7 @@
 #   .\run_test2.ps1 stage0          # bin\stage0\actba64.exe（AB4.20 手動ビルド・64bit 出力）
 #   .\run_test2.ps1 stage0 -Actba32 # 同上コンパイラで PE32 出力
 #   .\run_test2.ps1 stage1
-#   .\run_test2.ps1 stage2
-#   .\run_test2.ps1 stage3          # 固定点確認用（日常テストは stage1/stage2 で十分）
+#   .\run_test2.ps1 stage2          # 固定点確認用（日常テストは stage1 で十分）
 #   .\run_test2.ps1 -Rebuild        # 先に build.ps1（stage1 は -Stage1Only。stage0 では無効）
 #   .\run_test2.ps1 -Quiet
 #   .\run_test2.ps1 -KeepArtifacts
@@ -29,7 +28,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("stage0", "stage1", "stage2", "stage3")]
+    [ValidateSet("stage0", "stage1", "stage2")]
     [string]$Stage = "stage1",
     [string]$Linker = "",
     [int]$TimeoutSec = 5,
