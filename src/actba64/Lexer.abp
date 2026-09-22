@@ -36,6 +36,13 @@ Const TK_ERROR = 99
 
 Const LEX_MAX_TOKS = 131072
 Const LEX_TEXT_LEN = 256
+' Dim buf(…) 用（LEX_TEXT_LEN - 1）
+Const LEX_TEXT_MAXIDX = 255
+' 小数リテラルの千分率（3 桁 → *1000）
+Const LEX_FLOAT_FRAC_DIGITS = 3
+Const LEX_FLOAT_SCALE = 1000
+Const LEX_RADIX_DEC = 10
+Const LEX_RADIX_HEX = 16
 
 Type Tok
     kind As Long
@@ -55,44 +62,6 @@ Type Lexer
     srcLine As Long
 End Type
 
-Function LexIsSpace(c As Long) As Long
-    If c = 32 Or c = 9 Or c = 10 Or c = 13 Then
-        LexIsSpace = 1
-    Else
-        LexIsSpace = 0
-    End If
-End Function
-
-Function LexIsAlpha(c As Long) As Long
-    If c >= 65 And c <= 90 Then
-        LexIsAlpha = 1
-    ElseIf c >= 97 And c <= 122 Then
-        LexIsAlpha = 1
-    ElseIf c = 95 Then
-        LexIsAlpha = 1
-    Else
-        LexIsAlpha = 0
-    End If
-End Function
-
-Function LexIsDigit(c As Long) As Long
-    If c >= 48 And c <= 57 Then
-        LexIsDigit = 1
-    Else
-        LexIsDigit = 0
-    End If
-End Function
-
-Function LexIsAlnum(c As Long) As Long
-    If LexIsAlpha(c) <> 0 Then
-        LexIsAlnum = 1
-    ElseIf LexIsDigit(c) <> 0 Then
-        LexIsAlnum = 1
-    Else
-        LexIsAlnum = 0
-    End If
-End Function
-
 ' 行末の _ （および直後の空白・'注釈）→ 次行へ継続。識別子 _foo とは区別
 Function LexLineContHere(lx As *Lexer) As Long
     Dim src As *Byte
@@ -103,25 +72,25 @@ Function LexLineContHere(lx As *Lexer) As Long
     src = lx->src
     p = lx->pos + 1
     c = src[p]
-    If LexIsAlnum(c) <> 0 Then Exit Function
-    If c = 36 Then Exit Function
-    While src[p] = 32 Or src[p] = 9
+    If IsIdentCont(c) <> 0 Then Exit Function
+    If c = CH_DOLLAR Then Exit Function
+    While IsHSpace(src[p]) <> 0
         p = p + 1
     Wend
-    If src[p] = 39 Then
-        While src[p] <> 0 And src[p] <> 10 And src[p] <> 13
+    If src[p] = CH_SQUOTE Then
+        While src[p] <> CH_NUL And IsEol(src[p]) = 0
             p = p + 1
         Wend
     End If
-    If src[p] <> 0 And src[p] <> 10 And src[p] <> 13 Then Exit Function
+    If src[p] <> CH_NUL And IsEol(src[p]) = 0 Then Exit Function
     lx->pos = p
-    If src[lx->pos] = 13 Then
+    If src[lx->pos] = CH_CR Then
         lx->srcLine = lx->srcLine + 1
         lx->pos = lx->pos + 1
-        If src[lx->pos] = 10 Then
+        If src[lx->pos] = CH_NL Then
             lx->pos = lx->pos + 1
         End If
-    ElseIf src[lx->pos] = 10 Then
+    ElseIf src[lx->pos] = CH_NL Then
         lx->srcLine = lx->srcLine + 1
         lx->pos = lx->pos + 1
     End If
@@ -162,11 +131,11 @@ Sub LexStoreText(lx As *Lexer, idx As Long, s As *Byte, n As Long)
     texts = lx->texts
     off = idx * LEX_TEXT_LEN
     i = 0
-    While i < n And i < LEX_TEXT_LEN - 1
+    While i < n And i < LEX_TEXT_MAXIDX
         texts[off + i] = s[i]
         i = i + 1
     Wend
-    texts[off + i] = 0
+    texts[off + i] = CH_NUL
 End Sub
 
 Sub LexCopyText(lx As *Lexer, idx As Long, dst As *Byte)
@@ -178,10 +147,10 @@ Sub LexCopyText(lx As *Lexer, idx As Long, dst As *Byte)
     i = 0
     Do
         dst[i] = texts[off + i]
-        If texts[off + i] = 0 Then Exit Sub
+        If texts[off + i] = CH_NUL Then Exit Sub
         i = i + 1
         If i >= LEX_TEXT_LEN Then
-            dst[LEX_TEXT_LEN - 1] = 0
+            dst[LEX_TEXT_MAXIDX] = CH_NUL
             Exit Sub
         End If
     Loop
@@ -226,7 +195,7 @@ End Function
 Sub LexSkipEol(lx As *Lexer)
     Dim src As *Byte
     src = lx->src
-    While src[lx->pos] <> 0 And src[lx->pos] <> 10 And src[lx->pos] <> 13
+    While src[lx->pos] <> CH_NUL And IsEol(src[lx->pos]) = 0
         lx->pos = lx->pos + 1
     Wend
 End Sub
@@ -235,7 +204,7 @@ Function LexSkipComment(lx As *Lexer) As Long
     Dim src As *Byte
     LexSkipComment = 0
     src = lx->src
-    If src[lx->pos + 1] <> 42 Then
+    If src[lx->pos + 1] <> CH_STAR Then
         LexPush(lx, TK_SLASH)
         lx->pos = lx->pos + 1
         LexSkipComment = 1
@@ -243,21 +212,21 @@ Function LexSkipComment(lx As *Lexer) As Long
     End If
     lx->pos = lx->pos + 2
     Do
-        If src[lx->pos] = 0 Then
+        If src[lx->pos] = CH_NUL Then
             lx->err = 1
             Exit Function
         End If
-        If src[lx->pos] = 13 Then
+        If src[lx->pos] = CH_CR Then
             lx->srcLine = lx->srcLine + 1
             lx->pos = lx->pos + 1
-            If src[lx->pos] = 10 Then
+            If src[lx->pos] = CH_NL Then
                 lx->pos = lx->pos + 1
             End If
-        ElseIf src[lx->pos] = 10 Then
+        ElseIf src[lx->pos] = CH_NL Then
             lx->srcLine = lx->srcLine + 1
             lx->pos = lx->pos + 1
-        ElseIf src[lx->pos] = 42 Then
-            If src[lx->pos + 1] = 47 Then
+        ElseIf src[lx->pos] = CH_STAR Then
+            If src[lx->pos + 1] = CH_SLASH Then
                 lx->pos = lx->pos + 2
                 Exit Do
             End If
@@ -274,25 +243,20 @@ Function LexHexLit(lx As *Lexer) As Long
     Dim n2 As Long
     Dim c As Long
     Dim n As Long
+    Dim v As Long
     Dim idx As Long
     Dim toks As *Tok
     LexHexLit = 0
     src = lx->src
     n2 = src[lx->pos + 1]
-    If n2 = 72 Or n2 = 104 Then
+    If IsHexPrefix(n2) <> 0 Then
         lx->pos = lx->pos + 2
         n = 0
         Do
             c = src[lx->pos]
-            If c >= 48 And c <= 57 Then
-                n = n * 16 + (c - 48)
-            ElseIf c >= 65 And c <= 70 Then
-                n = n * 16 + (c - 55)
-            ElseIf c >= 97 And c <= 102 Then
-                n = n * 16 + (c - 87)
-            Else
-                Exit Do
-            End If
+            v = HexDigitValue(c)
+            If v < 0 Then Exit Do
+            n = n * LEX_RADIX_HEX + v
             lx->pos = lx->pos + 1
         Loop
         idx = LexPush(lx, TK_NUMBER)
@@ -316,31 +280,31 @@ Function LexNumber(lx As *Lexer) As Long
     LexNumber = 0
     src = lx->src
     n = 0
-    While LexIsDigit(src[lx->pos]) <> 0
-        n = n * 10 + (src[lx->pos] - 48)
+    While IsDigit(src[lx->pos]) <> 0
+        n = n * LEX_RADIX_DEC + DigitValue(src[lx->pos])
         lx->pos = lx->pos + 1
     Wend
     ' 1.5 / 6.28 → TK_FLOAT（千分率: 1500 / 6280）
-    If src[lx->pos] = 46 Then
-        If LexIsDigit(src[lx->pos + 1]) <> 0 Then
+    If src[lx->pos] = CH_DOT Then
+        If IsDigit(src[lx->pos + 1]) <> 0 Then
             lx->pos = lx->pos + 1
             n2 = 0
             i = 0
-            While LexIsDigit(src[lx->pos]) <> 0
-                If i < 3 Then
-                    n2 = n2 * 10 + (src[lx->pos] - 48)
+            While IsDigit(src[lx->pos]) <> 0
+                If i < LEX_FLOAT_FRAC_DIGITS Then
+                    n2 = n2 * LEX_RADIX_DEC + DigitValue(src[lx->pos])
                     i = i + 1
                 End If
                 lx->pos = lx->pos + 1
             Wend
-            While i < 3
-                n2 = n2 * 10
+            While i < LEX_FLOAT_FRAC_DIGITS
+                n2 = n2 * LEX_RADIX_DEC
                 i = i + 1
             Wend
             idx = LexPush(lx, TK_FLOAT)
             If idx < 0 Then Exit Function
             toks = lx->toks
-            toks[idx].num = n * 1000 + n2
+            toks[idx].num = n * LEX_FLOAT_SCALE + n2
         Else
             idx = LexPush(lx, TK_NUMBER)
             If idx < 0 Then Exit Function
@@ -362,23 +326,23 @@ Function LexIdent(lx As *Lexer) As Long
     Dim n As Long
     Dim i As Long
     Dim idx As Long
-    Dim buf(255) As Byte
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
     LexIdent = 0
     src = lx->src
     start = lx->pos
-    While LexIsAlnum(src[lx->pos]) <> 0
+    While IsIdentCont(src[lx->pos]) <> 0
         lx->pos = lx->pos + 1
     Wend
-    If src[lx->pos] = 36 Then
+    If src[lx->pos] = CH_DOLLAR Then
         lx->pos = lx->pos + 1
     End If
     n = lx->pos - start
     i = 0
-    While i < n And i < LEX_TEXT_LEN - 1
+    While i < n And i < LEX_TEXT_MAXIDX
         buf[i] = src[start + i]
         i = i + 1
     Wend
-    buf[i] = 0
+    buf[i] = CH_NUL
     idx = LexPush(lx, TK_IDENT)
     If idx < 0 Then Exit Function
     LexStoreText(lx, idx, VarPtr(buf), i)
@@ -389,20 +353,20 @@ Function LexString(lx As *Lexer) As Long
     Dim src As *Byte
     Dim i As Long
     Dim idx As Long
-    Dim buf(255) As Byte
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
     LexString = 0
     src = lx->src
     lx->pos = lx->pos + 1
     i = 0
     Do
-        If src[lx->pos] = 0 Then
+        If src[lx->pos] = CH_NUL Then
             lx->err = 1
             Exit Function
         End If
-        If src[lx->pos] = 34 Then
-            If src[lx->pos + 1] = 34 Then
-                If i < LEX_TEXT_LEN - 1 Then
-                    buf[i] = 34
+        If src[lx->pos] = CH_DQUOTE Then
+            If src[lx->pos + 1] = CH_DQUOTE Then
+                If i < LEX_TEXT_MAXIDX Then
+                    buf[i] = CH_DQUOTE
                     i = i + 1
                 End If
                 lx->pos = lx->pos + 2
@@ -410,14 +374,14 @@ Function LexString(lx As *Lexer) As Long
                 Exit Do
             End If
         Else
-            If i < LEX_TEXT_LEN - 1 Then
+            If i < LEX_TEXT_MAXIDX Then
                 buf[i] = src[lx->pos]
                 i = i + 1
             End If
             lx->pos = lx->pos + 1
         End If
     Loop
-    buf[i] = 0
+    buf[i] = CH_NUL
     lx->pos = lx->pos + 1
     idx = LexPush(lx, TK_STRING)
     If idx < 0 Then Exit Function
@@ -430,37 +394,37 @@ Sub LexTwoCharOp(lx As *Lexer, c As Long)
     Dim n2 As Long
     src = lx->src
     n2 = src[lx->pos + 1]
-    If c = 45 Then
-        If n2 = 62 Then
+    If c = CH_MINUS Then
+        If n2 = CH_GREATER Then
             LexPush(lx, TK_ARROW)
             lx->pos = lx->pos + 2
         Else
             LexPush(lx, TK_MINUS)
             lx->pos = lx->pos + 1
         End If
-    ElseIf c = 60 Then
-        If n2 = 61 Then
+    ElseIf c = CH_LESS Then
+        If n2 = CH_EQ Then
             LexPush(lx, TK_LE)
             lx->pos = lx->pos + 2
-        ElseIf n2 = 62 Then
+        ElseIf n2 = CH_GREATER Then
             LexPush(lx, TK_NE)
             lx->pos = lx->pos + 2
-        ElseIf n2 = 60 Then
+        ElseIf n2 = CH_LESS Then
             LexPush(lx, TK_SHL)
             lx->pos = lx->pos + 2
         Else
             LexPush(lx, TK_LT)
             lx->pos = lx->pos + 1
         End If
-    ElseIf c = 62 Then
-        If n2 = 61 Then
+    ElseIf c = CH_GREATER Then
+        If n2 = CH_EQ Then
             LexPush(lx, TK_GE)
             lx->pos = lx->pos + 2
-        ElseIf n2 = 60 Then
+        ElseIf n2 = CH_LESS Then
             ' >< は <> と同じ（等しくない）
             LexPush(lx, TK_NE)
             lx->pos = lx->pos + 2
-        ElseIf n2 = 62 Then
+        ElseIf n2 = CH_GREATER Then
             LexPush(lx, TK_SHR)
             lx->pos = lx->pos + 2
         Else
@@ -485,68 +449,68 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
     lx->err = 0
     lx->srcLine = 1
 
-    While src[lx->pos] <> 0
+    While src[lx->pos] <> CH_NUL
         c = src[lx->pos]
-        If c = 13 Then
+        If c = CH_CR Then
             lx->srcLine = lx->srcLine + 1
             lx->pos = lx->pos + 1
-            If src[lx->pos] = 10 Then
+            If src[lx->pos] = CH_NL Then
                 lx->pos = lx->pos + 1
             End If
-        ElseIf c = 10 Then
+        ElseIf c = CH_NL Then
             lx->srcLine = lx->srcLine + 1
             lx->pos = lx->pos + 1
-        ElseIf c = 32 Or c = 9 Then
+        ElseIf IsHSpace(c) <> 0 Then
             lx->pos = lx->pos + 1
-        ElseIf c = 39 Then
+        ElseIf c = CH_SQUOTE Then
             LexSkipEol(lx)
-        ElseIf c = 47 Then
+        ElseIf c = CH_SLASH Then
             If LexSkipComment(lx) = 0 Then Exit Function
-        ElseIf c = 35 Then
+        ElseIf c = CH_HASH Then
             LexSkipEol(lx)
-        ElseIf c = 38 Then
+        ElseIf c = CH_AMP Then
             If LexHexLit(lx) = 0 Then Exit Function
-        ElseIf c = 92 Then
+        ElseIf c = CH_BSLASH Then
             LexSimpleOp(lx, TK_BACKSLASH)
-        ElseIf LexIsDigit(c) <> 0 Then
+        ElseIf IsDigit(c) <> 0 Then
             If LexNumber(lx) = 0 Then Exit Function
-        ElseIf c = 95 Then
+        ElseIf c = CH_UNDER Then
             If LexLineContHere(lx) <> 0 Then
                 ' skip
             Else
                 If LexIdent(lx) = 0 Then Exit Function
             End If
-        ElseIf LexIsAlpha(c) <> 0 Then
+        ElseIf IsIdentChar(c) <> 0 Then
             If LexIdent(lx) = 0 Then Exit Function
-        ElseIf c = 34 Then
+        ElseIf c = CH_DQUOTE Then
             If LexString(lx) = 0 Then Exit Function
-        ElseIf c = 40 Then
+        ElseIf c = CH_LPAREN Then
             LexSimpleOp(lx, TK_LPAREN)
-        ElseIf c = 41 Then
+        ElseIf c = CH_RPAREN Then
             LexSimpleOp(lx, TK_RPAREN)
-        ElseIf c = 59 Then
+        ElseIf c = CH_SEMI Then
             LexSimpleOp(lx, TK_SEMI)
-        ElseIf c = 58 Then
+        ElseIf c = CH_COLON Then
             LexSimpleOp(lx, TK_COLON)
-        ElseIf c = 44 Then
+        ElseIf c = CH_COMMA Then
             LexSimpleOp(lx, TK_COMMA)
-        ElseIf c = 91 Then
+        ElseIf c = CH_LBRACK Then
             LexSimpleOp(lx, TK_LBRACK)
-        ElseIf c = 93 Then
+        ElseIf c = CH_RBRACK Then
             LexSimpleOp(lx, TK_RBRACK)
-        ElseIf c = 46 Then
+        ElseIf c = CH_DOT Then
             LexSimpleOp(lx, TK_DOT)
-        ElseIf c = 43 Then
+        ElseIf c = CH_PLUS Then
             LexSimpleOp(lx, TK_PLUS)
-        ElseIf c = 45 Or c = 60 Or c = 62 Then
+        ElseIf c = CH_MINUS Or c = CH_LESS Or c = CH_GREATER Then
             LexTwoCharOp(lx, c)
-        ElseIf c = 42 Then
+        ElseIf c = CH_STAR Then
             LexSimpleOp(lx, TK_STAR)
-        ElseIf c = 94 Then
+        ElseIf c = CH_CARET Then
             LexSimpleOp(lx, TK_CARET)
-        ElseIf c = 126 Then
+        ElseIf c = CH_TILDE Then
             LexSimpleOp(lx, TK_TILDE)
-        ElseIf c = 61 Then
+        ElseIf c = CH_EQ Then
             LexSimpleOp(lx, TK_EQ)
         Else
             lx->err = 1

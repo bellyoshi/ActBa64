@@ -73,18 +73,35 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 .\run_test2.ps1 stage2
 .\run_test2.ps1 stage2 -Actba32 # 同じテストを PE32 で
 .\run_test2.ps1 -Rebuild
-.\run_test2.ps1 -IncludeGui
+.\run_test2.ps1 -IncludeGui     # GUI 系も実行（下記。既定はスキップ）
 .\run_test2.ps1 -KeepArtifacts
+.\run_test2.ps1 -ShowSkipped    # SKIP 行も表示
 ```
 
 | メタ | 意味 |
 |---|---|
 | `' Target: actba64` | このランナーの対象（必須） |
 | `' Expect: N` | 終了コード期待値（省略時 0） |
-| `' Gui: 1` | 対話 UI 想定。既定は SKIP |
+| `' Gui: 1` | 対話 UI 想定。**既定は SKIP**（`-IncludeGui` で実行） |
 | `' Skip32: 1` | `-Actba32` 時はスキップ（ポインタ幅依存など） |
 
-スキップの大半は **`' Target: actba64` が無い旧手動テスト**（ランナー対象外）か、**`.pj` の `#SOURCE` に含まれる .abp**（プロジェクトテストで代替）です。Summary 行の下に内訳が出ます。GUI テストは `-IncludeGui`、32bit では `t_double*` など SSE 未対応分が追加でスキップされます。
+**GUI の自動判定**（`' Gui: 1` が無くても GUI 扱い → 既定 SKIP）:
+
+- `#USEWINDOW=1`
+- ファイル名が `_pe_gui` で始まる（例: `_pe_gui5.abp`）
+
+`-IncludeGui` 時は、一定時間プロセスが生きていれば PASS（メッセージループ型）。すぐ終了すれば `Expect` と比較する。
+
+**その他のスキップ**（Summary 直後に内訳）:
+
+| 理由 | 内容 |
+|---|---|
+| no Target | `' Target: actba64` が無い旧手動テスト |
+| pj-covered | `.pj` の `#SOURCE` に含まれる `.abp`（プロジェクト側で実行） |
+| gui | 上記 GUI（`-IncludeGui` で有効） |
+| skip32 / double | `-Actba32` 時の `Skip32: 1` や `t_double*`（SSE 未対応） |
+
+`SizeOf(UDT)` やポインタ幅に依存する期待値は、64bit 決め打ちせず `SizeOf(*Byte)` 相当（例: ポインタ用ダミー Type）や `' Skip32: 1` で扱う。
 
 ---
 
