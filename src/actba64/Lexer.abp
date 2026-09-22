@@ -32,6 +32,7 @@ Const TK_SHR = 26
 Const TK_CARET = 27
 Const TK_TILDE = 28
 Const TK_COLON = 29
+Const TK_HASH = 30
 Const TK_ERROR = 99
 
 Const LEX_MAX_TOKS = 131072
@@ -95,6 +96,28 @@ Function LexLineContHere(lx As *Lexer) As Long
         lx->pos = lx->pos + 1
     End If
     LexLineContHere = 1
+End Function
+
+' 行頭（空白のみのあと）の # はディレクティブ。文中の # は TK_HASH（Input #1 / As #1）
+Function LexHashIsDirective(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim p As Long
+    Dim c As Long
+
+    LexHashIsDirective = 1
+    src = lx->src
+    p = lx->pos - 1
+    While p >= 0
+        c = src[p]
+        If c = CH_SP Or c = CH_TAB Then
+            p = p - 1
+        ElseIf c = CH_NL Or c = CH_CR Then
+            Exit Function
+        Else
+            LexHashIsDirective = 0
+            Exit Function
+        End If
+    Wend
 End Function
 
 Function LexCreate(capacity As Long) As *Lexer
@@ -467,7 +490,11 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
         ElseIf c = CH_SLASH Then
             If LexSkipComment(lx) = 0 Then Exit Function
         ElseIf c = CH_HASH Then
-            LexSkipEol(lx)
+            If LexHashIsDirective(lx) <> 0 Then
+                LexSkipEol(lx)
+            Else
+                LexSimpleOp(lx, TK_HASH)
+            End If
         ElseIf c = CH_AMP Then
             If LexHexLit(lx) = 0 Then Exit Function
         ElseIf c = CH_BSLASH Then
