@@ -2,7 +2,7 @@
 
 完全互換ではない。言語の共通核は [language.md](./language.md)、ビルドは [build.md](./build.md)。
 
-**ActiveBasic 4.20 仕様の参照:** BasicHelp.html（CHM エクスポート。型・文法・Win32/DirectX API・`dx_*.sbp` 等）。  
+**ActiveBasic 4.20 仕様の参照:** （型・文法・Win32/DirectX API・`dx_*.sbp` 等）。  
 ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確認すること（実装が docs より進んでいる箇所あり）。
 
 ---
