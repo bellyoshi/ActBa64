@@ -179,36 +179,88 @@ Sub IrFree(list As *IrList)
     free(list)
 End Sub
 
+Sub IrSetStrAtN(list As *IrList, idx As Long, s As *Byte, n As Long)
+    Dim i As Long
+    Dim off As Long
+    Dim strs As *Byte
+    Dim lim As Long
+    strs = list->strs
+    off = idx * IR_STR_LEN
+    If n < 0 Then
+        i = 0
+        While s[i] <> 0 And i < IR_STR_LEN - 1
+            strs[off + i] = s[i]
+            i = i + 1
+        Wend
+        strs[off + i] = 0
+    Else
+        lim = n
+        If lim > IR_STR_LEN - 1 Then lim = IR_STR_LEN - 1
+        i = 0
+        While i < lim
+            strs[off + i] = s[i]
+            i = i + 1
+        Wend
+        strs[off + i] = 0
+    End If
+End Sub
+
 Sub IrSetStrAt(list As *IrList, idx As Long, s As *Byte)
+    Dim ops As *IrOp
+    Dim opv As Long
+    Dim n As Long
+    ops = list->ops
+    opv = ops[idx].op
+    If opv = OP_LEA_RAX_STR Or opv = OP_LEA_RDX_STR Or opv = OP_LEA_R8_STR Then
+        n = ops[idx].arg2
+        If n > 0 Then
+            IrSetStrAtN(list, idx, s, n)
+        Else
+            IrSetStrAtN(list, idx, s, -1)
+        End If
+    Else
+        IrSetStrAtN(list, idx, s, -1)
+    End If
+End Sub
+
+Sub IrCopyStrAtN(list As *IrList, idx As Long, dst As *Byte, n As Long)
     Dim i As Long
     Dim off As Long
     Dim strs As *Byte
     strs = list->strs
     off = idx * IR_STR_LEN
-    i = 0
-    While s[i] <> 0 And i < IR_STR_LEN - 1
-        strs[off + i] = s[i]
-        i = i + 1
-    Wend
-    strs[off + i] = 0
+    If n > 0 Then
+        i = 0
+        While i < n And i < IR_STR_LEN - 1
+            dst[i] = strs[off + i]
+            i = i + 1
+        Wend
+        dst[i] = 0
+    Else
+        i = 0
+        Do
+            dst[i] = strs[off + i]
+            If strs[off + i] = 0 Then Exit Sub
+            i = i + 1
+            If i >= IR_STR_LEN Then
+                dst[IR_STR_LEN - 1] = 0
+                Exit Sub
+            End If
+        Loop
+    End If
 End Sub
 
 Sub IrCopyStrAt(list As *IrList, idx As Long, dst As *Byte)
-    Dim i As Long
-    Dim off As Long
-    Dim strs As *Byte
-    strs = list->strs
-    off = idx * IR_STR_LEN
-    i = 0
-    Do
-        dst[i] = strs[off + i]
-        If strs[off + i] = 0 Then Exit Sub
-        i = i + 1
-        If i >= IR_STR_LEN Then
-            dst[IR_STR_LEN - 1] = 0
-            Exit Sub
-        End If
-    Loop
+    Dim ops As *IrOp
+    Dim opv As Long
+    Dim n As Long
+    ops = list->ops
+    opv = ops[idx].op
+    n = -1
+    If opv = OP_LEA_RAX_STR Or opv = OP_LEA_RDX_STR Or opv = OP_LEA_R8_STR Then
+        n = ops[idx].arg2
+    End If
+    IrCopyStrAtN(list, idx, dst, n)
 End Sub
 
 Function IrEmit(list As *IrList, op As Long, arg1 As DWord, arg2 As DWord) As Long

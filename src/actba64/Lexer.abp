@@ -149,6 +149,7 @@ End Sub
 
 Sub LexStoreText(lx As *Lexer, idx As Long, s As *Byte, n As Long)
     Dim texts As *Byte
+    Dim toks As *Tok
     Dim off As Long
     Dim i As Long
     texts = lx->texts
@@ -159,6 +160,11 @@ Sub LexStoreText(lx As *Lexer, idx As Long, s As *Byte, n As Long)
         i = i + 1
     Wend
     texts[off + i] = CH_NUL
+    If n < LEX_TEXT_LEN Then
+        texts[off + LEX_TEXT_LEN - 1] = n As Byte
+    End If
+    toks = lx->toks
+    toks[idx].num = n
 End Sub
 
 Sub LexCopyText(lx As *Lexer, idx As Long, dst As *Byte)
@@ -376,6 +382,7 @@ Function LexString(lx As *Lexer) As Long
     Dim src As *Byte
     Dim i As Long
     Dim idx As Long
+    Dim toks As *Tok
     Dim buf(LEX_TEXT_MAXIDX) As Byte
     LexString = 0
     src = lx->src
@@ -409,7 +416,102 @@ Function LexString(lx As *Lexer) As Long
     idx = LexPush(lx, TK_STRING)
     If idx < 0 Then Exit Function
     LexStoreText(lx, idx, VarPtr(buf), i)
+    toks = lx->toks
+    toks[idx].num = i
     LexString = 1
+End Function
+
+Function LexExString(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim i As Long
+    Dim idx As Long
+    Dim toks As *Tok
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+    Dim c As Long
+    Dim n2 As Long
+    LexExString = 0
+    src = lx->src
+    If src[lx->pos] <> CH_DQUOTE Then Exit Function
+    lx->pos = lx->pos + 1
+    i = 0
+    Do
+        If src[lx->pos] = CH_NUL Then
+            lx->err = 1
+            Exit Function
+        End If
+        If src[lx->pos] = CH_DQUOTE Then
+            Exit Do
+        End If
+        If src[lx->pos] = CH_BSLASH Then
+            lx->pos = lx->pos + 1
+            If src[lx->pos] = CH_NUL Then
+                lx->err = 1
+                Exit Function
+            End If
+            n2 = src[lx->pos]
+            If n2 = 110 Then
+                c = CH_NL
+            ElseIf n2 = 114 Then
+                c = CH_CR
+            ElseIf n2 = 116 Then
+                c = CH_TAB
+            ElseIf n2 = 48 Then
+                c = CH_NUL
+            ElseIf n2 = 92 Then
+                c = CH_BSLASH
+            ElseIf n2 = 34 Then
+                c = CH_DQUOTE
+            Else
+                c = n2
+            End If
+            lx->pos = lx->pos + 1
+        Else
+            c = src[lx->pos]
+            lx->pos = lx->pos + 1
+        End If
+        If i < LEX_TEXT_MAXIDX Then
+            buf[i] = c As Byte
+            i = i + 1
+        End If
+    Loop
+    buf[i] = CH_NUL
+    lx->pos = lx->pos + 1
+    idx = LexPush(lx, TK_STRING)
+    If idx < 0 Then Exit Function
+    LexStoreText(lx, idx, VarPtr(buf), i)
+    toks = lx->toks
+    toks[idx].num = i
+    LexExString = 1
+End Function
+
+Function LexTryExStringAfterIdent(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim last As Long
+    Dim toks As *Tok
+    Dim texts As *Byte
+    Dim off As Long
+    Dim c0 As Long
+    Dim c1 As Long
+    LexTryExStringAfterIdent = 0
+    If lx->count <= 0 Then Exit Function
+    last = lx->count - 1
+    toks = lx->toks
+    If toks[last].kind <> TK_IDENT Then Exit Function
+    texts = lx->texts
+    off = toks[last].textOff * LEX_TEXT_LEN
+    c0 = texts[off]
+    c1 = texts[off + 1]
+    If texts[off + 2] <> CH_NUL Then Exit Function
+    If c0 >= Asc("A") And c0 <= Asc("Z") Then c0 = c0 + 32
+    If c1 >= Asc("A") And c1 <= Asc("Z") Then c1 = c1 + 32
+    If c0 <> Asc("e") Or c1 <> Asc("x") Then Exit Function
+    src = lx->src
+    While IsHSpace(src[lx->pos]) <> 0
+        lx->pos = lx->pos + 1
+    Wend
+    If src[lx->pos] <> CH_DQUOTE Then Exit Function
+    lx->count = last
+    LexTryExStringAfterIdent = LexExString(lx)
 End Function
 
 Sub LexTwoCharOp(lx As *Lexer, c As Long)
@@ -509,6 +611,9 @@ Function LexTokenize(lx As *Lexer, src As *Byte) As Long
             End If
         ElseIf IsIdentChar(c) <> 0 Then
             If LexIdent(lx) = 0 Then Exit Function
+            If LexTryExStringAfterIdent(lx) = 0 Then
+                If lx->err <> 0 Then Exit Function
+            End If
         ElseIf c = CH_DQUOTE Then
             If LexString(lx) = 0 Then Exit Function
         ElseIf c = CH_LPAREN Then

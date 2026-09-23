@@ -636,6 +636,7 @@ Sub TextBuf_InsertChar(ByVal c As Long)
     g_textBuf.buffer[g_textBuf.gap_start] = bp[0]
     g_textBuf.gap_start = g_textBuf.gap_start + 1
     TextBuf_RebuildLineOffsets()
+    Hl_ResetCache()
     TextBuf_SyncPreferredCol()
     If g_undoSuppress = 0 Then EditorDoc_MarkDirty()
 End Sub
@@ -783,14 +784,31 @@ Sub TextBuf_Clear()
     g_selAnchor = -1
     LineOff_Init()
     g_preferredCol = 0
+    Hl_ResetCache()
 End Sub
 
 Sub TextBuf_SetText(s As String)
+    Dim n As Long
+    Dim p As *Byte
+
     EditorUndo_Suppress(1)
     TextBuf_Clear()
-    If Len(s) > 0 Then
-        TextBuf_Append(s)
+    n = Len(s)
+    If n > 0 Then
+        TextBuf_EnsureInit()
+        While (g_textBuf.gap_end - g_textBuf.gap_start) < n
+            g_textBuf.GrowGap()
+            If (g_textBuf.gap_end - g_textBuf.gap_start) < n Then
+                EditorUndo_Suppress(0)
+                Exit Sub
+            End If
+        Wend
+        p = StrPtr(s)
+        memcpy(VarPtr(g_textBuf.buffer[g_textBuf.gap_start]), p, n)
+        g_textBuf.gap_start = g_textBuf.gap_start + n
+        TextBuf_RebuildLineOffsets()
     End If
+    Hl_ResetCache()
     TextBuf_MoveCursorTo(0)
     TextBuf_SyncPreferredCol()
     EditorUndo_Suppress(0)
