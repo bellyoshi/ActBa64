@@ -579,7 +579,7 @@ Function LowStmtHeavy(ctx As *LowerCtx, idx As Long) As Long
         LowStmtHeavy = LowStmtDim(ctx, idx)
         Exit Function
     End If
-    If k = AST_CONST Or k = AST_TYPE Or k = AST_FUNC Or k = AST_DECLARE Then
+    If k = AST_CONST Or k = AST_TYPE Or k = AST_ENUM Or k = AST_FUNC Or k = AST_DECLARE Then
         LowStmtHeavy = 1
         Exit Function
     End If
@@ -852,6 +852,50 @@ Function AstToIrRegDecls(ctx As *LowerCtx, prog As Long) As Long
     AstToIrRegDecls = 1
 End Function
 
+Function AstToIrRegEnum(ctx As *LowerCtx, enumIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim mem As Long
+    Dim nm(63) As Byte
+    Dim v As Long
+    Dim last As Long
+    Dim hasLast As Long
+
+    AstToIrRegEnum = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    mem = nodes[enumIdx].left
+    last = 0
+    hasLast = 0
+    While mem >= 0
+        If nodes[mem].kind <> AST_ENUMMEM Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If nodes[mem].left >= 0 Then
+            v = LowBoundVal(ctx, nodes[mem].left)
+            If v < 0 Then
+                AstCopyStr(ast, mem, VarPtr(nm))
+                Print "error: invalid enum value for '" + MakeStr(VarPtr(nm)) + "'"
+                ctx->err = 1
+                Exit Function
+            End If
+        Else
+            If hasLast = 0 Then
+                v = 1
+            Else
+                v = last + 1
+            End If
+        End If
+        AstCopyStr(ast, mem, VarPtr(nm))
+        If LowAddConst(ctx, VarPtr(nm), v) = 0 Then Exit Function
+        last = v
+        hasLast = 1
+        mem = nodes[mem].nxt
+    Wend
+    AstToIrRegEnum = 1
+End Function
+
 Function AstToIrRegConsts(ctx As *LowerCtx, prog As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -862,6 +906,7 @@ Function AstToIrRegConsts(ctx As *LowerCtx, prog As Long) As Long
     AstToIrRegConsts = 0
     ast = ctx->ast
     nodes = ast->nodes
+    LowAddBuiltinConsts(ctx)
     stmt = nodes[prog].left
     While stmt >= 0
         If nodes[stmt].kind = AST_CONST Then
@@ -875,6 +920,8 @@ Function AstToIrRegConsts(ctx As *LowerCtx, prog As Long) As Long
             Else
                 If LowAddConst(ctx, VarPtr(nm), nodes[stmt].num) = 0 Then Exit Function
             End If
+        ElseIf nodes[stmt].kind = AST_ENUM Then
+            If AstToIrRegEnum(ctx, stmt) = 0 Then Exit Function
         End If
         stmt = nodes[stmt].nxt
     Wend

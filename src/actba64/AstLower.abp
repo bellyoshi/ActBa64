@@ -300,6 +300,25 @@ Function LowNameEq(a As *Byte, b As *Byte) As Long
     Loop
 End Function
 
+' 組み込みランタイム呼び出し（FillMemory / malloc 等）— 綴りは大小無視
+Function LowIntrinNameEq(name As *Byte, canon As *Byte) As Long
+    LowIntrinNameEq = ByteNameEqCI(name, canon)
+End Function
+
+Function LowNameEqExact(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    LowNameEqExact = 0
+    i = 0
+    Do
+        If a[i] <> b[i] Then Exit Function
+        If a[i] = 0 Then
+            LowNameEqExact = 1
+            Exit Function
+        End If
+        i = i + 1
+    Loop
+End Function
+
 Function LowFindSym(ctx As *LowerCtx, name As *Byte) As Long
     Dim i As Long
     Dim names As *Byte
@@ -309,7 +328,7 @@ Function LowFindSym(ctx As *LowerCtx, name As *Byte) As Long
     i = 0
     While i < ctx->symCount
         off = i * SYM_NAME_LEN
-        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
             LowFindSym = i
             Exit Function
         End If
@@ -380,7 +399,7 @@ Function LowFindGlob(ctx As *LowerCtx, name As *Byte) As Long
     i = 0
     While i < g_gCount
         off = i * SYM_NAME_LEN
-        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
             LowFindGlob = i
             Exit Function
         End If
@@ -773,13 +792,22 @@ Function LowFindConst(ctx As *LowerCtx, name As *Byte) As Long
     i = 0
     While i < ctx->constCount
         off = i * SYM_NAME_LEN
-        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
             LowFindConst = i
             Exit Function
         End If
         i = i + 1
     Wend
 End Function
+
+Sub LowAddBuiltinConsts(ctx As *LowerCtx)
+    Dim t(7) As Byte
+    Dim f(7) As Byte
+    lstrcpy(VarPtr(t), "TRUE")
+    lstrcpy(VarPtr(f), "FALSE")
+    LowAddConst(ctx, VarPtr(t), 1)
+    LowAddConst(ctx, VarPtr(f), 0)
+End Sub
 
 Function LowAddConst(ctx As *LowerCtx, name As *Byte, v As Long) As Long
     Dim i As Long
@@ -823,7 +851,7 @@ Function LowFindStrConst(ctx As *LowerCtx, name As *Byte) As Long
     i = 0
     While i < ctx->constStrCount
         off = i * SYM_NAME_LEN
-        If LowNameEq(VarPtr(names[off]), name) <> 0 Then
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
             LowFindStrConst = i
             Exit Function
         End If
@@ -953,6 +981,13 @@ Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
                     rv = rv - 1
                 Wend
                 LowBoundVal = acc
+            End If
+        End If
+    ElseIf nodes[idx].kind = AST_BUILTIN Then
+        If nodes[idx].num = BI_ELM Then
+            lv = LowBoundVal(ctx, nodes[idx].left)
+            If lv >= 0 Then
+                LowBoundVal = lv + 1
             End If
         End If
     End If

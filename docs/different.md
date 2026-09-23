@@ -35,7 +35,7 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `Enum` … `End Enum` | 列挙型（`DWord` 値、省略時は前値+1） | 非対応 |
+| `Enum` … `End Enum` | 列挙型（`DWord` 値、省略時は前値+1） | ○（初回省略時は 1、`Dim x As EnumName` は 4 バイト） |
 | `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
 | `New` / `Delete` | `New [[num]] Class[(params)]`、`Delete pObj` | 非対応（`Dim As Class(args)` で ctor は呼べる） |
 | 関数ポインタ型 | `AddressOf(Proc)` で取得し、`CreateThread` 等へ渡す | `AddressOf` は組み込み。型・呼び出し規約の一般サポートは限定的 |
@@ -85,6 +85,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `For` … `Next` | `For c = start To end [Step step]`、`Exit For` | **Step / Exit For 対応**（[language.md §4](./language.md#4-文) 参照） |
 | `Do` … `Loop` | `Do [While/Until cond] ... [Loop [While/Until cond]]` | **While/Until 両対応** |
 | 関係演算の値 | 真 = `-1`、偽 = `0` | 同じ |
+| `TRUE` / `FALSE` 定数 | **`TRUE` = 1**、`FALSE` = 0（BasicHelp） | **同じ**（組み込み + `WinConsts.sbp`）。小文字 `true` / `false` は AB 同様**未対応** |
 | 文字列 | 長さプレフィックス（dword）、埋め込み NUL 可 | **AB 4.20 互換**（[改良点](#文字列長さプレフィックス)） |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
@@ -99,6 +100,43 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | DirectX | DirectX 9 + `dx_*.sbp` | **DirectX 11**（[改良点](#directx-11)）。高レベル `dx_*` 一式はサンプルのみ |
 | 64bit | ver 4.20 はバグで実質困難 | **64bit PE32+ を正式サポート**（ポインタ・`String`・`HANDLE` = 8、`Long` = 4） |
 | コンパイル | GUI IDE が主 | **CLI** `actba64 src -o out.exe` |
+
+---
+
+## 既知の問題（AB 4.20 仕様をそのまま踏襲）
+
+ActBa64 の不具合ではなく、**ActiveBasic 4.20 と同じ挙動**として把握しておく項目。
+
+### 定数 `TRUE` (=1) と関係演算の真 (-1) が一致しない
+
+- **定数** `TRUE` / `FALSE` は **1 / 0**（Win32 慣習・BasicHelp）。
+- **関係演算**（`=` など）の**式の値**は、真 **-1**、偽 **0**。
+- そのため `(TRUE = TRUE)` は **-1** になるが、`(-1 = TRUE)` は **`-1 = 1` で偽**になり、連鎖比較 `(TRUE = TRUE) = TRUE` は直感とずれる（AB 4.20 も **`False`**）。
+
+```basic
+#console
+If (TRUE = TRUE) = TRUE Then
+    Print "True"
+Else
+    Print "False"    ' AB 4.20 / ActBa64 ともこちら
+End If
+
+If (-1 = -1) = -1 Then
+    Print "True"     ' こちらは真
+Else
+    Print "False"
+End If
+```
+
+比較結果そのものを扱うときは **`-1` / `0` リテラル**や中間変数を使う。回帰: `test/t_true_chain.abp`。
+
+### 小文字 `true` / `false`
+
+AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **`TRUE` / `FALSE`（大文字）のみ**組み込み。小文字は未定義変数としてエラーになる。
+
+### 識別子の大小区別（AB 4.20 同様）
+
+**定数・変数・Sub/Function・Declare 名・Type/Class 名**は定義どおりの綴りで参照する（`TRUE` ≠ `true`、`Foo` ≠ `foo`）。**言語キーワード**、**組み込みランタイム**（`FillMemory` / `memcpy` / `malloc` 等）、**Win32 API 名の正規化**（`LowMapKernelApi` 等）だけ大小無視。
 
 ---
 
