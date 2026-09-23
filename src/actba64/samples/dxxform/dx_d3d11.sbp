@@ -1,0 +1,554 @@
+' dx_d3d11.sbp - Direct3D 11 matrix transform sample
+' 2D アフィン変換（拡大縮小 * 回転 * 移動）で三角形の座標を毎フレーム変換する。
+' 数値は Math.abp の千分率（1.0 = 1000）。GPU へ渡す直前に IEEE Single へ変換。
+
+Dim g_pDevice As *ID3D11Device
+Dim g_pContext As *ID3D11DeviceContext
+Dim g_pSwapChain As *IDXGISwapChain
+Dim g_pRTV As *ID3D11RenderTargetView
+Dim g_pVS As *ID3D11VertexShader
+Dim g_pPS As *ID3D11PixelShader
+Dim g_pVB As *ID3D11Buffer
+Dim g_pLayout As *ID3D11InputLayout
+Dim g_vpW As Long
+Dim g_vpH As Long
+
+Dim IID_ID3D11Texture2D As GUID
+
+' 変換パラメータ（千分率）
+Dim g_tx As Long
+Dim g_ty As Long
+Dim g_ang As Long
+Dim g_scale As Long
+
+' モデル座標（千分率）x,y × 3
+Dim g_baseX[2] As Long
+Dim g_baseY[2] As Long
+
+' 色（固定）r,g,b,a × 3（千分率）
+Dim g_colR[2] As Long
+Dim g_colG[2] As Long
+Dim g_colB[2] As Long
+Dim g_colA[2] As Long
+
+' 頂点バッファ用ワーク（pos3 + col4）× 3 = 21 floats → 余裕で 27
+Dim g_vdata[26] As Single
+
+Const VK_OEM_PLUS = &HBB
+Const VK_OEM_MINUS = &HBD
+Const VK_ADD = &H6B
+Const VK_SUBTRACT = &H6D
+
+Declare Function GetAsyncKeyState Lib "user32.dll" (ByVal vKey As Long) As Long
+
+
+' 千分率 → IEEE754 Single ビット列（D3D 頂点用）
+Function MilliToSingleBits(milli As Long) As Long
+	Dim sign As Long
+	Dim num As Long
+	Dim uexp As Long
+	Dim man As Long
+	Dim biased As Long
+
+	MilliToSingleBits = 0
+	If milli = 0 Then Exit Function
+	sign = 0
+	If milli < 0 Then
+		sign = 1
+		milli = 0 - milli
+	End If
+	num = milli
+	uexp = 0
+	While num < 1000
+		num = num * 2
+		uexp = uexp - 1
+		If uexp < -140 Then Exit Function
+	Wend
+	While num >= 2000
+		num = num / 2
+		uexp = uexp + 1
+		If uexp > 140 Then Exit Function
+	Wend
+	man = (num - 1000) * 8388 + ((num - 1000) * 608) / 1000
+	biased = uexp + 127
+	If biased <= 0 Then Exit Function
+	If biased >= 255 Then Exit Function
+	MilliToSingleBits = (sign * &H80000000) Or (biased * 8388608) Or man
+End Function
+
+Function dx_KeyDown(vk As Long) As Long
+	Dim st As Long
+	st = GetAsyncKeyState(vk)
+	If (st And &H8000) <> 0 Then
+		dx_KeyDown = 1
+	Else
+		dx_KeyDown = 0
+	End If
+End Function
+
+Sub dx_ResetXform()
+	g_tx = 0
+	g_ty = 0
+	g_ang = 0
+	g_scale = 1000
+End Sub
+
+Sub dx_StoreSingle(dest As VoidPtr, milli As Long)
+	Dim bits As Long
+	bits = MilliToSingleBits(milli)
+	memcpy(dest, VarPtr(bits), 4)
+End Sub
+
+' M = T * R * S  （先に拡大縮小 → 回転 → 移動）
+Sub dx_XformPoint(x As Long, y As Long, ByRef ox As Long, ByRef oy As Long)
+	Dim sx As Long
+	Dim sy As Long
+	Dim cs As Long
+	Dim sn As Long
+	Dim rx As Long
+	Dim ry As Long
+	Dim t1 As Long
+	Dim t2 As Long
+
+	sx = MathDiv(x * g_scale, MATH_ONE)
+	sy = MathDiv(y * g_scale, MATH_ONE)
+
+	cs = Cos(g_ang)
+	sn = Sin(g_ang)
+	t1 = sx * cs
+	t2 = sy * sn
+	rx = MathDiv(t1 - t2, MATH_ONE)
+	t1 = sx * sn
+	t2 = sy * cs
+	ry = MathDiv(t1 + t2, MATH_ONE)
+
+	ox = rx + g_tx
+	oy = ry + g_ty
+End Sub
+
+Sub dx_BuildVertices()
+	Dim i As Long
+	Dim ox As Long
+	Dim oy As Long
+	Dim base As Long
+
+	ZeroMemory(VarPtr(g_vdata[0]), 84)
+	i = 0
+	While i < 3
+		dx_XformPoint(g_baseX[i], g_baseY[i], ox, oy)
+		base = i * 7
+		dx_StoreSingle(VarPtr(g_vdata[base + 0]), ox)
+		dx_StoreSingle(VarPtr(g_vdata[base + 1]), oy)
+		dx_StoreSingle(VarPtr(g_vdata[base + 2]), 0)
+		dx_StoreSingle(VarPtr(g_vdata[base + 3]), g_colR[i])
+		dx_StoreSingle(VarPtr(g_vdata[base + 4]), g_colG[i])
+		dx_StoreSingle(VarPtr(g_vdata[base + 5]), g_colB[i])
+		dx_StoreSingle(VarPtr(g_vdata[base + 6]), g_colA[i])
+		i = i + 1
+	Wend
+End Sub
+
+Sub dx_UpdateVB()
+	If g_pContext = 0 Then Exit Sub
+	If g_pVB = 0 Then Exit Sub
+	dx_BuildVertices()
+	g_pContext->UpdateSubresource(g_pVB, 0, 0, VarPtr(g_vdata[0]), 84, 0)
+End Sub
+
+Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, pTarget As BytePtr, ByRef ppBlob As *ID3DBlob) As DWord
+	Dim pErr As *ID3DBlob
+	Dim hr As DWord
+
+	pErr = 0
+	hr = D3DCompile(pSrc, srcLen, "triangle.hlsl", 0, 0, pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, VarPtr(ppBlob), VarPtr(pErr))
+	If hr Then
+		If pErr Then
+			MessageBox(0, pErr->GetBufferPointer(), "dx_fail", MB_OK or MB_ICONSTOP)
+			pErr->Release()
+		Else
+			MessageBox(0, "D3DCompile failed. Check d3dcompiler_47.dll.", "dx_fail", MB_OK or MB_ICONSTOP)
+		End If
+	End If
+	dx_CompileShader = hr
+End Function
+
+Sub dx_FailStep(stepName As String, hr As DWord)
+	Dim msg As String
+	msg = stepName
+	msg = msg + " hr="
+	msg = msg + Str$(hr)
+	MessageBox(0, msg, "dx_fail", MB_OK or MB_ICONSTOP)
+End Sub
+
+Sub dx_ReleaseAll()
+	If g_pLayout Then
+		g_pLayout->Release()
+		g_pLayout = 0
+	End If
+	If g_pVB Then
+		g_pVB->Release()
+		g_pVB = 0
+	End If
+	If g_pPS Then
+		g_pPS->Release()
+		g_pPS = 0
+	End If
+	If g_pVS Then
+		g_pVS->Release()
+		g_pVS = 0
+	End If
+	If g_pRTV Then
+		g_pRTV->Release()
+		g_pRTV = 0
+	End If
+	If g_pContext Then
+		g_pContext->Release()
+		g_pContext = 0
+	End If
+	If g_pSwapChain Then
+		g_pSwapChain->Release()
+		g_pSwapChain = 0
+	End If
+	If g_pDevice Then
+		g_pDevice->Release()
+		g_pDevice = 0
+	End If
+End Sub
+
+Function dx_CreateTriangle() As Long
+	Dim u As String
+	Dim hlsl As String
+	u = Chr$(95)
+	hlsl = "struct VS" + u + "IN{float3 pos:POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "struct VS" + u + "OUT{float4 pos:SV" + u + "POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "VS" + u + "OUT VS(VS" + u + "IN i){VS" + u + "OUT o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
+	hlsl = hlsl + "float4 PS(VS" + u + "OUT i):SV" + u + "Target{return i.col;}"
+
+	Dim pVSBlob As *ID3DBlob
+	Dim pPSBlob As *ID3DBlob
+	Dim srcLen As DWord
+	pVSBlob = 0
+	pPSBlob = 0
+	srcLen = Len(hlsl)
+
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then
+		dx_CreateTriangle = 0
+		Exit Function
+	End If
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("PS"), StrPtr("ps_4_0"), pPSBlob) Then
+		If pVSBlob Then pVSBlob->Release()
+		dx_CreateTriangle = 0
+		Exit Function
+	End If
+
+	Dim hr As DWord
+	Dim vsCode As VoidPtr
+	Dim vsLen As DWord
+	Dim psCode As VoidPtr
+	Dim psLen As DWord
+	vsCode = pVSBlob->GetBufferPointer()
+	vsLen = pVSBlob->GetBufferSize()
+	hr = g_pDevice->CreateVertexShader(vsCode, vsLen, 0, VarPtr(g_pVS))
+	If hr Then
+		dx_FailStep("CreateVertexShader", hr)
+		pVSBlob->Release()
+		pPSBlob->Release()
+		dx_CreateTriangle = 0
+		Exit Function
+	End If
+
+	psCode = pPSBlob->GetBufferPointer()
+	psLen = pPSBlob->GetBufferSize()
+	hr = g_pDevice->CreatePixelShader(psCode, psLen, 0, VarPtr(g_pPS))
+	If hr Then
+		dx_FailStep("CreatePixelShader", hr)
+		pVSBlob->Release()
+		pPSBlob->Release()
+		dx_CreateTriangle = 0
+		Exit Function
+	End If
+	pPSBlob->Release()
+
+	Dim namePos As String
+	Dim nameCol As String
+	namePos = "POSITION"
+	nameCol = "COLOR"
+
+	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
+	Dim tmpDesc As D3D11_INPUT_ELEMENT_DESC
+	Dim descSz As DWord
+	descSz = Len(tmpDesc)
+	ZeroMemory(VarPtr(layout[0]), descSz * 2)
+
+	layout[0].SemanticName = StrPtr(namePos)
+	layout[0].SemanticIndex = 0
+	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
+	layout[0].InputSlot = 0
+	layout[0].AlignedByteOffset = 0
+	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout[0].InstanceDataStepRate = 0
+
+	layout[1].SemanticName = StrPtr(nameCol)
+	layout[1].SemanticIndex = 0
+	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
+	layout[1].InputSlot = 0
+	layout[1].AlignedByteOffset = 12
+	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout[1].InstanceDataStepRate = 0
+
+	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, vsCode, vsLen, VarPtr(g_pLayout))
+	If hr Then
+		dx_FailStep("CreateInputLayout", hr)
+		pVSBlob->Release()
+		dx_CreateTriangle = 0
+		Exit Function
+	End If
+	pVSBlob->Release()
+
+	' モデル座標（クリップ空間想定の ±0.5 付近）
+	g_baseX[0] = 0
+	g_baseY[0] = 500
+	g_baseX[1] = 500
+	g_baseY[1] = -500
+	g_baseX[2] = -500
+	g_baseY[2] = -500
+
+	g_colR[0] = 1000
+	g_colG[0] = 200
+	g_colB[0] = 200
+	g_colA[0] = 1000
+	g_colR[1] = 200
+	g_colG[1] = 1000
+	g_colB[1] = 200
+	g_colA[1] = 1000
+	g_colR[2] = 200
+	g_colG[2] = 200
+	g_colB[2] = 1000
+	g_colA[2] = 1000
+
+	dx_ResetXform()
+	dx_BuildVertices()
+
+	Dim bd As D3D11_BUFFER_DESC
+	Dim initData As D3D11_SUBRESOURCE_DATA
+	ZeroMemory(VarPtr(bd), Len(bd))
+	ZeroMemory(VarPtr(initData), Len(initData))
+	bd.ByteWidth = 84
+	bd.Usage = D3D11_USAGE_DEFAULT
+	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
+	initData.pSysMem = VarPtr(g_vdata[0])
+
+	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
+	If hr Then
+		dx_FailStep("CreateBuffer VB", hr)
+		dx_CreateTriangle = 0
+		Exit Function
+	End If
+
+	dx_CreateTriangle = 1
+End Function
+
+Function dx_Init(hWnd As HWND) As Long
+	CoInitialize(NULL)
+
+	Dim rc As RECT
+	GetClientRect(hWnd, rc)
+	Dim w As Long
+	Dim h As Long
+	w = rc.right - rc.left
+	h = rc.bottom - rc.top
+	If w < 1 Then w = 640
+	If h < 1 Then h = 480
+	g_vpW = w
+	g_vpH = h
+
+	Dim sd As DXGI_SWAP_CHAIN_DESC
+	ZeroMemory(VarPtr(sd), Len(sd))
+	sd.BufferDesc.Width = w
+	sd.BufferDesc.Height = h
+	sd.BufferDesc.RefreshRate.Numerator = 60
+	sd.BufferDesc.RefreshRate.Denominator = 1
+	sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM
+	sd.SampleDesc.Count = 1
+	sd.SampleDesc.Quality = 0
+	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT
+	sd.BufferCount = 1
+	sd.OutputWindow = hWnd
+	sd.Windowed = TRUE
+	sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD
+
+	Dim fl[1] As DWord
+	fl[0] = D3D_FEATURE_LEVEL_11_0
+	fl[1] = D3D_FEATURE_LEVEL_10_0
+
+	Dim hr As DWord
+	hr = D3D11CreateDeviceAndSwapChain(0, D3D_DRIVER_TYPE_HARDWARE, 0, 0, VarPtr(fl[0]), 2, D3D11_SDK_VERSION, VarPtr(sd), g_pSwapChain, g_pDevice, 0, g_pContext)
+	If hr Then
+		hr = D3D11CreateDeviceAndSwapChain(0, D3D_DRIVER_TYPE_WARP, 0, 0, VarPtr(fl[0]), 2, D3D11_SDK_VERSION, VarPtr(sd), g_pSwapChain, g_pDevice, 0, g_pContext)
+	End If
+	If hr Then
+		MessageBox(hWnd, "D3D11CreateDeviceAndSwapChain failed.", "Error", MB_OK or MB_ICONSTOP)
+		dx_Init = 0
+		Exit Function
+	End If
+
+	Dim pBackBuffer As *IUnknown
+	pBackBuffer = 0
+	IID_ID3D11Texture2D.Data1 = &H6F15AAF2
+	IID_ID3D11Texture2D.Data2 = &HD208
+	IID_ID3D11Texture2D.Data3 = &H4E89
+	IID_ID3D11Texture2D.Data4[0] = &H9A
+	IID_ID3D11Texture2D.Data4[1] = &HB4
+	IID_ID3D11Texture2D.Data4[2] = &H48
+	IID_ID3D11Texture2D.Data4[3] = &H95
+	IID_ID3D11Texture2D.Data4[4] = &H35
+	IID_ID3D11Texture2D.Data4[5] = &HD3
+	IID_ID3D11Texture2D.Data4[6] = &H4F
+	IID_ID3D11Texture2D.Data4[7] = &H9C
+	hr = g_pSwapChain->GetBuffer(0, IID_ID3D11Texture2D, VarPtr(pBackBuffer))
+	If hr Then
+		MessageBox(hWnd, "IDXGISwapChain::GetBuffer failed.", "Error", MB_OK or MB_ICONSTOP)
+		dx_Init = 0
+		Exit Function
+	End If
+
+	hr = g_pDevice->CreateRenderTargetView(pBackBuffer, 0, VarPtr(g_pRTV))
+	pBackBuffer->Release()
+	If hr Then
+		MessageBox(hWnd, "CreateRenderTargetView failed.", "Error", MB_OK or MB_ICONSTOP)
+		dx_Init = 0
+		Exit Function
+	End If
+
+	If dx_CreateTriangle() = 0 Then
+		dx_Init = 0
+		Exit Function
+	End If
+
+	MessageBox(hWnd, "操作方法" + Chr$(13) + Chr$(10) + Chr$(13) + Chr$(10) + "矢印キー : 移動" + Chr$(13) + Chr$(10) + "Q / E    : 回転" + Chr$(13) + Chr$(10) + "+ / -    : 拡大縮小" + Chr$(13) + Chr$(10) + "R        : リセット" + Chr$(13) + Chr$(10) + "Esc      : 終了", "行列変換サンプル", MB_OK)
+
+	dx_Init = 1
+End Function
+
+Sub dx_UpdateInput()
+	Dim stepMove As Long
+	Dim stepAng As Long
+	Dim stepScale As Long
+	stepMove = 8
+	stepAng = 35
+	stepScale = 15
+
+	If dx_KeyDown(VK_LEFT) <> 0 Then g_tx = g_tx - stepMove
+	If dx_KeyDown(VK_RIGHT) <> 0 Then g_tx = g_tx + stepMove
+	If dx_KeyDown(VK_UP) <> 0 Then g_ty = g_ty + stepMove
+	If dx_KeyDown(VK_DOWN) <> 0 Then g_ty = g_ty - stepMove
+
+	If dx_KeyDown(81) <> 0 Then g_ang = g_ang + stepAng
+	If dx_KeyDown(69) <> 0 Then g_ang = g_ang - stepAng
+
+	If dx_KeyDown(VK_OEM_PLUS) <> 0 Then g_scale = g_scale + stepScale
+	If dx_KeyDown(VK_ADD) <> 0 Then g_scale = g_scale + stepScale
+	If dx_KeyDown(VK_OEM_MINUS) <> 0 Then g_scale = g_scale - stepScale
+	If dx_KeyDown(VK_SUBTRACT) <> 0 Then g_scale = g_scale - stepScale
+
+	If g_scale < 100 Then g_scale = 100
+	If g_scale > 4000 Then g_scale = 4000
+
+	If dx_KeyDown(82) <> 0 Then dx_ResetXform()
+
+	dx_UpdateVB()
+End Sub
+
+Sub dx_DrawHelp()
+	Dim hdc As HDC
+	Dim y As Long
+	Dim s As String
+	Dim deg As Long
+
+	If hMainWnd = 0 Then Exit Sub
+	hdc = GetDC(hMainWnd)
+	If hdc = 0 Then Exit Sub
+
+	SelectObject(hdc, hFont_MainWnd)
+	SetBkMode(hdc, TRANSPARENT)
+	SetTextColor(hdc, &H00FFFF00)
+
+	y = 8
+	s = "[操作方法]"
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+	y = y + 18
+	s = "矢印 : 移動"
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+	y = y + 18
+	s = "Q/E  : 回転"
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+	y = y + 18
+	s = "+/-  : 拡大縮小"
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+	y = y + 18
+	s = "R    : リセット"
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+	y = y + 18
+	s = "Esc  : 終了"
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+
+	SetTextColor(hdc, &H00FFFFFF)
+	y = y + 24
+	deg = RadToDeg(g_ang)
+	s = "tx=" + Str$(g_tx) + "  ty=" + Str$(g_ty)
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+	y = y + 18
+	s = "ang=" + Str$(deg) + " deg  scale=" + Str$(g_scale)
+	TextOutA(hdc, 8, y, StrPtr(s), Len(s))
+
+	ReleaseDC(hMainWnd, hdc)
+End Sub
+
+Sub dx_Render()
+	If g_pContext = 0 Then Exit Sub
+	dx_RenderClear()
+	dx_RenderDraw()
+	dx_DrawHelp()
+End Sub
+
+Sub dx_RenderClear()
+	Dim clearColor[3] As Single
+	Dim vp[5] As Single
+
+	clearColor[0] = 0.05
+	clearColor[1] = 0.10
+	clearColor[2] = 0.20
+	clearColor[3] = 1.0
+
+	vp[0] = 0.0
+	vp[1] = 0.0
+	vp[2] = g_vpW
+	vp[3] = g_vpH
+	vp[4] = 0.0
+	vp[5] = 1.0
+
+	g_pContext->OMSetRenderTargets(1, VarPtr(g_pRTV), 0)
+	g_pContext->RSSetViewports(1, VarPtr(vp[0]))
+	g_pContext->ClearRenderTargetView(g_pRTV, VarPtr(clearColor[0]))
+End Sub
+
+Sub dx_RenderDraw()
+	Dim stride As DWord
+	Dim offset As DWord
+	stride = 28
+	offset = 0
+
+	g_pContext->IASetInputLayout(g_pLayout)
+	g_pContext->IASetVertexBuffers(0, 1, VarPtr(g_pVB), VarPtr(stride), VarPtr(offset))
+	g_pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
+	g_pContext->VSSetShader(g_pVS, 0, 0)
+	g_pContext->PSSetShader(g_pPS, 0, 0)
+	g_pContext->Draw(3, 0)
+
+	g_pSwapChain->Present(1, 0)
+End Sub
+
+Sub dx_Quit()
+	dx_ReleaseAll()
+	CoUninitialize()
+End Sub
