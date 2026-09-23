@@ -344,28 +344,47 @@ Function PpIsIncludeLine(line As *Byte, n As Long) As Long
     PpIsIncludeLine = 1
 End Function
 
-Function PpExtractInclude(line As *Byte, n As Long, dst As *Byte) As Long
+Function PpExtractInclude(line As *Byte, n As Long, dst As *Byte, ByRef isAngle As Long) As Long
     Dim i As Long
     Dim q1 As Long
     Dim q2 As Long
     Dim j As Long
+    Dim openCh As Long
+    Dim closeCh As Long
     PpExtractInclude = 0
+    isAngle = 0
     dst[0] = 0
     q1 = -1
     q2 = -1
+    openCh = 0
+    closeCh = 0
     i = 0
     While i < n
         If line[i] = 34 Then
-            If q1 < 0 Then
-                q1 = i
-            Else
-                q2 = i
-                Exit While
-            End If
+            openCh = 34
+            closeCh = 34
+            q1 = i
+            Exit While
+        End If
+        If line[i] = 60 Then
+            openCh = 60
+            closeCh = 62
+            q1 = i
+            isAngle = 1
+            Exit While
         End If
         i = i + 1
     Wend
-    If q1 < 0 Or q2 <= q1 Then Exit Function
+    If q1 < 0 Then Exit Function
+    i = q1 + 1
+    While i < n
+        If line[i] = closeCh Then
+            q2 = i
+            Exit While
+        End If
+        i = i + 1
+    Wend
+    If q2 <= q1 Then Exit Function
     j = 0
     i = q1 + 1
     While i < q2 And j < 250
@@ -572,10 +591,14 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
         Wend
         line[n] = 0
         If PpIsIncludeLine(VarPtr(line), n) <> 0 Then
-            If PpExtractInclude(VarPtr(line), n, VarPtr(inc)) = 0 Then Exit Function
+            Dim isAngle As Long
+            isAngle = 0
+            If PpExtractInclude(VarPtr(line), n, VarPtr(inc), isAngle) = 0 Then Exit Function
             full[0] = 0
             If inc[0] = 0 Then Exit Function
-            If (inc[1] = 58) Or (inc[0] = 92) Or (inc[0] = 47) Then
+            If isAngle <> 0 Then
+                If PpResolveAngleInclude(VarPtr(inc), VarPtr(full)) = 0 Then Exit Function
+            ElseIf (inc[1] = 58) Or (inc[0] = 92) Or (inc[0] = 47) Then
                 lstrcpy(VarPtr(full), VarPtr(inc))
             Else
                 PpDirOf(curFile, VarPtr(dir))

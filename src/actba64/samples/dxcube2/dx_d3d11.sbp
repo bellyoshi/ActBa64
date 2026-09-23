@@ -1,6 +1,5 @@
-' dx_d3d11.sbp - Direct3D 11 matrix transform sample
-' 2D アフィン変換（拡大縮小 * 回転 * 移動）で三角形の座標を毎フレーム変換する。
-' 数値は Math.abp の千分率（1.0 = 1000）。GPU へ渡す直前に IEEE Single へ変換。
+' dx_d3d11.sbp - Direct3D 11 cube (6 faces) + matrix transform
+' 立方体 6 面（各面を色分け）。拡大縮小 → 回転(Y/X) → 移動 → 簡易透視投影。
 
 Dim g_pDevice As *ID3D11Device
 Dim g_pContext As *ID3D11DeviceContext
@@ -18,23 +17,17 @@ Dim IID_ID3D11Texture2D As GUID
 ' 変換パラメータ（千分率）
 Dim g_tx As Long
 Dim g_ty As Long
-Dim g_ang As Long
+Dim g_angY As Long
+Dim g_angX As Long
 Dim g_scale As Long
 
-' モデル座標（千分率）x,y × 3
-Dim g_baseX[2] As Long
-Dim g_baseY[2] As Long
+' 頂点ワーク: (pos3+col4)×36 = 252 floats
+Dim g_vdata[251] As Single
+Dim g_vertCount As Long
 
-' 色（固定）r,g,b,a × 3（千分率）
-Dim g_colR[2] As Long
-Dim g_colG[2] As Long
-Dim g_colB[2] As Long
-Dim g_colA[2] As Long
+Const CUBE_HALF = 400
+Const CUBE_VB_BYTES = 1008
 
-' 頂点バッファ用ワーク（pos3 + col4）× 3 = 21 floats → 余裕で 27
-Dim g_vdata[26] As Single
-
-' 千分率 → IEEE754 Single ビット列（D3D 頂点用）
 Function MilliToSingleBits(milli As Long) As Long
 	Dim sign As Long
 	Dim num As Long
@@ -71,7 +64,8 @@ End Function
 Sub dx_ResetXform()
 	g_tx = 0
 	g_ty = 0
-	g_ang = 0
+	g_angY = 700
+	g_angX = 500
 	g_scale = 1000
 End Sub
 
@@ -81,60 +75,120 @@ Sub dx_StoreSingle(dest As VoidPtr, milli As Long)
 	memcpy(dest, VarPtr(bits), 4)
 End Sub
 
-' M = T * R * S  （先に拡大縮小 → 回転 → 移動）
-Sub dx_XformPoint(x As Long, y As Long, ByRef ox As Long, ByRef oy As Long)
+' S → Ry → Rx → T → 透視投影
+Sub dx_XformPoint(x As Long, y As Long, z As Long, ByRef ox As Long, ByRef oy As Long, ByRef oz As Long)
 	Dim sx As Long
 	Dim sy As Long
+	Dim sz As Long
 	Dim cs As Long
 	Dim sn As Long
-	Dim rx As Long
-	Dim ry As Long
+	Dim x1 As Long
+	Dim y1 As Long
+	Dim z1 As Long
+	Dim x2 As Long
+	Dim y2 As Long
+	Dim z2 As Long
 	Dim t1 As Long
 	Dim t2 As Long
+	Dim ez As Long
+	Dim px As Long
+	Dim py As Long
+	Dim pz As Long
 
 	sx = MathDiv(x * g_scale, MATH_ONE)
 	sy = MathDiv(y * g_scale, MATH_ONE)
+	sz = MathDiv(z * g_scale, MATH_ONE)
 
-	cs = Cos(g_ang)
-	sn = Sin(g_ang)
+	cs = Cos(g_angY)
+	sn = Sin(g_angY)
 	t1 = sx * cs
-	t2 = sy * sn
-	rx = MathDiv(t1 - t2, MATH_ONE)
+	t2 = sz * sn
+	x1 = MathDiv(t1 + t2, MATH_ONE)
+	y1 = sy
 	t1 = sx * sn
-	t2 = sy * cs
-	ry = MathDiv(t1 + t2, MATH_ONE)
+	t2 = sz * cs
+	z1 = MathDiv(t2 - t1, MATH_ONE)
 
-	ox = rx + g_tx
-	oy = ry + g_ty
+	cs = Cos(g_angX)
+	sn = Sin(g_angX)
+	x2 = x1
+	t1 = y1 * cs
+	t2 = z1 * sn
+	y2 = MathDiv(t1 - t2, MATH_ONE)
+	t1 = y1 * sn
+	t2 = z1 * cs
+	z2 = MathDiv(t1 + t2, MATH_ONE)
+
+	x2 = x2 + g_tx
+	y2 = y2 + g_ty
+
+	ez = z2 + 2200
+	If ez < 400 Then ez = 400
+	px = MathDiv(x2 * 1600, ez)
+	py = MathDiv(y2 * 1600, ez)
+	pz = MathDiv((ez - 400) * 200, 1000)
+
+	ox = px
+	oy = py
+	oz = pz
+End Sub
+
+Sub dx_EmitVert(ByRef vi As Long, x As Long, y As Long, z As Long, cr As Long, cg As Long, cb As Long)
+	Dim ox As Long
+	Dim oy As Long
+	Dim oz As Long
+	Dim base As Long
+
+	dx_XformPoint(x, y, z, ox, oy, oz)
+	base = vi * 7
+	dx_StoreSingle(VarPtr(g_vdata[base + 0]), ox)
+	dx_StoreSingle(VarPtr(g_vdata[base + 1]), oy)
+	dx_StoreSingle(VarPtr(g_vdata[base + 2]), oz)
+	dx_StoreSingle(VarPtr(g_vdata[base + 3]), cr)
+	dx_StoreSingle(VarPtr(g_vdata[base + 4]), cg)
+	dx_StoreSingle(VarPtr(g_vdata[base + 5]), cb)
+	dx_StoreSingle(VarPtr(g_vdata[base + 6]), 1000)
+	vi = vi + 1
+End Sub
+
+' 外側から見て時計回り（D3D11 既定の前面）: 0,1,2 / 0,2,3
+Sub dx_EmitFace(ByRef vi As Long, x0 As Long, y0 As Long, z0 As Long, x1 As Long, y1 As Long, z1 As Long, x2 As Long, y2 As Long, z2 As Long, x3 As Long, y3 As Long, z3 As Long, cr As Long, cg As Long, cb As Long)
+	dx_EmitVert(vi, x0, y0, z0, cr, cg, cb)
+	dx_EmitVert(vi, x1, y1, z1, cr, cg, cb)
+	dx_EmitVert(vi, x2, y2, z2, cr, cg, cb)
+	dx_EmitVert(vi, x0, y0, z0, cr, cg, cb)
+	dx_EmitVert(vi, x2, y2, z2, cr, cg, cb)
+	dx_EmitVert(vi, x3, y3, z3, cr, cg, cb)
 End Sub
 
 Sub dx_BuildVertices()
-	Dim i As Long
-	Dim ox As Long
-	Dim oy As Long
-	Dim base As Long
+	Dim vi As Long
+	Dim h As Long
+	h = CUBE_HALF
+	vi = 0
+	ZeroMemory(VarPtr(g_vdata[0]), CUBE_VB_BYTES)
 
-	ZeroMemory(VarPtr(g_vdata[0]), 84)
-	i = 0
-	While i < 3
-		dx_XformPoint(g_baseX[i], g_baseY[i], ox, oy)
-		base = i * 7
-		dx_StoreSingle(VarPtr(g_vdata[base + 0]), ox)
-		dx_StoreSingle(VarPtr(g_vdata[base + 1]), oy)
-		dx_StoreSingle(VarPtr(g_vdata[base + 2]), 0)
-		dx_StoreSingle(VarPtr(g_vdata[base + 3]), g_colR[i])
-		dx_StoreSingle(VarPtr(g_vdata[base + 4]), g_colG[i])
-		dx_StoreSingle(VarPtr(g_vdata[base + 5]), g_colB[i])
-		dx_StoreSingle(VarPtr(g_vdata[base + 6]), g_colA[i])
-		i = i + 1
-	Wend
+	' +Z（赤）
+	dx_EmitFace(vi, 0 - h, 0 - h, h, h, 0 - h, h, h, h, h, 0 - h, h, h, 1000, 250, 250)
+	' +X（緑）
+	dx_EmitFace(vi, h, 0 - h, h, h, 0 - h, 0 - h, h, h, 0 - h, h, h, h, 250, 1000, 250)
+	' -Z（青）
+	dx_EmitFace(vi, h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 0 - h, 250, 250, 1000)
+	' -X（黄）
+	dx_EmitFace(vi, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 0 - h, h, 0 - h, 1000, 1000, 250)
+	' +Y（シアン）
+	dx_EmitFace(vi, 0 - h, h, h, h, h, h, h, h, 0 - h, 0 - h, h, 0 - h, 250, 1000, 1000)
+	' -Y（マゼンタ）
+	dx_EmitFace(vi, 0 - h, 0 - h, 0 - h, h, 0 - h, 0 - h, h, 0 - h, h, 0 - h, 0 - h, h, 1000, 250, 1000)
+
+	g_vertCount = vi
 End Sub
 
 Sub dx_UpdateVB()
 	If g_pContext = 0 Then Exit Sub
 	If g_pVB = 0 Then Exit Sub
 	dx_BuildVertices()
-	g_pContext->UpdateSubresource(g_pVB, 0, 0, VarPtr(g_vdata[0]), 84, 0)
+	g_pContext->UpdateSubresource(g_pVB, 0, 0, VarPtr(g_vdata[0]), CUBE_VB_BYTES, 0)
 End Sub
 
 Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, pTarget As BytePtr, ByRef ppBlob As *ID3DBlob) As DWord
@@ -142,7 +196,7 @@ Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, p
 	Dim hr As DWord
 
 	pErr = 0
-	hr = D3DCompile(pSrc, srcLen, "triangle.hlsl", 0, 0, pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, VarPtr(ppBlob), VarPtr(pErr))
+	hr = D3DCompile(pSrc, srcLen, "cube.hlsl", 0, 0, pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, VarPtr(ppBlob), VarPtr(pErr))
 	If hr Then
 		If pErr Then
 			MessageBox(0, pErr->GetBufferPointer(), "dx_fail", MB_OK or MB_ICONSTOP)
@@ -197,7 +251,7 @@ Sub dx_ReleaseAll()
 	End If
 End Sub
 
-Function dx_CreateTriangle() As Long
+Function dx_CreateCube() As Long
 	Dim u As String
 	Dim hlsl As String
 	u = Chr$(95)
@@ -214,12 +268,12 @@ Function dx_CreateTriangle() As Long
 	srcLen = Len(hlsl)
 
 	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("PS"), StrPtr("ps_4_0"), pPSBlob) Then
 		If pVSBlob Then pVSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 
@@ -235,7 +289,7 @@ Function dx_CreateTriangle() As Long
 		dx_FailStep("CreateVertexShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 
@@ -246,7 +300,7 @@ Function dx_CreateTriangle() As Long
 		dx_FailStep("CreatePixelShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 	pPSBlob->Release()
@@ -282,31 +336,10 @@ Function dx_CreateTriangle() As Long
 	If hr Then
 		dx_FailStep("CreateInputLayout", hr)
 		pVSBlob->Release()
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 	pVSBlob->Release()
-
-	' モデル座標（クリップ空間想定の ±0.5 付近）
-	g_baseX[0] = 0
-	g_baseY[0] = 500
-	g_baseX[1] = 500
-	g_baseY[1] = -500
-	g_baseX[2] = -500
-	g_baseY[2] = -500
-
-	g_colR[0] = 1000
-	g_colG[0] = 200
-	g_colB[0] = 200
-	g_colA[0] = 1000
-	g_colR[1] = 200
-	g_colG[1] = 1000
-	g_colB[1] = 200
-	g_colA[1] = 1000
-	g_colR[2] = 200
-	g_colG[2] = 200
-	g_colB[2] = 1000
-	g_colA[2] = 1000
 
 	dx_ResetXform()
 	dx_BuildVertices()
@@ -315,7 +348,7 @@ Function dx_CreateTriangle() As Long
 	Dim initData As D3D11_SUBRESOURCE_DATA
 	ZeroMemory(VarPtr(bd), Len(bd))
 	ZeroMemory(VarPtr(initData), Len(initData))
-	bd.ByteWidth = 84
+	bd.ByteWidth = CUBE_VB_BYTES
 	bd.Usage = D3D11_USAGE_DEFAULT
 	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
 	initData.pSysMem = VarPtr(g_vdata[0])
@@ -323,11 +356,11 @@ Function dx_CreateTriangle() As Long
 	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
 	If hr Then
 		dx_FailStep("CreateBuffer VB", hr)
-		dx_CreateTriangle = 0
+		dx_CreateCube = 0
 		Exit Function
 	End If
 
-	dx_CreateTriangle = 1
+	dx_CreateCube = 1
 End Function
 
 Function dx_Init(hWnd As HWND) As Long
@@ -402,7 +435,7 @@ Function dx_Init(hWnd As HWND) As Long
 		Exit Function
 	End If
 
-	If dx_CreateTriangle() = 0 Then
+	If dx_CreateCube() = 0 Then
 		dx_Init = 0
 		Exit Function
 	End If
@@ -423,8 +456,10 @@ Sub dx_UpdateInput()
 	If dx_KeyDown(VK_UP) <> 0 Then g_ty = g_ty + stepMove
 	If dx_KeyDown(VK_DOWN) <> 0 Then g_ty = g_ty - stepMove
 
-	If dx_KeyDown(81) <> 0 Then g_ang = g_ang + stepAng
-	If dx_KeyDown(69) <> 0 Then g_ang = g_ang - stepAng
+	If dx_KeyDown(81) <> 0 Then g_angY = g_angY + stepAng
+	If dx_KeyDown(69) <> 0 Then g_angY = g_angY - stepAng
+	If dx_KeyDown(65) <> 0 Then g_angX = g_angX + stepAng
+	If dx_KeyDown(68) <> 0 Then g_angX = g_angX - stepAng
 
 	If dx_KeyDown(VK_OEM_PLUS) <> 0 Then g_scale = g_scale + stepScale
 	If dx_KeyDown(VK_ADD) <> 0 Then g_scale = g_scale + stepScale
@@ -443,7 +478,8 @@ Sub dx_DrawHelp()
 	Dim hdc As HDC
 	Dim y As Long
 	Dim s As String
-	Dim deg As Long
+	Dim degY As Long
+	Dim degX As Long
 
 	If hMainWnd = 0 Then Exit Sub
 	hdc = GetDC(hMainWnd)
@@ -458,7 +494,9 @@ Sub dx_DrawHelp()
 	y = y + 18
 	dx_TextOutUtf8(hdc, 8, y, "矢印 : 移動")
 	y = y + 18
-	dx_TextOutUtf8(hdc, 8, y, "Q/E  : 回転")
+	dx_TextOutUtf8(hdc, 8, y, "Q/E  : Y回転")
+	y = y + 18
+	dx_TextOutUtf8(hdc, 8, y, "A/D  : X回転")
 	y = y + 18
 	dx_TextOutUtf8(hdc, 8, y, "+/-  : 拡大縮小")
 	y = y + 18
@@ -468,11 +506,15 @@ Sub dx_DrawHelp()
 
 	SetTextColor(hdc, &H00FFFFFF)
 	y = y + 24
-	deg = RadToDeg(g_ang)
+	degY = RadToDeg(g_angY)
+	degX = RadToDeg(g_angX)
 	s = "tx=" + Str$(g_tx) + "  ty=" + Str$(g_ty)
 	dx_TextOutUtf8(hdc, 8, y, s)
 	y = y + 18
-	s = "ang=" + Str$(deg) + " deg  scale=" + Str$(g_scale)
+	s = "Yaw=" + Str$(degY) + "  Pitch=" + Str$(degX)
+	dx_TextOutUtf8(hdc, 8, y, s)
+	y = y + 18
+	s = "scale=" + Str$(g_scale)
 	dx_TextOutUtf8(hdc, 8, y, s)
 
 	ReleaseDC(hMainWnd, hdc)
@@ -517,7 +559,7 @@ Sub dx_RenderDraw()
 	g_pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
 	g_pContext->VSSetShader(g_pVS, 0, 0)
 	g_pContext->PSSetShader(g_pPS, 0, 0)
-	g_pContext->Draw(3, 0)
+	g_pContext->Draw(g_vertCount, 0)
 
 	g_pSwapChain->Present(1, 0)
 End Sub
