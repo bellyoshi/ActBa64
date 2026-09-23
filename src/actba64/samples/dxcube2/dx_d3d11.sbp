@@ -1,0 +1,570 @@
+' dx_d3d11.sbp - Direct3D 11 cube (6 faces) + matrix transform
+' 立方体 6 面（各面を色分け）。拡大縮小 → 回転(Y/X) → 移動 → 簡易透視投影。
+
+Dim g_pDevice As *ID3D11Device
+Dim g_pContext As *ID3D11DeviceContext
+Dim g_pSwapChain As *IDXGISwapChain
+Dim g_pRTV As *ID3D11RenderTargetView
+Dim g_pVS As *ID3D11VertexShader
+Dim g_pPS As *ID3D11PixelShader
+Dim g_pVB As *ID3D11Buffer
+Dim g_pLayout As *ID3D11InputLayout
+Dim g_vpW As Long
+Dim g_vpH As Long
+
+Dim IID_ID3D11Texture2D As GUID
+
+' 変換パラメータ（千分率）
+Dim g_tx As Long
+Dim g_ty As Long
+Dim g_angY As Long
+Dim g_angX As Long
+Dim g_scale As Long
+
+' 頂点ワーク: (pos3+col4)×36 = 252 floats
+Dim g_vdata[251] As Single
+Dim g_vertCount As Long
+
+Const CUBE_HALF = 400
+Const CUBE_VB_BYTES = 1008
+
+Function MilliToSingleBits(milli As Long) As Long
+	Dim sign As Long
+	Dim num As Long
+	Dim uexp As Long
+	Dim man As Long
+	Dim biased As Long
+
+	MilliToSingleBits = 0
+	If milli = 0 Then Exit Function
+	sign = 0
+	If milli < 0 Then
+		sign = 1
+		milli = 0 - milli
+	End If
+	num = milli
+	uexp = 0
+	While num < 1000
+		num = num * 2
+		uexp = uexp - 1
+		If uexp < -140 Then Exit Function
+	Wend
+	While num >= 2000
+		num = num / 2
+		uexp = uexp + 1
+		If uexp > 140 Then Exit Function
+	Wend
+	man = (num - 1000) * 8388 + ((num - 1000) * 608) / 1000
+	biased = uexp + 127
+	If biased <= 0 Then Exit Function
+	If biased >= 255 Then Exit Function
+	MilliToSingleBits = (sign * &H80000000) Or (biased * 8388608) Or man
+End Function
+
+Sub dx_ResetXform()
+	g_tx = 0
+	g_ty = 0
+	g_angY = 700
+	g_angX = 500
+	g_scale = 1000
+End Sub
+
+Sub dx_StoreSingle(dest As VoidPtr, milli As Long)
+	Dim bits As Long
+	bits = MilliToSingleBits(milli)
+	memcpy(dest, VarPtr(bits), 4)
+End Sub
+
+' S → Ry → Rx → T → 透視投影
+Sub dx_XformPoint(x As Long, y As Long, z As Long, ByRef ox As Long, ByRef oy As Long, ByRef oz As Long)
+	Dim sx As Long
+	Dim sy As Long
+	Dim sz As Long
+	Dim cs As Long
+	Dim sn As Long
+	Dim x1 As Long
+	Dim y1 As Long
+	Dim z1 As Long
+	Dim x2 As Long
+	Dim y2 As Long
+	Dim z2 As Long
+	Dim t1 As Long
+	Dim t2 As Long
+	Dim ez As Long
+	Dim px As Long
+	Dim py As Long
+	Dim pz As Long
+
+	sx = MathDiv(x * g_scale, MATH_ONE)
+	sy = MathDiv(y * g_scale, MATH_ONE)
+	sz = MathDiv(z * g_scale, MATH_ONE)
+
+	cs = Cos(g_angY)
+	sn = Sin(g_angY)
+	t1 = sx * cs
+	t2 = sz * sn
+	x1 = MathDiv(t1 + t2, MATH_ONE)
+	y1 = sy
+	t1 = sx * sn
+	t2 = sz * cs
+	z1 = MathDiv(t2 - t1, MATH_ONE)
+
+	cs = Cos(g_angX)
+	sn = Sin(g_angX)
+	x2 = x1
+	t1 = y1 * cs
+	t2 = z1 * sn
+	y2 = MathDiv(t1 - t2, MATH_ONE)
+	t1 = y1 * sn
+	t2 = z1 * cs
+	z2 = MathDiv(t1 + t2, MATH_ONE)
+
+	x2 = x2 + g_tx
+	y2 = y2 + g_ty
+
+	ez = z2 + 2200
+	If ez < 400 Then ez = 400
+	px = MathDiv(x2 * 1600, ez)
+	py = MathDiv(y2 * 1600, ez)
+	pz = MathDiv((ez - 400) * 200, 1000)
+
+	ox = px
+	oy = py
+	oz = pz
+End Sub
+
+Sub dx_EmitVert(ByRef vi As Long, x As Long, y As Long, z As Long, cr As Long, cg As Long, cb As Long)
+	Dim ox As Long
+	Dim oy As Long
+	Dim oz As Long
+	Dim base As Long
+
+	dx_XformPoint(x, y, z, ox, oy, oz)
+	base = vi * 7
+	dx_StoreSingle(VarPtr(g_vdata[base + 0]), ox)
+	dx_StoreSingle(VarPtr(g_vdata[base + 1]), oy)
+	dx_StoreSingle(VarPtr(g_vdata[base + 2]), oz)
+	dx_StoreSingle(VarPtr(g_vdata[base + 3]), cr)
+	dx_StoreSingle(VarPtr(g_vdata[base + 4]), cg)
+	dx_StoreSingle(VarPtr(g_vdata[base + 5]), cb)
+	dx_StoreSingle(VarPtr(g_vdata[base + 6]), 1000)
+	vi = vi + 1
+End Sub
+
+' 外側から見て時計回り（D3D11 既定の前面）: 0,1,2 / 0,2,3
+Sub dx_EmitFace(ByRef vi As Long, x0 As Long, y0 As Long, z0 As Long, x1 As Long, y1 As Long, z1 As Long, x2 As Long, y2 As Long, z2 As Long, x3 As Long, y3 As Long, z3 As Long, cr As Long, cg As Long, cb As Long)
+	dx_EmitVert(vi, x0, y0, z0, cr, cg, cb)
+	dx_EmitVert(vi, x1, y1, z1, cr, cg, cb)
+	dx_EmitVert(vi, x2, y2, z2, cr, cg, cb)
+	dx_EmitVert(vi, x0, y0, z0, cr, cg, cb)
+	dx_EmitVert(vi, x2, y2, z2, cr, cg, cb)
+	dx_EmitVert(vi, x3, y3, z3, cr, cg, cb)
+End Sub
+
+Sub dx_BuildVertices()
+	Dim vi As Long
+	Dim h As Long
+	h = CUBE_HALF
+	vi = 0
+	ZeroMemory(VarPtr(g_vdata[0]), CUBE_VB_BYTES)
+
+	' +Z（赤）
+	dx_EmitFace(vi, 0 - h, 0 - h, h, h, 0 - h, h, h, h, h, 0 - h, h, h, 1000, 250, 250)
+	' +X（緑）
+	dx_EmitFace(vi, h, 0 - h, h, h, 0 - h, 0 - h, h, h, 0 - h, h, h, h, 250, 1000, 250)
+	' -Z（青）
+	dx_EmitFace(vi, h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 0 - h, 250, 250, 1000)
+	' -X（黄）
+	dx_EmitFace(vi, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 0 - h, h, 0 - h, 1000, 1000, 250)
+	' +Y（シアン）
+	dx_EmitFace(vi, 0 - h, h, h, h, h, h, h, h, 0 - h, 0 - h, h, 0 - h, 250, 1000, 1000)
+	' -Y（マゼンタ）
+	dx_EmitFace(vi, 0 - h, 0 - h, 0 - h, h, 0 - h, 0 - h, h, 0 - h, h, 0 - h, 0 - h, h, 1000, 250, 1000)
+
+	g_vertCount = vi
+End Sub
+
+Sub dx_UpdateVB()
+	If g_pContext = 0 Then Exit Sub
+	If g_pVB = 0 Then Exit Sub
+	dx_BuildVertices()
+	g_pContext->UpdateSubresource(g_pVB, 0, 0, VarPtr(g_vdata[0]), CUBE_VB_BYTES, 0)
+End Sub
+
+Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, pTarget As BytePtr, ByRef ppBlob As *ID3DBlob) As DWord
+	Dim pErr As *ID3DBlob
+	Dim hr As DWord
+
+	pErr = 0
+	hr = D3DCompile(pSrc, srcLen, "cube.hlsl", 0, 0, pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, VarPtr(ppBlob), VarPtr(pErr))
+	If hr Then
+		If pErr Then
+			MessageBox(0, pErr->GetBufferPointer(), "dx_fail", MB_OK or MB_ICONSTOP)
+			pErr->Release()
+		Else
+			MessageBox(0, "D3DCompile failed. Check d3dcompiler_47.dll.", "dx_fail", MB_OK or MB_ICONSTOP)
+		End If
+	End If
+	dx_CompileShader = hr
+End Function
+
+Sub dx_FailStep(stepName As String, hr As DWord)
+	Dim msg As String
+	msg = stepName
+	msg = msg + " hr="
+	msg = msg + Str$(hr)
+	MessageBox(0, msg, "dx_fail", MB_OK or MB_ICONSTOP)
+End Sub
+
+Sub dx_ReleaseAll()
+	If g_pLayout Then
+		g_pLayout->Release()
+		g_pLayout = 0
+	End If
+	If g_pVB Then
+		g_pVB->Release()
+		g_pVB = 0
+	End If
+	If g_pPS Then
+		g_pPS->Release()
+		g_pPS = 0
+	End If
+	If g_pVS Then
+		g_pVS->Release()
+		g_pVS = 0
+	End If
+	If g_pRTV Then
+		g_pRTV->Release()
+		g_pRTV = 0
+	End If
+	If g_pContext Then
+		g_pContext->Release()
+		g_pContext = 0
+	End If
+	If g_pSwapChain Then
+		g_pSwapChain->Release()
+		g_pSwapChain = 0
+	End If
+	If g_pDevice Then
+		g_pDevice->Release()
+		g_pDevice = 0
+	End If
+End Sub
+
+Function dx_CreateCube() As Long
+	Dim u As String
+	Dim hlsl As String
+	u = Chr$(95)
+	hlsl = "struct VS" + u + "IN{float3 pos:POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "struct VS" + u + "OUT{float4 pos:SV" + u + "POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "VS" + u + "OUT VS(VS" + u + "IN i){VS" + u + "OUT o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
+	hlsl = hlsl + "float4 PS(VS" + u + "OUT i):SV" + u + "Target{return i.col;}"
+
+	Dim pVSBlob As *ID3DBlob
+	Dim pPSBlob As *ID3DBlob
+	Dim srcLen As DWord
+	pVSBlob = 0
+	pPSBlob = 0
+	srcLen = Len(hlsl)
+
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then
+		dx_CreateCube = 0
+		Exit Function
+	End If
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("PS"), StrPtr("ps_4_0"), pPSBlob) Then
+		If pVSBlob Then pVSBlob->Release()
+		dx_CreateCube = 0
+		Exit Function
+	End If
+
+	Dim hr As DWord
+	Dim vsCode As VoidPtr
+	Dim vsLen As DWord
+	Dim psCode As VoidPtr
+	Dim psLen As DWord
+	vsCode = pVSBlob->GetBufferPointer()
+	vsLen = pVSBlob->GetBufferSize()
+	hr = g_pDevice->CreateVertexShader(vsCode, vsLen, 0, VarPtr(g_pVS))
+	If hr Then
+		dx_FailStep("CreateVertexShader", hr)
+		pVSBlob->Release()
+		pPSBlob->Release()
+		dx_CreateCube = 0
+		Exit Function
+	End If
+
+	psCode = pPSBlob->GetBufferPointer()
+	psLen = pPSBlob->GetBufferSize()
+	hr = g_pDevice->CreatePixelShader(psCode, psLen, 0, VarPtr(g_pPS))
+	If hr Then
+		dx_FailStep("CreatePixelShader", hr)
+		pVSBlob->Release()
+		pPSBlob->Release()
+		dx_CreateCube = 0
+		Exit Function
+	End If
+	pPSBlob->Release()
+
+	Dim namePos As String
+	Dim nameCol As String
+	namePos = "POSITION"
+	nameCol = "COLOR"
+
+	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
+	Dim tmpDesc As D3D11_INPUT_ELEMENT_DESC
+	Dim descSz As DWord
+	descSz = Len(tmpDesc)
+	ZeroMemory(VarPtr(layout[0]), descSz * 2)
+
+	layout[0].SemanticName = StrPtr(namePos)
+	layout[0].SemanticIndex = 0
+	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
+	layout[0].InputSlot = 0
+	layout[0].AlignedByteOffset = 0
+	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout[0].InstanceDataStepRate = 0
+
+	layout[1].SemanticName = StrPtr(nameCol)
+	layout[1].SemanticIndex = 0
+	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
+	layout[1].InputSlot = 0
+	layout[1].AlignedByteOffset = 12
+	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout[1].InstanceDataStepRate = 0
+
+	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, vsCode, vsLen, VarPtr(g_pLayout))
+	If hr Then
+		dx_FailStep("CreateInputLayout", hr)
+		pVSBlob->Release()
+		dx_CreateCube = 0
+		Exit Function
+	End If
+	pVSBlob->Release()
+
+	dx_ResetXform()
+	dx_BuildVertices()
+
+	Dim bd As D3D11_BUFFER_DESC
+	Dim initData As D3D11_SUBRESOURCE_DATA
+	ZeroMemory(VarPtr(bd), Len(bd))
+	ZeroMemory(VarPtr(initData), Len(initData))
+	bd.ByteWidth = CUBE_VB_BYTES
+	bd.Usage = D3D11_USAGE_DEFAULT
+	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
+	initData.pSysMem = VarPtr(g_vdata[0])
+
+	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
+	If hr Then
+		dx_FailStep("CreateBuffer VB", hr)
+		dx_CreateCube = 0
+		Exit Function
+	End If
+
+	dx_CreateCube = 1
+End Function
+
+Function dx_Init(hWnd As HWND) As Long
+	CoInitialize(NULL)
+
+	Dim rc As RECT
+	GetClientRect(hWnd, rc)
+	Dim w As Long
+	Dim h As Long
+	w = rc.right - rc.left
+	h = rc.bottom - rc.top
+	If w < 1 Then w = 640
+	If h < 1 Then h = 480
+	g_vpW = w
+	g_vpH = h
+
+	Dim sd As DXGI_SWAP_CHAIN_DESC
+	ZeroMemory(VarPtr(sd), Len(sd))
+	sd.BufferDesc.Width = w
+	sd.BufferDesc.Height = h
+	sd.BufferDesc.RefreshRate.Numerator = 60
+	sd.BufferDesc.RefreshRate.Denominator = 1
+	sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM
+	sd.SampleDesc.Count = 1
+	sd.SampleDesc.Quality = 0
+	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT
+	sd.BufferCount = 1
+	sd.OutputWindow = hWnd
+	sd.Windowed = TRUE
+	sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD
+
+	Dim fl[1] As DWord
+	fl[0] = D3D_FEATURE_LEVEL_11_0
+	fl[1] = D3D_FEATURE_LEVEL_10_0
+
+	Dim hr As DWord
+	hr = D3D11CreateDeviceAndSwapChain(0, D3D_DRIVER_TYPE_HARDWARE, 0, 0, VarPtr(fl[0]), 2, D3D11_SDK_VERSION, VarPtr(sd), g_pSwapChain, g_pDevice, 0, g_pContext)
+	If hr Then
+		hr = D3D11CreateDeviceAndSwapChain(0, D3D_DRIVER_TYPE_WARP, 0, 0, VarPtr(fl[0]), 2, D3D11_SDK_VERSION, VarPtr(sd), g_pSwapChain, g_pDevice, 0, g_pContext)
+	End If
+	If hr Then
+		MessageBox(hWnd, "D3D11CreateDeviceAndSwapChain failed.", "Error", MB_OK or MB_ICONSTOP)
+		dx_Init = 0
+		Exit Function
+	End If
+
+	Dim pBackBuffer As *IUnknown
+	pBackBuffer = 0
+	IID_ID3D11Texture2D.Data1 = &H6F15AAF2
+	IID_ID3D11Texture2D.Data2 = &HD208
+	IID_ID3D11Texture2D.Data3 = &H4E89
+	IID_ID3D11Texture2D.Data4[0] = &H9A
+	IID_ID3D11Texture2D.Data4[1] = &HB4
+	IID_ID3D11Texture2D.Data4[2] = &H48
+	IID_ID3D11Texture2D.Data4[3] = &H95
+	IID_ID3D11Texture2D.Data4[4] = &H35
+	IID_ID3D11Texture2D.Data4[5] = &HD3
+	IID_ID3D11Texture2D.Data4[6] = &H4F
+	IID_ID3D11Texture2D.Data4[7] = &H9C
+	hr = g_pSwapChain->GetBuffer(0, IID_ID3D11Texture2D, VarPtr(pBackBuffer))
+	If hr Then
+		MessageBox(hWnd, "IDXGISwapChain::GetBuffer failed.", "Error", MB_OK or MB_ICONSTOP)
+		dx_Init = 0
+		Exit Function
+	End If
+
+	hr = g_pDevice->CreateRenderTargetView(pBackBuffer, 0, VarPtr(g_pRTV))
+	pBackBuffer->Release()
+	If hr Then
+		MessageBox(hWnd, "CreateRenderTargetView failed.", "Error", MB_OK or MB_ICONSTOP)
+		dx_Init = 0
+		Exit Function
+	End If
+
+	If dx_CreateCube() = 0 Then
+		dx_Init = 0
+		Exit Function
+	End If
+
+	dx_Init = 1
+End Function
+
+Sub dx_UpdateInput()
+	Dim stepMove As Long
+	Dim stepAng As Long
+	Dim stepScale As Long
+	stepMove = 8
+	stepAng = 35
+	stepScale = 15
+
+	If dx_KeyDown(VK_LEFT) <> 0 Then g_tx = g_tx - stepMove
+	If dx_KeyDown(VK_RIGHT) <> 0 Then g_tx = g_tx + stepMove
+	If dx_KeyDown(VK_UP) <> 0 Then g_ty = g_ty + stepMove
+	If dx_KeyDown(VK_DOWN) <> 0 Then g_ty = g_ty - stepMove
+
+	If dx_KeyDown(81) <> 0 Then g_angY = g_angY + stepAng
+	If dx_KeyDown(69) <> 0 Then g_angY = g_angY - stepAng
+	If dx_KeyDown(65) <> 0 Then g_angX = g_angX + stepAng
+	If dx_KeyDown(68) <> 0 Then g_angX = g_angX - stepAng
+
+	If dx_KeyDown(VK_OEM_PLUS) <> 0 Then g_scale = g_scale + stepScale
+	If dx_KeyDown(VK_ADD) <> 0 Then g_scale = g_scale + stepScale
+	If dx_KeyDown(VK_OEM_MINUS) <> 0 Then g_scale = g_scale - stepScale
+	If dx_KeyDown(VK_SUBTRACT) <> 0 Then g_scale = g_scale - stepScale
+
+	If g_scale < 100 Then g_scale = 100
+	If g_scale > 4000 Then g_scale = 4000
+
+	If dx_KeyDown(82) <> 0 Then dx_ResetXform()
+
+	dx_UpdateVB()
+End Sub
+
+Sub dx_DrawHelp()
+	Dim hdc As HDC
+	Dim y As Long
+	Dim s As String
+	Dim degY As Long
+	Dim degX As Long
+
+	If hMainWnd = 0 Then Exit Sub
+	hdc = GetDC(hMainWnd)
+	If hdc = 0 Then Exit Sub
+
+	SelectObject(hdc, hFont_MainWnd)
+	SetBkMode(hdc, TRANSPARENT)
+	SetTextColor(hdc, &H00FFFF00)
+
+	y = 8
+	dx_TextOutUtf8(hdc, 8, y, "[操作方法]")
+	y = y + 18
+	dx_TextOutUtf8(hdc, 8, y, "矢印 : 移動")
+	y = y + 18
+	dx_TextOutUtf8(hdc, 8, y, "Q/E  : Y回転")
+	y = y + 18
+	dx_TextOutUtf8(hdc, 8, y, "A/D  : X回転")
+	y = y + 18
+	dx_TextOutUtf8(hdc, 8, y, "+/-  : 拡大縮小")
+	y = y + 18
+	dx_TextOutUtf8(hdc, 8, y, "R    : リセット")
+	y = y + 18
+	dx_TextOutUtf8(hdc, 8, y, "Esc  : 終了")
+
+	SetTextColor(hdc, &H00FFFFFF)
+	y = y + 24
+	degY = RadToDeg(g_angY)
+	degX = RadToDeg(g_angX)
+	s = "tx=" + Str$(g_tx) + "  ty=" + Str$(g_ty)
+	dx_TextOutUtf8(hdc, 8, y, s)
+	y = y + 18
+	s = "Yaw=" + Str$(degY) + "  Pitch=" + Str$(degX)
+	dx_TextOutUtf8(hdc, 8, y, s)
+	y = y + 18
+	s = "scale=" + Str$(g_scale)
+	dx_TextOutUtf8(hdc, 8, y, s)
+
+	ReleaseDC(hMainWnd, hdc)
+End Sub
+
+Sub dx_Render()
+	If g_pContext = 0 Then Exit Sub
+	dx_RenderClear()
+	dx_RenderDraw()
+	dx_DrawHelp()
+End Sub
+
+Sub dx_RenderClear()
+	Dim clearColor[3] As Single
+	Dim vp[5] As Single
+
+	clearColor[0] = 0.05
+	clearColor[1] = 0.10
+	clearColor[2] = 0.20
+	clearColor[3] = 1.0
+
+	vp[0] = 0.0
+	vp[1] = 0.0
+	vp[2] = g_vpW
+	vp[3] = g_vpH
+	vp[4] = 0.0
+	vp[5] = 1.0
+
+	g_pContext->OMSetRenderTargets(1, VarPtr(g_pRTV), 0)
+	g_pContext->RSSetViewports(1, VarPtr(vp[0]))
+	g_pContext->ClearRenderTargetView(g_pRTV, VarPtr(clearColor[0]))
+End Sub
+
+Sub dx_RenderDraw()
+	Dim stride As DWord
+	Dim offset As DWord
+	stride = 28
+	offset = 0
+
+	g_pContext->IASetInputLayout(g_pLayout)
+	g_pContext->IASetVertexBuffers(0, 1, VarPtr(g_pVB), VarPtr(stride), VarPtr(offset))
+	g_pContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
+	g_pContext->VSSetShader(g_pVS, 0, 0)
+	g_pContext->PSSetShader(g_pPS, 0, 0)
+	g_pContext->Draw(g_vertCount, 0)
+
+	g_pSwapChain->Present(1, 0)
+End Sub
+
+Sub dx_Quit()
+	dx_ReleaseAll()
+	CoUninitialize()
+End Sub
