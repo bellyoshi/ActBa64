@@ -318,6 +318,11 @@ Function LowExprString(ctx As *LowerCtx, idx As Long) As Long
     Dim tt As *TypeTable
     Dim typeIdxs As *Long
     Dim byRefs As *Long
+    Dim slen As Long
+    Dim strs As *Byte
+    Dim stOff As Long
+    Dim j As Long
+    Dim irIdx As Long
 
     LowExprString = 0
     ast = ctx->ast
@@ -329,8 +334,19 @@ Function LowExprString(ctx As *LowerCtx, idx As Long) As Long
     typeIdxs = ctx->typeIdxs
     byRefs = ctx->byRefs
 
-    AstCopyStr(ast, idx, VarPtr(buf))
-    IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(buf))
+    slen = AstStrByteLen(ast, idx)
+    If slen <= 0 Then
+        AstCopyStr(ast, idx, VarPtr(buf))
+        slen = 0
+        While buf[slen] <> 0
+            slen = slen + 1
+        Wend
+    Else
+        AstCopyStrTo(ast, idx, VarPtr(buf), slen)
+    End If
+    irIdx = IrEmit(list, OP_LEA_RAX_STR, 0, slen)
+    If irIdx < 0 Then Exit Function
+    IrSetStrAtN(list, irIdx, VarPtr(buf), slen)
     LowExprString = 1
 End Function
 
@@ -896,6 +912,60 @@ Function LowExprBuiltinStr(ctx As *LowerCtx, idx As Long) As Long
         IrEmit(list, OP_MOV_ECX, 65535, 0)
         IrEmit(list, OP_AND_EAX_ECX, 0, 0)
         LowExprBuiltinStr = 1
+    ElseIf nodes[idx].num = BI_LOBYTE Then
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, 255, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+        LowExprBuiltinStr = 1
+    ElseIf nodes[idx].num = BI_HIBYTE Then
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, 8, 0)
+        IrEmit(list, OP_SAR_EAX_CL, 0, 0)
+        IrEmit(list, OP_MOV_ECX, 255, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+        LowExprBuiltinStr = 1
+    ElseIf nodes[idx].num = BI_HIWORD Then
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, 16, 0)
+        IrEmit(list, OP_SAR_EAX_CL, 0, 0)
+        IrEmit(list, OP_MOV_ECX, 65535, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+        LowExprBuiltinStr = 1
+    ElseIf nodes[idx].num = BI_MAKELONG Then
+        If nodes[idx].right < 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, 16, 0)
+        IrEmit(list, OP_SHL_EAX_CL, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+        LowExprBuiltinStr = 1
+    ElseIf nodes[idx].num = BI_ELM Then
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, 1, 0)
+        IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+        LowExprBuiltinStr = 1
+    ElseIf nodes[idx].num = BI_MAKEWORD Then
+        If nodes[idx].right < 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, 255, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, 255, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+        IrEmit(list, OP_MOV_ECX, 8, 0)
+        IrEmit(list, OP_SHL_EAX_CL, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+        LowExprBuiltinStr = 1
     Else
         Print "error: unsupported builtin " + Str$(nodes[idx].num)
         ctx->err = 1
@@ -912,7 +982,7 @@ Function LowExprBuiltin(ctx As *LowerCtx, idx As Long) As Long
     ast = ctx->ast
     nodes = ast->nodes
     n = nodes[idx].num
-    If n = BI_LEFT Or n = BI_MID Or n = BI_CHR Or n = BI_RIGHT Or n = BIK_RGB Or n = BI_LOWORD Then
+    If n = BI_LEFT Or n = BI_MID Or n = BI_CHR Or n = BI_RIGHT Or n = BIK_RGB Or n = BI_LOWORD Or n = BI_HIBYTE Or n = BI_LOBYTE Or n = BI_HIWORD Or n = BI_MAKELONG Or n = BI_MAKEWORD Or n = BI_ELM Then
         LowExprBuiltin = LowExprBuiltinStr(ctx, idx)
         Exit Function
     End If
