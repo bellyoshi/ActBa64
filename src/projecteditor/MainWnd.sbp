@@ -94,131 +94,135 @@ Sub EditorInvalidate(hWnd As HWND)
     InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
 
+Sub MainWnd_OnChar(hWnd As HWND, ByVal wParam As WPARAM)
+    If wParam = VK_BACK Then
+        g_cp932Lead = 0
+        coreBridgeDeleteCharBeforeCursor()
+    ElseIf wParam = 13 Then
+        g_cp932Lead = 0
+        TextBuf_AppendChar(10)
+    ElseIf wParam >= 32 Then
+        If g_imeSkipChar <> 0 Then
+            g_imeSkipChar = 0
+        Else
+            EditorAppendAnsiChar(wParam)
+        End If
+    End If
+    EditorInvalidate(hWnd)
+End Sub
+
+Sub MainWnd_OnKeyDown(hWnd As HWND, ByVal wParam As WPARAM)
+    If wParam = VK_LEFT Then
+        coreBridgeMoveCursor("left")
+        EditorInvalidate(hWnd)
+    ElseIf wParam = VK_RIGHT Then
+        coreBridgeMoveCursor("right")
+        EditorInvalidate(hWnd)
+    ElseIf wParam = VK_UP Then
+        coreBridgeMoveCursor("up")
+        EditorInvalidate(hWnd)
+    ElseIf wParam = VK_DOWN Then
+        coreBridgeMoveCursor("down")
+        EditorInvalidate(hWnd)
+    ElseIf wParam = VK_PRIOR Then
+        coreBridgeScrollBy(hWnd, -VirtualScroll_VisibleRows(hWnd))
+        InvalidateRect(hWnd, ByVal 0, FALSE)
+    ElseIf wParam = VK_NEXT Then
+        coreBridgeScrollBy(hWnd, VirtualScroll_VisibleRows(hWnd))
+        InvalidateRect(hWnd, ByVal 0, FALSE)
+    ElseIf wParam = VK_F1 Then
+        EditorHelp_Show(EditorHelp_KeywordAtCursor$())
+    ElseIf wParam = VK_DELETE Then
+        MainWnd_IDM_DELETE_MenuClick()
+    End If
+End Sub
+
+Function MainWnd_OnLButtonDown(hWnd As HWND, ByVal lParam As LPARAM) As Long
+    Dim clickX As Long
+    Dim clickY As Long
+    clickX = lParam And 65535
+    If clickX >= 32768 Then clickX = clickX - 65536
+    clickY = (lParam \ 65536) And 65535
+    If clickY >= 32768 Then clickY = clickY - 65536
+    SetFocus(hWnd)
+    coreBridgeClick(hWnd, clickX, clickY)
+    EditorInvalidate(hWnd)
+    MainWnd_OnLButtonDown = 0
+End Function
+
+Function MainWnd_OnMouseWheel(hWnd As HWND, ByVal wParam As WPARAM) As Long
+    If WheelDeltaFromWParam(wParam) > 0 Then
+        coreBridgeScrollBy(hWnd, -3)
+    Else
+        coreBridgeScrollBy(hWnd, 3)
+    End If
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+    MainWnd_OnMouseWheel = 0
+End Function
+
+Function MainWnd_OnImeComposition(hWnd As HWND, ByVal lParam As LPARAM) As Long
+    Dim hIMC As Long
+    hIMC = ImmGetContext(hWnd)
+    If hIMC <> 0 Then
+        If (lParam And GCS_RESULTSTR) <> 0 Then
+            TextBuf_Append(ImmCompToStr$(hIMC, GCS_RESULTSTR))
+            TextBuf_ClearComp()
+            g_imeSkipChar = 1
+            g_cp932Lead = 0
+        ElseIf (lParam And GCS_COMPSTR) <> 0 Then
+            TextBuf_SetComp(ImmCompToStr$(hIMC, GCS_COMPSTR))
+        End If
+        ImmReleaseContext(hWnd, hIMC)
+    End If
+    EditorInvalidate(hWnd)
+    MainWnd_OnImeComposition = 0
+End Function
+
+Sub MainWnd_OnPaint(hWnd As HWND)
+    Dim ps As PAINTSTRUCT
+    Dim hDC As HDC
+    hDC = BeginPaint(hWnd, ps)
+    DrawTextEngine(hDC, hWnd)
+    EndPaint(hWnd, ps)
+End Sub
+
 Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
     Select Case dwMsg
-
-
         Case WM_CONTEXTMENU
             EditorContext_Show(hWnd, lParam)
             MainWndProc = 0
             Exit Function
-
         Case WM_CHAR
-            If wParam = VK_BACK Then
-                g_cp932Lead = 0
-                coreBridgeDeleteCharBeforeCursor()
-            ElseIf wParam = 13 Then
-                g_cp932Lead = 0
-                TextBuf_AppendChar(10)
-            ElseIf wParam >= 32 Then
-                If g_imeSkipChar <> 0 Then
-                    g_imeSkipChar = 0
-                Else
-                    EditorAppendAnsiChar(wParam)
-                End If
-            End If
-            EditorInvalidate(hWnd)
-
+            MainWnd_OnChar(hWnd, wParam)
         Case WM_KEYDOWN
-            If wParam = VK_LEFT Then
-                coreBridgeMoveCursor("left")
-                EditorInvalidate(hWnd)
-            ElseIf wParam = VK_RIGHT Then
-                coreBridgeMoveCursor("right")
-                EditorInvalidate(hWnd)
-            ElseIf wParam = VK_UP Then
-                coreBridgeMoveCursor("up")
-                EditorInvalidate(hWnd)
-            ElseIf wParam = VK_DOWN Then
-                coreBridgeMoveCursor("down")
-                EditorInvalidate(hWnd)
-            ElseIf wParam = VK_PRIOR Then
-                coreBridgeScrollBy(hWnd, -VirtualScroll_VisibleRows(hWnd))
-                InvalidateRect(hWnd, ByVal 0, FALSE)
-            ElseIf wParam = VK_NEXT Then
-                coreBridgeScrollBy(hWnd, VirtualScroll_VisibleRows(hWnd))
-                InvalidateRect(hWnd, ByVal 0, FALSE)
-            ElseIf wParam = VK_F1 Then
-                EditorHelp_Show(EditorHelp_KeywordAtCursor$())
-            ElseIf wParam = VK_DELETE Then
-                MainWnd_IDM_DELETE_MenuClick()
-            End If
-
+            MainWnd_OnKeyDown(hWnd, wParam)
         Case WM_LBUTTONDOWN
-            Dim clickX As Long
-            Dim clickY As Long
-            clickX = lParam And 65535
-            If clickX >= 32768 Then clickX = clickX - 65536
-            clickY = (lParam \ 65536) And 65535
-            If clickY >= 32768 Then clickY = clickY - 65536
-            SetFocus(hWnd)
-            coreBridgeClick(hWnd, clickX, clickY)
-            EditorInvalidate(hWnd)
-            MainWndProc = 0
+            MainWndProc = MainWnd_OnLButtonDown(hWnd, lParam)
             Exit Function
-
         Case WM_MOUSEWHEEL
-            If WheelDeltaFromWParam(wParam) > 0 Then
-                coreBridgeScrollBy(hWnd, -3)
-            Else
-                coreBridgeScrollBy(hWnd, 3)
-            End If
-            InvalidateRect(hWnd, ByVal 0, FALSE)
-            MainWndProc = 0
+            MainWndProc = MainWnd_OnMouseWheel(hWnd, wParam)
             Exit Function
-
         Case WM_IME_COMPOSITION
-            Dim hIMC As Long
-            hIMC = ImmGetContext(hWnd)
-
-            If hIMC <> 0 Then
-                If (lParam And GCS_RESULTSTR) <> 0 Then
-                    TextBuf_Append(ImmCompToStr$(hIMC, GCS_RESULTSTR))
-                    TextBuf_ClearComp()
-                    g_imeSkipChar = 1
-                    g_cp932Lead = 0
-                ElseIf (lParam And GCS_COMPSTR) <> 0 Then
-                    TextBuf_SetComp(ImmCompToStr$(hIMC, GCS_COMPSTR))
-                End If
-
-                ImmReleaseContext(hWnd, hIMC)
-            End If
-
-            EditorInvalidate(hWnd)
-            MainWndProc = 0
+            MainWndProc = MainWnd_OnImeComposition(hWnd, lParam)
             Exit Function
-
         Case WM_IME_ENDCOMPOSITION
             TextBuf_ClearComp()
             EditorInvalidate(hWnd)
             MainWndProc = 0
             Exit Function
-
         Case WM_PAINT
-            Dim ps As PAINTSTRUCT
-            Dim hDC As HDC
-            hDC = BeginPaint(hWnd, ps)
-
-            DrawTextEngine(hDC, hWnd)
-
-            EndPaint(hWnd, ps)
-
+            MainWnd_OnPaint(hWnd)
         Case WM_ERASEBKGND
-            ' DrawTextEngine が全面を描くので背景消去を抑止（ちらつき低減）
             MainWndProc = 1
             Exit Function
-
         Case WM_SETFOCUS
             EditorCaret_Create(hWnd)
             InvalidateRect(hWnd, ByVal 0, FALSE)
-
         Case WM_KILLFOCUS
             EditorCaret_Destroy()
-
         Case WM_SIZE
             VirtualScroll_Clamp(hWnd)
             InvalidateRect(hWnd, ByVal 0, FALSE)
-
         Case WM_IME_STARTCOMPOSITION
             UpdateImePosition(hWnd, g_caretX, g_caretY)
             MainWndProc = 0

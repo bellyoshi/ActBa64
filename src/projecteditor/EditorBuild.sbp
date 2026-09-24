@@ -232,14 +232,21 @@ Function EditorBuild_RunCapture(cmdLine As String, ByRef outText As String, ByRe
     Dim pi As PROCESS_INFORMATION
     Dim hRead As HANDLE
     Dim hWrite As HANDLE
-    Dim cmd As String
-    Dim pCmd As *Byte
-    Dim code As DWord
 
     EditorBuild_RunCapture = 0
     outText = ""
     exitCode = 1
+    If EditorBuild_OpenCapturePipe(sa, hRead, hWrite) = 0 Then Exit Function
+    If EditorBuild_SpawnCapture(cmdLine, hRead, hWrite, si, pi) = 0 Then Exit Function
+    outText = EditorBuild_ReadPipeAll$(hRead)
+    CloseHandle(hRead)
+    exitCode = EditorBuild_WaitExit(pi.hProcess)
+    CloseHandle(pi.hProcess)
+    EditorBuild_RunCapture = 1
+End Function
 
+Function EditorBuild_OpenCapturePipe(ByRef sa As SECURITY_ATTRIBUTES, ByRef hRead As HANDLE, ByRef hWrite As HANDLE) As Long
+    EditorBuild_OpenCapturePipe = 0
     FillMemory(VarPtr(sa), Len(sa), 0)
     sa.nLength = Len(sa)
     sa.bInheritHandle = 1
@@ -247,7 +254,13 @@ Function EditorBuild_RunCapture(cmdLine As String, ByRef outText As String, ByRe
     hWrite = 0
     If EditorBuild_CreatePipe(hRead, hWrite, sa, 0) = 0 Then Exit Function
     EditorBuild_SetHandleInformation(hRead, EDITORBUILD_HANDLE_FLAG_INHERIT, 0)
+    EditorBuild_OpenCapturePipe = 1
+End Function
 
+Function EditorBuild_SpawnCapture(cmdLine As String, ByRef hRead As HANDLE, ByRef hWrite As HANDLE, ByRef si As STARTUPINFO, ByRef pi As PROCESS_INFORMATION) As Long
+    Dim cmd As String
+    Dim pCmd As *Byte
+    EditorBuild_SpawnCapture = 0
     FillMemory(VarPtr(si), Len(si), 0)
     FillMemory(VarPtr(pi), Len(pi), 0)
     si.cb = Len(si)
@@ -256,7 +269,6 @@ Function EditorBuild_RunCapture(cmdLine As String, ByRef outText As String, ByRe
     si.hStdOutput = hWrite
     si.hStdError = hWrite
     si.hStdInput = 0
-
     cmd = cmdLine
     pCmd = StrPtr(cmd)
     If EditorBuild_CreateProcess(0, pCmd, 0, 0, 1, CREATE_NO_WINDOW, 0, 0, si, pi) = 0 Then
@@ -264,19 +276,17 @@ Function EditorBuild_RunCapture(cmdLine As String, ByRef outText As String, ByRe
         CloseHandle(hWrite)
         Exit Function
     End If
-
     CloseHandle(hWrite)
     CloseHandle(pi.hThread)
+    EditorBuild_SpawnCapture = 1
+End Function
 
-    outText = EditorBuild_ReadPipeAll$(hRead)
-    CloseHandle(hRead)
-
-    WaitForSingleObject(pi.hProcess, INFINITE)
+Function EditorBuild_WaitExit(hProcess As HANDLE) As Long
+    Dim code As DWord
+    WaitForSingleObject(hProcess, INFINITE)
     code = 1
-    EditorBuild_GetExitCodeProcess(pi.hProcess, code)
-    exitCode = code
-    CloseHandle(pi.hProcess)
-    EditorBuild_RunCapture = 1
+    EditorBuild_GetExitCodeProcess(hProcess, code)
+    EditorBuild_WaitExit = code
 End Function
 
 Function EditorBuild_DoCompile(hWnd As HWND) As Long
@@ -285,8 +295,6 @@ Function EditorBuild_DoCompile(hWnd As HWND) As Long
     Dim cmd As String
     Dim exitCode As Long
     Dim outText As String
-    Dim msg As String
-    Dim attr As Long
 
     EditorBuild_DoCompile = 0
     toolName = EditorBuild_CompilerName$()
@@ -295,24 +303,37 @@ Function EditorBuild_DoCompile(hWnd As HWND) As Long
 
     MessageWnd_Open(hWnd)
     MessageWnd_SetText("Compiling (" + EditorBuild_TargetLabel$() + ") with " + toolName + "..." + Chr$(13) + Chr$(10))
-
-    attr = GetFileAttributes(StrPtr(actba))
-    If attr = -1 Then
-        msg = "Failed to find " + toolName + " (place beside editor.exe"
-        If g_buildTarget32 <> 0 Then
-            msg = msg + " with abc.exe / abassembler.exe / ablinker.exe"
-        End If
-        msg = msg + ")." + Chr$(13) + Chr$(10)
-        MessageWnd_SetText(msg)
-        Exit Function
-    End If
+    If EditorBuild_EnsureCompiler(actba, toolName) = 0 Then Exit Function
 
     cmd = EditorBuild_QuoteArg$(actba) + " " + EditorBuild_CompileArgs$()
     If EditorBuild_RunCapture(cmd, outText, exitCode) = 0 Then
         MessageWnd_SetText("Failed to launch " + toolName + "." + Chr$(13) + Chr$(10))
         Exit Function
     End If
+    MessageWnd_SetText(EditorBuild_FormatResult$(outText, exitCode))
+    If exitCode <> 0 Then Exit Function
+    EditorBuild_DoCompile = 1
+End Function
 
+Function EditorBuild_EnsureCompiler(actba As String, toolName As String) As Long
+    Dim msg As String
+    Dim attr As Long
+    EditorBuild_EnsureCompiler = 0
+    attr = GetFileAttributes(StrPtr(actba))
+    If attr <> -1 Then
+        EditorBuild_EnsureCompiler = 1
+        Exit Function
+    End If
+    msg = "Failed to find " + toolName + " (place beside editor.exe"
+    If g_buildTarget32 <> 0 Then
+        msg = msg + " with abc.exe / abassembler.exe / ablinker.exe"
+    End If
+    msg = msg + ")." + Chr$(13) + Chr$(10)
+    MessageWnd_SetText(msg)
+End Function
+
+Function EditorBuild_FormatResult$(outText As String, ByVal exitCode As Long) As String
+    Dim msg As String
     If Len(outText) = 0 Then
         If exitCode = 0 Then
             msg = "Compile succeeded." + Chr$(13) + Chr$(10)
@@ -328,10 +349,7 @@ Function EditorBuild_DoCompile(hWnd As HWND) As Long
             msg = msg + "Compile failed. (exit=" + Str$(exitCode) + ")" + Chr$(13) + Chr$(10)
         End If
     End If
-    MessageWnd_SetText(msg)
-
-    If exitCode <> 0 Then Exit Function
-    EditorBuild_DoCompile = 1
+    EditorBuild_FormatResult$ = msg
 End Function
 
 Sub EditorBuild_Compile(hWnd As HWND)
