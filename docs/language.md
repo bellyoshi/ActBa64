@@ -480,7 +480,7 @@ Print Log(MathE())    ' ≒ 1
 `Fix` / `Int` / `Rnd` / `Randomize` / `DegToRad` / `RadToDeg`
 
 - 小数リテラル（`1.12345`）は AST 上 IEEE Double ビット。`Function As Double` の戻り値・仮引数も Double ビットとして扱う
-- N88 `CIRCLE` の角度のみ、内部は千分率整数（ソース小数 → Double → ×1000）
+- N88 `CIRCLE` の角度のみ、内部は千分率整数（ソース小数テキストを下3桁まで整数化。`3.14` → 3140）
 - `Rnd()` は `[0, 1)` の Double。`Abs` は Double 引数
 - `-actba32` では SSE 未実装のため Double 演算テストはスキップ
 
@@ -590,7 +590,7 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 ## 10. 非対応（意図的）
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` / `Super` は未対応）
-- `Single` の汎用演算。`Double` の演算・`Math.abp` は **64bit のみ**（`-actba32` は SSE 未実装）。N88 `CIRCLE` 角度はソース小数→内部千分率→実行時 Double
+- `Single` の汎用演算。`Double` の演算・`Math.abp` は **64bit のみ**（`-actba32` は SSE 未実装）。N88 `CIRCLE` 角度はソース小数→内部千分率（下3桁）→実行時 Double
 - `GoTo` / `GoSub` / `ReDim`
 - ネスト手続き
 - リソース（`#RESOURCE`）埋め込み
