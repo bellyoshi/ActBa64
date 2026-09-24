@@ -137,11 +137,50 @@ Function ParseN88LineStmt(p As *Parser) As Long
     ParseN88LineStmt = nCall
 End Function
 
+' 十進テキスト → 千分率 Long（小数は下3桁まで。Double を使わない）
+Function ParseN88MilliFromText(text As *Byte) As Long
+    Dim i As Long
+    Dim c As Long
+    Dim ip As Long
+    Dim fp As Long
+    Dim n As Long
+
+    ParseN88MilliFromText = 0
+    ip = 0
+    i = 0
+    c = text[i]
+    While c >= 48 And c <= 57
+        ip = ip * 10 + (c - 48)
+        i = i + 1
+        c = text[i]
+    Wend
+    fp = 0
+    n = 0
+    If c = 46 Then
+        i = i + 1
+        c = text[i]
+        While c >= 48 And c <= 57 And n < 3
+            fp = fp * 10 + (c - 48)
+            n = n + 1
+            i = i + 1
+            c = text[i]
+        Wend
+        While n < 3
+            fp = fp * 10
+            n = n + 1
+        Wend
+    End If
+    ParseN88MilliFromText = ip * 1000 + fp
+End Function
+
 ' 千分率リテラル/整数 → milli。空なら 0 を返し ok=0
 ' 負号があれば neg=1（絶対値を返す）
 Function ParseN88Milli(p As *Parser, ByRef outV As Long, ByRef neg As Long) As Long
     Dim sign As Long
     Dim v As Long
+    Dim buf(255) As Byte
+    Dim lx As *Lexer
+    Dim toks As *Tok
 
     ParseN88Milli = 0
     outV = 0
@@ -153,12 +192,13 @@ Function ParseN88Milli(p As *Parser, ByRef outV As Long, ByRef neg As Long) As L
         p->pos = p->pos + 1
     End If
     If ParseTokKind(p) = TK_FLOAT Then
-        v = ParseTokNum(p)
+        ' 小数テキスト → 千分率整数（N88 CIRCLE 内部。3桁固定）
+        lx = p->lx
+        toks = lx->toks
+        LexCopyText(lx, toks[p->pos].textOff, VarPtr(buf))
+        v = ParseN88MilliFromText(VarPtr(buf))
         p->pos = p->pos + 1
         outV = v
-        If sign < 0 Then
-            ' 値は絶対値で保持
-        End If
         ParseN88Milli = 1
         Exit Function
     End If

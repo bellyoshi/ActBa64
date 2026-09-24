@@ -95,8 +95,16 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 |---|---|
 | `' Target: actba64` | このランナーの対象（必須） |
 | `' Expect: N` | 終了コード期待値（省略時 0） |
+| `' CompileFail: 1` | コンパイル失敗が期待。隣接 `test/<name>.err.txt` の各行が出力に含まれること（部分一致） |
+| `' ExpectErrors: N` | `CompileFail` 時の診断件数下限（省略時 1） |
 | `' Gui: 1` | 対話 UI 想定。**既定は SKIP**（`-IncludeGui` で実行） |
 | `' Skip32: 1` | `-Actba32` 時はスキップ（ポインタ幅依存など） |
+
+### コンパイル診断（複数エラー）
+
+形式: `error: <file>(<line>): <message>` / `warning: <file>(<line>): <message>`（英語）。パースは文単位で続行し、意味解析も可能な限り複数報告する。エラー時は末尾 `error: N error(s)`。警告のみならコンパイル成功しつつ `warning: N warning(s)`。パースで 1 件でも失敗したらコード生成は行わない。`#strict` は変数同士の代入型不一致を warning（`As` で抑制）。
+
+異常系の例: `test/t_err_then.abp`（`Then` 欠落）、`t_err_end_if.abp`、`t_err_undef.abp`、`t_err_multi_*.abp`。
 
 **GUI の自動判定**（`' Gui: 1` が無くても GUI 扱い → 既定 SKIP）:
 

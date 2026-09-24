@@ -28,7 +28,8 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
   - `/* ... */` ブロック（ネスト不可。途中にも可）
 - 識別子: `[A-Za-z_][A-Za-z0-9_]*`、末尾 `$` 可（例: `Left$`）
 - 整数: 十進 / `&H` 十六進
-- 小数リテラル（N88 等）: `1.5` → 千分率 `1500`（`TK_FLOAT`）
+- 小数リテラル: `1.5` / `1.12345` は字句テキストを保持し、AST 上で IEEE Double ビット（64bit）に変換する
+
 - 文字列リテラル: `"..."`（`""` で `"`）
 - 識別子の大小文字: **定数・変数・Sub/Function・Type/Class 名は区別する**（AB 4.20 同様。`Foo` と `foo` は別）。**言語キーワード**（`If` / `Then` / `Dim` 等）と **組み込みランタイム名**（`FillMemory` / `malloc` 等）の認識のみ大小無視
 - 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）
@@ -51,7 +52,7 @@ Print a +_
 | `#console` | `Include\console\console.idx` を自動挿入 |
 | `#n88basic` / `#N88BASIC` / `#prompt` | N88BASIC 互換モード（[§1.6](#16-n88basic-モード)）。`#prompt` は完全別名 |
 | `#USEWINDOW=0\|1` | 0=CUI / 1=GUI。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
-| `#strict` | 無視 |
+| `#strict` | 変数代入の型不一致を warning（`As` で抑制） |
 | `#include "path"` | ファイル挿入（深さ上限あり） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
@@ -123,9 +124,9 @@ CIRCLE STEP(x,y),r[,...]              ' 中心は LP からの相対
 CIRCLE ,r[,...]                       ' 中心は LP
 ```
 
-- 角度はラジアン（小数可。内部は千分率。`3.14` → 3140）。省略または `start=end` で全周
+- 角度はラジアン（小数可。パーサは千分率整数に直し、実行時に Double ラジアンへ変換。`3.14` → 3140）。省略または `start=end` で全周
 - 負の角度は絶対値で円弧し、中心から半径線を引く（扇形）
-- `aspect` は 垂直半径/水平半径（省略時 1.0）
+- `aspect` は垂直半径/水平半径（省略時 1.0。内部も千分率スケール）
 - `F` で塗りつぶし（タイルストリングは未対応）
 - 実行後 LP は円の中心へ移動
 
@@ -163,9 +164,9 @@ PAINT (x, y), color1 [, color2]
 |---|---|---|---|
 | `Byte` | 1 | 1 | |
 | `Word` | 2 | 2 | |
-| `Single` | 4 | 4 | サイズと格納。演算は千分率経由が中心 |
+| `Single` | 4 | 4 | サイズと格納。汎用 IEEE 演算は未（`Double` を使う） |
 | `Long` / `DWord` / `Integer` | 4 | 4 | 別名あり |
-| `Double` | 8 | **8** | IEEE 倍精度。64bit は加減乗除・比較。`-actba32` は SSE 未実装 |
+| `Double` | 8 | **8** | IEEE 倍精度。64bit は加減乗除・比較・`Function As Double` / Double 仮引数。`-actba32` は SSE 未実装 |
 | `HANDLE` / `HWND` 等 | 4 | **8** | 64bit は `VoidPtr` / `*T`（`HFILE` は 4 のまま） |
 | `*T` | 4 | **8** | ポインタ |
 | `String` | ポインタ相当 (4) | ポインタ相当 (**8**) | 長さプレフィックス付きバイト列（AB4.20 互換） |
@@ -385,7 +386,7 @@ ExitProcess(式)
 | `++` / `--` | ○ |
 
 文字列の関係演算は辞書順（`lstrcmpA`）。長さが違い途中まで一致したら短い方が小さい。  
-`As` は例: `&H12345678 As Word` → `&H5678`。`#strict` 自体は未実装（警告なし）。
+`As` は例: `&H12345678 As Word` → `&H5678`。`#strict` 時は異なる型の変数代入が warning（`As` キャストで抑制）。
 
 ### 5.2 アドレス・サイズ・組込
 
@@ -461,25 +462,33 @@ memcpy(dst, src, n)
 
 **`Declare Lib` 群は載せない**（IAT 解決）。
 
-### 7.3 Math（固定小数点・千分率）
+### 7.3 Math（IEEE Double）
 
-`1.0 = 1000`。角度はラジアン千分率（`MATH_PI = 3142`）。`Sin` / `Cos` はマクローリン展開。
+角度はラジアン（`Double`）。`Sin` / `Cos` はマクローリン展開。円周率は `MathPi()`、ネイピア数は `MathE()`（`Const` は整数のみのため Function）。
 
 ```
-Print Sin(MATH_HPI)   ' ≒ 1000
-Print Cos(0)          ' = 1000
-Print SinDeg(30)      ' ≒ 500
+Dim hpi As Double
+hpi = MathPi() / 2
+Print Sin(hpi)        ' ≒ 1
+Print Cos(0)          ' = 1
+Print SinDeg(30)      ' ≒ 0.5
+Print Log(MathE())    ' ≒ 1
 ```
 
-主な関数: `MathDiv` / `MathMod` / `Abs` / `Sgn` / `Min` / `Max` / `Sqr` /
-`Sin` / `Cos` / `Tan` / `SinDeg` / `CosDeg` / `Atn` / `Exp` /
-`DegToRad` / `RadToDeg`
+主な関数: `MathDiv` / `MathMod`（整数ヘルパ） / `Abs` / `Sgn` / `Min` / `Max` / `Sqr` /
+`Sin` / `Cos` / `Tan` / `SinDeg` / `CosDeg` / `Atn` / `Exp` / `Log` / `Log10` /
+`Fix` / `Int` / `Rnd` / `Randomize` / `DegToRad` / `RadToDeg`
+
+- 小数リテラル（`1.12345`）は AST 上 IEEE Double ビット。`Function As Double` の戻り値・仮引数も Double ビットとして扱う
+- N88 `CIRCLE` の角度のみ、内部は千分率整数（ソース小数 → Double → ×1000）
+- `Rnd()` は `[0, 1)` の Double。`Abs` は Double 引数
+- `-actba32` では SSE 未実装のため Double 演算テストはスキップ
 
 `Space$(n)` は `Space.abp` から常時利用可。ネストした関数呼び出しは対応する。複雑な入れ子は一時変数経由が安全。
 
 `StrD$(d As Double)` は `DoubleStr.abp` から常時利用可。`Print` が Double 式を表示するとき自動で呼ばれる（64bit）。
 
-サンプル: `src/actba64/samples/math_test.abp`
+サンプル: `src/actba64/samples/math_test.abp` / テスト: `test/t_math_*.abp` / `test/t_dbl_func.abp`
 
 ### 7.4 ファイル I/O（`BasicFile.abp`）
 
@@ -581,12 +590,10 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 ## 10. 非対応（意図的）
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` / `Super` は未対応）
-- `Single` の汎用演算。`Double` の演算は **64bit のみ**（`-actba32` は SSE 未実装）。N88 角度・`Math.abp` は千分率
-- `GoTo` / `GoSub` / `Continue` / `ReDim` / `Enum`
+- `Single` の汎用演算。`Double` の演算・`Math.abp` は **64bit のみ**（`-actba32` は SSE 未実装）。N88 `CIRCLE` 角度はソース小数→内部千分率→実行時 Double
+- `GoTo` / `GoSub` / `ReDim`
 - ネスト手続き
 - リソース（`#RESOURCE`）埋め込み
-- `Print #`（ファイル番号付き Print。`Write #` で代替可）
-- `Eof` / `Loc` / `Lof`
 - 高度な最適化
 
 ---

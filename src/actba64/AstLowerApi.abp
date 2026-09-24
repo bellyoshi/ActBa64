@@ -124,6 +124,79 @@ Function LowFindFunc(ctx As *LowerCtx, name As *Byte) As Long
     Wend
 End Function
 
+' AST_FUNC.extra に Parser が書いた戻り型（TY_DOUBLE / TY_STRING 等）
+Function LowFindFuncRetTy(ctx As *LowerCtx, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim stmt As Long
+    Dim nm(63) As Byte
+    Dim ty As Long
+
+    LowFindFuncRetTy = TY_LONG
+    If ctx = NULL Then Exit Function
+    ast = ctx->ast
+    If ast = NULL Then Exit Function
+    If ast->root < 0 Then Exit Function
+    nodes = ast->nodes
+    stmt = nodes[ast->root].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_FUNC Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            If LowNameEqExact(VarPtr(nm), name) <> 0 Then
+                ty = nodes[stmt].extra
+                If ty = TY_DOUBLE Or ty = TY_SINGLE Or ty = TY_STRING Then
+                    LowFindFuncRetTy = ty
+                Else
+                    LowFindFuncRetTy = TY_LONG
+                End If
+                Exit Function
+            End If
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+End Function
+
+' 仮引数 argIndex の型（見つからなければ TY_LONG）
+Function LowFindFuncParamTy(ctx As *LowerCtx, name As *Byte, argIndex As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim stmt As Long
+    Dim param As Long
+    Dim nm(63) As Byte
+    Dim i As Long
+    Dim ty As Long
+
+    LowFindFuncParamTy = TY_LONG
+    If ctx = NULL Then Exit Function
+    If argIndex < 0 Then Exit Function
+    ast = ctx->ast
+    If ast = NULL Then Exit Function
+    If ast->root < 0 Then Exit Function
+    nodes = ast->nodes
+    stmt = nodes[ast->root].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_FUNC Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            If LowNameEqExact(VarPtr(nm), name) <> 0 Then
+                param = nodes[stmt].left
+                i = 0
+                While param >= 0
+                    If i = argIndex Then
+                        ty = nodes[param].extra
+                        If ty < 0 Then ty = TY_LONG
+                        LowFindFuncParamTy = ty
+                        Exit Function
+                    End If
+                    i = i + 1
+                    param = nodes[param].nxt
+                Wend
+                Exit Function
+            End If
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+End Function
+
 Function LowFindFuncByRefs(ctx As *LowerCtx, name As *Byte) As Long
     Dim i As Long
     Dim names As *Byte
@@ -653,8 +726,8 @@ Function LowConstInt(ast As *Ast, idx As Long, ByRef outV As Long) As Long
     If idx < 0 Then Exit Function
     nodes = ast->nodes
     If nodes[idx].kind = AST_NUM Then
-        If nodes[idx].extra = AST_NUM_MILLI Then Exit Function
-        If nodes[idx].extra = 1 Then Exit Function
+        If nodes[idx].extra = AST_NUM_EXTRA_F64 Then Exit Function
+        If nodes[idx].extra = AST_NUM_EXTRA_SINGLE Then Exit Function
         outV = nodes[idx].num
         LowConstInt = 1
     ElseIf nodes[idx].kind = AST_BUILTIN Then

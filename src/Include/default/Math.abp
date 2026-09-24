@@ -1,21 +1,23 @@
-' Math.abp — 固定小数点（千分率）数学ライブラリ（default 常時読込）
+' Math.abp — IEEE Double 数学ライブラリ（default 常時読込）
 '
-' スケール: 1.0 = 1000
-' 角度: ラジアンの千分率（π ≒ 3142、2π ≒ 6283）
+' 角度はラジアン（Double）。例: Sin(1.5707963267948966) ≒ 1.0
 ' Sin/Cos はマクローリン展開（範囲還元付き）
 '
-' 注意: actba64 はネストした関数呼び出しが壊れるため、呼び出しは一時変数経由にする
+' ネスト呼び出しは一時変数経由が安全。
 '
-' 例: Sin(1571) ≒ 1000（sin(π/2)）
-'     Cos(0) = 1000
+' 整数ヘルパ MathDiv / MathMod / Abs(Long 用途は Double 版 Abs) も提供。
 
-Const MATH_ONE = 1000
-Const MATH_PI = 3142
-Const MATH_HPI = 1571
-Const MATH_PI2 = 6283
-Const MATH_E = 2718
+' ---------- 定数（Const は整数のみのため Function）----------
 
-' ---------- 基本演算（actba64 は / と Mod 非対応）----------
+Function MathPi() As Double
+    MathPi = 3.141592653589793
+End Function
+
+Function MathE() As Double
+    MathE = 2.718281828459045
+End Function
+
+' ---------- 整数ヘルパ ----------
 
 Function MathDiv(a As Long, b As Long) As Long
     Dim neg As Long
@@ -62,7 +64,7 @@ Function MathMod(a As Long, b As Long) As Long
     MathMod = a - q * b
 End Function
 
-Function Abs(n As Long) As Long
+Function Abs(n As Double) As Double
     If n < 0 Then
         Abs = 0 - n
     Else
@@ -96,115 +98,204 @@ Function Max(a As Long, b As Long) As Long
     End If
 End Function
 
-' 整数平方根（切り捨て）
-Function Sqr(n As Long) As Long
-    Dim x As Long
-    Dim y As Long
-    Dim q As Long
+' ---------- 変換・床 ----------
 
+Function Fix(n As Double) As Double
+    Dim t As Long
+    t = n
+    Fix = t
+End Function
+
+Function Int(n As Double) As Double
+    Dim t As Long
+    Dim f As Double
+    t = n
+    f = t
+    If n < 0 Then
+        If n <> f Then
+            Int = f - 1
+        Else
+            Int = f
+        End If
+    Else
+        Int = f
+    End If
+End Function
+
+Function DegToRad(deg As Double) As Double
+    Dim pi As Double
+    pi = MathPi()
+    DegToRad = deg * pi / 180
+End Function
+
+Function RadToDeg(rad As Double) As Double
+    Dim pi As Double
+    pi = MathPi()
+    RadToDeg = rad * 180 / pi
+End Function
+
+' ---------- 平方根・指数・対数 ----------
+
+Function Sqr(n As Double) As Double
+    Dim x As Double
+    Dim y As Double
     Sqr = 0
     If n <= 0 Then Exit Function
     x = n
+    If x < 1 Then x = 1
     Do
-        q = MathDiv(n, x)
-        y = x + q
-        y = MathDiv(y, 2)
+        y = (x + n / x) / 2
         If y >= x Then Exit Do
+        If x - y < 0.0000000001 Then Exit Do
         x = y
     Loop
     Sqr = x
 End Function
 
-' 度 → 千分率ラジアン
-Function DegToRad(deg As Long) As Long
-    DegToRad = MathDiv(deg * MATH_PI, 180)
-End Function
-
-' 千分率ラジアン → 度
-Function RadToDeg(rad As Long) As Long
-    RadToDeg = MathDiv(rad * 180, MATH_PI)
-End Function
-
-' (-π, π] へ正規化
-Function MathNormPi(ang As Long) As Long
-    Dim a As Long
-    a = MathMod(ang, MATH_PI2)
-    If a < 0 Then a = a + MATH_PI2
-    If a > MATH_PI Then a = a - MATH_PI2
-    MathNormPi = a
-End Function
-
-' マクローリン: sin（|x| ≤ π/2、千分率）
-Function MathSinMac(x As Long) As Long
-    Dim t As Long
-    Dim s As Long
-    Dim x2 As Long
+Function Exp(x As Double) As Double
+    Dim t As Double
+    Dim s As Double
     Dim k As Long
-    Dim den As Long
-    Dim u As Long
-
-    t = x
-    s = x
-    x2 = x * x
-    x2 = MathDiv(x2, MATH_ONE)
+    Dim xx As Double
+    xx = x
+    If xx > 20 Then xx = 20
+    If xx < 0 - 20 Then xx = 0 - 20
+    t = 1
+    s = 1
     k = 1
     Do
-        den = (k + k) * (k + k + 1)
-        u = t * x2
-        u = MathDiv(u, MATH_ONE)
-        t = MathDiv(u, den)
-        t = 0 - t
+        t = t * xx / k
         If t = 0 Then Exit Do
         s = s + t
         k = k + 1
-        If k > 16 Then Exit Do
+        If k > 40 Then Exit Do
+    Loop
+    Exp = s
+End Function
+
+Function Log(n As Double) As Double
+    Dim x As Double
+    Dim e As Long
+    Dim z As Double
+    Dim z2 As Double
+    Dim t As Double
+    Dim s As Double
+    Dim k As Long
+    Dim ln2 As Double
+
+    Log = 0
+    If n <= 0 Then Exit Function
+    ln2 = 0.6931471805599453
+    x = n
+    e = 0
+    While x >= 2
+        x = x / 2
+        e = e + 1
+    Wend
+    While x < 1
+        x = x * 2
+        e = e - 1
+    Wend
+    z = (x - 1) / (x + 1)
+    z2 = z * z
+    t = z
+    s = z
+    k = 3
+    Do
+        t = t * z2
+        s = s + t / k
+        k = k + 2
+        If k > 40 Then Exit Do
+    Loop
+    s = s + s
+    Log = s + e * ln2
+End Function
+
+Function Log10(n As Double) As Double
+    Dim ln10 As Double
+    Log10 = 0
+    If n <= 0 Then Exit Function
+    ln10 = 2.302585092994046
+    Log10 = Log(n) / ln10
+End Function
+
+' ---------- 三角 ----------
+
+Function MathNormPi(ang As Double) As Double
+    Dim a As Double
+    Dim pi As Double
+    Dim twopi As Double
+    pi = MathPi()
+    twopi = pi + pi
+    a = ang
+    While a > pi
+        a = a - twopi
+    Wend
+    While a < 0 - pi
+        a = a + twopi
+    Wend
+    MathNormPi = a
+End Function
+
+Function MathSinMac(x As Double) As Double
+    Dim t As Double
+    Dim s As Double
+    Dim x2 As Double
+    Dim k As Long
+    Dim den As Long
+    t = x
+    s = x
+    x2 = x * x
+    k = 1
+    Do
+        den = (k + k) * (k + k + 1)
+        t = 0 - t * x2 / den
+        If t = 0 Then Exit Do
+        s = s + t
+        k = k + 1
+        If k > 24 Then Exit Do
     Loop
     MathSinMac = s
 End Function
 
-' マクローリン: cos（|x| ≤ π/2、千分率）
-Function MathCosMac(x As Long) As Long
-    Dim t As Long
-    Dim s As Long
-    Dim x2 As Long
+Function MathCosMac(x As Double) As Double
+    Dim t As Double
+    Dim s As Double
+    Dim x2 As Double
     Dim k As Long
     Dim den As Long
-    Dim u As Long
-
-    t = MATH_ONE
-    s = MATH_ONE
+    t = 1
+    s = 1
     x2 = x * x
-    x2 = MathDiv(x2, MATH_ONE)
     k = 1
     Do
         den = (k + k - 1) * (k + k)
-        u = t * x2
-        u = MathDiv(u, MATH_ONE)
-        t = MathDiv(u, den)
-        t = 0 - t
+        t = 0 - t * x2 / den
         If t = 0 Then Exit Do
         s = s + t
         k = k + 1
-        If k > 16 Then Exit Do
+        If k > 24 Then Exit Do
     Loop
     MathCosMac = s
 End Function
 
-' sin（角度は千分率ラジアン、戻り値は千分率）
-Function Sin(ang As Long) As Long
-    Dim x As Long
+Function Sin(ang As Double) As Double
+    Dim x As Double
     Dim neg As Long
-    Dim v As Long
-
+    Dim v As Double
+    Dim pi As Double
+    Dim hpi As Double
     x = MathNormPi(ang)
     neg = 0
     If x < 0 Then
         neg = 1
         x = 0 - x
     End If
-    If x > MATH_HPI Then x = MATH_PI - x
+    pi = MathPi()
+    hpi = pi / 2
+    If x > hpi Then x = pi - x
     v = MathSinMac(x)
-    If v > MATH_ONE Then v = MATH_ONE
+    If v > 1 Then v = 1
     If neg <> 0 Then
         Sin = 0 - v
     Else
@@ -212,92 +303,86 @@ Function Sin(ang As Long) As Long
     End If
 End Function
 
-' cos（角度は千分率ラジアン、戻り値は千分率）
-Function Cos(ang As Long) As Long
-    Dim x As Long
+Function Cos(ang As Double) As Double
+    Dim x As Double
     Dim sign As Long
-    Dim v As Long
-
+    Dim v As Double
+    Dim pi As Double
+    Dim hpi As Double
     x = MathNormPi(ang)
     sign = 1
     If x < 0 Then x = 0 - x
-    If x > MATH_HPI Then
-        x = MATH_PI - x
+    pi = MathPi()
+    hpi = pi / 2
+    If x > hpi Then
+        x = pi - x
         sign = -1
     End If
     v = MathCosMac(x)
-    If v > MATH_ONE Then v = MATH_ONE
+    If v > 1 Then v = 1
     If v < 0 Then v = 0
     Cos = sign * v
 End Function
 
-Function Tan(ang As Long) As Long
-    Dim c As Long
-    Dim s As Long
+Function Tan(ang As Double) As Double
+    Dim c As Double
+    Dim s As Double
     c = Cos(ang)
     s = Sin(ang)
     If c = 0 Then
         If s >= 0 Then
-            Tan = 1000000
+            Tan = 1000000000
         Else
-            Tan = -1000000
+            Tan = 0 - 1000000000
         End If
         Exit Function
     End If
-    Tan = MathDiv(s * MATH_ONE, c)
+    Tan = s / c
 End Function
 
-Function SinDeg(deg As Long) As Long
-    Dim r As Long
+Function SinDeg(deg As Double) As Double
+    Dim r As Double
     r = DegToRad(deg)
     SinDeg = Sin(r)
 End Function
 
-Function CosDeg(deg As Long) As Long
-    Dim r As Long
+Function CosDeg(deg As Double) As Double
+    Dim r As Double
     r = DegToRad(deg)
     CosDeg = Cos(r)
 End Function
 
-' マクローリン: atan(|x| ≤ 1)
-Function MathAtnMac(x As Long) As Long
-    Dim t As Long
-    Dim s As Long
-    Dim x2 As Long
+Function MathAtnMac(x As Double) As Double
+    Dim t As Double
+    Dim s As Double
+    Dim x2 As Double
     Dim n As Long
-    Dim term As Long
-
     t = x
     s = x
     x2 = x * x
-    x2 = MathDiv(x2, MATH_ONE)
     n = 3
     Do
-        t = t * x2
-        t = MathDiv(t, MATH_ONE)
-        t = 0 - t
-        term = MathDiv(t, n)
-        If term = 0 Then Exit Do
-        s = s + term
+        t = 0 - t * x2
+        s = s + t / n
         n = n + 2
         If n > 40 Then Exit Do
     Loop
     MathAtnMac = s
 End Function
 
-' arctan（入力・出力とも千分率）
-Function Atn(x As Long) As Long
-    Dim ax As Long
-    Dim v As Long
-    Dim inv As Long
-
+Function Atn(x As Double) As Double
+    Dim ax As Double
+    Dim v As Double
+    Dim inv As Double
+    Dim hpi As Double
     ax = Abs(x)
-    If ax <= MATH_ONE Then
+    hpi = MathPi() / 2
+    If ax <= 1 Then
         v = MathAtnMac(ax)
     Else
-        inv = MathDiv(MATH_ONE * MATH_ONE, ax)
+        inv = 1 / ax
         v = MathAtnMac(inv)
-        v = MATH_HPI - v
+        v = hpi - v
     End If
     If x < 0 Then
         Atn = 0 - v
@@ -306,35 +391,7 @@ Function Atn(x As Long) As Long
     End If
 End Function
 
-' マクローリン: exp（入力・出力とも千分率。|x| が大きいと精度低下）
-Function Exp(x As Long) As Long
-    Dim t As Long
-    Dim s As Long
-    Dim k As Long
-    Dim xx As Long
-    Dim u As Long
-
-    xx = x
-    If xx > 4000 Then xx = 4000
-    If xx < -4000 Then xx = -4000
-
-    t = MATH_ONE
-    s = MATH_ONE
-    k = 1
-    Do
-        u = t * xx
-        u = MathDiv(u, MATH_ONE)
-        t = MathDiv(u, k)
-        If t = 0 Then Exit Do
-        s = s + t
-        k = k + 1
-        If k > 32 Then Exit Do
-    Loop
-    If s < 0 Then s = 0
-    Exp = s
-End Function
-
-' ---------- 乱数・変換（P1）----------
+' ---------- 乱数 ----------
 
 Dim g_rndSeed As Long
 
@@ -347,35 +404,10 @@ Sub RandomizeSeed(n As Long)
     g_rndSeed = n
 End Sub
 
-Function Rnd() As Long
+' [0, 1) の Double
+Function Rnd() As Double
     If g_rndSeed = 0 Then Randomize()
     g_rndSeed = g_rndSeed * 1103515245 + 12345
     g_rndSeed = g_rndSeed And 2147483647
-    Rnd = MathMod(g_rndSeed, 1000)
-End Function
-
-Function Int(n As Long) As Long
-    Int = n
-End Function
-
-Function Fix(n As Long) As Long
-    Fix = n
-End Function
-
-Function Log10Milli(n As Long) As Long
-    Dim x As Long
-    Dim e As Long
-    Log10Milli = 0
-    If n <= 0 Then Exit Function
-    x = n
-    e = 0
-    While x >= 10000
-        x = MathDiv(x, 10)
-        e = e + 1
-    Wend
-    While x < 1000 And x > 0
-        x = x * 10
-        e = e - 1
-    Wend
-    Log10Milli = e * 1000 + x
+    Rnd = (g_rndSeed And 65535) / 65536
 End Function

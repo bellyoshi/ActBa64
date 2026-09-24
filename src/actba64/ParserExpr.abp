@@ -2,6 +2,71 @@
 '  ParserExpr - factor / expression
 ' ===================================================
 
+' 十進テキスト → Double（ホスト演算）。
+' 小数リテラル定数は使わない（自己ホスト時の鶏卵を避ける）。
+Function ParseFloatTextToDouble(text As *Byte) As Double
+    Dim d As Double
+    Dim scale As Double
+    Dim ten As Double
+    Dim i As Long
+    Dim c As Long
+    Dim dig As Long
+
+    d = 0
+    ten = 10
+    i = 0
+    c = text[i]
+    While c >= 48 And c <= 57
+        dig = c - 48
+        d = d * ten + dig
+        i = i + 1
+        c = text[i]
+    Wend
+    If c = 46 Then
+        i = i + 1
+        scale = 1
+        scale = scale / ten
+        c = text[i]
+        While c >= 48 And c <= 57
+            dig = c - 48
+            d = d + dig * scale
+            scale = scale / ten
+            i = i + 1
+            c = text[i]
+        Wend
+    End If
+    ParseFloatTextToDouble = d
+End Function
+
+' 現在トークンの TK_FLOAT テキスト → Double ビット AST_NUM
+' num=lo, left=hi（葉のため left は子インデックスではない）
+Function ParseMakeFloatAst(p As *Parser, neg As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim buf(255) As Byte
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim d As Double
+    Dim bits(1) As Long
+
+    ParseMakeFloatAst = -1
+    lx = p->lx
+    toks = lx->toks
+    LexCopyText(lx, toks[p->pos].textOff, VarPtr(buf))
+    d = ParseFloatTextToDouble(VarPtr(buf))
+    If neg <> 0 Then d = 0 - d
+    memcpy(VarPtr(bits), VarPtr(d), 8)
+    ast = p->ast
+    n = AstAddNode(ast, AST_NUM)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = bits[0]
+    nodes[n].left = bits[1]
+    nodes[n].extra = AST_NUM_EXTRA_F64
+    ParseMakeFloatAst = n
+End Function
+
 Function ParseFactorNum(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -18,17 +83,11 @@ Function ParseFactorNum(p As *Parser) As Long
 End Function
 
 Function ParseFactorFloat(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
     Dim n As Long
 
     ParseFactorFloat = -1
-    ast = p->ast
-    n = AstAddNode(ast, AST_NUM)
+    n = ParseMakeFloatAst(p, 0)
     If n < 0 Then Exit Function
-    nodes = ast->nodes
-    nodes[n].num = ParseTokNum(p)
-    nodes[n].extra = 3
     p->pos = p->pos + 1
     ParseFactorFloat = n
 End Function
@@ -386,6 +445,7 @@ Function ParseFactorIdent(p As *Parser) As Long
     Dim n As Long
     Dim name(63) As Byte
     Dim bi As Long
+    Dim idLine As Long
 
     ParseFactorIdent = -1
     bi = ParseFactorBuiltinA(p)
@@ -406,17 +466,23 @@ Function ParseFactorIdent(p As *Parser) As Long
         ParseFactorIdent = ParseFactorBuiltinCall(p, bi)
         Exit Function
     End If
+    idLine = ParseTokLine(p)
     If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
     If ParseTokKind(p) = TK_LBRACK Then
-        ParseFactorIdent = ParseFactorIdentIndex(p, VarPtr(name))
+        n = ParseFactorIdentIndex(p, VarPtr(name))
+        If n >= 0 Then AstSetSrcLine(p->ast, n, idLine)
+        ParseFactorIdent = n
         Exit Function
     End If
     If ParseTokKind(p) = TK_LPAREN Then
-        ParseFactorIdent = ParseFactorIdentCall(p, VarPtr(name))
+        n = ParseFactorIdentCall(p, VarPtr(name))
+        If n >= 0 Then AstSetSrcLine(p->ast, n, idLine)
+        ParseFactorIdent = n
         Exit Function
     End If
     n = ParseClassIdentExpr(p, VarPtr(name))
     If n < 0 Then Exit Function
+    AstSetSrcLine(p->ast, n, idLine)
     n = ParsePostfixMemIdx(p, n)
     If n < 0 Then Exit Function
     ParseFactorIdent = ParseMemberCall(p, n)
@@ -494,15 +560,11 @@ Function ParseUnary(p As *Parser) As Long
 
     ParseUnary = -1
     If ParseTokKind(p) = TK_MINUS Then
-        ' -1.5 → IEEE Single の符号ビット反転（整数 NEG では壊れる）
+        ' -1.5 → IEEE Double ビット（符号付き）
         If ParseTokKindAt(p, p->pos + 1) = TK_FLOAT Then
             p->pos = p->pos + 1
-            ast = p->ast
-            n = ParseMakeNum(ast, 0 - ParseTokNum(p))
-            If n >= 0 Then
-                nodes = ast->nodes
-                nodes[n].extra = 3
-            End If
+            n = ParseMakeFloatAst(p, 1)
+            If n < 0 Then Exit Function
             p->pos = p->pos + 1
             ParseUnary = n
             Exit Function

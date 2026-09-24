@@ -9,17 +9,23 @@ Function AstToIrEmitFuncFinish(ctx As *LowerCtx, stmt As Long, retBuf As *Byte, 
     Dim nm(63) As Byte
     Dim offs As *Long
     Dim pi As Long
+    Dim savedErr As Long
 
     AstToIrEmitFuncFinish = 0
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
     offs = ctx->offs
-    If LowStmtList(ctx, nodes[stmt].right) = 0 Or ctx->err <> 0 Then
-        AstCopyStr(ast, stmt, VarPtr(nm))
-        Print "error: codegen in function '" + MakeStr(VarPtr(nm)) + "'"
-        Exit Function
+    savedErr = ctx->err
+    ctx->err = 0
+    If LowStmtList(ctx, nodes[stmt].right) = 0 Then
+        If ctx->err = 0 Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            LowerDiagError(ctx, stmt, "codegen in function '" + MakeStr(VarPtr(nm)) + "'")
+        End If
     End If
+    If ctx->err <> 0 Then savedErr = 1
+    ctx->err = savedErr
     IrEmit(list, OP_LABEL, g_funcEndLab, 0)
     LowEmitLocalClassDtors(ctx)
     ' エピローグでは Collect しない。入れ子の Mid$ / Lower$ 終了時に
@@ -64,6 +70,7 @@ Function AstToIrEmitMain(ctx As *LowerCtx, prog As Long, labMain As Long) As Lon
     Dim list As *IrList
     Dim stmt As Long
     Dim frame As Long
+    Dim savedErr As Long
 
     AstToIrEmitMain = 0
     list = ctx->list
@@ -81,13 +88,22 @@ Function AstToIrEmitMain(ctx As *LowerCtx, prog As Long, labMain As Long) As Lon
     stmt = nodes[prog].left
     While stmt >= 0
         If nodes[stmt].kind <> AST_FUNC And nodes[stmt].kind <> AST_CONST And nodes[stmt].kind <> AST_TYPE And nodes[stmt].kind <> AST_ENUM Then
-            If LowStmt(ctx, stmt) = 0 Or ctx->err <> 0 Then
-                Print "error: codegen in module stmt kind " + Str$(nodes[stmt].kind)
-                Exit Function
+            savedErr = ctx->err
+            ctx->err = 0
+            If LowStmt(ctx, stmt) = 0 Then
+                If ctx->err = 0 Then
+                    LowerDiagError(ctx, stmt, "codegen in module stmt kind " + Str$(nodes[stmt].kind))
+                End If
             End If
+            If ctx->err <> 0 Then savedErr = 1
+            ctx->err = savedErr
         End If
         stmt = nodes[stmt].nxt
     Wend
+
+    If ctx->err <> 0 Or DiagErrorCount() > 0 Then
+        Exit Function
+    End If
 
     LowEmitGlobalClassDtors(ctx)
     LowEmitStrCollectSafepoint(ctx)
@@ -217,9 +233,6 @@ Sub AstToIrInitCtx(ctx As *LowerCtx, list As *IrList, ast As *Ast)
 End Sub
 
 Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Long
-    If g_compileStrict <> 0 Then
-        Print "warning: #strict is enabled (limited checks in this build)"
-    End If
     Dim ctx As LowerCtx
     Dim nodes As *AstNode
     Dim prog As Long

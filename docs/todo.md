@@ -22,24 +22,25 @@
 
 ### P0 — 移植・基盤
 
-- **標準ライブラリ**: `StrUtils.abp` 相当（`InStr` / `Hex$` / `Val` / `Trim$`）を `default.idx` またはよく使うプロファイルへ。4.20 `basic\function.sbp` の不足分
-- **Ex 文字列 `Ex"..."`**: Win32 メニュー・リソース文字列で AB ソースと同形に（テスト `_pe_gui_*.abp` が依存）
-- **ファイル I/O 仕上げ**: `Eof` / `Loc` / `Lof`、`Print #`（`BasicFile.abp` 拡張）
-- **ビットマクロ**: `HIBYTE` / `HIWORD` / `MAKELONG` 等（組込 or `WinConsts`）— API 定義とセットで
-- **プリプロセス**: `#define` / `#ifdef` と `_WIN64` / `_DEBUG` 自動定義 — 4.20 ソースの `#ifdef` 塊をそのまま通す
+- ~~**標準ライブラリ**~~: 済（`StrUtils.abp` → `default.idx`）
+- ~~**Ex 文字列 `Ex"..."`**~~: 済（`test/t_ex_string.abp`）
+- ~~**ファイル I/O 仕上げ**~~: 済（`Eof` / `Loc` / `Lof`、`Print #` — `BasicFile.abp`）
+- ~~**ビットマクロ**~~: 済（組込 + テスト）
+- ~~**プリプロセス**~~: 済（`#define` / `#ifdef` 等 + テスト）
 - **D3D11 共通 API**: サンプル横断の `dx_Init` / `dx_Quit` / クリア・Present の形を `Include/d3d11/` に寄せ、`dx_DrawText`（または相当）で 4.20 Hello World 相当
 - **ProjectEditor**: ソース読込速度・スクロールちらつき（日常開発のボトルネック）
 
 ### P1 — 言語・相互運用
 
 - ~~**`Enum`**~~: 済（`test/t_enum.abp`）
-- **`#strict`**: 警告出力（現状無視）。段階的に `#strict` 付きプロジェクトを推奨
-- **`Continue`**: ループ制御（代替は `GoTo` なしで冗長）
-- **`Type Align(n)`**: SDK 構造体とオフセット一致
-- **`ELM(n)`**: 4.20 配列宣言慣習
-- **`Input "prompt", var`**: コンソール対話
-- **`GetByte` / `Set*` 系**: 組込 or 薄い `Memory.abp` — ポインタ演算より AB 慣習に近い
-- **乱数・Math 不足**: `Randomize` / `Rnd`、`Log` / `Int` / `Fix`（`Math.abp` 方針に合わせる）
+- ~~**`#strict`**~~: 済（代入の型不一致を **warning**。`As` キャストで抑制。`Include\default` は対象外。`test/t_strict_*.abp`）
+- ~~**`Continue`**~~: 済（`test/t_continue.abp`）
+- ~~**`Type Align(n)`**~~: 済（`Type Name Align(n)` — `test/t_type_align.abp`）
+- ~~**`ELM(n)`**~~: 済（組込）
+- ~~**`Input "prompt", var`**~~: 済（`test/t_input_prompt.abp`）
+- ~~**`GetByte` / `Set*` 系**~~: 済（`Memory.abp` → `default.idx`）
+- ~~**乱数**~~: 済（`Randomize` / `Rnd` — `test/t_rnd.abp`）。~~**Math `Log` / `Int` / `Fix` / 三角**~~: 済（IEEE Double `Math.abp` — `test/t_math_*.abp`）
+
 - **`#resource` / `.rc`**: GUI アイコン・メニュー ID の本格運用
 - **関数ポインタ型**: `CreateThread` / コールバックで型安全に（`AddressOf` は済）
 - **D3D11**: `dx_SetProjection` / `dx_SetCamera` / `dx_GetDevice` 相当 — `dxxform` 以上の共通化
@@ -51,7 +52,8 @@
 - **厳密 `Protected` / `Private`**
 - **`ReDim`**, **`Const` マクロ関数**, **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術（64bit ポインタは済）
-- **`Single` IEEE 演算**（千分率 `Math.abp` との役割分担を決めてから）
+- **`Single` IEEE 演算**（`Double` / `Math.abp` は済。Single の汎用 SSE は未）
+
 - **`Double` @ `-actba32`**
 - **符号無し演算**の AB 4.20 ルール完全化
 - **BASIC 命令**: `Window` / `MsgBox` / `Inkey$` 等（API 代替で足りるなら Include のみ）
@@ -77,48 +79,48 @@
 | 厳密な `Protected` / `Private` | 受理するが Public と同等 |
 | メンバ Class の自動 ctor/dtor | 親 Class 内のメンバ Class 生成・破棄（4.20） |
 | デストラクタ `Sub ~ClassName` | 明示 dtor 構文（4.20）。COM 向けは別途 |
-| `Continue` | `For` / `While` / `Do` の先頭へ（4.20）。現状は `Exit` のみ |
+| ~~`Continue`~~ | 済 — `For` / `While` / `Do` の先頭へ |
 | `GoTo` / `GoSub` / `Return`（`*ラベル`） | 行番号は非対応方針。ラベル付き分岐・復帰も未 |
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | `Enum` … `End Enum` | 列挙型（4.20）。値は DWord 扱い |
-| `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` | 条件コンパイル。4.20 の `_DEBUG` / `_WIN64` / `_AB_VER4` 等の自動定義も未 |
+| `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` | 条件コンパイル（済）。4.20 の `_DEBUG` / `_WIN64` 等の**自動定義**は要確認 |
 | `#resource` | `*.rc` 取り込み（4.20）。`#RESOURCE` 埋め込みと同系 |
-| `#strict` | 厳密型チェック・警告（4.20）。行は受理するが無視 |
+| `#strict` | 厳密型チェック・警告（4.20）。変数代入の型不一致を warning（`As` で抑制） |
 | `ReDim` | 動的配列サイズ変更（4.20） |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
 | `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章）。整数・文字列リテラルのみ対応 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタ型 | `Dim As *Function(...)` / `*Sub(...)`、`TypeDef` で別名（4.20）。`AddressOf` のみ実用 |
-| `Type Align(n)` | 構造体アラインメント指定 n=1,2,4,8,16（4.20 Type 章） |
-| `Input "prompt", var` | 4.20 Input。変数のみ対応済 |
+| ~~`Type Align(n)`~~ | 済 — `Type Name Align(n)`（n=1,2,4,8,16） |
+| ~~`Input "prompt", var`~~ | 済 |
 | `Print Using "fmt"` | 書式付き出力（4.20 関数ポインタサンプル等） |
-| Ex 文字列 `Ex"..."` | エスケープ付き文字列（4.20 ポインタサンプル `lstrcat(...,Ex"...")` 等）。`Ex` キーワードとして未 |
+| ~~Ex 文字列 `Ex"..."`~~ | 済 |
 | `Char` / `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は `Byte`/`Long`/`DWord` 中心 |
 
 ## 数値・型
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Double` を `-actba32` で | 64bit は IEEE 加減乗除・比較済。32bit は SSE 未実装 |
+| `Double` を `-actba32` で | 64bit は IEEE 加減乗除・比較・`Function As Double` 済。32bit は SSE 未実装 |
 | `Single` の汎用演算 | 4.20 は IEEE 浮動小数。格納と Input 変換が中心 |
 | 符号無し演算 | 4.20: 両オペランドが符号無し型なら符号無し演算 |
 | `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |
 | `CDbl` / `CInt` / `CSng` 等 | 4.20 変換関数。`As` キャストは可 |
-| `Randomize` / `Rnd` | 4.20 乱数 |
-| `Log` / `Int` / `Fix`（Math） | 4.20 数学関数。千分率 `Math.abp` の `Sin` 等は済 |
+| ~~`Randomize` / `Rnd`~~ | 済（`Math.abp`、`Rnd` は `[0,1)` Double） |
+| ~~`Log` / `Int` / `Fix` / 三角（Math）~~ | 済（IEEE Double。旧千分率は廃止） |
 
 ## 文字列・メモリ・ファイル
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Print #` | 未。`Write #` で代替可 |
-| `Eof` / `Loc` / `Lof` | 4.20 ファイル状態 |
-| `InStr` / `Hex$` / `Val` / `Trim$` / `Oct$` | `basic\function.sbp` 等。`StrUtils.abp`（手動 Include） |
+| ~~`Print #`~~ | 済（`BasicFile.abp`） |
+| ~~`Eof` / `Loc` / `Lof`~~ | 済 |
+| ~~`InStr` / `Hex$` / `Val` / `Trim$`~~ | 済（`StrUtils.abp` + `default.idx`）。`Oct$` は未 |
 | `ZeroString` / `_splitpath` | `system\string.sbp`（4.20） |
-| `GetByte` / `SetByte` / `GetWord` / `SetWord` / `GetDWord` / `SetDWord` / `GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` | 4.20 ポインタ経由読み書き命令。自前ポインタ参照で代替 |
+| `GetByte` … `SetDouble` | `Memory.abp`（`default.idx`）。`GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` は未 |
 | `realloc` | 4.20 C ヒープ。`calloc` は `HeapAlloc` マップ済 |
-| `ELM(n)` | 4.20: 添字上限→要素数。`Dim a[ELM(10)]` 等 |
-| `HIBYTE` / `HIWORD` / `LOBYTE` / `MAKELONG` / `MAKEWORD` 等 | 4.20 ビットマクロ。`LOWORD` / `RGB` のみ組込 |
+| ~~`ELM(n)`~~ | 済（組込） |
+| ~~`HIBYTE` / `HIWORD` 等~~ | 済（組込） |
 
 済（`BasicFile.abp`）: `Open` / `Close` / `Input #` / `Write` / `Field` / `Get #` / `Put #`
 

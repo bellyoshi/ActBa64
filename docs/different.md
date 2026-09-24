@@ -25,10 +25,10 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
 | `Goto` / `GoSub` / `Return` | 行番号または `*ラベル` へ分岐・復帰 | 非対応（キーワードなし） |
-| `#define` | 条件コンパイル用識別子定義（`#ifdef` 専用） | 非対応 |
-| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | 非対応 |
+| `#define` | 条件コンパイル用識別子定義（`#ifdef` 専用） | ○ |
+| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | ○（自動定義は一部） |
 | `ReDim` | 動的配列サイズ変更 | 非対応 |
-| `Continue` | ループ先頭へ制御移動（`For` / `While` / `Do`） | 非対応 |
+| `Continue` | ループ先頭へ制御移動（`For` / `While` / `Do`） | ○ |
 | `On Error` / `Resume` | エラートラップ | 非対応 |
 
 ### 言語機能
@@ -39,22 +39,22 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 | `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
 | `New` / `Delete` | `New [[num]] Class[(params)]`、`Delete pObj` | 非対応（`Dim As Class(args)` で ctor は呼べる） |
 | 関数ポインタ型 | `AddressOf(Proc)` で取得し、`CreateThread` 等へ渡す | `AddressOf` は組み込み。型・呼び出し規約の一般サポートは限定的 |
-| Ex文字列 | BasicHelp に該当トピックなし | 非対応（要調査） |
+| Ex文字列 | エスケープ付き `Ex"..."` | ○ |
 
 ### ファイル I/O（言語命令）
 
-`Open` / `Close` / `Input #` / `Write` / `Field` / `Get #` / `Put #` は `BasicFile.abp` で対応（番号 1..16）。`Print #` と `Eof` / `Loc` / `Lof` は未実装。WinAPI（`CreateFileA` / `ReadFile` / `WriteFile` 等）でも代替可。
+`Open` / `Close` / `Input #` / `Write` / `Field` / `Get #` / `Put #` / `Print #` / `Eof` / `Loc` / `Lof` は `BasicFile.abp` で対応（番号 1..16）。WinAPI でも代替可。
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
 | `Open` | `Open filename$ [For Input/Output/Append] As number` | ○（`As #n` 可。パス式は `As` キャストなし） |
 | `Close` | `Close [#filenumber]` | ○（省略で全閉） |
-| `Print #` | `Print #FileNumber, data [, ...]` | 未（`Write #` で代替可） |
+| `Print #` | `Print #FileNumber, data [, ...]` | ○ |
 | `Input #` | `Input #filenumber, variable [, ...]` | ○（カンマ／改行区切りフィールド） |
 | `Write` | `Write [#filenumber, ] [data, ...]`（`,` 区切り） | ○ |
 | `Get#` / `Put#` | `Get/Put #filenumber, recode, StrBuffer`（`Field` 必須） | ○ |
 | `Field` | `Field #filenumber, fieldbyte`（ランダムファイル） | ○ |
-| `Eof` / `Loc` / `Lof` | ファイル状態・位置 | 未 |
+| `Eof` / `Loc` / `Lof` | ファイル状態・位置 | ○ |
 | `rc` ファイル取り込み | リソース埋め込み | 未 |
 
 ### GUI・対話・マルチメディア命令
@@ -77,9 +77,9 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 の動作 |
 |---|---|---|
-| `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 行は受理するが**無視**（警告なし） |
-| `Input` | `Input "prompt", variable` または `Input variable` | **`Input variable` のみ**（プロンプト文字列なし）。`String` / `Long` / `Byte` / `Single` / `Double` に代入可 |
-| `Single` / `Double` | IEEE 浮動小数点演算 | **`Double` は 64bit で加減乗除・比較**（IEEE）。`Single` は格納と Input 変換が中心。小数リテラル・N88 角度は**千分率固定小数**（`1.5` → 1500）も併用。三角関数等は `Math.abp`。`-actba32` では SSE 未実装のため `Double` 演算テストはスキップ |
+| `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | **変数同士の代入**で型不一致を warning（`As` で抑制）。リテラル代入は対象外。`Include\default` は抑制 |
+| `Input` | `Input "prompt", variable` または `Input variable` | **両方対応**（`String` / `Long` / `Byte` / `Single` / `Double`） |
+| `Single` / `Double` | IEEE 浮動小数点演算 | **`Double`（64bit）**: 加減乗除・比較・`Function As Double` / Double 仮引数・小数リテラルは AST 上 IEEE ビット。`Math.abp` も IEEE Double。**`Single`**: 格納と Input 変換が中心（汎用演算は未）。N88 `CIRCLE` 角度はソース小数可（内部千分率→実行時 Double）。`-actba32` は SSE 未実装のため Double 演算テストをスキップ |
 | `Const` | `Const name = expr` および `Const name(arglist) = expr`（マクロ関数） | 整数・文字列リテラル中心。複雑な定数式・マクロ関数は制限あり |
 | `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New`/`Delete` 演算子なし。`Protected` は受理するが **Public と同等**。メソッドはマングル名 + 暗黙 `Me` |
 | `For` … `Next` | `For c = start To end [Step step]`、`Exit For` | **Step / Exit For 対応**（[language.md §4](./language.md#4-文) 参照） |
@@ -89,11 +89,11 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | 文字列 | 長さプレフィックス（dword）、埋め込み NUL 可 | **AB 4.20 互換**（[改良点](#文字列長さプレフィックス)） |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
-| 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / `Left$` / `Mid$` / `Right$` / `Str$` / `VarPtr` / `StrPtr` / `AddressOf` / `SizeOf` / `MakeStr` / `RGB` / `LOWORD` は組込**。`InStr` / `Hex$` / `Val` / `Trim$` 等は **`StrUtils.abp` 等のライブラリ**（自動挿入されない） |
-| 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp`（千分率固定小数）**。ネストした関数呼び出しは対応（複雑な入れ子は一時変数経由が安全） |
+| 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` / `Trim$` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |
+| 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp`（IEEE Double）**。ネストした関数呼び出しは対応（複雑な入れ子は一時変数経由が安全） |
 | メモリ | `malloc` / `calloc` / `realloc` / `free` | `malloc` / `free` / `memcpy` / `FillMemory`。**`calloc` は `HeapAlloc` へマップ**。`realloc` なし |
-| `GetByte` 等 / `SetWord` 等 | ポインタ経由の読み書き | 組み込みなし（自前でポインタ参照） |
-| `HIBYTE` / `HIWORD` / `MAKELONG` 等 | ビット分解・合成マクロ | 組み込みなし（`LOWORD` のみ組込） |
+| `GetByte` 等 / `SetWord` 等 | ポインタ経由の読み書き | **`Memory.abp`**（浮動小数版は未） |
+| `HIBYTE` / `HIWORD` / `MAKELONG` 等 | ビット分解・合成マクロ | **組込** |
 | `Int64` / `QWord` / `Char` | 基本型として定義 | **`Char` / `Int64` / `QWord` 型なし**（`Byte` / `Long` / `DWord` 等） |
 | ソース拡張子 | `.sbp` 推奨 | **`.abp`**（`.pj` で結合） |
 | Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`Include\default\default.idx` を自動挿入**。未登録 API は `Declare Lib` またはコンパイルエラー |
@@ -182,7 +182,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `With` … `End With` | 構造体メンバを `.Member` で省略、ネスト可 | **実装済み** |
 | `ByRef` / `ByVal` | 既定は値渡し。`ByRef p As Type` で参照渡し | **実装済み** |
 | `TypeDef` | `TypeDef newtype = basetype`（型エイリアス） | **実装済み** |
-| `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（`Inherits` / `Virtual` は部分対応） |
+| `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（`Type Name Align(n)`、`Inherits` / `Virtual` は部分対応） |
 | `#include` | `"path"` / `<path>` で `.sbp` 取り込み | **`#include "path"`**（`.abp`） |
 | 行継続 `_` | 行末 `_` で次行と連結 | **実装済み** |
 | `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **実装済み**（32/64 とも IAT） |
@@ -196,7 +196,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `Left$` / `Mid$` / `Right$` / `Str$` | 部分文字列・数値文字列化 | 組込 |
 | `VarPtr` / `StrPtr` / `MakeStr` | ポインタ取得・NUL 終端から String 生成 | 組込 |
 | `AddressOf` | 手続き先頭アドレス（関数ポインタ） | 組込 |
-| `SizeOf` / `ELM` | 型サイズ / 添字上限→要素数 | `SizeOf` 組込。**`ELM` なし** |
+| `SizeOf` / `ELM` | 型サイズ / 添字上限→要素数 | **両方組込** |
 | `malloc` / `free` | C ヒープ | 組込（`free` → `HeapFree`） |
 | `RGB` / `LOWORD` | 色・ワード分解 | 組込 |
 
@@ -204,7 +204,9 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 
 | 関数 | ActiveBasic 仕様 | ActBa64 |
 |---|---|---|
-| `Abs` / `Sgn` / `Sqr` / `Sin` / `Cos` / `Tan` / `Atn` / `Exp` / `Log` / `Int` / `Fix` | 浮動小数数学 | **千分率固定小数**版（自動 Include）。`Log` / `Int` / `Fix` は未 |
+| `Abs` / `Sgn` / `Sqr` / `Sin` / `Cos` / `Tan` / `Atn` / `Exp` / `Log` / `Int` / `Fix` | 浮動小数数学 | **IEEE Double**（自動 Include）。`MathPi()` / `MathE()`。`test/t_math_*.abp` |
+| `Rnd` / `Randomize` | `[0,1)` 乱数 | **済**（`Rnd` は Double。`test/t_rnd.abp`） |
+| `Log10` / `SinDeg` / `CosDeg` | — | Double。`MathDiv` / `MathMod` は整数ヘルパとして残置 |
 
 ---
 
@@ -216,12 +218,12 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| Ex文字列 | BasicHelp 未確認 | 要調査 |
+| Ex文字列 | BasicHelp 未確認 | **済**（`Ex"..."`） |
 | 関数ポインタ | `AddressOf(Proc)` をスレッド等へ | `AddressOf` のみ。一般化は未 |
-| `#strict` | 型不一致を警告 | 現状無視。将来は警告出力 |
-| `#define` / `#ifdef` | 条件コンパイル | |
+| `#strict` | 型不一致を警告 | **実装済**（変数代入。詳細は [動作が異なるもの](#動作が異なるもの)） |
+| `#define` / `#ifdef` | 条件コンパイル | **済** |
 | `GoSub` / `Return` | `*ラベル` 付きサブルーチン | 関数 `Return` とは別 |
-| `Enum` | 列挙型定義 | |
+| `Enum` | 列挙型定義 | **済** |
 | `Let` | 明示代入（省略可） | 優先度低 |
 | `Class` 拡張 | `New`/`Delete`、`Super`、厳密 `Protected`、メンバ Class の自動 ctor/dtor | `Inherits`/`Virtual` は COM/vtable 向けに部分対応済 |
 
@@ -233,15 +235,15 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `Input #` | ファイル番号付き入力 | ○ |
 | `Write` | カンマ区切り出力（画面／ファイル） | ○ |
 | `Field` / `Get #` / `Put #` | ランダムファイル | ○ |
-| `Print #` | ファイル番号付き Print | 未 |
-| `Eof` / `Loc` / `Lof` | ファイル状態 | |
+| `Print #` | ファイル番号付き Print | **済**（`BasicFile.abp`） |
+| `Eof` / `Loc` / `Lof` | ファイル状態 | **済** |
 | `rc` ファイル取り込み | リソース | |
 
 ### 入出力・対話
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Input` プロンプト付き | `Input "文字列", variable` | 変数のみ対応済 |
+| `Input` プロンプト付き | `Input "文字列", variable` | **済** |
 | `Cls` | 画面クリア | |
 | `MsgBox` | BASIC 命令 | `MessageBoxA` で代替 |
 | `Beep` | ビープ音 | |
@@ -261,16 +263,16 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Randomize` / `Rnd()` | 乱数 | |
+| `Randomize` / `Rnd()` | 乱数 | **済**（`Math.abp`） |
 | `CDbl` / `CInt` / `CSng` | 型変換関数 | `As` キャストは可 |
 | `Oct$` | 8 進文字列 | |
 | `Date$` / `Time$` | 日付・時刻文字列 | |
 | `Hex$` / `Val` / `ZeroString` | 16 進文字列・数値化・ゼロ埋め | `StrUtils.abp` 等で一部 |
-| `InStr` | 部分文字列検索 | `StrUtils.abp`（手動 Include） |
-| `HIBYTE` / `HIWORD` / `LOBYTE` / `LOWORD` / `MAKELONG` / `MAKEWORD` | ビット操作 | `LOWORD` のみ組込 |
-| `SetDouble` / `SetWord` / `GetDouble` / `GetSingle` / `GetDWord` / `GetByte` 等 | メモリ読み書き | ポインタ直接参照で代替 |
+| `InStr` | 部分文字列検索 | **済**（`StrUtils.abp` + `default.idx`） |
+| `HIBYTE` / `HIWORD` / `LOBYTE` / `LOWORD` / `MAKELONG` / `MAKEWORD` | ビット操作 | **組込**（`LOWORD` 含む） |
+| `SetDouble` / `SetWord` / `GetDouble` / `GetSingle` / `GetDWord` / `GetByte` 等 | メモリ読み書き | **`Memory.abp`**（浮動 Get/Set Double は未） |
 | `calloc` / `realloc` | C ヒープ | `calloc` は `HeapAlloc` マップ済。`realloc` 未 |
-| `ELM` | `ELM(n)` — 添字上限から要素数 | |
+| `ELM` | `ELM(n)` — 添字上限から要素数 | **済**（組込） |
 
 ### GUI・Win32・マルチメディア
 

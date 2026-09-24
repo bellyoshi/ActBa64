@@ -1,0 +1,150 @@
+' ===================================================
+'  Diag - compile diagnostics (multi-error buffer)
+' ===================================================
+
+Const DIAG_MAX = 64
+Const DIAG_MSG_LEN = 256
+Const DIAG_KIND_ERR = 0
+Const DIAG_KIND_WARN = 1
+
+Dim g_diagSrc As *Byte
+Dim g_diagCount As Long
+Dim g_diagLines As *Long
+Dim g_diagKinds As *Long
+Dim g_diagMsgs As *Byte
+Dim g_diagOverflow As Long
+
+Sub DiagEnsureBuf()
+    If g_diagLines <> NULL Then Exit Sub
+    g_diagLines = calloc(BytesN(DIAG_MAX, SizeOf(Long)))
+    g_diagKinds = calloc(BytesN(DIAG_MAX, SizeOf(Long)))
+    g_diagMsgs = calloc(BytesN(DIAG_MAX, DIAG_MSG_LEN))
+End Sub
+
+Sub DiagReset(src As *Byte)
+    DiagEnsureBuf()
+    g_diagSrc = src
+    g_diagCount = 0
+    g_diagOverflow = 0
+End Sub
+
+Function DiagCount() As Long
+    DiagCount = g_diagCount
+End Function
+
+Function DiagErrorCount() As Long
+    Dim i As Long
+    Dim n As Long
+    n = 0
+    i = 0
+    While i < g_diagCount
+        If g_diagKinds[i] = DIAG_KIND_ERR Then n = n + 1
+        i = i + 1
+    Wend
+    DiagErrorCount = n
+End Function
+
+Function DiagWarnCount() As Long
+    Dim i As Long
+    Dim n As Long
+    n = 0
+    i = 0
+    While i < g_diagCount
+        If g_diagKinds[i] = DIAG_KIND_WARN Then n = n + 1
+        i = i + 1
+    Wend
+    DiagWarnCount = n
+End Function
+
+Sub DiagCopyMsg(dst As *Byte, msg As *Byte)
+    Dim i As Long
+    i = 0
+    While msg[i] <> 0 And i < DIAG_MSG_LEN - 1
+        dst[i] = msg[i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub DiagAdd(kind As Long, srcLine As Long, msg As String)
+    Dim off As Long
+    Dim bp As *Byte
+    Dim sp As *Byte
+
+    DiagEnsureBuf()
+    If g_diagCount >= DIAG_MAX Then
+        If g_diagOverflow = 0 Then
+            g_diagOverflow = 1
+        End If
+        Exit Sub
+    End If
+    If srcLine <= 0 Then srcLine = 1
+    g_diagLines[g_diagCount] = srcLine
+    g_diagKinds[g_diagCount] = kind
+    off = g_diagCount * DIAG_MSG_LEN
+    bp = VarPtr(g_diagMsgs[off])
+    sp = StrPtr(msg)
+    If sp = NULL Then
+        bp[0] = 0
+    Else
+        DiagCopyMsg(bp, sp)
+    End If
+    g_diagCount = g_diagCount + 1
+End Sub
+
+Sub DiagError(srcLine As Long, msg As String)
+    DiagAdd(DIAG_KIND_ERR, srcLine, msg)
+End Sub
+
+Sub DiagWarn(srcLine As Long, msg As String)
+    DiagAdd(DIAG_KIND_WARN, srcLine, msg)
+End Sub
+
+Sub DiagPrintAll()
+    Dim i As Long
+    Dim off As Long
+    Dim srcLine As Long
+    Dim loc As String
+    Dim msg As String
+    Dim prefix As String
+
+    i = 0
+    While i < g_diagCount
+        srcLine = g_diagLines[i]
+        off = i * DIAG_MSG_LEN
+        loc = PpErrLoc$(g_diagSrc, srcLine)
+        msg = MakeStr(VarPtr(g_diagMsgs[off]))
+        If g_diagKinds[i] = DIAG_KIND_WARN Then
+            prefix = "warning: "
+        Else
+            prefix = "error: "
+        End If
+        Print prefix + loc + ": " + msg
+        i = i + 1
+    Wend
+    If g_diagOverflow <> 0 Then
+        Print "error: too many errors; further diagnostics suppressed"
+    End If
+End Sub
+
+Sub DiagPrintSummary()
+    Dim ne As Long
+    Dim nw As Long
+    ne = DiagErrorCount()
+    nw = DiagWarnCount()
+    If ne <= 0 And nw <= 0 Then Exit Sub
+    If ne > 0 Then
+        If ne = 1 Then
+            Print "error: 1 error"
+        Else
+            Print "error: " + Str$(ne) + " errors"
+        End If
+    End If
+    If nw > 0 Then
+        If nw = 1 Then
+            Print "warning: 1 warning"
+        Else
+            Print "warning: " + Str$(nw) + " warnings"
+        End If
+    End If
+End Sub

@@ -68,14 +68,62 @@ Function ParseTokLine(p As *Parser) As Long
 End Function
 
 Function ParseExpect(p As *Parser, kind As Long) As Long
+    Dim want As String
     ParseExpect = 0
     If ParseTokKind(p) <> kind Then
-        p->err = 1
+        If kind = TK_LPAREN Then
+            want = "'('"
+        ElseIf kind = TK_RPAREN Then
+            want = "')'"
+        ElseIf kind = TK_LBRACK Then
+            want = "'['"
+        ElseIf kind = TK_RBRACK Then
+            want = "']'"
+        ElseIf kind = TK_EQ Then
+            want = "'='"
+        ElseIf kind = TK_COMMA Then
+            want = "','"
+        ElseIf kind = TK_DOT Then
+            want = "'.'"
+        Else
+            want = "token"
+        End If
+        ParseFail(p, "expected " + want)
         Exit Function
     End If
     p->pos = p->pos + 1
     ParseExpect = 1
 End Function
+
+Sub ParseFail(p As *Parser, msg As String)
+    Dim srcLine As Long
+    If p = NULL Then Exit Sub
+    srcLine = ParseTokLine(p)
+    If srcLine <= 0 Then srcLine = 1
+    DiagError(srcLine, msg)
+    p->err = 1
+End Sub
+
+' Skip tokens on the current line so parsing can resume at the next line.
+Sub ParseRecoverStmt(p As *Parser)
+    Dim srcLine As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    If p = NULL Then Exit Sub
+    lx = p->lx
+    toks = lx->toks
+    If p->pos < 0 Or p->pos >= lx->count Then Exit Sub
+    srcLine = toks[p->pos].srcLine
+    While p->pos < lx->count
+        If toks[p->pos].kind = TK_EOF Then Exit Sub
+        If toks[p->pos].srcLine > srcLine Then
+            p->err = 0
+            Exit Sub
+        End If
+        p->pos = p->pos + 1
+    Wend
+    p->err = 0
+End Sub
 
 Function ParseIdentIsAt(p As *Parser, pos As Long, name As *Byte) As Long
     Dim lx As *Lexer
@@ -136,7 +184,10 @@ Function ParseStmtListUntilEndPair(p As *Parser, second As *Byte) As Long
             End If
         End If
         nStmt = ParseStmt(p)
-        If nStmt < 0 Or p->err <> 0 Then Exit Function
+        If nStmt < 0 Or p->err <> 0 Then
+            ' Nested lists still abort; top-level ParseProgram recovers.
+            Exit Function
+        End If
         If nFirst < 0 Then
             nFirst = nStmt
         Else
@@ -149,6 +200,8 @@ Function ParseStmtListUntilEndPair(p As *Parser, second As *Byte) As Long
             nPrev = nodes[nPrev].nxt
         Wend
     Wend
+    ' Reached EOF without End <second>
+    ParseFail(p, "expected 'End " + MakeStr(second) + "'")
     ParseStmtListUntilEndPair = nFirst
 End Function
 
@@ -213,11 +266,11 @@ Function ParseWithLval(p As *Parser) As Long
 
     ParseWithLval = -1
     If p->withBase < 0 Then
-        p->err = 1
+        ParseFail(p, "'.' member access outside With block")
         Exit Function
     End If
     If ParseTokKind(p) <> TK_DOT Then
-        p->err = 1
+        ParseFail(p, "expected '.'")
         Exit Function
     End If
     ast = p->ast

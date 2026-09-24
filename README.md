@@ -68,4 +68,4 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 .\bin\stage2\actba64.exe .\samples\n88_shapes.abp -o .\samples\n88_shapes.exe
 ```
 
-`#n88basic` で `LINE` / `CIRCLE` が使えます。`Sleep` と千分率の `Math`（`Sin` / `Cos` 等）は標準ヘッダから常時利用できます。詳細は [docs/language.md](docs/language.md)。
+`#n88basic` で `LINE` / `CIRCLE` が使えます。`Sleep` と IEEE Double の `Math`（`Sin` / `Cos` / `Log` 等）は標準ヘッダから常時利用できます。詳細は [docs/language.md](docs/language.md)。
