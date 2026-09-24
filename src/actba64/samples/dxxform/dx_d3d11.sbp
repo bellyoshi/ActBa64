@@ -1,98 +1,58 @@
 ' dx_d3d11.sbp - Direct3D 11 matrix transform sample
 ' 2D アフィン変換（拡大縮小 * 回転 * 移動）で三角形の座標を毎フレーム変換する。
-' 数値は Math.abp の千分率（1.0 = 1000）。GPU へ渡す直前に IEEE Single へ変換。
+' 角度・座標・色は Double。GPU 頂点バッファへは Single ビット列を memcpy する。
 
 Dim g_pVS As *ID3D11VertexShader
 Dim g_pPS As *ID3D11PixelShader
 Dim g_pVB As *ID3D11Buffer
 Dim g_pLayout As *ID3D11InputLayout
 
-' 変換パラメータ（千分率）
-Dim g_tx As Long
-Dim g_ty As Long
-Dim g_ang As Long
-Dim g_scale As Long
+' 変換パラメータ
+Dim g_tx As Double
+Dim g_ty As Double
+Dim g_ang As Double
+Dim g_scale As Double
 
-' モデル座標（千分率）x,y × 3
-Dim g_baseX[2] As Long
-Dim g_baseY[2] As Long
+' モデル座標 x,y × 3
+Dim g_baseX[2] As Double
+Dim g_baseY[2] As Double
 
-' 色（固定）r,g,b,a × 3（千分率）
-Dim g_colR[2] As Long
-Dim g_colG[2] As Long
-Dim g_colB[2] As Long
-Dim g_colA[2] As Long
+' 色（固定）r,g,b,a × 3
+Dim g_colR[2] As Double
+Dim g_colG[2] As Double
+Dim g_colB[2] As Double
+Dim g_colA[2] As Double
 
 ' 頂点バッファ用ワーク（pos3 + col4）× 3 = 21 floats → 余裕で 27
 Dim g_vdata[26] As Single
-
-' 千分率 → IEEE754 Single ビット列（D3D 頂点用）
-Function MilliToSingleBits(milli As Long) As Long
-	Dim sign As Long
-	Dim num As Long
-	Dim uexp As Long
-	Dim man As Long
-	Dim biased As Long
-
-	MilliToSingleBits = 0
-	If milli = 0 Then Exit Function
-	sign = 0
-	If milli < 0 Then
-		sign = 1
-		milli = 0 - milli
-	End If
-	num = milli
-	uexp = 0
-	While num < 1000
-		num = num * 2
-		uexp = uexp - 1
-		If uexp < -140 Then Exit Function
-	Wend
-	While num >= 2000
-		num = num / 2
-		uexp = uexp + 1
-		If uexp > 140 Then Exit Function
-	Wend
-	man = (num - 1000) * 8388 + ((num - 1000) * 608) / 1000
-	biased = uexp + 127
-	If biased <= 0 Then Exit Function
-	If biased >= 255 Then Exit Function
-	MilliToSingleBits = (sign * &H80000000) Or (biased * 8388608) Or man
-End Function
 
 Sub dx_ResetXform()
 	g_tx = 0
 	g_ty = 0
 	g_ang = 0
-	g_scale = 1000
+	g_scale = 1.0
 End Sub
 
-Sub dx_StoreSingle(dest As VoidPtr, milli As Long)
-	Dim bits As Long
-	bits = MilliToSingleBits(milli)
-	memcpy(dest, VarPtr(bits), 4)
+Sub dx_StoreSingle(dest As VoidPtr, v As Double)
+	Dim s As Single
+	s = v
+	memcpy(dest, VarPtr(s), 4)
 End Sub
 
 ' M = T * R * S  （先に拡大縮小 → 回転 → 移動）
-Sub dx_XformPoint(x As Long, y As Long, ByRef ox As Long, ByRef oy As Long)
+Sub dx_XformPoint(x As Double, y As Double, ByRef ox As Double, ByRef oy As Double)
 	Dim sx As Double
 	Dim sy As Double
 	Dim cs As Double
 	Dim sn As Double
 	Dim rx As Double
 	Dim ry As Double
-	Dim dang As Double
-	Dim sc As Double
 
-	sc = g_scale
-	sc = sc / 1000
-	sx = x * sc
-	sy = y * sc
+	sx = x * g_scale
+	sy = y * g_scale
 
-	dang = g_ang
-	dang = dang / 1000
-	cs = Cos(dang)
-	sn = Sin(dang)
+	cs = Cos(g_ang)
+	sn = Sin(g_ang)
 	rx = sx * cs - sy * sn
 	ry = sx * sn + sy * cs
 
@@ -102,8 +62,8 @@ End Sub
 
 Sub dx_BuildVertices()
 	Dim i As Long
-	Dim ox As Long
-	Dim oy As Long
+	Dim ox As Double
+	Dim oy As Double
 	Dim base As Long
 
 	ZeroMemory(VarPtr(g_vdata[0]), 84)
@@ -265,24 +225,24 @@ Function dx_CreateTriangle() As Long
 
 	' モデル座標（クリップ空間想定の ±0.5 付近）
 	g_baseX[0] = 0
-	g_baseY[0] = 500
-	g_baseX[1] = 500
-	g_baseY[1] = -500
-	g_baseX[2] = -500
-	g_baseY[2] = -500
+	g_baseY[0] = 0.5
+	g_baseX[1] = 0.5
+	g_baseY[1] = -0.5
+	g_baseX[2] = -0.5
+	g_baseY[2] = -0.5
 
-	g_colR[0] = 1000
-	g_colG[0] = 200
-	g_colB[0] = 200
-	g_colA[0] = 1000
-	g_colR[1] = 200
-	g_colG[1] = 1000
-	g_colB[1] = 200
-	g_colA[1] = 1000
-	g_colR[2] = 200
-	g_colG[2] = 200
-	g_colB[2] = 1000
-	g_colA[2] = 1000
+	g_colR[0] = 1.0
+	g_colG[0] = 0.2
+	g_colB[0] = 0.2
+	g_colA[0] = 1.0
+	g_colR[1] = 0.2
+	g_colG[1] = 1.0
+	g_colB[1] = 0.2
+	g_colA[1] = 1.0
+	g_colR[2] = 0.2
+	g_colG[2] = 0.2
+	g_colB[2] = 1.0
+	g_colA[2] = 1.0
 
 	dx_ResetXform()
 	dx_BuildVertices()
@@ -315,12 +275,12 @@ Function dx_LoadSample() As Long
 End Function
 
 Sub dx_UpdateInput()
-	Dim stepMove As Long
-	Dim stepAng As Long
-	Dim stepScale As Long
-	stepMove = 8
-	stepAng = 35
-	stepScale = 15
+	Dim stepMove As Double
+	Dim stepAng As Double
+	Dim stepScale As Double
+	stepMove = 0.008
+	stepAng = 0.035
+	stepScale = 0.015
 
 	If dx_KeyDown(VK_LEFT) <> 0 Then g_tx = g_tx - stepMove
 	If dx_KeyDown(VK_RIGHT) <> 0 Then g_tx = g_tx + stepMove
@@ -335,8 +295,8 @@ Sub dx_UpdateInput()
 	If dx_KeyDown(VK_OEM_MINUS) <> 0 Then g_scale = g_scale - stepScale
 	If dx_KeyDown(VK_SUBTRACT) <> 0 Then g_scale = g_scale - stepScale
 
-	If g_scale < 100 Then g_scale = 100
-	If g_scale > 4000 Then g_scale = 4000
+	If g_scale < 0.1 Then g_scale = 0.1
+	If g_scale > 4.0 Then g_scale = 4.0
 
 	If dx_KeyDown(82) <> 0 Then dx_ResetXform()
 
@@ -348,7 +308,6 @@ Sub dx_DrawHelp()
 	Dim y As Long
 	Dim s As String
 	Dim deg As Long
-	Dim dr As Double
 
 	If hMainWnd = 0 Then Exit Sub
 	hdc = GetDC(hMainWnd)
@@ -373,9 +332,7 @@ Sub dx_DrawHelp()
 
 	SetTextColor(hdc, &H00FFFFFF)
 	y = y + 24
-	dr = g_ang
-	dr = dr / 1000
-	deg = RadToDeg(dr)
+	deg = RadToDeg(g_ang)
 	s = "tx=" + Str$(g_tx) + "  ty=" + Str$(g_ty)
 	dx_TextOutUtf8(hdc, 8, y, s)
 	y = y + 18

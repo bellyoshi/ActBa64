@@ -28,8 +28,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
   - `/* ... */` ブロック（ネスト不可。途中にも可）
 - 識別子: `[A-Za-z_][A-Za-z0-9_]*`、末尾 `$` 可（例: `Left$`）
 - 整数: 十進 / `&H` 十六進
-- 小数リテラル: `1.5` / `1.12345` は字句テキストを保持し、AST 上で IEEE Double ビット（64bit）に変換する
-
+- 小数リテラル: `1.5` / `1.12345` など（符号・小数点付き十進）。字句テキストを保持し、**AST 上で IEEE 754 Double ビット**（64bit: `num`=下位32 / `left`=上位32）に変換する。科学記法（`1.0e10`）は未対応。コード生成は `movabs rax, imm64`
 - 文字列リテラル: `"..."`（`""` で `"`）
 - 識別子の大小文字: **定数・変数・Sub/Function・Type/Class 名は区別する**（AB 4.20 同様。`Foo` と `foo` は別）。**言語キーワード**（`If` / `Then` / `Dim` 等）と **組み込みランタイム名**（`FillMemory` / `malloc` 等）の認識のみ大小無視
 - 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）
@@ -124,9 +123,9 @@ CIRCLE STEP(x,y),r[,...]              ' 中心は LP からの相対
 CIRCLE ,r[,...]                       ' 中心は LP
 ```
 
-- 角度はラジアン（小数可。パーサは千分率整数に直し、実行時に Double ラジアンへ変換。`3.14` → 3140）。省略または `start=end` で全周
-- 負の角度は絶対値で円弧し、中心から半径線を引く（扇形）
-- `aspect` は垂直半径/水平半径（省略時 1.0。内部も千分率スケール）
+- 角度 `start` / `end` はラジアン（`Double`）。省略または `start=end` で全周
+- 負の角度は絶対値で円弧し、中心から半径線を引く（扇形。flags の startNeg/endNeg）
+- `aspect` は垂直半径/水平半径（`Double`、省略時 `1.0`）
 - `F` で塗りつぶし（タイルストリングは未対応）
 - 実行後 LP は円の中心へ移動
 
@@ -352,7 +351,7 @@ ExitProcess(式)
 | `With ... End With` | ○（ネスト可） |
 | `Exit Do` / `Exit While` / `Exit For` | ○ |
 | `Print` | ○ |
-| `Input` | ○（プロンプト文字列なし。数値は十進変換） |
+| `Input` | ○（プロンプト文字列可。数値は十進文字列 → IEEE。`Double`/`Single` は `ValDouble`、整数は `Val`） |
 | `Open` / `Close` / `Input #` | ○（`BasicFile.abp`。番号 1..16） |
 | `Field` / `Get #` / `Put #` | ○（ランダム。`Open ... As` + Field 長） |
 | `Write` | ○（画面または `#番号`。カンマ区切り） |
@@ -479,8 +478,9 @@ Print Log(MathE())    ' ≒ 1
 `Sin` / `Cos` / `Tan` / `SinDeg` / `CosDeg` / `Atn` / `Exp` / `Log` / `Log10` /
 `Fix` / `Int` / `Rnd` / `Randomize` / `DegToRad` / `RadToDeg`
 
-- 小数リテラル（`1.12345`）は AST 上 IEEE Double ビット。`Function As Double` の戻り値・仮引数も Double ビットとして扱う
-- N88 `CIRCLE` の角度のみ、内部は千分率整数（ソース小数テキストを下3桁まで整数化。`3.14` → 3140）
+- 小数リテラル・`Function As Double` / Double 仮引数はすべて IEEE Double ビット
+- N88 `CIRCLE` の角度・aspect も `Double`（内部の千分率表現は廃止）
+- `Input` / `Input #` の `Double`/`Single` は十進文字列を `ValDouble` で IEEE 化（`Single` はその後 `cvtsd2ss`）
 - `Rnd()` は `[0, 1)` の Double。`Abs` は Double 引数
 - `-actba32` では SSE 未実装のため Double 演算テストはスキップ
 
@@ -488,7 +488,7 @@ Print Log(MathE())    ' ≒ 1
 
 `StrD$(d As Double)` は `DoubleStr.abp` から常時利用可。`Print` が Double 式を表示するとき自動で呼ばれる（64bit）。
 
-サンプル: `src/actba64/samples/math_test.abp` / テスト: `test/t_math_*.abp` / `test/t_dbl_func.abp`
+サンプル: `src/actba64/samples/math_test.abp` / テスト: `test/t_math_*.abp` / `test/t_double_lit*.abp` / `test/t_dbl_func.abp`
 
 ### 7.4 ファイル I/O（`BasicFile.abp`）
 
@@ -590,7 +590,7 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 ## 10. 非対応（意図的）
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` / `Super` は未対応）
-- `Single` の汎用演算。`Double` の演算・`Math.abp` は **64bit のみ**（`-actba32` は SSE 未実装）。N88 `CIRCLE` 角度はソース小数→内部千分率（下3桁）→実行時 Double
+- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は **64bit IEEE Double**（`-actba32` は SSE 未実装）
 - `GoTo` / `GoSub` / `ReDim`
 - ネスト手続き
 - リソース（`#RESOURCE`）埋め込み

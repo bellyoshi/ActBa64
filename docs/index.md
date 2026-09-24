@@ -7,7 +7,7 @@ ActiveBasic 互換サブセットコンパイラ（完全互換ではない）�
 
 | 文書 | 内容 |
 |---|---|
-| [language.md](./language.md) | 言語仕様（ソース・構文・型・ファイル I/O・標準ライブラリ、32/64 ターゲット） |
+| [language.md](./language.md) | 言語仕様（ソース・構文・型・IEEE Double・ファイル I/O・標準ライブラリ、32/64 ターゲット） |
 | [string-gc.md](./string-gc.md) | String GC（ハイブリッドマーク掃き出しの設計・BSS レイアウト・セーフポイント） |
 | [build.md](./build.md) | ビルド手順（AB4.20 stage0 → 自己ホスト → リリース一式）、回帰テスト、[コンパイラソース分割](./build.md#コンパイラソースの分割) |
 | [coding.md](./coding.md) | コーディング規約（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**） |
