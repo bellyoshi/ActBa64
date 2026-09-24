@@ -22,37 +22,22 @@
 
 ### P0 — 移植・基盤
 
-- ~~**標準ライブラリ**~~: 済（`StrUtils.abp` → `default.idx`）
-- ~~**Ex 文字列 `Ex"..."`**~~: 済（`test/t_ex_string.abp`）
-- ~~**ファイル I/O 仕上げ**~~: 済（`Eof` / `Loc` / `Lof`、`Print #` — `BasicFile.abp`）
-- ~~**ビットマクロ**~~: 済（組込 + テスト）
-- ~~**プリプロセス**~~: 済（`#define` / `#ifdef` 等 + テスト）
-- **D3D11 共通 API**: サンプル横断の `dx_Init` / `dx_Quit` / クリア・Present の形を `Include/d3d11/` に寄せ、`dx_DrawText`（または相当）で 4.20 Hello World 相当
-- **ProjectEditor**: ソース読込速度・スクロールちらつき（日常開発のボトルネック）
+（当面なし。次は P1）
 
 ### P1 — 言語・相互運用
 
-- ~~**`Enum`**~~: 済（`test/t_enum.abp`）
-- ~~**`#strict`**~~: 済（代入の型不一致を **warning**。`As` キャストで抑制。`Include\default` は対象外。`test/t_strict_*.abp`）
-- ~~**`Continue`**~~: 済（`test/t_continue.abp`）
-- ~~**`Type Align(n)`**~~: 済（`Type Name Align(n)` — `test/t_type_align.abp`）
-- ~~**`ELM(n)`**~~: 済（組込）
-- ~~**`Input "prompt", var`**~~: 済（`test/t_input_prompt.abp`）
-- ~~**`GetByte` / `Set*` 系**~~: 済（`Memory.abp` → `default.idx`）
-- ~~**乱数**~~: 済（`Randomize` / `Rnd` — `test/t_rnd.abp`）。~~**Math `Log` / `Int` / `Fix` / 三角**~~: 済（IEEE Double `Math.abp` — `test/t_math_*.abp`）
-
 - **`#resource` / `.rc`**: GUI アイコン・メニュー ID の本格運用
-- **関数ポインタ型**: `CreateThread` / コールバックで型安全に（`AddressOf` は済）
-- **D3D11**: `dx_SetProjection` / `dx_SetCamera` / `dx_GetDevice` 相当 — `dxxform` 以上の共通化
+- **関数ポインタ型**: `CreateThread` / コールバックで型安全に（`AddressOf` は済。`*Function` / `TypeDef` は未）
+- **D3D11**: `dx_SetProjection` / `dx_SetCamera` 相当 — `dxxform` 以上のカメラ・射影の共通化
 - **ProjectEditor**: スクロールバー、コンソール実行後にウィンドウを閉じない、日本語メニュー
 
 ### P2 — OOP・メディア・規模
 
-- **`New` / `Delete` 演算子**、`Sub ~ClassName`、**`Super.*`**、メンバ Class の自動 ctor/dtor
-- **厳密 `Protected` / `Private`**
+- **`New` / `Delete` 演算子**、**`Super.*`**、メンバ Class の自動 ctor/dtor（`Sub ~ClassName` は済）
+- **厳密 `Protected` / `Private`**（受理のみ。Public と同等）
 - **`ReDim`**, **`Const` マクロ関数**, **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術（64bit ポインタは済）
-- **`Single` IEEE 演算**（`Double` / `Math.abp` は済。Single の汎用 SSE は未）
+- **`Single` IEEE 演算**（格納・変換中心。汎用 SSE は未。`Double` / `Math.abp` は済）
 
 - **`Double` @ `-actba32`**
 - **符号無し演算**の AB 4.20 ルール完全化
@@ -78,23 +63,16 @@
 | `Super.Method` | スーパークラス ctor/dtor 呼び出し（4.20 Class 章）。`Inherits` / `Virtual` は COM/vtable 向けに部分対応済 |
 | 厳密な `Protected` / `Private` | 受理するが Public と同等 |
 | メンバ Class の自動 ctor/dtor | 親 Class 内のメンバ Class 生成・破棄（4.20） |
-| デストラクタ `Sub ~ClassName` | 明示 dtor 構文（4.20）。COM 向けは別途 |
-| ~~`Continue`~~ | 済 — `For` / `While` / `Do` の先頭へ |
 | `GoTo` / `GoSub` / `Return`（`*ラベル`） | 行番号は非対応方針。ラベル付き分岐・復帰も未 |
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
-| `Enum` … `End Enum` | 列挙型（4.20）。値は DWord 扱い |
-| `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` | 条件コンパイル（済）。4.20 の `_DEBUG` / `_WIN64` 等の**自動定義**は要確認 |
+| プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
 | `#resource` | `*.rc` 取り込み（4.20）。`#RESOURCE` 埋め込みと同系 |
-| `#strict` | 厳密型チェック・警告（4.20）。変数代入の型不一致を warning（`As` で抑制） |
 | `ReDim` | 動的配列サイズ変更（4.20） |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
 | `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章）。整数・文字列リテラルのみ対応 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタ型 | `Dim As *Function(...)` / `*Sub(...)`、`TypeDef` で別名（4.20）。`AddressOf` のみ実用 |
-| ~~`Type Align(n)`~~ | 済 — `Type Name Align(n)`（n=1,2,4,8,16） |
-| ~~`Input "prompt", var`~~ | 済 |
 | `Print Using "fmt"` | 書式付き出力（4.20 関数ポインタサンプル等） |
-| ~~Ex 文字列 `Ex"..."`~~ | 済 |
 | `Char` / `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は `Byte`/`Long`/`DWord` 中心 |
 
 ## 数値・型
@@ -106,24 +84,15 @@
 | 符号無し演算 | 4.20: 両オペランドが符号無し型なら符号無し演算 |
 | `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |
 | `CDbl` / `CInt` / `CSng` 等 | 4.20 変換関数。`As` キャストは可 |
-| ~~`Randomize` / `Rnd`~~ | 済（`Math.abp`、`Rnd` は `[0,1)` Double） |
-| ~~`Log` / `Int` / `Fix` / 三角（Math）~~ | 済（IEEE Double。千分率はプロジェクト全体で廃止） |
-| ~~小数リテラル / N88 `CIRCLE` 角度~~ | 済（AST 上 IEEE Double ビット。`test/t_double_lit_prec.abp`） |
 
 ## 文字列・メモリ・ファイル
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| ~~`Print #`~~ | 済（`BasicFile.abp`） |
-| ~~`Eof` / `Loc` / `Lof`~~ | 済 |
-| ~~`InStr` / `Hex$` / `Val` / `Trim$`~~ | 済（`StrUtils.abp` + `default.idx`）。`Oct$` は未 |
+| `Oct$` | `StrUtils.abp` 未（`Hex$` 等は済） |
 | `ZeroString` / `_splitpath` | `system\string.sbp`（4.20） |
-| `GetByte` … `SetDouble` | `Memory.abp`（`default.idx`）。`GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` は未 |
+| `GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` | `Memory.abp` は Byte〜DWord まで。浮動小数 Get/Set は未 |
 | `realloc` | 4.20 C ヒープ。`calloc` は `HeapAlloc` マップ済 |
-| ~~`ELM(n)`~~ | 済（組込） |
-| ~~`HIBYTE` / `HIWORD` 等~~ | 済（組込） |
-
-済（`BasicFile.abp`）: `Open` / `Close` / `Input #` / `Write` / `Field` / `Get #` / `Put #`
 
 ## GUI・Win32・マルチメディア
 
@@ -134,7 +103,7 @@
 | `Inkey$` / `Input$(n)` | 4.20 対話入出力 |
 | `ChDir` / `Exec` / `Kill` / `MkDir` | 4.20。`CreateProcessA` 等で代替可 |
 | `Date$` / `Time$` | 4.20 |
-| Project Editor / RAD | 4.20: `.pj`・ウィンドウ RAD・`MainWnd.sbp` 雛形 |
+| Project Editor / RAD | 4.20: `.pj`・ウィンドウ RAD・`MainWnd.sbp` 雛形（エディタ本体は有。RAD 全面は未） |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
 | `#RESOURCE` / `#resource` / `.rc` | リソース埋め込み |
@@ -143,26 +112,20 @@
 
 | 4.20（D3D9 系） | ActBa64 | メモ |
 |---|---|---|
-| `dx_Init` / `dx_Quit` / `dx_BeginScene` / `dx_EndScene` / `dx_Present` | サンプル `dx_d3d11.sbp` に相当処理の一部 | 解像度・ウィンドウモード引数など API 形状は未統一 |
-| `dx_Clear` / `dx_GetDevice` / `dx_DrawText` | 未 | 4.20 Hello World 手順 |
-| `dx_SetProjection` / `dx_SetCamera` / `dx_SetCullMode` | 未 | カメラ・射影 |
+| `dx_SetProjection` / `dx_SetCamera` / `dx_SetCullMode` | 未（サンプル側に個別実装あり） | カメラ・射影の共通化は P1 |
 | `dx_SetDefaultLight` / `dx_SetLightOff` | 未 | ライト |
-| `CImage2D` / `CMeshModel` / `CRectPolygon` | 未 | `dx_graphics.sbp` 高レベル描画 |
+| `CImage2D` / `CMeshModel` / `CRectPolygon` | 未 | 高レベル描画 |
 | `CInputKeyboard` / `CInputMouse` | 未 | `dx_input.sbp`（DirectInput） |
 | `CAudio` / `CAudio3D` / `CListener` | 未 | `dx_music.sbp` |
-| `dx_ui.sbp` 等 | `Include/d3d11/dx_ui.sbp` 着手 | UI ラッパ |
-
-済（D3D11 サンプル）: 三角形・頂点色・立方体・行列変換（`dxxform` / `dxcube2` 等）、キーボード簡易入力
+| `dx_ui.sbp` 等 | `Include/d3d11/dx_ui.sbp` 着手 | キー・TextOut 程度。UI ラッパは未 |
 
 ## 標準ライブラリ
 
-- BasicHelp の `basic\*.sbp` / `system\*.sbp` 相当を `.abp` として増やす（4.20 目録: `basic\function.sbp`, `basic\prompt.sbp`, `system\string.sbp`, `Math` 系など）
-- 4.20 プリプロセス `#console` / `#prompt`（=`#N88BASIC`）は ActBa64 で対応。`#include <...>` の angle 形式も可
+- BasicHelp の `basic\*.sbp` / `system\*.sbp` 相当を `.abp` として増やす（4.20 目録: `basic\function.sbp`, `basic\prompt.sbp`, `system\string.sbp` など）
 - 4.20 の `#N88BASIC As EXE` / `IDNAME` 相当（実行ファイル名・サブシステム指定）は `.pj` / CLI で代替検討
 
-ProjectEditor
--[ ] abpなどのソースの読み込みに時間がかかる
--[ ] スクロールするときにちらつく
--[ ] スクロールバー
--[ ] 日本語メニュー
--[ ] コンソールプログラム。実行後コンソール閉じないように
+## ProjectEditor
+
+- [ ] スクロールバー（論理スクロールは有。Win32 スクロールバー UI は未）
+- [ ] 日本語メニュー
+- [ ] コンソールプログラム。実行後コンソール閉じないように

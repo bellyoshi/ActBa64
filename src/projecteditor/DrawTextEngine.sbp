@@ -121,7 +121,6 @@ Sub EditorHitTestClick(hWnd As HWND, ByVal x As Long, ByVal y As Long)
     Wend
 
     SelectObject(hDC, hFontOld)
-    DeleteObject(hFontMono)
     ReleaseDC(hWnd, hDC)
 
     TextBuf_MoveCursorTo(best)
@@ -192,10 +191,33 @@ Sub DrawTextEngine(hDC As HDC, hWnd As HWND)
     Dim lineStr As String
     Dim curLine As Long
     Dim inBlock As Long
+    Dim memDC As HDC
+    Dim memBmp As HBITMAP
+    Dim oldBmp As HBITMAP
+    Dim drawDC As HDC
+    Dim w As Long
+    Dim h As Long
 
     GetClientRect(hWnd, rect)
+    w = rect.right - rect.left
+    h = rect.bottom - rect.top
+    If w < 1 Then w = 1
+    If h < 1 Then h = 1
+
+    memDC = CreateCompatibleDC(hDC)
+    memBmp = CreateCompatibleBitmap(hDC, w, h)
+    If memDC = 0 Or memBmp = 0 Then
+        drawDC = hDC
+        memDC = 0
+        memBmp = 0
+        oldBmp = 0
+    Else
+        oldBmp = SelectObject(memDC, memBmp)
+        drawDC = memDC
+    End If
+
     hBrush = CreateSolidBrush(RGB(255, 255, 255))
-    FillRect(hDC, rect, hBrush)
+    FillRect(drawDC, rect, hBrush)
     DeleteObject(hBrush)
 
     VirtualScroll_Clamp(hWnd)
@@ -206,8 +228,8 @@ Sub DrawTextEngine(hDC As HDC, hWnd As HWND)
     curLine = TextBuf_CursorLine()
 
     hFontMono = EditorFont_Create(-16)
-    hFontOld = SelectObject(hDC, hFontMono)
-    SetBkMode(hDC, TRANSPARENT)
+    hFontOld = SelectObject(drawDC, hFontMono)
+    SetBkMode(drawDC, TRANSPARENT)
 
     Hl_EnsureStateThrough(g_viewTopLine)
     inBlock = g_hlInBlock
@@ -215,18 +237,25 @@ Sub DrawTextEngine(hDC As HDC, hWnd As HWND)
     lineNo = g_viewTopLine
     While lineNo <= lastLine
         y = VS_MARGIN_Y + (lineNo - g_viewTopLine) * VS_LINE_HEIGHT
-        DrawText_SelBg(hDC, hWnd, lineNo, y)
+        DrawText_SelBg(drawDC, hWnd, lineNo, y)
         lineStr = TextBuf_GetLineText$(lineNo)
         If lineNo = curLine And Len(g_strComp) > 0 Then
             lineStr = lineStr & g_strComp
         End If
         If Len(lineStr) > 0 Then
-            Hl_DrawLine(hDC, VS_MARGIN_X, y, lineStr, inBlock, 1)
+            Hl_DrawLine(drawDC, VS_MARGIN_X, y, lineStr, inBlock, 1)
         End If
         lineNo = lineNo + 1
     Wend
 
-    EditorCaret_Update(hDC, hWnd)
+    EditorCaret_Update(drawDC, hWnd)
 
-    SelectObject(hDC, hFontOld)
+    SelectObject(drawDC, hFontOld)
+
+    If memDC <> 0 Then
+        BitBlt(hDC, 0, 0, w, h, memDC, 0, 0, &H00CC0020)
+        SelectObject(memDC, oldBmp)
+        DeleteObject(memBmp)
+        DeleteDC(memDC)
+    End If
 End Sub
