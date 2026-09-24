@@ -358,6 +358,25 @@ Function TyIsClass(t As *TypeTable, typeIdx As Long) As Long
     If t->typeIsClass[typeIdx] <> 0 Then TyIsClass = 1
 End Function
 
+' フィールドを持たない型のアラインメント（サイズから推定）
+Function TyAlignOfLeaf(t As *TypeTable, typeIdx As Long) As Long
+    Dim tsizes As *Long
+    Dim esz As Long
+    Dim best As Long
+    tsizes = t->typeSizes
+    esz = tsizes[typeIdx]
+    best = 1
+    If esz >= 8 Then
+        best = 8
+    ElseIf esz >= 4 Then
+        best = 4
+    ElseIf esz >= 2 Then
+        best = 2
+    End If
+    If t->typeExplicitAlign[typeIdx] > best Then best = t->typeExplicitAlign[typeIdx]
+    TyAlignOfLeaf = best
+End Function
+
 ' C 互換: 型のアラインメント（ネスト UDT は要素の最大整列。size 丸めではない）
 Function TyAlignOf(t As *TypeTable, typeIdx As Long) As Long
     Dim fi As Long
@@ -365,7 +384,6 @@ Function TyAlignOf(t As *TypeTable, typeIdx As Long) As Long
     Dim firsts As *Long
     Dim sizes As *Long
     Dim tys As *Long
-    Dim tsizes As *Long
     Dim a As Long
     Dim best As Long
     Dim esz As Long
@@ -378,21 +396,10 @@ Function TyAlignOf(t As *TypeTable, typeIdx As Long) As Long
     nexts = t->fieldNext
     sizes = t->fieldSizes
     tys = t->fieldTypeIdxs
-    tsizes = t->typeSizes
     best = 1
     fi = firsts[typeIdx]
     If fi < 0 Then
-        esz = tsizes[typeIdx]
-        best = 1
-        If esz >= 8 Then
-            best = 8
-        ElseIf esz >= 4 Then
-            best = 4
-        ElseIf esz >= 2 Then
-            best = 2
-        End If
-        If t->typeExplicitAlign[typeIdx] > best Then best = t->typeExplicitAlign[typeIdx]
-        TyAlignOf = best
+        TyAlignOf = TyAlignOfLeaf(t, typeIdx)
         Exit Function
     End If
     While fi >= 0
@@ -432,6 +439,56 @@ Sub TyFinalizeType(t As *TypeTable, typeIdx As Long)
     End If
 End Sub
 
+Function TyFieldAlign(t As *TypeTable, elemSize As Long, fieldTy As Long) As Long
+    Dim align As Long
+    ' ネスト UDT は「サイズ」ではなく「型のアライン」で整列（DXGI 等）
+    If fieldTy >= 0 Then
+        align = TyAlignOf(t, fieldTy)
+    Else
+        align = elemSize
+    End If
+    If align > 8 Then align = 8
+    If align < 1 Then align = 1
+    TyFieldAlign = align
+End Function
+
+Function TyAlignFieldOff(off As Long, align As Long) As Long
+    Dim cur As Long
+    Dim last As Long
+    cur = align - 1
+    last = off And cur
+    While last <> 0
+        off = off + 1
+        last = off And cur
+    Wend
+    TyAlignFieldOff = off
+End Function
+
+Sub TyCopyFieldName(names As *Byte, fi As Long, name As *Byte)
+    Dim j As Long
+    Dim cur As Long
+    j = 0
+    cur = fi * TYNAME_LEN
+    While name[j] <> 0 And j < TYNAME_LEN - 1
+        names[cur + j] = name[j]
+        j = j + 1
+    Wend
+    names[cur + j] = 0
+End Sub
+
+Sub TyLinkField(firsts As *Long, nexts As *Long, typeIdx As Long, fi As Long)
+    Dim last As Long
+    If firsts[typeIdx] < 0 Then
+        firsts[typeIdx] = fi
+    Else
+        last = firsts[typeIdx]
+        While nexts[last] >= 0
+            last = nexts[last]
+        Wend
+        nexts[last] = fi
+    End If
+End Sub
+
 Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As Long, count As Long, fieldTy As Long) As Long
     Dim fi As Long
     Dim names As *Byte
@@ -442,11 +499,8 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     Dim firsts As *Long
     Dim tys As *Long
     Dim tsizes As *Long
-    Dim j As Long
     Dim off As Long
     Dim align As Long
-    Dim cur As Long
-    Dim last As Long
 
     TyAddField = 0
     If t = NULL Then Exit Function
@@ -454,22 +508,9 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     If elemSize <= 0 Or count <= 0 Then Exit Function
     If TyEnsureFieldCap(t) = 0 Then Exit Function
 
-    ' ネスト UDT は「サイズ」ではなく「型のアライン」で整列（DXGI 等）
-    If fieldTy >= 0 Then
-        align = TyAlignOf(t, fieldTy)
-    Else
-        align = elemSize
-    End If
-    If align > 8 Then align = 8
-    If align < 1 Then align = 1
+    align = TyFieldAlign(t, elemSize, fieldTy)
     tsizes = t->typeSizes
-    off = tsizes[typeIdx]
-    cur = align - 1
-    last = off And cur
-    While last <> 0
-        off = off + 1
-        last = off And cur
-    Wend
+    off = TyAlignFieldOff(tsizes[typeIdx], align)
 
     fi = t->nFields
     names = t->fieldNames
@@ -480,28 +521,14 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     firsts = t->typeFirst
     tys = t->fieldTypeIdxs
 
-    j = 0
-    cur = fi * TYNAME_LEN
-    While name[j] <> 0 And j < TYNAME_LEN - 1
-        names[cur + j] = name[j]
-        j = j + 1
-    Wend
-    names[cur + j] = 0
+    TyCopyFieldName(names, fi, name)
     offs[fi] = off
     sizes[fi] = elemSize
     counts[fi] = count
     tys[fi] = fieldTy
     nexts[fi] = -1
 
-    If firsts[typeIdx] < 0 Then
-        firsts[typeIdx] = fi
-    Else
-        last = firsts[typeIdx]
-        While nexts[last] >= 0
-            last = nexts[last]
-        Wend
-        nexts[last] = fi
-    End If
+    TyLinkField(firsts, nexts, typeIdx, fi)
 
     tsizes[typeIdx] = off + elemSize * count
     t->nFields = fi + 1

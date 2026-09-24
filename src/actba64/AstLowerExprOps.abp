@@ -2,25 +2,106 @@
 '  AstLowerExprOps - call / binop / cast / cmp
 ' ===================================================
 
+' AST_ARG チェーンの個数を base から数える。16 を超えたら -1
+Function LowCountCallArgs(ctx As *LowerCtx, idx As Long, base As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim argi As Long
+    Dim argn As Long
+
+    ast = ctx->ast
+    nodes = ast->nodes
+    argi = base
+    argn = nodes[idx].left
+    While argn >= 0
+        If argi >= 16 Then
+            LowCountCallArgs = -1
+            Exit Function
+        End If
+        argi = argi + 1
+        argn = nodes[argn].nxt
+    Wend
+    LowCountCallArgs = argi
+End Function
+
+' メソッド呼び出しのユーザー引数を rsp+8.. のホーム領域へ
+Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim argi As Long
+    Dim argn As Long
+    Dim useAddr As Long
+
+    LowEmitMethodArgs = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    argi = 1
+    argn = nodes[idx].left
+    While argi < nArgs
+        useAddr = LowCallUseAddr(ctx, argn, 0, 0, 1)
+        If useAddr <> 0 Then
+            If LowAddr(ctx, nodes[argn].left) = 0 Then Exit Function
+        Else
+            If LowExprArg(ctx, nodes[argn].left) = 0 Then Exit Function
+        End If
+        IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
+        argi = argi + 1
+        argn = nodes[argn].nxt
+    Wend
+    LowEmitMethodArgs = 1
+End Function
+
+Sub LowEmitMethodRegArgs(list As *IrList, nArgs As Long)
+    If TyIs32() <> 0 Then Exit Sub
+    If nArgs >= 4 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
+        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+    End If
+    If nArgs >= 3 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    End If
+    If nArgs >= 2 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    End If
+End Sub
+
+Function LowEmitMethodThis(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
+    LowEmitMethodThis = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    ' Me: 値クラスはアドレス、*Class はポインタ値
+    If LowRecvIsPtr(ctx, nodes[idx].right) <> 0 Then
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    Else
+        If LowAddr(ctx, nodes[idx].right) = 0 Then Exit Function
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    If TyIs32() = 0 Then
+        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    End If
+    LowEmitMethodThis = 1
+End Function
+
 Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(2047) As Byte
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(63) As Byte
-    Dim buf(255) As Byte
     Dim list As *IrList
-    Dim lab As Long
     Dim nArgs As Long
-    Dim vals As *Long
     Dim tt As *TypeTable
     Dim ti As Long
-    Dim args(15) As Long
     Dim argi As Long
-    Dim argn As Long
     Dim stk As Long
-    Dim j As Long
-    Dim useAddr As Long
-    Dim names As *Byte
 
     LowExprCallMethod = 0
     ast = ctx->ast
@@ -35,193 +116,125 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
         ctx->err = 1
         Exit Function
     End If
-    tt = ast->types
-    j = ti * 48
-    names = tt->typeNames
     nArgs = nodes[idx].num + 1
     If nArgs > 16 Then
         ctx->err = 1
         Exit Function
     End If
-    args[0] = -1
-    argi = 1
-    argn = nodes[idx].left
-    While argn >= 0
-        If argi >= 16 Then
-            ctx->err = 1
-            Exit Function
-        End If
-        args[argi] = argn
-        argi = argi + 1
-        argn = nodes[argn].nxt
-    Wend
-    If argi <> nArgs Then
+    argi = LowCountCallArgs(ctx, idx, 1)
+    If argi < 0 Or argi <> nArgs Then
         ctx->err = 1
         Exit Function
     End If
     stk = LowCallStk(nArgs)
     IrEmit(list, OP_SUB_RSP, stk, 0)
     ' user args 1..n-1 into home/stack; this (rcx) set last
-    argi = 1
-    While argi < nArgs
-        useAddr = LowCallUseAddr(ctx, args[argi], 0, 0, 1)
-        If useAddr <> 0 Then
-            If LowAddr(ctx, nodes[args[argi]].left) = 0 Then Exit Function
-        Else
-            If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
-        End If
-        IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
-        argi = argi + 1
-    Wend
-    If TyIs32() = 0 Then
-    If nArgs >= 4 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
-        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
-    End If
-    If nArgs >= 3 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
-        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
-    End If
-    If nArgs >= 2 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
-        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
-    End If
-    End If
-    ' Me: 値クラスはアドレス、*Class はポインタ値
-    If LowRecvIsPtr(ctx, nodes[idx].right) <> 0 Then
-        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-    Else
-        If LowAddr(ctx, nodes[idx].right) = 0 Then Exit Function
-    End If
-    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
-    If TyIs32() = 0 Then
-        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-    End If
+    If LowEmitMethodArgs(ctx, idx, nArgs) = 0 Then Exit Function
+    LowEmitMethodRegArgs(list, nArgs)
+    If LowEmitMethodThis(ctx, idx) = 0 Then Exit Function
     If LowExprCallMethodInvoke(ctx, idx, ti, nArgs, stk) = 0 Then Exit Function
     LowExprCallMethod = 1
 End Function
 
-Function LowExprCallMemOp(ctx As *LowerCtx, idx As Long) As Long
-    Dim stackPad(2047) As Byte
+' memcpy / fillmemory 相当の 3 引数 API 呼び出し。成功 1 / エラー -1
+Function LowEmitMemOp3(ctx As *LowerCtx, idx As Long, api As *Byte) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim name(63) As Byte
-    Dim buf(255) As Byte
     Dim list As *IrList
-    Dim sLen(15) As Byte
-    Dim args(15) As Long
+    Dim a0 As Long
+    Dim a1 As Long
+    Dim a2 As Long
     Dim argi As Long
-    Dim argn As Long
     Dim stk As Long
 
-    LowExprCallMemOp = -1
+    LowEmitMemOp3 = -1
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
+    argi = LowCountCallArgs(ctx, idx, 0)
+    If argi < 0 Or argi <> 3 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    a0 = nodes[idx].left
+    a1 = nodes[a0].nxt
+    a2 = nodes[a1].nxt
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    If LowExpr(ctx, nodes[a0].left) = 0 Then Exit Function
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    If LowExpr(ctx, nodes[a1].left) = 0 Then Exit Function
+    IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize(), 0)
+    If LowExpr(ctx, nodes[a2].left) = 0 Then Exit Function
+    IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize() + TyPtrSize(), 0)
+    LowEmitLoadRegArgs(list, 3)
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, api)
+    LowEmitCallFinish(list, stk)
+    LowEmitMemOp3 = 1
+End Function
+
+Function LowExprCallMemOp(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim buf(255) As Byte
+    Dim sLen(15) As Byte
+
+    LowExprCallMemOp = -1
+    ast = ctx->ast
     AstCopyStr(ast, idx, VarPtr(name))
     lstrcpy(VarPtr(buf), "memcpy")
     If LowIntrinNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argi = 0
-        argn = nodes[idx].left
-        While argn >= 0
-            If argi >= 16 Then
-                ctx->err = 1
-                Exit Function
-            End If
-            args[argi] = argn
-            argi = argi + 1
-            argn = nodes[argn].nxt
-        Wend
-        If argi <> 3 Then
-            ctx->err = 1
-            Exit Function
-        End If
-        stk = LowCallStk(3)
-        If stk > 0 Then
-            IrEmit(list, OP_SUB_RSP, stk, 0)
-        End If
-        If LowExpr(ctx, nodes[args[0]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
-        If LowExpr(ctx, nodes[args[1]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize(), 0)
-        If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize() + TyPtrSize(), 0)
-        LowEmitLoadRegArgs(list, 3)
         lstrcpy(VarPtr(sLen), "RtlMoveMemory")
-        IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
-        LowEmitCallFinish(list, stk)
-        LowExprCallMemOp = 1
+        LowExprCallMemOp = LowEmitMemOp3(ctx, idx, VarPtr(sLen))
         Exit Function
     End If
     lstrcpy(VarPtr(buf), "fillmemory")
     If LowIntrinNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argi = 0
-        argn = nodes[idx].left
-        While argn >= 0
-            If argi >= 16 Then
-                ctx->err = 1
-                Exit Function
-            End If
-            args[argi] = argn
-            argi = argi + 1
-            argn = nodes[argn].nxt
-        Wend
-        If argi <> 3 Then
-            ctx->err = 1
-            Exit Function
-        End If
-        stk = LowCallStk(3)
-        If stk > 0 Then
-            IrEmit(list, OP_SUB_RSP, stk, 0)
-        End If
-        If LowExpr(ctx, nodes[args[0]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
-        If LowExpr(ctx, nodes[args[1]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize(), 0)
-        If LowExpr(ctx, nodes[args[2]].left) = 0 Then Exit Function
-        IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize() + TyPtrSize(), 0)
-        LowEmitLoadRegArgs(list, 3)
         lstrcpy(VarPtr(sLen), "RtlFillMemory")
-        IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sLen))
-        LowEmitCallFinish(list, stk)
-        LowExprCallMemOp = 1
-        Exit Function
+        LowExprCallMemOp = LowEmitMemOp3(ctx, idx, VarPtr(sLen))
     End If
+End Function
+
+' AST_ARG を剥がして単一引数を評価
+Function LowExprIntrinArg1(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim argn As Long
+
+    ast = ctx->ast
+    nodes = ast->nodes
+    argn = nodes[idx].left
+    If argn >= 0 Then
+        If nodes[argn].kind = AST_ARG Then argn = nodes[argn].left
+    End If
+    LowExprIntrinArg1 = LowExpr(ctx, argn)
 End Function
 
 Function LowExprCallIntrin(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(2047) As Byte
-    Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(63) As Byte
     Dim buf(255) As Byte
     Dim list As *IrList
-    Dim argn As Long
     Dim r As Long
 
     LowExprCallIntrin = -1
     ast = ctx->ast
     list = ctx->list
-    nodes = ast->nodes
     AstCopyStr(ast, idx, VarPtr(name))
     lstrcpy(VarPtr(buf), "free")
     If LowIntrinNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argn = nodes[idx].left
-        If argn >= 0 Then
-            If nodes[argn].kind = AST_ARG Then argn = nodes[argn].left
-        End If
-        If LowExpr(ctx, argn) = 0 Then Exit Function
+        If LowExprIntrinArg1(ctx, idx) = 0 Then Exit Function
         LowEmitHeapFreeRax(list)
         LowExprCallIntrin = 1
         Exit Function
     End If
     lstrcpy(VarPtr(buf), "malloc")
     If LowIntrinNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
-        argn = nodes[idx].left
-        If argn >= 0 Then
-            If nodes[argn].kind = AST_ARG Then argn = nodes[argn].left
-        End If
-        If LowExpr(ctx, argn) = 0 Then Exit Function
+        If LowExprIntrinArg1(ctx, idx) = 0 Then Exit Function
         LowEmitHeapAllocRax(list, 0)
         LowExprCallIntrin = 1
         Exit Function
@@ -229,11 +242,7 @@ Function LowExprCallIntrin(ctx As *LowerCtx, idx As Long) As Long
     lstrcpy(VarPtr(buf), "calloc")
     If LowIntrinNameEq(VarPtr(name), VarPtr(buf)) <> 0 Then
         ' calloc(n) → HeapAlloc(heap, HEAP_ZERO_MEMORY=8, n)
-        argn = nodes[idx].left
-        If argn >= 0 Then
-            If nodes[argn].kind = AST_ARG Then argn = nodes[argn].left
-        End If
-        If LowExpr(ctx, argn) = 0 Then Exit Function
+        If LowExprIntrinArg1(ctx, idx) = 0 Then Exit Function
         LowEmitHeapAllocRax(list, 8)
         LowExprCallIntrin = 1
         Exit Function
@@ -297,6 +306,50 @@ Function LowExprCallArr(ctx As *LowerCtx, idx As Long) As Long
     End If
 End Function
 
+' 実引数を rsp+0.. のホーム領域へ格納（ByRef ビット / 仮引数型変換つき）
+Function LowEmitCallArgsHome(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, isApi As Long, name As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim argi As Long
+    Dim argn As Long
+    Dim j As Long
+    Dim bbit As Long
+    Dim useAddr As Long
+
+    LowEmitCallArgsHome = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    argi = 0
+    argn = nodes[idx].left
+    While argi < nArgs
+        bbit = 1
+        j = 0
+        While j < argi
+            bbit = bbit * 2
+            j = j + 1
+        Wend
+        useAddr = LowCallUseAddr(ctx, argn, byBits, bbit, isApi)
+        If useAddr <> 0 Then
+            If LowAddr(ctx, nodes[argn].left) = 0 Then Exit Function
+        Else
+            If LowExprArg(ctx, nodes[argn].left) = 0 Then Exit Function
+            If isApi = 0 Then
+                If LowFindFuncParamTy(ctx, name, argi) = TY_DOUBLE Then
+                    LowEmitCvtToDoubleIfNeeded(ctx, nodes[argn].left)
+                ElseIf LowFindFuncParamTy(ctx, name, argi) = TY_SINGLE Then
+                    LowEmitCvtToSingleIfNeeded(ctx, nodes[argn].left)
+                End If
+            End If
+        End If
+        IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
+        argi = argi + 1
+        argn = nodes[argn].nxt
+    Wend
+    LowEmitCallArgsHome = 1
+End Function
+
 Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Long, dllKind As Long, byBits As Long, apiName As *Byte) As Long
     Dim stackPad(2047) As Byte
     Dim nodes As *AstNode
@@ -304,13 +357,8 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     Dim name(63) As Byte
     Dim list As *IrList
     Dim nArgs As Long
-    Dim args(15) As Long
     Dim argi As Long
-    Dim argn As Long
     Dim stk As Long
-    Dim j As Long
-    Dim bbit As Long
-    Dim useAddr As Long
 
     LowExprCallEmit = 0
     ast = ctx->ast
@@ -323,18 +371,8 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
         ctx->err = 1
         Exit Function
     End If
-    argi = 0
-    argn = nodes[idx].left
-    While argn >= 0
-        If argi >= 16 Then
-            ctx->err = 1
-            Exit Function
-        End If
-        args[argi] = argn
-        argi = argi + 1
-        argn = nodes[argn].nxt
-    Wend
-    If argi <> nArgs Then
+    argi = LowCountCallArgs(ctx, idx, 0)
+    If argi < 0 Or argi <> nArgs Then
         ctx->err = 1
         Exit Function
     End If
@@ -347,30 +385,7 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     If stk > 0 Then
         IrEmit(list, OP_SUB_RSP, stk, 0)
     End If
-    argi = 0
-    While argi < nArgs
-        bbit = 1
-        j = 0
-        While j < argi
-            bbit = bbit * 2
-            j = j + 1
-        Wend
-        useAddr = LowCallUseAddr(ctx, args[argi], byBits, bbit, isApi)
-        If useAddr <> 0 Then
-            If LowAddr(ctx, nodes[args[argi]].left) = 0 Then Exit Function
-        Else
-            If LowExprArg(ctx, nodes[args[argi]].left) = 0 Then Exit Function
-            If isApi = 0 Then
-                If LowFindFuncParamTy(ctx, VarPtr(name), argi) = TY_DOUBLE Then
-                    LowEmitCvtToDoubleIfNeeded(ctx, nodes[args[argi]].left)
-                ElseIf LowFindFuncParamTy(ctx, VarPtr(name), argi) = TY_SINGLE Then
-                    LowEmitCvtToSingleIfNeeded(ctx, nodes[args[argi]].left)
-                End If
-            End If
-        End If
-        IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
-        argi = argi + 1
-    Wend
+    If LowEmitCallArgsHome(ctx, idx, nArgs, byBits, isApi, VarPtr(name)) = 0 Then Exit Function
     LowEmitLoadRegArgs(list, nArgs)
     If isApi <> 0 Then
         IrEmitStr(list, OP_CALL_API, dllKind, apiName)
@@ -383,12 +398,9 @@ End Function
 
 Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(2047) As Byte
-    Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(63) As Byte
-    Dim list As *IrList
     Dim lab As Long
-    Dim tt As *TypeTable
     Dim byBits As Long
     Dim apiName(63) As Byte
     Dim isApi As Long
@@ -399,9 +411,6 @@ Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
 
     LowExprCallNormal = 0
     ast = ctx->ast
-    list = ctx->list
-    nodes = ast->nodes
-    tt = ast->types
     AstCopyStr(ast, idx, VarPtr(name))
     If LowExprCallArr(ctx, idx) <> 0 Then
         LowExprCallNormal = 1
@@ -432,9 +441,7 @@ Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
             isApi = 1
         End If
     End If
-    If isApi <> 0 Then
-        If dllKind = 0 Then dllKind = IR_DLL_KERNEL32
-    End If
+    If isApi <> 0 And dllKind = 0 Then dllKind = IR_DLL_KERNEL32
     If LowExprCallEmit(ctx, idx, lab, isApi, dllKind, byBits, VarPtr(apiName)) = 0 Then Exit Function
     LowExprCallNormal = 1
 End Function
@@ -499,39 +506,80 @@ Function LowExprUnary(ctx As *LowerCtx, idx As Long) As Long
     End If
 End Function
 
-Function LowExprBinopDiv(ctx As *LowerCtx, idx As Long, op As Long, fty As Long) As Long
-    Dim stackPad(2047) As Byte
+Function LowExprBinopDivOp(ctx As *LowerCtx, idx As Long, fty As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
+    LowExprBinopDivOp = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If fty = TY_DOUBLE Then
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_DIV_SD, 0, 0)
+        LowExprBinopDivOp = 1
+        Exit Function
+    End If
+    ' eax = left, ecx = right, edx = 0 → div ecx
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_XOR_EDX, 0, 0)
+    IrEmit(list, OP_DIV_ECX, 0, 0)
+    LowExprBinopDivOp = 1
+End Function
+
+' eax = left ^ right（非負指数の整数累乗）
+Function LowExprBinopPow(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
     Dim lab As Long
     Dim labB As Long
 
+    LowExprBinopPow = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EDX_EAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+    lab = LowNewLab(ctx)
+    labB = LowNewLab(ctx)
+    IrEmit(list, OP_LABEL, lab, 0)
+    IrEmit(list, OP_TEST_ECX, 0, 0)
+    IrEmit(list, OP_JZ, labB, 0)
+    IrEmit(list, OP_IMUL_EAX_EDX, 0, 0)
+    IrEmit(list, OP_DEC_ECX, 0, 0)
+    IrEmit(list, OP_JMP, lab, 0)
+    IrEmit(list, OP_LABEL, labB, 0)
+    LowExprBinopPow = 1
+End Function
+
+Function LowExprBinopDiv(ctx As *LowerCtx, idx As Long, op As Long, fty As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
     LowExprBinopDiv = 0
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
     If op = BOP_IDIV Or op = BOP_DIV Then
-        If fty = TY_DOUBLE Then
-            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-            LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
-            IrEmit(list, OP_PUSH_RAX, 0, 0)
-            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-            LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
-            IrEmit(list, OP_POP_RCX, 0, 0)
-            IrEmit(list, OP_DIV_SD, 0, 0)
-            LowExprBinopDiv = 1
-        Else
-        ' eax = left, ecx = right, edx = 0 → div ecx
-        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-        IrEmit(list, OP_PUSH_RAX, 0, 0)
-        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-        IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
-        IrEmit(list, OP_POP_RAX, 0, 0)
-        IrEmit(list, OP_XOR_EDX, 0, 0)
-        IrEmit(list, OP_DIV_ECX, 0, 0)
-        LowExprBinopDiv = 1
-        End If
+        LowExprBinopDiv = LowExprBinopDivOp(ctx, idx, fty)
     ElseIf op = BOP_MOD Then
         If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
         IrEmit(list, OP_PUSH_RAX, 0, 0)
@@ -555,33 +603,84 @@ Function LowExprBinopDiv(ctx As *LowerCtx, idx As Long, op As Long, fty As Long)
         End If
         LowExprBinopDiv = 1
     ElseIf op = BOP_POW Then
-        ' eax = left ^ right（非負指数の整数累乗）
-        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-        IrEmit(list, OP_PUSH_RAX, 0, 0)
-        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-        IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
-        IrEmit(list, OP_POP_RAX, 0, 0)
-        IrEmit(list, OP_MOV_EDX_EAX, 0, 0)
-        IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
-        lab = LowNewLab(ctx)
-        labB = LowNewLab(ctx)
-        IrEmit(list, OP_LABEL, lab, 0)
-        IrEmit(list, OP_TEST_ECX, 0, 0)
-        IrEmit(list, OP_JZ, labB, 0)
-        IrEmit(list, OP_IMUL_EAX_EDX, 0, 0)
-        IrEmit(list, OP_DEC_ECX, 0, 0)
-        IrEmit(list, OP_JMP, lab, 0)
-        IrEmit(list, OP_LABEL, labB, 0)
-        LowExprBinopDiv = 1
+        LowExprBinopDiv = LowExprBinopPow(ctx, idx)
     End If
 End Function
+
+' lstrcmp 由来の TEST フラグから 真=-1 / 偽=0 を eax へ
+Sub LowEmitCmpBoolStr(ctx As *LowerCtx, list As *IrList, op As Long)
+    Dim labB As Long
+
+    IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+    labB = LowNewLab(ctx)
+    If op = BOP_EQ Then
+        IrEmit(list, OP_JNZ, labB, 0)
+    ElseIf op = BOP_NE Then
+        IrEmit(list, OP_JZ, labB, 0)
+    ElseIf op = BOP_LT Then
+        IrEmit(list, OP_JGE, labB, 0)
+    ElseIf op = BOP_LE Then
+        IrEmit(list, OP_JG, labB, 0)
+    ElseIf op = BOP_GT Then
+        IrEmit(list, OP_JLE, labB, 0)
+    Else
+        IrEmit(list, OP_JL, labB, 0)
+    End If
+    IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
+    IrEmit(list, OP_LABEL, labB, 0)
+End Sub
+
+' ucomisd のフラグ（順序なし比較）から 真=-1 / 偽=0 を eax へ
+Sub LowEmitCmpBoolUnsigned(ctx As *LowerCtx, list As *IrList, op As Long)
+    Dim labB As Long
+
+    IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+    labB = LowNewLab(ctx)
+    If op = BOP_EQ Then
+        IrEmit(list, OP_JNE, labB, 0)
+    ElseIf op = BOP_NE Then
+        IrEmit(list, OP_JE, labB, 0)
+    ElseIf op = BOP_LT Then
+        IrEmit(list, OP_JAE, labB, 0)
+    ElseIf op = BOP_LE Then
+        IrEmit(list, OP_JA, labB, 0)
+    ElseIf op = BOP_GT Then
+        IrEmit(list, OP_JBE, labB, 0)
+    Else
+        IrEmit(list, OP_JB, labB, 0)
+    End If
+    IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
+    IrEmit(list, OP_LABEL, labB, 0)
+End Sub
+
+' cmp のフラグ（符号付き）から 真=-1 / 偽=0 を eax へ
+Sub LowEmitCmpBoolSigned(ctx As *LowerCtx, list As *IrList, op As Long)
+    Dim labB As Long
+
+    IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+    labB = LowNewLab(ctx)
+    If op = BOP_EQ Then
+        IrEmit(list, OP_JNE, labB, 0)
+    ElseIf op = BOP_NE Then
+        IrEmit(list, OP_JE, labB, 0)
+    ElseIf op = BOP_LT Then
+        IrEmit(list, OP_JGE, labB, 0)
+    ElseIf op = BOP_LE Then
+        IrEmit(list, OP_JG, labB, 0)
+    ElseIf op = BOP_GT Then
+        IrEmit(list, OP_JLE, labB, 0)
+    Else
+        IrEmit(list, OP_JL, labB, 0)
+    End If
+    IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
+    IrEmit(list, OP_LABEL, labB, 0)
+End Sub
 
 Function LowExprBinopCmp(ctx As *LowerCtx, idx As Long, op As Long, fty As Long) As Long
     Dim stackPad(2047) As Byte
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
-    Dim labB As Long
 
     LowExprBinopCmp = 0
     ast = ctx->ast
@@ -591,23 +690,7 @@ Function LowExprBinopCmp(ctx As *LowerCtx, idx As Long, op As Long, fty As Long)
     If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Or LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then
         If LowEmitStrCmp(ctx, nodes[idx].left, nodes[idx].right) = 0 Then Exit Function
         IrEmit(list, OP_TEST_EAX, 0, 0)
-        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
-        labB = LowNewLab(ctx)
-        If op = BOP_EQ Then
-            IrEmit(list, OP_JNZ, labB, 0)
-        ElseIf op = BOP_NE Then
-            IrEmit(list, OP_JZ, labB, 0)
-        ElseIf op = BOP_LT Then
-            IrEmit(list, OP_JGE, labB, 0)
-        ElseIf op = BOP_LE Then
-            IrEmit(list, OP_JG, labB, 0)
-        ElseIf op = BOP_GT Then
-            IrEmit(list, OP_JLE, labB, 0)
-        Else
-            IrEmit(list, OP_JL, labB, 0)
-        End If
-        IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
-        IrEmit(list, OP_LABEL, labB, 0)
+        LowEmitCmpBoolStr(ctx, list, op)
         LowExprBinopCmp = 1
     ElseIf fty = TY_DOUBLE Then
         If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
@@ -617,23 +700,7 @@ Function LowExprBinopCmp(ctx As *LowerCtx, idx As Long, op As Long, fty As Long)
         LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
         IrEmit(list, OP_POP_RCX, 0, 0)
         IrEmit(list, OP_UCOMISD, 0, 0)
-        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
-        labB = LowNewLab(ctx)
-        If op = BOP_EQ Then
-            IrEmit(list, OP_JNE, labB, 0)
-        ElseIf op = BOP_NE Then
-            IrEmit(list, OP_JE, labB, 0)
-        ElseIf op = BOP_LT Then
-            IrEmit(list, OP_JAE, labB, 0)
-        ElseIf op = BOP_LE Then
-            IrEmit(list, OP_JA, labB, 0)
-        ElseIf op = BOP_GT Then
-            IrEmit(list, OP_JBE, labB, 0)
-        Else
-            IrEmit(list, OP_JB, labB, 0)
-        End If
-        IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
-        IrEmit(list, OP_LABEL, labB, 0)
+        LowEmitCmpBoolUnsigned(ctx, list, op)
         LowExprBinopCmp = 1
     Else
         If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
@@ -641,104 +708,105 @@ Function LowExprBinopCmp(ctx As *LowerCtx, idx As Long, op As Long, fty As Long)
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
         IrEmit(list, OP_POP_RCX, 0, 0)
         IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
-        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
-        labB = LowNewLab(ctx)
-        If op = BOP_EQ Then
-            IrEmit(list, OP_JNE, labB, 0)
-        ElseIf op = BOP_NE Then
-            IrEmit(list, OP_JE, labB, 0)
-        ElseIf op = BOP_LT Then
-            IrEmit(list, OP_JGE, labB, 0)
-        ElseIf op = BOP_LE Then
-            IrEmit(list, OP_JG, labB, 0)
-        ElseIf op = BOP_GT Then
-            IrEmit(list, OP_JLE, labB, 0)
-        Else
-            IrEmit(list, OP_JL, labB, 0)
-        End If
-        IrEmit(list, OP_MOV_EAX_IMM, -1, 0)
-        IrEmit(list, OP_LABEL, labB, 0)
+        LowEmitCmpBoolSigned(ctx, list, op)
         LowExprBinopCmp = 1
     End If
+End Function
+
+' 文字列連結（+ / &）。1=処理済み, 0=非文字列, -1=エラー
+Function LowExprBinopCat(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim lab As Long
+
+    LowExprBinopCat = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If LowIsStringExpr(ctx, nodes[idx].left) = 0 And LowIsStringExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    LowExprBinopCat = -1
+    lab = LowEnsureRtCat(ctx)
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    LowEmitCallLab2(list, lab)
+    LowExprBinopCat = 1
+End Function
+
+' 加減乗算・ビット演算
+Function LowExprBinopArith(ctx As *LowerCtx, idx As Long, op As Long, fty As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
+    LowExprBinopArith = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If fty = TY_DOUBLE And (op = BOP_ADD Or op = BOP_MUL Or op = BOP_SUB) Then
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        If op = BOP_ADD Then
+            IrEmit(list, OP_ADD_SD, 0, 0)
+        ElseIf op = BOP_SUB Then
+            IrEmit(list, OP_SUB_SD, 0, 0)
+        Else
+            IrEmit(list, OP_MUL_SD, 0, 0)
+        End If
+        LowExprBinopArith = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    If op = BOP_ADD Then
+        IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    ElseIf op = BOP_SUB Then
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+    ElseIf op = BOP_MUL Then
+        IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    ElseIf op = BOP_AND Then
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    ElseIf op = BOP_XOR Then
+        IrEmit(list, OP_XOR_EAX_ECX, 0, 0)
+    Else
+        IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    End If
+    LowExprBinopArith = 1
 End Function
 
 Function LowExprBinop(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(2047) As Byte
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim offs As *Long
-    Dim types As *Long
     Dim op As Long
-    Dim list As *IrList
-    Dim lab As Long
-    Dim tt As *TypeTable
-    Dim typeIdxs As *Long
-    Dim byRefs As *Long
-    Dim labB As Long
+    Dim r As Long
     Dim fty As Long
 
     LowExprBinop = 0
     ast = ctx->ast
-    list = ctx->list
     nodes = ast->nodes
-    tt = ast->types
-    offs = ctx->offs
-    types = ctx->types
-    typeIdxs = ctx->typeIdxs
-    byRefs = ctx->byRefs
 
     op = nodes[idx].num
     fty = LowPromoteType(LowExprType(ctx, nodes[idx].left), LowExprType(ctx, nodes[idx].right))
     If op = BOP_ADD Or op = BOP_CAT Then
-        If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Or LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then
-            lab = LowEnsureRtCat(ctx)
-            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-            IrEmit(list, OP_PUSH_RAX, 0, 0)
-            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-            IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
-            IrEmit(list, OP_POP_RCX, 0, 0)
-            LowEmitCallLab2(list, lab)
-            LowExprBinop = 1
+        r = LowExprBinopCat(ctx, idx)
+        If r <> 0 Then
+            If r > 0 Then LowExprBinop = 1
             Exit Function
         End If
     End If
     If op = BOP_ADD Or op = BOP_MUL Or op = BOP_AND Or op = BOP_OR Or op = BOP_SUB Or op = BOP_XOR Then
-        If fty = TY_DOUBLE And (op = BOP_ADD Or op = BOP_MUL Or op = BOP_SUB) Then
-            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-            LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
-            IrEmit(list, OP_PUSH_RAX, 0, 0)
-            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-            LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].right))
-            IrEmit(list, OP_POP_RCX, 0, 0)
-            If op = BOP_ADD Then
-                IrEmit(list, OP_ADD_SD, 0, 0)
-            ElseIf op = BOP_SUB Then
-                IrEmit(list, OP_SUB_SD, 0, 0)
-            Else
-                IrEmit(list, OP_MUL_SD, 0, 0)
-            End If
-            LowExprBinop = 1
-        Else
-            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-            IrEmit(list, OP_PUSH_RAX, 0, 0)
-            If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-            IrEmit(list, OP_POP_RCX, 0, 0)
-            If op = BOP_ADD Then
-                IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
-            ElseIf op = BOP_SUB Then
-                IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
-                IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
-            ElseIf op = BOP_MUL Then
-                IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
-            ElseIf op = BOP_AND Then
-                IrEmit(list, OP_AND_EAX_ECX, 0, 0)
-            ElseIf op = BOP_XOR Then
-                IrEmit(list, OP_XOR_EAX_ECX, 0, 0)
-            Else
-                IrEmit(list, OP_OR_EAX_ECX, 0, 0)
-            End If
-            LowExprBinop = 1
-        End If
+        LowExprBinop = LowExprBinopArith(ctx, idx, op, fty)
         Exit Function
     End If
     If op = BOP_IDIV Or op = BOP_DIV Or op = BOP_MOD Or op = BOP_SHL Or op = BOP_SHR Or op = BOP_POW Then
@@ -782,13 +850,31 @@ Function LowExprCast(ctx As *LowerCtx, idx As Long) As Long
     LowExprCast = 1
 End Function
 
+' 定数畳み込みできる式なら rax に積んで 1
+Function LowExprConst(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim v As Long
+    Dim buf(255) As Byte
+
+    LowExprConst = 0
+    ast = ctx->ast
+    list = ctx->list
+    If LowConstInt(ast, idx, v) <> 0 Then
+        IrEmit(list, OP_MOV_EAX_IMM, v, 0)
+        LowExprConst = 1
+        Exit Function
+    End If
+    If LowConstStr(ast, idx, VarPtr(buf)) <> 0 Then
+        IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(buf))
+        LowExprConst = 1
+    End If
+End Function
+
 Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim k As Long
-    Dim list As *IrList
-    Dim v As Long
-    Dim buf(255) As Byte
 
     LowExpr = 0
     If idx < 0 Then
@@ -796,16 +882,8 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     ast = ctx->ast
-    list = ctx->list
     nodes = ast->nodes
-
-    If LowConstInt(ast, idx, v) <> 0 Then
-        IrEmit(list, OP_MOV_EAX_IMM, v, 0)
-        LowExpr = 1
-        Exit Function
-    End If
-    If LowConstStr(ast, idx, VarPtr(buf)) <> 0 Then
-        IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(buf))
+    If LowExprConst(ctx, idx) <> 0 Then
         LowExpr = 1
         Exit Function
     End If
@@ -813,46 +891,28 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     k = nodes[idx].kind
     If k = AST_NUM Then
         LowExpr = LowExprNum(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_STRING Then
+    ElseIf k = AST_STRING Then
         LowExpr = LowExprString(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_VAR Then
+    ElseIf k = AST_VAR Then
         LowExpr = LowExprVar(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_MEMBER Then
+    ElseIf k = AST_MEMBER Then
         LowExpr = LowExprMember(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_INDEX Then
+    ElseIf k = AST_INDEX Then
         LowExpr = LowExprIndex(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_BUILTIN Then
+    ElseIf k = AST_BUILTIN Then
         LowExpr = LowExprBuiltin(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_CALL Then
+    ElseIf k = AST_CALL Then
         LowExpr = LowExprCall(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_UNARY Then
+    ElseIf k = AST_UNARY Then
         LowExpr = LowExprUnary(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_BINOP Then
+    ElseIf k = AST_BINOP Then
         LowExpr = LowExprBinop(ctx, idx)
-        Exit Function
-    End If
-    If k = AST_CAST Then
+    ElseIf k = AST_CAST Then
         LowExpr = LowExprCast(ctx, idx)
-        Exit Function
+    Else
+        Print "error: unsupported expr kind " + Str$(k)
+        ctx->err = 1
     End If
-    Print "error: unsupported expr kind " + Str$(k)
-    ctx->err = 1
 End Function
 
 Function LowEmitStrCmp(ctx As *LowerCtx, leftIdx As Long, rightIdx As Long) As Long
@@ -885,6 +945,66 @@ Function LowEmitStrCmp(ctx As *LowerCtx, leftIdx As Long, rightIdx As Long) As L
     LowEmitStrCmp = 1
 End Function
 
+' 文字列比較（TEST eax）で偽になる jcc
+Function LowCmpFalseJccStr(ctx As *LowerCtx, op As Long) As Long
+    LowCmpFalseJccStr = 0
+    If op = BOP_EQ Then
+        LowCmpFalseJccStr = OP_JNZ
+    ElseIf op = BOP_NE Then
+        LowCmpFalseJccStr = OP_JZ
+    ElseIf op = BOP_LT Then
+        LowCmpFalseJccStr = OP_JGE
+    ElseIf op = BOP_LE Then
+        LowCmpFalseJccStr = OP_JG
+    ElseIf op = BOP_GT Then
+        LowCmpFalseJccStr = OP_JLE
+    ElseIf op = BOP_GE Then
+        LowCmpFalseJccStr = OP_JL
+    Else
+        ctx->err = 1
+    End If
+End Function
+
+' ucomisd（順序なし比較）で偽になる jcc
+Function LowCmpFalseJccFlt(ctx As *LowerCtx, op As Long) As Long
+    LowCmpFalseJccFlt = 0
+    If op = BOP_EQ Then
+        LowCmpFalseJccFlt = OP_JNE
+    ElseIf op = BOP_NE Then
+        LowCmpFalseJccFlt = OP_JE
+    ElseIf op = BOP_LT Then
+        LowCmpFalseJccFlt = OP_JAE
+    ElseIf op = BOP_LE Then
+        LowCmpFalseJccFlt = OP_JA
+    ElseIf op = BOP_GT Then
+        LowCmpFalseJccFlt = OP_JBE
+    ElseIf op = BOP_GE Then
+        LowCmpFalseJccFlt = OP_JB
+    Else
+        ctx->err = 1
+    End If
+End Function
+
+' cmp（符号付き）で偽になる jcc
+Function LowCmpFalseJccInt(ctx As *LowerCtx, op As Long) As Long
+    LowCmpFalseJccInt = 0
+    If op = BOP_EQ Then
+        LowCmpFalseJccInt = OP_JNE
+    ElseIf op = BOP_NE Then
+        LowCmpFalseJccInt = OP_JE
+    ElseIf op = BOP_LT Then
+        LowCmpFalseJccInt = OP_JGE
+    ElseIf op = BOP_LE Then
+        LowCmpFalseJccInt = OP_JG
+    ElseIf op = BOP_GT Then
+        LowCmpFalseJccInt = OP_JLE
+    ElseIf op = BOP_GE Then
+        LowCmpFalseJccInt = OP_JL
+    Else
+        ctx->err = 1
+    End If
+End Function
+
 ' Emit cmp for a comparison BINOP; return jcc that jumps when FALSE
 Function LowCmpFalseJcc(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
@@ -907,21 +1027,7 @@ Function LowCmpFalseJcc(ctx As *LowerCtx, idx As Long) As Long
     If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Or LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then
         If LowEmitStrCmp(ctx, nodes[idx].left, nodes[idx].right) = 0 Then Exit Function
         IrEmit(list, OP_TEST_EAX, 0, 0)
-        If op = BOP_EQ Then
-            LowCmpFalseJcc = OP_JNZ
-        ElseIf op = BOP_NE Then
-            LowCmpFalseJcc = OP_JZ
-        ElseIf op = BOP_LT Then
-            LowCmpFalseJcc = OP_JGE
-        ElseIf op = BOP_LE Then
-            LowCmpFalseJcc = OP_JG
-        ElseIf op = BOP_GT Then
-            LowCmpFalseJcc = OP_JLE
-        ElseIf op = BOP_GE Then
-            LowCmpFalseJcc = OP_JL
-        Else
-            ctx->err = 1
-        End If
+        LowCmpFalseJcc = LowCmpFalseJccStr(ctx, op)
         Exit Function
     End If
     lty = LowExprType(ctx, nodes[idx].left)
@@ -939,39 +1045,11 @@ Function LowCmpFalseJcc(ctx As *LowerCtx, idx As Long) As Long
     IrEmit(list, OP_POP_RCX, 0, 0)
     If fty = TY_DOUBLE Then
         IrEmit(list, OP_UCOMISD, 0, 0)
-        If op = BOP_EQ Then
-            LowCmpFalseJcc = OP_JNE
-        ElseIf op = BOP_NE Then
-            LowCmpFalseJcc = OP_JE
-        ElseIf op = BOP_LT Then
-            LowCmpFalseJcc = OP_JAE
-        ElseIf op = BOP_LE Then
-            LowCmpFalseJcc = OP_JA
-        ElseIf op = BOP_GT Then
-            LowCmpFalseJcc = OP_JBE
-        ElseIf op = BOP_GE Then
-            LowCmpFalseJcc = OP_JB
-        Else
-            ctx->err = 1
-        End If
+        LowCmpFalseJcc = LowCmpFalseJccFlt(ctx, op)
         Exit Function
     End If
     IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
-    If op = BOP_EQ Then
-        LowCmpFalseJcc = OP_JNE
-    ElseIf op = BOP_NE Then
-        LowCmpFalseJcc = OP_JE
-    ElseIf op = BOP_LT Then
-        LowCmpFalseJcc = OP_JGE
-    ElseIf op = BOP_LE Then
-        LowCmpFalseJcc = OP_JG
-    ElseIf op = BOP_GT Then
-        LowCmpFalseJcc = OP_JLE
-    ElseIf op = BOP_GE Then
-        LowCmpFalseJcc = OP_JL
-    Else
-        ctx->err = 1
-    End If
+    LowCmpFalseJcc = LowCmpFalseJccInt(ctx, op)
 End Function
 
 Function LowCmpTrueJcc(falseJcc As Long) As Long

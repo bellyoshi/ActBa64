@@ -167,9 +167,38 @@ Function CompileSource(src As *Byte, outPath As *Byte, useWindow As Long) As Lon
     AstFree(ast)
 End Function
 
-Function CompileFile(srcPath As *Byte, outPath As *Byte) As Long
+' 読み込み + #ifdef 等の条件付きプリプロセス。失敗時は NULL（PpStateFree は呼び元）
+Function CompLoadCond(srcPath As *Byte, ByRef condSize As Long) As *Byte
     Dim src As *Byte
     Dim srcSize As Long
+    Dim cond As *Byte
+
+    CompLoadCond = NULL
+    condSize = 0
+    src = LoadFile(srcPath, srcSize)
+    If src = NULL Then
+        Print "error: cannot open: " + MakeStr(srcPath)
+        Exit Function
+    End If
+    If srcSize <= 0 Then
+        Print "error: empty source: " + MakeStr(srcPath)
+        free(src)
+        Exit Function
+    End If
+
+    cond = PpApplyConditionals(src, srcSize)
+    free(src)
+    If cond = NULL Then
+        Print "error: conditional preprocess failed: " + MakeStr(srcPath)
+        Exit Function
+    End If
+    While cond[condSize] <> 0
+        condSize = condSize + 1
+    Wend
+    CompLoadCond = cond
+End Function
+
+Function CompileFile(srcPath As *Byte, outPath As *Byte) As Long
     Dim cond As *Byte
     Dim condSize As Long
     Dim expanded As *Byte
@@ -180,30 +209,11 @@ Function CompileFile(srcPath As *Byte, outPath As *Byte) As Long
         Print "error: out of memory (preproc)"
         Exit Function
     End If
-    src = LoadFile(srcPath, srcSize)
-    If src = NULL Then
-        Print "error: cannot open: " + MakeStr(srcPath)
-        PpStateFree()
-        Exit Function
-    End If
-    If srcSize <= 0 Then
-        Print "error: empty source: " + MakeStr(srcPath)
-        free(src)
-        PpStateFree()
-        Exit Function
-    End If
-
-    cond = PpApplyConditionals(src, srcSize)
-    free(src)
+    cond = CompLoadCond(srcPath, condSize)
     If cond = NULL Then
-        Print "error: conditional preprocess failed: " + MakeStr(srcPath)
         PpStateFree()
         Exit Function
     End If
-    condSize = 0
-    While cond[condSize] <> 0
-        condSize = condSize + 1
-    Wend
     PpOnceReset()
     expanded = ExpandIncludes(cond, condSize, srcPath)
     free(cond)

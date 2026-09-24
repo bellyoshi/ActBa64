@@ -139,40 +139,34 @@ Function PpDotNeedsBase(line As *Byte, pos As Long) As Long
     If c = 61 Or c = 44 Or c = 60 Or c = 62 Then PpDotNeedsBase = 1
 End Function
 
-Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As Long
-    Dim off As Long
-    Dim expr(255) As Byte
+Function PpWithPush(expr As *Byte) As Long
+    Dim stackOff As Long
+    PpWithPush = 0
+    If g_ppWithDepth >= PP_WITH_MAX Then Exit Function
+    stackOff = g_ppWithDepth * 256
+    PpStrCopy(VarPtr(g_ppWithStack[stackOff]), VarPtr(g_ppWithCur))
+    PpStrCopy(VarPtr(g_ppWithCur), expr)
+    g_ppWithDepth = g_ppWithDepth + 1
+    PpWithPush = 1
+End Function
+
+Sub PpWithPop()
+    Dim stackOff As Long
+    g_ppWithDepth = g_ppWithDepth - 1
+    If g_ppWithDepth > 0 Then
+        stackOff = g_ppWithDepth * 256
+        PpStrCopy(VarPtr(g_ppWithCur), VarPtr(g_ppWithStack[stackOff]))
+    Else
+        g_ppWithCur[0] = 0
+    End If
+End Sub
+
+Function PpWithSubstitute(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As Long
     Dim i As Long
     Dim j As Long
     Dim k As Long
-    Dim stackOff As Long
-    PpRewriteWithLine = 0
+    PpWithSubstitute = 0
     outN = 0
-    off = PpLineTrimOff(line, n)
-    If PpIsWithStart(line, n, off, VarPtr(expr)) <> 0 Then
-        If g_ppWithDepth >= PP_WITH_MAX Then Exit Function
-        stackOff = g_ppWithDepth * 256
-        PpStrCopy(VarPtr(g_ppWithStack[stackOff]), VarPtr(g_ppWithCur))
-        PpStrCopy(VarPtr(g_ppWithCur), VarPtr(expr))
-        g_ppWithDepth = g_ppWithDepth + 1
-        PpRewriteWithLine = 2
-        Exit Function
-    End If
-    If g_ppWithDepth > 0 And PpIsEndWith(line, n, off) <> 0 Then
-        g_ppWithDepth = g_ppWithDepth - 1
-        If g_ppWithDepth > 0 Then
-            stackOff = g_ppWithDepth * 256
-            PpStrCopy(VarPtr(g_ppWithCur), VarPtr(g_ppWithStack[stackOff]))
-        Else
-            g_ppWithCur[0] = 0
-        End If
-        PpRewriteWithLine = 2
-        Exit Function
-    End If
-    If g_ppWithDepth <= 0 Or g_ppWithCur[0] = 0 Then
-        PpRewriteWithLine = 1
-        Exit Function
-    End If
     j = 0
     i = 0
     While i < n
@@ -193,6 +187,30 @@ Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As
     Wend
     out[j] = 0
     outN = j
+    PpWithSubstitute = 1
+End Function
+
+Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As Long
+    Dim off As Long
+    Dim expr(255) As Byte
+    PpRewriteWithLine = 0
+    outN = 0
+    off = PpLineTrimOff(line, n)
+    If PpIsWithStart(line, n, off, VarPtr(expr)) <> 0 Then
+        If PpWithPush(VarPtr(expr)) = 0 Then Exit Function
+        PpRewriteWithLine = 2
+        Exit Function
+    End If
+    If g_ppWithDepth > 0 And PpIsEndWith(line, n, off) <> 0 Then
+        PpWithPop()
+        PpRewriteWithLine = 2
+        Exit Function
+    End If
+    If g_ppWithDepth <= 0 Or g_ppWithCur[0] = 0 Then
+        PpRewriteWithLine = 1
+        Exit Function
+    End If
+    If PpWithSubstitute(line, n, out, outN) = 0 Then Exit Function
     PpRewriteWithLine = 1
 End Function
 
@@ -344,37 +362,41 @@ Function PpIsIncludeLine(line As *Byte, n As Long) As Long
     PpIsIncludeLine = 1
 End Function
 
+Function PpIncFindOpen(line As *Byte, n As Long, ByRef closeCh As Long, ByRef isAngle As Long) As Long
+    Dim i As Long
+    PpIncFindOpen = -1
+    closeCh = 0
+    isAngle = 0
+    i = 0
+    While i < n
+        If line[i] = 34 Then
+            closeCh = 34
+            PpIncFindOpen = i
+            Exit Function
+        End If
+        If line[i] = 60 Then
+            closeCh = 62
+            isAngle = 1
+            PpIncFindOpen = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
 Function PpExtractInclude(line As *Byte, n As Long, dst As *Byte, ByRef isAngle As Long) As Long
     Dim i As Long
     Dim q1 As Long
     Dim q2 As Long
     Dim j As Long
-    Dim openCh As Long
     Dim closeCh As Long
+    Dim ang As Long
     PpExtractInclude = 0
     isAngle = 0
     dst[0] = 0
-    q1 = -1
     q2 = -1
-    openCh = 0
-    closeCh = 0
-    i = 0
-    While i < n
-        If line[i] = 34 Then
-            openCh = 34
-            closeCh = 34
-            q1 = i
-            Exit While
-        End If
-        If line[i] = 60 Then
-            openCh = 60
-            closeCh = 62
-            q1 = i
-            isAngle = 1
-            Exit While
-        End If
-        i = i + 1
-    Wend
+    q1 = PpIncFindOpen(line, n, closeCh, ang)
+    isAngle = ang
     If q1 < 0 Then Exit Function
     i = q1 + 1
     While i < n
@@ -483,18 +505,38 @@ Function PpLineIsFileMark(line As *Byte, n As Long, nameOut As *Byte, nameMax As
     PpLineIsFileMark = 1
 End Function
 
+Function PpLineEndAt(src As *Byte, from As Long) As Long
+    Dim i As Long
+    Dim c As Long
+    i = from
+    While src[i] <> 0
+        c = src[i]
+        If c = 10 Or c = 13 Then Exit While
+        i = i + 1
+    Wend
+    PpLineEndAt = i
+End Function
+
+Sub PpCopyMarkName(dst As *Byte, src As *Byte)
+    Dim k As Long
+    k = 0
+    While src[k] <> 0 And k < 259
+        dst[k] = src[k]
+        k = k + 1
+    Wend
+    dst[k] = 0
+End Sub
+
 Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) As String
     Dim i As Long
     Dim start As Long
     Dim n As Long
     Dim cur As Long
-    Dim c As Long
     Dim sp As Long
     Dim off As Long
     Dim name(259) As Byte
     Dim names(4159) As Byte
     Dim locs(15) As Long
-    Dim k As Long
 
     PpMapSrcName$ = ""
     localLine = combLine
@@ -505,11 +547,7 @@ Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) 
     sp = 0
     While src[i] <> 0
         start = i
-        While src[i] <> 0
-            c = src[i]
-            If c = 10 Or c = 13 Then Exit While
-            i = i + 1
-        Wend
+        i = PpLineEndAt(src, i)
         n = i - start
         If PpLineIsFileMark(VarPtr(src[start]), n, VarPtr(name), 260) <> 0 Then
             If PpNameIsEnd(VarPtr(name)) <> 0 Then
@@ -517,12 +555,7 @@ Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) 
             Else
                 If sp < 16 Then
                     off = sp * 260
-                    k = 0
-                    While name[k] <> 0 And k < 259
-                        names[off + k] = name[k]
-                        k = k + 1
-                    Wend
-                    names[off + k] = 0
+                    PpCopyMarkName(VarPtr(names[off]), VarPtr(name))
                     locs[sp] = 0
                     sp = sp + 1
                 End If
@@ -554,21 +587,89 @@ Function PpErrLoc$(src As *Byte, combLine As Long) As String
     End If
 End Function
 
+Function PpEmitLineCrlf(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long) As Long
+    Dim crlf(3) As Byte
+    PpEmitLineCrlf = 0
+    If n > 0 Then
+        If PpAppend(dst, dstLen, dstCap, line, n) = 0 Then Exit Function
+    End If
+    crlf[0] = 13
+    crlf[1] = 10
+    If PpAppend(dst, dstLen, dstCap, VarPtr(crlf), 2) = 0 Then Exit Function
+    PpEmitLineCrlf = 1
+End Function
+
+Function PpResolveIncPath(inc As *Byte, isAngle As Long, curFile As *Byte, full As *Byte) As Long
+    Dim dir(511) As Byte
+    PpResolveIncPath = 0
+    full[0] = 0
+    If inc[0] = 0 Then Exit Function
+    If isAngle <> 0 Then
+        If PpResolveAngleInclude(inc, full) = 0 Then Exit Function
+    ElseIf (inc[1] = 58) Or (inc[0] = 92) Or (inc[0] = 47) Then
+        lstrcpy(full, inc)
+    Else
+        PpDirOf(curFile, VarPtr(dir))
+        lstrcpy(full, VarPtr(dir))
+        lstrcat(full, inc)
+    End If
+    PpResolveIncPath = 1
+End Function
+
+Function PpExpandIncludeLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long, curFile As *Byte, depth As Long) As Long
+    Dim inc(255) As Byte
+    Dim full(511) As Byte
+    Dim isAngle As Long
+    Dim child As *Byte
+    Dim childSize As Long
+    PpExpandIncludeLine = 0
+    isAngle = 0
+    If PpExtractInclude(line, n, VarPtr(inc), isAngle) = 0 Then Exit Function
+    If PpResolveIncPath(VarPtr(inc), isAngle, curFile, VarPtr(full)) = 0 Then Exit Function
+    If PpEmitLineCrlf(dst, dstLen, dstCap, line, n) = 0 Then Exit Function
+    If PpOnceHas(VarPtr(full)) <> 0 Then
+        PpExpandIncludeLine = 1
+        Exit Function
+    End If
+    child = LoadFile(VarPtr(full), childSize)
+    If child = NULL Then Exit Function
+    PpOnceAdd(VarPtr(full))
+    If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) = 0 Then
+        free(child)
+        Exit Function
+    End If
+    free(child)
+    PpExpandIncludeLine = 1
+End Function
+
+Function PpExpandNormalLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long) As Long
+    Dim wOut(511) As Byte
+    Dim wN As Long
+    Dim wSt As Long
+    PpExpandNormalLine = 0
+    wN = 0
+    wSt = PpRewriteWithLine(line, n, VarPtr(wOut), wN)
+    If wSt = 0 Then Exit Function
+    If wSt = 2 Then
+        ' With / End With 行は出力しない
+        PpExpandNormalLine = 1
+        Exit Function
+    End If
+    If wSt = 1 And wN > 0 Then
+        If PpEmitLineCrlf(dst, dstLen, dstCap, VarPtr(wOut), wN) = 0 Then Exit Function
+    Else
+        If PpEmitLineCrlf(dst, dstLen, dstCap, line, n) = 0 Then Exit Function
+    End If
+    PpExpandNormalLine = 1
+End Function
+
 Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long) As Long
     Dim i As Long
     Dim start As Long
     Dim n As Long
     Dim c As Long
     Dim line(511) As Byte
-    Dim inc(255) As Byte
-    Dim full(511) As Byte
-    Dim dir(511) As Byte
-    Dim child As *Byte
-    Dim childSize As Long
     Dim j As Long
-    Dim wOut(511) As Byte
-    Dim wN As Long
-    Dim wSt As Long
 
     PpExpandInto = 0
     If depth >= PP_MAX_DEPTH Then Exit Function
@@ -591,54 +692,9 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
         Wend
         line[n] = 0
         If PpIsIncludeLine(VarPtr(line), n) <> 0 Then
-            Dim isAngle As Long
-            isAngle = 0
-            If PpExtractInclude(VarPtr(line), n, VarPtr(inc), isAngle) = 0 Then Exit Function
-            full[0] = 0
-            If inc[0] = 0 Then Exit Function
-            If isAngle <> 0 Then
-                If PpResolveAngleInclude(VarPtr(inc), VarPtr(full)) = 0 Then Exit Function
-            ElseIf (inc[1] = 58) Or (inc[0] = 92) Or (inc[0] = 47) Then
-                lstrcpy(VarPtr(full), VarPtr(inc))
-            Else
-                PpDirOf(curFile, VarPtr(dir))
-                lstrcpy(VarPtr(full), VarPtr(dir))
-                lstrcat(VarPtr(full), VarPtr(inc))
-            End If
-            If n > 0 Then
-                If PpAppend(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
-            End If
-            line[0] = 13
-            line[1] = 10
-            If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
-            If PpOnceHas(VarPtr(full)) = 0 Then
-                child = LoadFile(VarPtr(full), childSize)
-                If child = NULL Then Exit Function
-                PpOnceAdd(VarPtr(full))
-                If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) = 0 Then
-                    free(child)
-                    Exit Function
-                End If
-                free(child)
-            End If
+            If PpExpandIncludeLine(dst, dstLen, dstCap, VarPtr(line), n, curFile, depth) = 0 Then Exit Function
         Else
-            wSt = PpRewriteWithLine(VarPtr(line), n, VarPtr(wOut), wN)
-            If wSt = 0 Then Exit Function
-            If wSt = 2 Then
-                ' With / End With 行は出力しない
-            ElseIf wSt = 1 And wN > 0 Then
-                If PpAppend(dst, dstLen, dstCap, VarPtr(wOut), wN) = 0 Then Exit Function
-                line[0] = 13
-                line[1] = 10
-                If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
-            Else
-                If n > 0 Then
-                    If PpAppend(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
-                End If
-                line[0] = 13
-                line[1] = 10
-                If PpAppend(dst, dstLen, dstCap, VarPtr(line), 2) = 0 Then Exit Function
-            End If
+            If PpExpandNormalLine(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
         End If
         If i < srcSize And src[i] = 13 Then i = i + 1
         If i < srcSize And src[i] = 10 Then i = i + 1
