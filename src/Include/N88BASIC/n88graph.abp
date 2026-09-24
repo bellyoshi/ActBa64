@@ -5,8 +5,8 @@
 ' CIRCLE [(x,y)|STEP(x,y)],r[,color][,start][,end][,aspect][,F[,color2]]
 ' LOCATE x,y | Locate(x,y)  — 文字座標（桁 x, 行 y）
 ' PAINT (x,y), color1 [, color2]  — 塗りつぶし（境界色 color2、省略時 color1）
-'   start/end: ラジアン（千分率。6.28 → 6280）。省略または start=end=0 で全周
-'   aspect: 垂直/水平（千分率。1.0 → 1000）。省略時 1000
+'   start/end: ラジアン（Double）。省略または start=end で全周
+'   aspect: 垂直/水平（Double。省略時 1.0）
 '   flags: 1=F  2=startNeg  4=endNeg  8=STEP  16=center=LP
 
 Const N88_WIDTH = 640
@@ -21,7 +21,6 @@ Const N88_CW_USEDEFAULT = &H80000000
 Const N88_MODE_LINE = 0
 Const N88_MODE_BOX = 1
 Const N88_MODE_BOXFILL = 2
-Const N88_PI2_M = 6283
 Const N88_CHAR_W = 8
 Const N88_CHAR_H = 16
 Const N88_FLOODFILLBORDER = 0
@@ -208,48 +207,60 @@ End Sub
 
 ' 整数除算・三角関数は Include\default\Math.abp（MathDiv / Sin / Cos）
 
-Sub N88_AspectRadii(r As Long, aspectM As Long, ByRef rx As Long, ByRef ry As Long)
-    Dim a As Long
-    a = aspectM
-    If a <= 0 Then a = 1000
-    If a = 1000 Then
+Sub N88_AspectRadii(r As Long, aspect As Double, ByRef rx As Long, ByRef ry As Long)
+    Dim a As Double
+    Dim one As Double
+    Dim tmp As Double
+
+    one = 1
+    a = aspect
+    If a <= 0 Then a = one
+    If a = one Then
         rx = r
         ry = r
-    ElseIf a < 1000 Then
+    ElseIf a < one Then
         rx = r
-        ry = MathDiv(r * a, 1000)
+        tmp = r * a
+        ry = tmp
         If ry < 1 Then ry = 1
     Else
         ry = r
-        rx = MathDiv(r * 1000, a)
+        tmp = r
+        tmp = tmp / a
+        rx = tmp
         If rx < 1 Then rx = 1
     End If
 End Sub
 
-Sub N88_AngPoint(cx As Long, cy As Long, rx As Long, ry As Long, angM As Long, ByRef ox As Long, ByRef oy As Long)
+Sub N88_AngPoint(cx As Long, cy As Long, rx As Long, ry As Long, ang As Double, ByRef ox As Long, ByRef oy As Long)
     Dim cs As Double
     Dim sn As Double
-    Dim dang As Double
     Dim tmp As Double
-    dang = angM
-    dang = dang / 1000
-    cs = Cos(dang)
-    sn = Sin(dang)
+
+    cs = Cos(ang)
+    sn = Sin(ang)
     tmp = rx * cs
     ox = cx + tmp
     tmp = ry * sn
     oy = cy - tmp
 End Sub
 
-Function N88_IsFullEllipse(startM As Long, endM As Long) As Long
-    Dim d As Long
-    If startM = endM Then
+Function N88_IsFullEllipse(startAng As Double, endAng As Double) As Long
+    Dim d As Double
+    Dim twopi As Double
+    Dim eps As Double
+
+    If startAng = endAng Then
         N88_IsFullEllipse = 1
         Exit Function
     End If
-    d = endM - startM
+    d = endAng - startAng
     If d < 0 Then d = 0 - d
-    If d >= N88_PI2_M - 2 Then
+    twopi = MathPi()
+    twopi = twopi + twopi
+    eps = 2
+    eps = eps / 1000
+    If d >= twopi - eps Then
         N88_IsFullEllipse = 1
     Else
         N88_IsFullEllipse = 0
@@ -281,7 +292,7 @@ Sub N88_StrokeEllipseFull(hdc As HDC, cx As Long, cy As Long, rx As Long, ry As 
     End If
 End Sub
 
-Sub N88_StrokeEllipseArc(hdc As HDC, cx As Long, cy As Long, rx As Long, ry As Long, startM As Long, endM As Long, color As Long, fillColor As Long, fill As Long, startNeg As Long, endNeg As Long)
+Sub N88_StrokeEllipseArc(hdc As HDC, cx As Long, cy As Long, rx As Long, ry As Long, startAng As Double, endAng As Double, color As Long, fillColor As Long, fill As Long, startNeg As Long, endNeg As Long)
     Dim pen As HPEN
     Dim brush As HBRUSH
     Dim oldPen As HANDLE
@@ -292,8 +303,8 @@ Sub N88_StrokeEllipseArc(hdc As HDC, cx As Long, cy As Long, rx As Long, ry As L
     Dim y1 As Long
 
     If hdc = 0 Then Exit Sub
-    N88_AngPoint(cx, cy, rx, ry, startM, x0, y0)
-    N88_AngPoint(cx, cy, rx, ry, endM, x1, y1)
+    N88_AngPoint(cx, cy, rx, ry, startAng, x0, y0)
+    N88_AngPoint(cx, cy, rx, ry, endAng, x1, y1)
 
     pen = CreatePen(N88_PS_SOLID, 2, N88_Rgb(color))
     If pen = 0 Then Exit Sub
@@ -326,7 +337,7 @@ Sub N88_StrokeEllipseArc(hdc As HDC, cx As Long, cy As Long, rx As Long, ry As L
     End If
 End Sub
 
-Sub N88_DrawCircleOn(hdc As HDC, cx As Long, cy As Long, r As Long, color As Long, startM As Long, endM As Long, aspectM As Long, flags As Long, fillColor As Long)
+Sub N88_DrawCircleOn(hdc As HDC, cx As Long, cy As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
     Dim rx As Long
     Dim ry As Long
     Dim fill As Long
@@ -339,12 +350,12 @@ Sub N88_DrawCircleOn(hdc As HDC, cx As Long, cy As Long, r As Long, color As Lon
     endNeg = 0
     If (flags And 2) <> 0 Then startNeg = 1
     If (flags And 4) <> 0 Then endNeg = 1
-    N88_AspectRadii(r, aspectM, rx, ry)
+    N88_AspectRadii(r, aspect, rx, ry)
 
-    If N88_IsFullEllipse(startM, endM) <> 0 Then
+    If N88_IsFullEllipse(startAng, endAng) <> 0 Then
         N88_StrokeEllipseFull(hdc, cx, cy, rx, ry, color, fillColor, fill)
     Else
-        N88_StrokeEllipseArc(hdc, cx, cy, rx, ry, startM, endM, color, fillColor, fill, startNeg, endNeg)
+        N88_StrokeEllipseArc(hdc, cx, cy, rx, ry, startAng, endAng, color, fillColor, fill, startNeg, endNeg)
     End If
 End Sub
 
@@ -384,8 +395,8 @@ Sub LineCont(ex As Long, ey As Long, color As Long, mode As Long)
     Line(g_n88LPx, g_n88LPy, ex, ey, color, mode)
 End Sub
 
-' CIRCLE → Circle(cx,cy,r,color,startM,endM,aspectM,flags,fillColor)
-Sub Circle(cx As Long, cy As Long, r As Long, color As Long, startM As Long, endM As Long, aspectM As Long, flags As Long, fillColor As Long)
+' CIRCLE → Circle(cx,cy,r,color,start,end,aspect,flags,fillColor)
+Sub Circle(cx As Long, cy As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
     Dim hdc As HDC
     Dim x As Long
     Dim y As Long
@@ -404,10 +415,10 @@ Sub Circle(cx As Long, cy As Long, r As Long, color As Long, startM As Long, end
     End If
 
     If g_n88MemDC <> 0 Then
-        N88_DrawCircleOn(g_n88MemDC, x, y, r, color, startM, endM, aspectM, flags, fillColor)
+        N88_DrawCircleOn(g_n88MemDC, x, y, r, color, startAng, endAng, aspect, flags, fillColor)
     End If
     hdc = GetDC(g_n88Hwnd)
-    N88_DrawCircleOn(hdc, x, y, r, color, startM, endM, aspectM, flags, fillColor)
+    N88_DrawCircleOn(hdc, x, y, r, color, startAng, endAng, aspect, flags, fillColor)
     ReleaseDC(g_n88Hwnd, hdc)
 
     g_n88LPx = x

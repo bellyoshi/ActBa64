@@ -6,69 +6,36 @@ Dim g_pPS As *ID3D11PixelShader
 Dim g_pVB As *ID3D11Buffer
 Dim g_pLayout As *ID3D11InputLayout
 
-' 変換パラメータ（角度は千分率ラジアン、scale は千分率。Sin/Cos へ渡すとき Double 化）
-Dim g_tx As Long
-Dim g_ty As Long
-Dim g_angY As Long
-Dim g_angX As Long
-Dim g_scale As Long
+' 変換パラメータ（角度はラジアン Double、Sin/Cos にそのまま渡す）
+Dim g_tx As Double
+Dim g_ty As Double
+Dim g_angY As Double
+Dim g_angX As Double
+Dim g_scale As Double
 
 ' 頂点ワーク: (pos3+col4)×36 = 252 floats
 Dim g_vdata[251] As Single
 Dim g_vertCount As Long
 
-Const CUBE_HALF = 400
+Const CUBE_HALF = 0.4
 Const CUBE_VB_BYTES = 1008
-
-Function MilliToSingleBits(milli As Long) As Long
-	Dim sign As Long
-	Dim num As Long
-	Dim uexp As Long
-	Dim man As Long
-	Dim biased As Long
-
-	MilliToSingleBits = 0
-	If milli = 0 Then Exit Function
-	sign = 0
-	If milli < 0 Then
-		sign = 1
-		milli = 0 - milli
-	End If
-	num = milli
-	uexp = 0
-	While num < 1000
-		num = num * 2
-		uexp = uexp - 1
-		If uexp < -140 Then Exit Function
-	Wend
-	While num >= 2000
-		num = num / 2
-		uexp = uexp + 1
-		If uexp > 140 Then Exit Function
-	Wend
-	man = (num - 1000) * 8388 + ((num - 1000) * 608) / 1000
-	biased = uexp + 127
-	If biased <= 0 Then Exit Function
-	If biased >= 255 Then Exit Function
-	MilliToSingleBits = (sign * &H80000000) Or (biased * 8388608) Or man
-End Function
 
 Sub dx_ResetXform()
 	g_tx = 0
 	g_ty = 0
-	g_angY = 700
-	g_angX = 500
-	g_scale = 1000
+	g_angY = 0.7
+	g_angX = 0.5
+	g_scale = 1.0
 End Sub
 
-Sub dx_StoreSingle(dest As VoidPtr, milli As Long)
-	Dim bits As Long
-	bits = MilliToSingleBits(milli)
-	memcpy(dest, VarPtr(bits), 4)
+Sub dx_StoreSingle(dest As VoidPtr, v As Double)
+	Dim s As Single
+	s = v
+	memcpy(dest, VarPtr(s), 4)
 End Sub
 
 ' S → Ry → Rx → T → 透視投影
-Sub dx_XformPoint(x As Long, y As Long, z As Long, ByRef ox As Long, ByRef oy As Long, ByRef oz As Long)
+Sub dx_XformPoint(x As Double, y As Double, z As Double, ByRef ox As Double, ByRef oy As Double, ByRef oz As Double)
 	Dim sx As Double
 	Dim sy As Double
 	Dim sz As Double
@@ -80,31 +47,20 @@ Sub dx_XformPoint(x As Long, y As Long, z As Long, ByRef ox As Long, ByRef oy As
 	Dim x2 As Double
 	Dim y2 As Double
 	Dim z2 As Double
-	Dim dang As Double
-	Dim sc As Double
 	Dim ez As Double
-	Dim px As Long
-	Dim py As Long
-	Dim pz As Long
 
-	sc = g_scale
-	sc = sc / 1000
-	sx = x * sc
-	sy = y * sc
-	sz = z * sc
+	sx = x * g_scale
+	sy = y * g_scale
+	sz = z * g_scale
 
-	dang = g_angY
-	dang = dang / 1000
-	cs = Cos(dang)
-	sn = Sin(dang)
+	cs = Cos(g_angY)
+	sn = Sin(g_angY)
 	x1 = sx * cs + sz * sn
 	y1 = sy
 	z1 = sz * cs - sx * sn
 
-	dang = g_angX
-	dang = dang / 1000
-	cs = Cos(dang)
-	sn = Sin(dang)
+	cs = Cos(g_angX)
+	sn = Sin(g_angX)
 	x2 = x1
 	y2 = y1 * cs - z1 * sn
 	z2 = y1 * sn + z1 * cs
@@ -112,21 +68,17 @@ Sub dx_XformPoint(x As Long, y As Long, z As Long, ByRef ox As Long, ByRef oy As
 	x2 = x2 + g_tx
 	y2 = y2 + g_ty
 
-	ez = z2 + 2200
-	If ez < 400 Then ez = 400
-	px = x2 * 1600 / ez
-	py = y2 * 1600 / ez
-	pz = (ez - 400) * 200 / 1000
-
-	ox = px
-	oy = py
-	oz = pz
+	ez = z2 + 2.2
+	If ez < 0.4 Then ez = 0.4
+	ox = x2 * 1.6 / ez
+	oy = y2 * 1.6 / ez
+	oz = (ez - 0.4) * 0.2
 End Sub
 
-Sub dx_EmitVert(ByRef vi As Long, x As Long, y As Long, z As Long, cr As Long, cg As Long, cb As Long)
-	Dim ox As Long
-	Dim oy As Long
-	Dim oz As Long
+Sub dx_EmitVert(ByRef vi As Long, x As Double, y As Double, z As Double, cr As Double, cg As Double, cb As Double)
+	Dim ox As Double
+	Dim oy As Double
+	Dim oz As Double
 	Dim base As Long
 
 	dx_XformPoint(x, y, z, ox, oy, oz)
@@ -137,12 +89,12 @@ Sub dx_EmitVert(ByRef vi As Long, x As Long, y As Long, z As Long, cr As Long, c
 	dx_StoreSingle(VarPtr(g_vdata[base + 3]), cr)
 	dx_StoreSingle(VarPtr(g_vdata[base + 4]), cg)
 	dx_StoreSingle(VarPtr(g_vdata[base + 5]), cb)
-	dx_StoreSingle(VarPtr(g_vdata[base + 6]), 1000)
+	dx_StoreSingle(VarPtr(g_vdata[base + 6]), 1.0)
 	vi = vi + 1
 End Sub
 
 ' 三角形 2 枚（Win64 呼び出しは 16 引数超で codegen 制限に触れるため分割）
-Sub dx_EmitTri(ByRef vi As Long, x0 As Long, y0 As Long, z0 As Long, x1 As Long, y1 As Long, z1 As Long, x2 As Long, y2 As Long, z2 As Long, cr As Long, cg As Long, cb As Long)
+Sub dx_EmitTri(ByRef vi As Long, x0 As Double, y0 As Double, z0 As Double, x1 As Double, y1 As Double, z1 As Double, x2 As Double, y2 As Double, z2 As Double, cr As Double, cg As Double, cb As Double)
 	dx_EmitVert(vi, x0, y0, z0, cr, cg, cb)
 	dx_EmitVert(vi, x1, y1, z1, cr, cg, cb)
 	dx_EmitVert(vi, x2, y2, z2, cr, cg, cb)
@@ -150,29 +102,29 @@ End Sub
 
 Sub dx_BuildVertices()
 	Dim vi As Long
-	Dim h As Long
+	Dim h As Double
 	h = CUBE_HALF
 	vi = 0
 	ZeroMemory(VarPtr(g_vdata[0]), CUBE_VB_BYTES)
 
 	' +Z（赤）
-	dx_EmitTri(vi, 0 - h, 0 - h, h, h, 0 - h, h, h, h, h, 1000, 250, 250)
-	dx_EmitTri(vi, 0 - h, 0 - h, h, h, h, h, 0 - h, h, h, 1000, 250, 250)
+	dx_EmitTri(vi, 0 - h, 0 - h, h, h, 0 - h, h, h, h, h, 1.0, 0.25, 0.25)
+	dx_EmitTri(vi, 0 - h, 0 - h, h, h, h, h, 0 - h, h, h, 1.0, 0.25, 0.25)
 	' +X（緑）
-	dx_EmitTri(vi, h, 0 - h, h, h, 0 - h, 0 - h, h, h, 0 - h, 250, 1000, 250)
-	dx_EmitTri(vi, h, 0 - h, h, h, h, 0 - h, h, h, h, 250, 1000, 250)
+	dx_EmitTri(vi, h, 0 - h, h, h, 0 - h, 0 - h, h, h, 0 - h, 0.25, 1.0, 0.25)
+	dx_EmitTri(vi, h, 0 - h, h, h, h, 0 - h, h, h, h, 0.25, 1.0, 0.25)
 	' -Z（青）
-	dx_EmitTri(vi, h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, 250, 250, 1000)
-	dx_EmitTri(vi, h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 0 - h, 250, 250, 1000)
+	dx_EmitTri(vi, h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, 0.25, 0.25, 1.0)
+	dx_EmitTri(vi, h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 0 - h, 0.25, 0.25, 1.0)
 	' -X（黄）
-	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 1000, 1000, 250)
-	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, 0 - h, h, h, 0 - h, h, 0 - h, 1000, 1000, 250)
+	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, 0 - h, 0 - h, h, 0 - h, h, h, 1.0, 1.0, 0.25)
+	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, 0 - h, h, h, 0 - h, h, 0 - h, 1.0, 1.0, 0.25)
 	' +Y（シアン）
-	dx_EmitTri(vi, 0 - h, h, h, h, h, h, h, h, 0 - h, 250, 1000, 1000)
-	dx_EmitTri(vi, 0 - h, h, h, h, h, 0 - h, 0 - h, h, 0 - h, 250, 1000, 1000)
+	dx_EmitTri(vi, 0 - h, h, h, h, h, h, h, h, 0 - h, 0.25, 1.0, 1.0)
+	dx_EmitTri(vi, 0 - h, h, h, h, h, 0 - h, 0 - h, h, 0 - h, 0.25, 1.0, 1.0)
 	' -Y（マゼンタ）
-	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, h, 0 - h, 0 - h, h, 0 - h, h, 1000, 250, 1000)
-	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, h, 0 - h, h, 0 - h, 0 - h, h, 1000, 250, 1000)
+	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, h, 0 - h, 0 - h, h, 0 - h, h, 1.0, 0.25, 1.0)
+	dx_EmitTri(vi, 0 - h, 0 - h, 0 - h, h, 0 - h, h, 0 - h, 0 - h, h, 1.0, 0.25, 1.0)
 
 	g_vertCount = vi
 End Sub
@@ -349,12 +301,12 @@ Function dx_LoadSample() As Long
 End Function
 
 Sub dx_UpdateInput()
-	Dim stepMove As Long
-	Dim stepAng As Long
-	Dim stepScale As Long
-	stepMove = 8
-	stepAng = 35
-	stepScale = 15
+	Dim stepMove As Double
+	Dim stepAng As Double
+	Dim stepScale As Double
+	stepMove = 0.008
+	stepAng = 0.035
+	stepScale = 0.015
 
 	If dx_KeyDown(VK_LEFT) <> 0 Then g_tx = g_tx - stepMove
 	If dx_KeyDown(VK_RIGHT) <> 0 Then g_tx = g_tx + stepMove
@@ -371,8 +323,8 @@ Sub dx_UpdateInput()
 	If dx_KeyDown(VK_OEM_MINUS) <> 0 Then g_scale = g_scale - stepScale
 	If dx_KeyDown(VK_SUBTRACT) <> 0 Then g_scale = g_scale - stepScale
 
-	If g_scale < 100 Then g_scale = 100
-	If g_scale > 4000 Then g_scale = 4000
+	If g_scale < 0.1 Then g_scale = 0.1
+	If g_scale > 4.0 Then g_scale = 4.0
 
 	If dx_KeyDown(82) <> 0 Then dx_ResetXform()
 
@@ -385,7 +337,6 @@ Sub dx_DrawHelp()
 	Dim s As String
 	Dim degY As Long
 	Dim degX As Long
-	Dim dr As Double
 
 	If hMainWnd = 0 Then Exit Sub
 	hdc = GetDC(hMainWnd)
@@ -412,12 +363,8 @@ Sub dx_DrawHelp()
 
 	SetTextColor(hdc, &H00FFFFFF)
 	y = y + 24
-	dr = g_angY
-	dr = dr / 1000
-	degY = RadToDeg(dr)
-	dr = g_angX
-	dr = dr / 1000
-	degX = RadToDeg(dr)
+	degY = RadToDeg(g_angY)
+	degX = RadToDeg(g_angX)
 	s = "tx=" + Str$(g_tx) + "  ty=" + Str$(g_ty)
 	dx_TextOutUtf8(hdc, 8, y, s)
 	y = y + 18

@@ -107,7 +107,8 @@
 | `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |
 | `CDbl` / `CInt` / `CSng` 等 | 4.20 変換関数。`As` キャストは可 |
 | ~~`Randomize` / `Rnd`~~ | 済（`Math.abp`、`Rnd` は `[0,1)` Double） |
-| ~~`Log` / `Int` / `Fix` / 三角（Math）~~ | 済（IEEE Double。旧千分率は廃止） |
+| ~~`Log` / `Int` / `Fix` / 三角（Math）~~ | 済（IEEE Double。千分率はプロジェクト全体で廃止） |
+| ~~小数リテラル / N88 `CIRCLE` 角度~~ | 済（AST 上 IEEE Double ビット。`test/t_double_lit_prec.abp`） |
 
 ## 文字列・メモリ・ファイル
 
