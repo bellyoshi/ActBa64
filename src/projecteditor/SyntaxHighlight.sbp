@@ -125,171 +125,187 @@ Sub Hl_Emit(hDC As HDC, ByRef x As Long, ByVal y As Long, seg As String, ByVal k
     x = x + sz.cx
 End Sub
 
+Function Hl_AdvanceUtf8(ByVal b As Long, ByVal i As Long, ByVal n As Long) As Long
+    Dim charBytes As Long
+    charBytes = Enc_Utf8CharBytes(b)
+    If charBytes > 1 And i + charBytes <= n Then
+        Hl_AdvanceUtf8 = i + charBytes
+    Else
+        Hl_AdvanceUtf8 = i + 1
+    End If
+End Function
+
+Function Hl_PeekByte(p As *Byte, ByVal i As Long) As Long
+    Dim tmp As Long
+    Dim bp As *Byte
+    bp = VarPtr(tmp)
+    bp[0] = p[i]
+    Hl_PeekByte = tmp And &HFF
+End Function
+
+Sub Hl_ScanBlockComment(p As *Byte, ByRef i As Long, ByVal n As Long, ByRef inBlock As Long)
+    Dim b As Long
+    Dim b2 As Long
+    While i < n
+        b = Hl_PeekByte(p, i)
+        If b = 42 And i + 1 < n Then
+            b2 = Hl_PeekByte(p, i + 1)
+            If b2 = 47 Then
+                i = i + 2
+                inBlock = 0
+                Exit Sub
+            End If
+        End If
+        i = Hl_AdvanceUtf8(b, i, n)
+    Wend
+End Sub
+
+Sub Hl_DrawInBlock(hDC As HDC, ByRef x As Long, ByVal y As Long, lineStr As String, p As *Byte, ByRef i As Long, ByVal n As Long, ByRef inBlock As Long, ByVal doDraw As Long)
+    Dim startI As Long
+    Dim seg As String
+    startI = i
+    Hl_ScanBlockComment(p, i, n, inBlock)
+    If inBlock <> 0 Then
+        seg = Hl_MidBytes$(lineStr, startI + 1, n - startI)
+        Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
+        i = n
+    Else
+        seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+        Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
+    End If
+End Sub
+
+Sub Hl_DrawSlash(hDC As HDC, ByRef x As Long, ByVal y As Long, lineStr As String, p As *Byte, ByRef i As Long, ByVal n As Long, ByRef inBlock As Long, ByVal doDraw As Long)
+    Dim startI As Long
+    Dim seg As String
+    Dim b2 As Long
+    b2 = Hl_PeekByte(p, i + 1)
+    If b2 <> 42 Then
+        seg = Hl_MidBytes$(lineStr, i + 1, 1)
+        Hl_Emit(hDC, x, y, seg, HL_NORMAL, doDraw)
+        i = i + 1
+        Exit Sub
+    End If
+    startI = i
+    i = i + 2
+    inBlock = 1
+    Hl_ScanBlockComment(p, i, n, inBlock)
+    seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+    Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
+End Sub
+
+Sub Hl_DrawStringLit(hDC As HDC, ByRef x As Long, ByVal y As Long, lineStr As String, p As *Byte, ByRef i As Long, ByVal n As Long, ByVal doDraw As Long)
+    Dim startI As Long
+    Dim seg As String
+    Dim b As Long
+    startI = i
+    i = i + 1
+    While i < n
+        b = Hl_PeekByte(p, i)
+        If b = 34 Then
+            i = i + 1
+            Exit While
+        End If
+        i = Hl_AdvanceUtf8(b, i, n)
+    Wend
+    seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+    Hl_Emit(hDC, x, y, seg, HL_STRING, doDraw)
+End Sub
+
+Sub Hl_DrawDirective(hDC As HDC, ByRef x As Long, ByVal y As Long, lineStr As String, p As *Byte, ByRef i As Long, ByVal n As Long, ByVal doDraw As Long)
+    Dim startI As Long
+    Dim word As String
+    Dim b As Long
+    Dim kind As Long
+    startI = i
+    i = i + 1
+    While i < n
+        b = Hl_PeekByte(p, i)
+        If Hl_IsAlnum(b) = 0 Then Exit While
+        i = i + 1
+    Wend
+    word = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+    kind = HL_NORMAL
+    If Hl_IsDirective(word) <> 0 Then kind = HL_KEYWORD
+    Hl_Emit(hDC, x, y, word, kind, doDraw)
+End Sub
+
+Sub Hl_DrawIdent(hDC As HDC, ByRef x As Long, ByVal y As Long, lineStr As String, p As *Byte, ByRef i As Long, ByVal n As Long, ByVal doDraw As Long)
+    Dim startI As Long
+    Dim word As String
+    Dim b As Long
+    Dim kind As Long
+    startI = i
+    i = i + 1
+    While i < n
+        b = Hl_PeekByte(p, i)
+        If Hl_IsAlnum(b) = 0 And b <> 36 Then Exit While
+        i = i + 1
+    Wend
+    word = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+    kind = HL_NORMAL
+    If Hl_IsKeyword(word) <> 0 Then kind = HL_KEYWORD
+    Hl_Emit(hDC, x, y, word, kind, doDraw)
+End Sub
+
+Sub Hl_DrawNumber(hDC As HDC, ByRef x As Long, ByVal y As Long, lineStr As String, p As *Byte, ByRef i As Long, ByVal n As Long, ByVal b0 As Long, ByVal doDraw As Long)
+    Dim startI As Long
+    Dim seg As String
+    Dim b As Long
+    startI = i
+    If b0 = 38 Then
+        i = i + 1
+        If i < n Then
+            b = Hl_PeekByte(p, i)
+            If b = 72 Or b = 104 Then i = i + 1
+        End If
+    End If
+    While i < n
+        b = Hl_PeekByte(p, i)
+        If Hl_IsHexDigit(b) = 0 Then Exit While
+        i = i + 1
+    Wend
+    seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
+    Hl_Emit(hDC, x, y, seg, HL_NUMBER, doDraw)
+End Sub
+
 Sub Hl_DrawLine(hDC As HDC, ByVal x As Long, ByVal y As Long, lineStr As String, ByRef inBlock As Long, ByVal doDraw As Long)
     Dim n As Long
     Dim i As Long
     Dim b As Long
-    Dim b2 As Long
-    Dim startI As Long
-    Dim word As String
     Dim seg As String
     Dim p As *Byte
-    Dim tmp As Long
-    Dim bp As *Byte
-    Dim kind As Long
     Dim charBytes As Long
 
     n = Len(lineStr)
     If n <= 0 Then Exit Sub
     p = StrPtr(lineStr)
-    bp = VarPtr(tmp)
     i = 0
 
     While i < n
-        bp[0] = p[i]
-        b = tmp And &HFF
+        b = Hl_PeekByte(p, i)
 
         If inBlock <> 0 Then
-            startI = i
-            While i < n
-                bp[0] = p[i]
-                b = tmp And &HFF
-                If b = 42 And i + 1 < n Then
-                    bp[0] = p[i + 1]
-                    b2 = tmp And &HFF
-                    If b2 = 47 Then
-                        i = i + 2
-                        seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-                        Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
-                        inBlock = 0
-                        Exit While
-                    End If
-                End If
-                charBytes = Enc_Utf8CharBytes(b)
-                If charBytes > 1 And i + charBytes <= n Then
-                    i = i + charBytes
-                Else
-                    i = i + 1
-                End If
-            Wend
-            If inBlock <> 0 Then
-                seg = Hl_MidBytes$(lineStr, startI + 1, n - startI)
-                Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
-                i = n
-            End If
-
+            Hl_DrawInBlock(hDC, x, y, lineStr, p, i, n, inBlock, doDraw)
         ElseIf b = 39 Then
             seg = Hl_MidBytes$(lineStr, i + 1, n - i)
             Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
             i = n
-
         ElseIf b = 47 And i + 1 < n Then
-            bp[0] = p[i + 1]
-            b2 = tmp And &HFF
-            If b2 = 42 Then
-                startI = i
-                i = i + 2
-                inBlock = 1
-                While i < n
-                    bp[0] = p[i]
-                    b = tmp And &HFF
-                    If b = 42 And i + 1 < n Then
-                        bp[0] = p[i + 1]
-                        b2 = tmp And &HFF
-                        If b2 = 47 Then
-                            i = i + 2
-                            inBlock = 0
-                            Exit While
-                        End If
-                    End If
-                    charBytes = Enc_Utf8CharBytes(b)
-                    If charBytes > 1 And i + charBytes <= n Then
-                        i = i + charBytes
-                    Else
-                        i = i + 1
-                    End If
-                Wend
-                seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-                Hl_Emit(hDC, x, y, seg, HL_COMMENT, doDraw)
-            Else
-                seg = Hl_MidBytes$(lineStr, i + 1, 1)
-                Hl_Emit(hDC, x, y, seg, HL_NORMAL, doDraw)
-                i = i + 1
-            End If
-
+            Hl_DrawSlash(hDC, x, y, lineStr, p, i, n, inBlock, doDraw)
         ElseIf b = 34 Then
-            startI = i
-            i = i + 1
-            While i < n
-                bp[0] = p[i]
-                b = tmp And &HFF
-                If b = 34 Then
-                    i = i + 1
-                    Exit While
-                End If
-                charBytes = Enc_Utf8CharBytes(b)
-                If charBytes > 1 And i + charBytes <= n Then
-                    i = i + charBytes
-                Else
-                    i = i + 1
-                End If
-            Wend
-            seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-            Hl_Emit(hDC, x, y, seg, HL_STRING, doDraw)
-
+            Hl_DrawStringLit(hDC, x, y, lineStr, p, i, n, doDraw)
         ElseIf b = 35 Then
-            startI = i
-            i = i + 1
-            While i < n
-                bp[0] = p[i]
-                b = tmp And &HFF
-                If Hl_IsAlnum(b) = 0 Then Exit While
-                i = i + 1
-            Wend
-            word = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-            kind = HL_NORMAL
-            If Hl_IsDirective(word) <> 0 Then kind = HL_KEYWORD
-            Hl_Emit(hDC, x, y, word, kind, doDraw)
-
+            Hl_DrawDirective(hDC, x, y, lineStr, p, i, n, doDraw)
         ElseIf Hl_IsAlpha(b) <> 0 Then
-            startI = i
-            i = i + 1
-            While i < n
-                bp[0] = p[i]
-                b = tmp And &HFF
-                If Hl_IsAlnum(b) = 0 And b <> 36 Then Exit While
-                i = i + 1
-            Wend
-            word = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-            kind = HL_NORMAL
-            If Hl_IsKeyword(word) <> 0 Then kind = HL_KEYWORD
-            Hl_Emit(hDC, x, y, word, kind, doDraw)
-
+            Hl_DrawIdent(hDC, x, y, lineStr, p, i, n, doDraw)
         ElseIf Hl_IsDigit(b) <> 0 Or b = 38 Then
-            startI = i
-            If b = 38 Then
-                i = i + 1
-                If i < n Then
-                    bp[0] = p[i]
-                    b = tmp And &HFF
-                    If b = 72 Or b = 104 Then i = i + 1
-                End If
-            End If
-            While i < n
-                bp[0] = p[i]
-                b = tmp And &HFF
-                If Hl_IsHexDigit(b) = 0 Then Exit While
-                i = i + 1
-            Wend
-            seg = Hl_MidBytes$(lineStr, startI + 1, i - startI)
-            Hl_Emit(hDC, x, y, seg, HL_NUMBER, doDraw)
-
+            Hl_DrawNumber(hDC, x, y, lineStr, p, i, n, b, doDraw)
         ElseIf Enc_Utf8CharBytes(b) > 1 And i + Enc_Utf8CharBytes(b) <= n Then
             charBytes = Enc_Utf8CharBytes(b)
             seg = Hl_MidBytes$(lineStr, i + 1, charBytes)
             Hl_Emit(hDC, x, y, seg, HL_NORMAL, doDraw)
             i = i + charBytes
-
         Else
             seg = Hl_MidBytes$(lineStr, i + 1, 1)
             Hl_Emit(hDC, x, y, seg, HL_NORMAL, doDraw)
