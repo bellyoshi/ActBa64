@@ -319,6 +319,25 @@ Function PpAppendN88Foot(ByRef head As *Byte, ByRef headLen As Long) As Long
     PpAppendN88Foot = 1
 End Function
 
+Function PpDetectConsole(src As *Byte) As Long
+    Dim kCon(15) As Byte
+    lstrcpy(VarPtr(kCon), "console")
+    PpDetectConsole = PpSourceHasHashDir(src, VarPtr(kCon))
+End Function
+
+Function PpDetectN88(src As *Byte) As Long
+    Dim kn88(15) As Byte
+    Dim kPrompt(15) As Byte
+    Dim want As Long
+    lstrcpy(VarPtr(kn88), "n88basic")
+    lstrcpy(VarPtr(kPrompt), "prompt")
+    want = PpSourceHasHashDir(src, VarPtr(kn88))
+    If want = 0 Then
+        want = PpSourceHasHashDir(src, VarPtr(kPrompt))
+    End If
+    PpDetectN88 = want
+End Function
+
 ' Include\default を常時先頭へ。#console / #n88basic / #prompt なら各 idx も挿入。
 ' #n88basic / #prompt 時は GUI サブシステムを有効化し、末尾に N88_Run() を付ける。
 Function PpPrependDefaults(src As *Byte) As *Byte
@@ -328,19 +347,10 @@ Function PpPrependDefaults(src As *Byte) As *Byte
     Dim srcLen As Long
     Dim wantCon As Long
     Dim wantN88 As Long
-    Dim kCon(15) As Byte
-    Dim kn88(15) As Byte
-    Dim kPrompt(15) As Byte
 
     PpPrependDefaults = NULL
-    lstrcpy(VarPtr(kCon), "console")
-    lstrcpy(VarPtr(kn88), "n88basic")
-    lstrcpy(VarPtr(kPrompt), "prompt")
-    wantCon = PpSourceHasHashDir(src, VarPtr(kCon))
-    wantN88 = PpSourceHasHashDir(src, VarPtr(kn88))
-    If wantN88 = 0 Then
-        wantN88 = PpSourceHasHashDir(src, VarPtr(kPrompt))
-    End If
+    wantCon = PpDetectConsole(src)
+    wantN88 = PpDetectN88(src)
     g_ppN88Basic = wantN88
     If wantN88 <> 0 Then
         g_ppUseWindow = 1
@@ -421,41 +431,25 @@ Function PpLineIsSourceHeader(line As *Byte, n As Long) As Long
     PpLineIsSourceHeader = 1
 End Function
 
-' #USEWINDOW=1 / #usewindow=0 （#SOURCE 節の外も含め全行を対象）
-Function PpLineUseWindow(line As *Byte, n As Long, ByRef valOut As Long) As Long
+Function PpSkipWsAt(line As *Byte, n As Long, from As Long) As Long
     Dim i As Long
-    Dim k As Long
     Dim c As Long
-    Dim word(15) As Byte
+    i = from
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    PpSkipWsAt = i
+End Function
+
+Function PpParseEqNumber(line As *Byte, n As Long, from As Long, ByRef valOut As Long) As Long
+    Dim i As Long
+    Dim c As Long
     Dim v As Long
     Dim got As Long
-
-    PpLineUseWindow = 0
-    i = 0
-    While i < n
-        c = line[i]
-        If c <> 32 And c <> 9 Then Exit While
-        i = i + 1
-    Wend
-    If i >= n Then Exit Function
-    If line[i] <> 35 Then Exit Function
-    i = i + 1
-    lstrcpy(VarPtr(word), "usewindow")
-    k = 0
-    While word[k] <> 0
-        If i + k >= n Then Exit Function
-        If PpToLower(line[i + k]) <> word[k] Then Exit Function
-        k = k + 1
-    Wend
-    i = i + k
-    While i < n
-        c = line[i]
-        If c <> 32 And c <> 9 Then Exit While
-        i = i + 1
-    Wend
-    If i >= n Then Exit Function
-    If line[i] <> 61 Then Exit Function
-    i = i + 1
+    PpParseEqNumber = 0
+    i = from
     v = 0
     got = 0
     While i < n
@@ -472,6 +466,31 @@ Function PpLineUseWindow(line As *Byte, n As Long, ByRef valOut As Long) As Long
     Wend
     If got = 0 Then Exit Function
     valOut = v
+    PpParseEqNumber = 1
+End Function
+
+' #USEWINDOW=1 / #usewindow=0 （#SOURCE 節の外も含め全行を対象）
+Function PpLineUseWindow(line As *Byte, n As Long, ByRef valOut As Long) As Long
+    Dim i As Long
+    Dim k As Long
+    Dim word(15) As Byte
+
+    PpLineUseWindow = 0
+    i = PpSkipWsAt(line, n, 0)
+    If i >= n Then Exit Function
+    If line[i] <> 35 Then Exit Function
+    i = i + 1
+    lstrcpy(VarPtr(word), "usewindow")
+    k = 0
+    While word[k] <> 0
+        If i + k >= n Then Exit Function
+        If PpToLower(line[i + k]) <> word[k] Then Exit Function
+        k = k + 1
+    Wend
+    i = PpSkipWsAt(line, n, i + k)
+    If i >= n Then Exit Function
+    If line[i] <> 61 Then Exit Function
+    If PpParseEqNumber(line, n, i + 1, valOut) = 0 Then Exit Function
     PpLineUseWindow = 1
 End Function
 
@@ -515,13 +534,26 @@ Sub PpJoinSrcPath(dir As *Byte, name As *Byte, full As *Byte)
     End If
 End Sub
 
+Function PpEmitSrcHeader(dst As *Byte, ByRef dstLen As Long, dstCap As Long, name As *Byte) As Long
+    Dim hdr(63) As Byte
+    PpEmitSrcHeader = 0
+    lstrcpy(VarPtr(hdr), "' ---- ")
+    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then Exit Function
+    If PpAppend(dst, dstLen, dstCap, name, lstrlen(name)) = 0 Then Exit Function
+    lstrcpy(VarPtr(hdr), " ----")
+    hdr[5] = 13
+    hdr[6] = 10
+    hdr[7] = 0
+    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then Exit Function
+    PpEmitSrcHeader = 1
+End Function
+
 Function PpAppendOneSource(dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, name As *Byte) As Long
     Dim full(511) As Byte
     Dim src As *Byte
     Dim srcSize As Long
     Dim expanded As *Byte
     Dim expLen As Long
-    Dim hdr(63) As Byte
     Dim crlf(3) As Byte
     PpAppendOneSource = 0
     PpJoinSrcPath(dir, name, VarPtr(full))
@@ -535,20 +567,7 @@ Function PpAppendOneSource(dst As *Byte, ByRef dstLen As Long, dstCap As Long, d
     expanded = ExpandIncludes(src, srcSize, VarPtr(full))
     free(src)
     If expanded = NULL Then Exit Function
-    lstrcpy(VarPtr(hdr), "' ---- ")
-    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then
-        free(expanded)
-        Exit Function
-    End If
-    If PpAppend(dst, dstLen, dstCap, name, lstrlen(name)) = 0 Then
-        free(expanded)
-        Exit Function
-    End If
-    lstrcpy(VarPtr(hdr), " ----")
-    hdr[5] = 13
-    hdr[6] = 10
-    hdr[7] = 0
-    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), 7) = 0 Then
+    If PpEmitSrcHeader(dst, dstLen, dstCap, name) = 0 Then
         free(expanded)
         Exit Function
     End If
@@ -596,13 +615,45 @@ Function PpHandleSourceLoop(line As *Byte, n As Long, ByRef inSource As Long, ds
     End If
 End Function
 
+Function PpNextPjLine(pj As *Byte, pjSize As Long, ByRef i As Long, line As *Byte) As Long
+    Dim start As Long
+    Dim n As Long
+    Dim c As Long
+    Dim j As Long
+    start = i
+    While i < pjSize
+        c = pj[i]
+        If c = 10 Or c = 13 Then Exit While
+        i = i + 1
+    Wend
+    n = i - start
+    If n >= PP_LINE_MAX Then n = PP_LINE_MAX - 1
+    j = 0
+    While j < n
+        line[j] = pj[start + j]
+        j = j + 1
+    Wend
+    line[n] = 0
+    If i < pjSize And pj[i] = 13 Then i = i + 1
+    If i < pjSize And pj[i] = 10 Then i = i + 1
+    PpNextPjLine = n
+End Function
+
+Function PpPjProcessLine(line As *Byte, n As Long, ByRef inSource As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, ByRef nSrc As Long) As Long
+    Dim uwVal As Long
+    PpPjProcessLine = 0
+    If PpLineUseWindow(line, n, uwVal) <> 0 Then
+        g_ppUseWindow = uwVal
+    End If
+    If PpHandleSourceLoop(line, n, inSource, dst, dstLen, dstCap, dir, nSrc) = 0 Then Exit Function
+    PpPjProcessLine = 1
+End Function
+
 Function CombinePjSources(pjPath As *Byte) As *Byte
     Dim pj As *Byte
     Dim pjSize As Long
     Dim i As Long
-    Dim start As Long
     Dim n As Long
-    Dim c As Long
     Dim line(511) As Byte
     Dim dir(511) As Byte
     Dim inSource As Long
@@ -610,8 +661,6 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
     Dim dstLen As Long
     Dim dstCap As Long
     Dim nSrc As Long
-    Dim j As Long
-    Dim uwVal As Long
 
     CombinePjSources = NULL
     PpOnceReset()
@@ -633,32 +682,12 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
     nSrc = 0
     i = 0
     While i < pjSize
-        start = i
-        While i < pjSize
-            c = pj[i]
-            If c = 10 Or c = 13 Then Exit While
-            i = i + 1
-        Wend
-        n = i - start
-        If n >= PP_LINE_MAX Then n = PP_LINE_MAX - 1
-        j = 0
-        While j < n
-            line[j] = pj[start + j]
-            j = j + 1
-        Wend
-        line[n] = 0
-
-        If PpLineUseWindow(VarPtr(line), n, uwVal) <> 0 Then
-            g_ppUseWindow = uwVal
-        End If
-
-        If PpHandleSourceLoop(VarPtr(line), n, inSource, dst, dstLen, dstCap, VarPtr(dir), nSrc) = 0 Then
+        n = PpNextPjLine(pj, pjSize, i, VarPtr(line))
+        If PpPjProcessLine(VarPtr(line), n, inSource, dst, dstLen, dstCap, VarPtr(dir), nSrc) = 0 Then
             free(pj)
             free(dst)
             Exit Function
         End If
-        If i < pjSize And pj[i] = 13 Then i = i + 1
-        If i < pjSize And pj[i] = 10 Then i = i + 1
     Wend
     free(pj)
     If nSrc <= 0 Then

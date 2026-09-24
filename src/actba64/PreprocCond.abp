@@ -132,21 +132,62 @@ Function PpCondDirectiveKeyword(line As *Byte, n As Long, ByRef i As Long, word 
     PpCondDirectiveKeyword = 1
 End Function
 
+Sub PpCondEmitLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long)
+    Dim nl(1) As Byte
+    If PpCondEmitActive() = 0 Then Exit Sub
+    If PpAppend(dst, dstLen, dstCap, line, n) = 0 Then Exit Sub
+    nl[0] = 10
+    If PpAppend(dst, dstLen, dstCap, VarPtr(nl), 1) = 0 Then Exit Sub
+End Sub
+
+' wantDefined = 1 for #ifdef, 0 for #ifndef
+Sub PpCondPushIf(id As *Byte, wantDefined As Long)
+    Dim parentActive As Long
+    Dim defined As Long
+    parentActive = PpCondEmitActive()
+    g_ppIfDepth = g_ppIfDepth + 1
+    If g_ppIfDepth >= PP_IF_MAX Then
+        g_ppIfDepth = PP_IF_MAX - 1
+    End If
+    defined = PpCondIsDefined(id)
+    g_ppIfElseFlip[g_ppIfDepth] = 0
+    If parentActive = 0 Then
+        g_ppIfActive[g_ppIfDepth] = 0
+    ElseIf defined = wantDefined Then
+        g_ppIfActive[g_ppIfDepth] = 1
+    Else
+        g_ppIfActive[g_ppIfDepth] = 0
+        g_ppIfElseFlip[g_ppIfDepth] = 1
+    End If
+End Sub
+
+Sub PpCondHandleElse()
+    Dim parentActive As Long
+    If g_ppIfDepth <= 0 Then Exit Sub
+    parentActive = PpCondEmitActive()
+    If parentActive = 0 And g_ppIfActive[g_ppIfDepth] = 0 Then
+        If g_ppIfElseFlip[g_ppIfDepth] <> 0 Then
+            g_ppIfActive[g_ppIfDepth] = 1
+            g_ppIfElseFlip[g_ppIfDepth] = 0
+        End If
+    ElseIf parentActive <> 0 Then
+        If g_ppIfActive[g_ppIfDepth] <> 0 Then
+            g_ppIfActive[g_ppIfDepth] = 0
+        ElseIf g_ppIfElseFlip[g_ppIfDepth] <> 0 Then
+            g_ppIfActive[g_ppIfDepth] = 1
+            g_ppIfElseFlip[g_ppIfDepth] = 0
+        End If
+    End If
+End Sub
+
 Sub PpCondHandleLine(line As *Byte, n As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long)
     Dim i As Long
     Dim word(15) As Byte
     Dim id(31) As Byte
-    Dim parentActive As Long
-    Dim defined As Long
-    Dim nl(1) As Byte
 
     i = 0
     If PpCondDirectiveKeyword(line, n, i, VarPtr(word)) = 0 Then
-        If PpCondEmitActive() <> 0 Then
-            If PpAppend(dst, dstLen, dstCap, line, n) = 0 Then Exit Sub
-            nl[0] = 10
-            If PpAppend(dst, dstLen, dstCap, VarPtr(nl), 1) = 0 Then Exit Sub
-        End If
+        PpCondEmitLine(dst, dstLen, dstCap, line, n)
         Exit Sub
     End If
 
@@ -160,60 +201,18 @@ Sub PpCondHandleLine(line As *Byte, n As Long, dst As *Byte, ByRef dstLen As Lon
 
     If PpStrEqCI(VarPtr(word), "ifdef") <> 0 Then
         PpCondCopyIdentFromLine(line, n, i, VarPtr(id))
-        parentActive = PpCondEmitActive()
-        g_ppIfDepth = g_ppIfDepth + 1
-        If g_ppIfDepth >= PP_IF_MAX Then
-            g_ppIfDepth = PP_IF_MAX - 1
-        End If
-        defined = PpCondIsDefined(VarPtr(id))
-        g_ppIfElseFlip[g_ppIfDepth] = 0
-        If parentActive = 0 Then
-            g_ppIfActive[g_ppIfDepth] = 0
-        ElseIf defined <> 0 Then
-            g_ppIfActive[g_ppIfDepth] = 1
-        Else
-            g_ppIfActive[g_ppIfDepth] = 0
-            g_ppIfElseFlip[g_ppIfDepth] = 1
-        End If
+        PpCondPushIf(VarPtr(id), 1)
         Exit Sub
     End If
 
     If PpStrEqCI(VarPtr(word), "ifndef") <> 0 Then
         PpCondCopyIdentFromLine(line, n, i, VarPtr(id))
-        parentActive = PpCondEmitActive()
-        g_ppIfDepth = g_ppIfDepth + 1
-        If g_ppIfDepth >= PP_IF_MAX Then
-            g_ppIfDepth = PP_IF_MAX - 1
-        End If
-        defined = PpCondIsDefined(VarPtr(id))
-        g_ppIfElseFlip[g_ppIfDepth] = 0
-        If parentActive = 0 Then
-            g_ppIfActive[g_ppIfDepth] = 0
-        ElseIf defined = 0 Then
-            g_ppIfActive[g_ppIfDepth] = 1
-        Else
-            g_ppIfActive[g_ppIfDepth] = 0
-            g_ppIfElseFlip[g_ppIfDepth] = 1
-        End If
+        PpCondPushIf(VarPtr(id), 0)
         Exit Sub
     End If
 
     If PpStrEqCI(VarPtr(word), "else") <> 0 Then
-        If g_ppIfDepth <= 0 Then Exit Sub
-        parentActive = PpCondEmitActive()
-        If parentActive = 0 And g_ppIfActive[g_ppIfDepth] = 0 Then
-            If g_ppIfElseFlip[g_ppIfDepth] <> 0 Then
-                g_ppIfActive[g_ppIfDepth] = 1
-                g_ppIfElseFlip[g_ppIfDepth] = 0
-            End If
-        ElseIf parentActive <> 0 Then
-            If g_ppIfActive[g_ppIfDepth] <> 0 Then
-                g_ppIfActive[g_ppIfDepth] = 0
-            ElseIf g_ppIfElseFlip[g_ppIfDepth] <> 0 Then
-                g_ppIfActive[g_ppIfDepth] = 1
-                g_ppIfElseFlip[g_ppIfDepth] = 0
-            End If
-        End If
+        PpCondHandleElse()
         Exit Sub
     End If
 
@@ -224,12 +223,19 @@ Sub PpCondHandleLine(line As *Byte, n As Long, dst As *Byte, ByRef dstLen As Lon
         Exit Sub
     End If
 
-    If PpCondEmitActive() <> 0 Then
-        If PpAppend(dst, dstLen, dstCap, line, n) = 0 Then Exit Sub
-        nl[0] = 10
-        If PpAppend(dst, dstLen, dstCap, VarPtr(nl), 1) = 0 Then Exit Sub
-    End If
+    PpCondEmitLine(dst, dstLen, dstCap, line, n)
 End Sub
+
+Function PpCondCopyLine(line As *Byte, src As *Byte, lineStart As Long, cnt As Long) As Long
+    Dim ln As Long
+    ln = cnt
+    If ln > 511 Then ln = 511
+    If ln > 0 Then
+        memcpy(line, src + lineStart, ln)
+    End If
+    line[ln] = 0
+    PpCondCopyLine = ln
+End Function
 
 Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
     Dim dst As *Byte
@@ -257,12 +263,7 @@ Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
     While i < srcSize
         c = src[i]
         If c = 10 Or c = 13 Then
-            ln = i - lineStart
-            If ln > 511 Then ln = 511
-            If ln > 0 Then
-                memcpy(VarPtr(line), src + lineStart, ln)
-            End If
-            line[ln] = 0
+            ln = PpCondCopyLine(VarPtr(line), src, lineStart, i - lineStart)
             PpCondHandleLine(VarPtr(line), ln, dst, dstLen, dstCap)
             If c = 13 And i + 1 < srcSize And src[i + 1] = 10 Then
                 i = i + 1
@@ -274,12 +275,7 @@ Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
         End If
     Wend
     If lineStart < srcSize Then
-        ln = srcSize - lineStart
-        If ln > 511 Then ln = 511
-        If ln > 0 Then
-            memcpy(VarPtr(line), src + lineStart, ln)
-        End If
-        line[ln] = 0
+        ln = PpCondCopyLine(VarPtr(line), src, lineStart, srcSize - lineStart)
         PpCondHandleLine(VarPtr(line), ln, dst, dstLen, dstCap)
     End If
     dst[dstLen] = 0
