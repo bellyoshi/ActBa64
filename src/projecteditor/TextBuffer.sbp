@@ -228,30 +228,58 @@ Function TextBuf_GetByte(ByVal logicalIndex As Long) As Byte
 End Function
 
 Sub TextBuf_RebuildLineOffsets()
+    Dim leftLen As Long
+    Dim rightLen As Long
     Dim docLen As Long
-    Dim i As Long
+    Dim logical As Long
     Dim b As Long
+    Dim nb As Long
+    Dim p As *Byte
+    Dim tmp As Byte
+    Dim bp As *Byte
 
     TextBuf_EnsureInit()
     LineOff_EnsureCap(1)
     g_lineOff.offsets[0] = 0
     g_lineOff.count = 1
 
-    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
-    i = 0
-    While i < docLen
-        b = TextBuf_GetByte(i)
-        If b = 13 And i + 1 < docLen And TextBuf_GetByte(i + 1) = 10 Then
-            i = i + 1
+    p = g_textBuf.buffer
+    leftLen = g_textBuf.gap_start
+    rightLen = g_textBuf.capacity - g_textBuf.gap_end
+    docLen = leftLen + rightLen
+    bp = VarPtr(tmp)
+
+    ' gap を跨いでも GetByte 呼び出し無しで走査（読込後は左連続が多い）
+    logical = 0
+    While logical < docLen
+        If logical < leftLen Then
+            bp[0] = p[logical]
+        Else
+            bp[0] = p[g_textBuf.gap_end + (logical - leftLen)]
+        End If
+        b = tmp And &HFF
+        If b = 13 And logical + 1 < docLen Then
+            If logical + 1 < leftLen Then
+                bp[0] = p[logical + 1]
+            Else
+                bp[0] = p[g_textBuf.gap_end + (logical + 1 - leftLen)]
+            End If
+            nb = tmp And &HFF
+            If nb = 10 Then
+                logical = logical + 1
+                LineOff_EnsureCap(g_lineOff.count + 1)
+                g_lineOff.offsets[g_lineOff.count] = logical + 1
+                g_lineOff.count = g_lineOff.count + 1
+                logical = logical + 1
+                Continue While
+            End If
+        End If
+        If b = 10 Or b = 13 Then
             LineOff_EnsureCap(g_lineOff.count + 1)
-            g_lineOff.offsets[g_lineOff.count] = i + 1
-            g_lineOff.count = g_lineOff.count + 1
-        ElseIf b = 10 Or b = 13 Then
-            LineOff_EnsureCap(g_lineOff.count + 1)
-            g_lineOff.offsets[g_lineOff.count] = i + 1
+            g_lineOff.offsets[g_lineOff.count] = logical + 1
             g_lineOff.count = g_lineOff.count + 1
         End If
-        i = i + 1
+        logical = logical + 1
     Wend
 End Sub
 
