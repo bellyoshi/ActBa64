@@ -39,9 +39,6 @@ Const LEX_MAX_TOKS = 131072
 Const LEX_TEXT_LEN = 256
 ' Dim buf(…) 用（LEX_TEXT_LEN - 1）
 Const LEX_TEXT_MAXIDX = 255
-' 小数リテラルの千分率（3 桁 → *1000）
-Const LEX_FLOAT_FRAC_DIGITS = 3
-Const LEX_FLOAT_SCALE = 1000
 Const LEX_RADIX_DEC = 10
 Const LEX_RADIX_HEX = 16
 
@@ -301,39 +298,38 @@ End Function
 
 Function LexNumber(lx As *Lexer) As Long
     Dim src As *Byte
+    Dim start As Long
     Dim n As Long
-    Dim n2 As Long
     Dim i As Long
     Dim idx As Long
     Dim toks As *Tok
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+
     LexNumber = 0
     src = lx->src
+    start = lx->pos
     n = 0
     While IsDigit(src[lx->pos]) <> 0
         n = n * LEX_RADIX_DEC + DigitValue(src[lx->pos])
         lx->pos = lx->pos + 1
     Wend
-    ' 1.5 / 6.28 → TK_FLOAT（千分率: 1500 / 6280）
+    ' 1.5 / 1.12345 → TK_FLOAT（テキスト保持。IEEE 化は Parser）
     If src[lx->pos] = CH_DOT Then
         If IsDigit(src[lx->pos + 1]) <> 0 Then
             lx->pos = lx->pos + 1
-            n2 = 0
-            i = 0
             While IsDigit(src[lx->pos]) <> 0
-                If i < LEX_FLOAT_FRAC_DIGITS Then
-                    n2 = n2 * LEX_RADIX_DEC + DigitValue(src[lx->pos])
-                    i = i + 1
-                End If
                 lx->pos = lx->pos + 1
             Wend
-            While i < LEX_FLOAT_FRAC_DIGITS
-                n2 = n2 * LEX_RADIX_DEC
+            n = lx->pos - start
+            If n > LEX_TEXT_MAXIDX Then n = LEX_TEXT_MAXIDX
+            i = 0
+            While i < n
+                buf[i] = src[start + i]
                 i = i + 1
             Wend
             idx = LexPush(lx, TK_FLOAT)
             If idx < 0 Then Exit Function
-            toks = lx->toks
-            toks[idx].num = n * LEX_FLOAT_SCALE + n2
+            LexStoreText(lx, idx, VarPtr(buf), n)
         Else
             idx = LexPush(lx, TK_NUMBER)
             If idx < 0 Then Exit Function

@@ -111,6 +111,127 @@ Dim g_constCap As Long
 Dim g_constStrCap As Long
 Dim g_declCap As Long
 
+Sub LowerDiagError(ctx As *LowerCtx, idx As Long, msg As String)
+    Dim srcLine As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+
+    srcLine = 1
+    If ctx <> NULL Then
+        ast = ctx->ast
+        If ast <> NULL And idx >= 0 And idx < ast->count Then
+            nodes = ast->nodes
+            If nodes[idx].srcLine > 0 Then srcLine = nodes[idx].srcLine
+        End If
+        ctx->err = 1
+    End If
+    DiagError(srcLine, msg)
+End Sub
+
+Sub LowerDiagWarn(ctx As *LowerCtx, idx As Long, msg As String)
+    Dim srcLine As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+
+    srcLine = 1
+    If ctx <> NULL Then
+        ast = ctx->ast
+        If ast <> NULL And idx >= 0 And idx < ast->count Then
+            nodes = ast->nodes
+            If nodes[idx].srcLine > 0 Then srcLine = nodes[idx].srcLine
+        End If
+    End If
+    DiagWarn(srcLine, msg)
+End Sub
+
+Sub LowStrictCheckAssign(ctx As *LowerCtx, assignIdx As Long, lhsTy As Long, lhsTi As Long, rhsIdx As Long)
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim rhsTy As Long
+    Dim rhsTi As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim k As Long
+    Dim msg As String
+    Dim lhsN As String
+    Dim rhsN As String
+    Dim srcLine As Long
+    Dim file As String
+    Dim localLine As Long
+    Dim sp As *Byte
+    Dim i As Long
+    Dim c0 As Long
+
+    If g_compileStrict = 0 Then Exit Sub
+    If ctx = NULL Then Exit Sub
+    If rhsIdx < 0 Then Exit Sub
+    ast = ctx->ast
+    If ast = NULL Then Exit Sub
+    nodes = ast->nodes
+    k = nodes[rhsIdx].kind
+    If k = AST_CAST Then Exit Sub
+    If k <> AST_VAR Then Exit Sub
+    AstCopyStr(ast, rhsIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(rhsTy), VarPtr(rhsTi), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Sub
+    If lhsTy = TY_STRING And rhsTy = TY_PTR_BYTE Then Exit Sub
+    If lhsTy = TY_PTR_BYTE And rhsTy = TY_STRING Then Exit Sub
+    If lhsTy = rhsTy Then
+        If lhsTy = TY_PTR_UDT Or lhsTy = TY_UDT Then
+            If lhsTi = rhsTi Then Exit Sub
+            If lhsTi < 0 Then Exit Sub
+            If rhsTi < 0 Then Exit Sub
+        Else
+            Exit Sub
+        End If
+    End If
+    ' Suppress warnings from auto-included Include\default\*.abp
+    srcLine = 1
+    If assignIdx >= 0 Then
+        If nodes[assignIdx].srcLine > 0 Then srcLine = nodes[assignIdx].srcLine
+    End If
+    file = PpMapSrcName$(g_diagSrc, srcLine, localLine)
+    If Len(file) > 0 Then
+        sp = StrPtr(file)
+        i = 0
+        While sp[i] <> 0
+            c0 = sp[i]
+            If c0 >= 65 And c0 <= 90 Then c0 = c0 + 32
+            If c0 = 105 Then
+                If sp[i + 1] = 110 Or sp[i + 1] = 78 Then
+                    If sp[i + 7] = 92 Or sp[i + 7] = 47 Then
+                        If sp[i + 8] = 100 Or sp[i + 8] = 68 Then
+                            Exit Sub
+                        End If
+                    End If
+                End If
+            End If
+            i = i + 1
+        Wend
+    End If
+    lhsN = "type"
+    rhsN = "type"
+    If lhsTy = TY_BYTE Then lhsN = "Byte"
+    If lhsTy = TY_LONG Then lhsN = "Long"
+    If lhsTy = TY_STRING Then lhsN = "String"
+    If lhsTy = TY_SINGLE Then lhsN = "Single"
+    If lhsTy = TY_DOUBLE Then lhsN = "Double"
+    If lhsTy = TY_PTR_BYTE Then lhsN = "*Byte"
+    If lhsTy = TY_PTR_LONG Then lhsN = "*Long"
+    If lhsTy = TY_PTR_UDT Then lhsN = "*UDT"
+    If rhsTy = TY_BYTE Then rhsN = "Byte"
+    If rhsTy = TY_LONG Then rhsN = "Long"
+    If rhsTy = TY_STRING Then rhsN = "String"
+    If rhsTy = TY_SINGLE Then rhsN = "Single"
+    If rhsTy = TY_DOUBLE Then rhsN = "Double"
+    If rhsTy = TY_PTR_BYTE Then rhsN = "*Byte"
+    If rhsTy = TY_PTR_LONG Then rhsN = "*Long"
+    If rhsTy = TY_PTR_UDT Then rhsN = "*UDT"
+    msg = "type mismatch assigning " + rhsN + " to " + lhsN + " (#strict)"
+    LowerDiagWarn(ctx, assignIdx, msg)
+End Sub
+
 Function LowEnsureSymCap(ctx As *LowerCtx) As Long
     Dim newCap As Long
     Dim p As *Byte
@@ -536,8 +657,8 @@ Sub LowEmitStoreString(ctx As *LowerCtx, off As Long, isGlob As Long)
     LowEmitStoreOff(ctx->list, off, isGlob)
 End Sub
 
-' AST_NUM.extra: 0=整数, 1=Single IEEE bits, 3=千分率リテラル
-Const AST_NUM_MILLI = 3
+' AST_NUM.extra: 0=整数, 1=Single IEEE bits, 4=Double IEEE bits (Ast.abp)
+' （旧千分率 extra=3 は廃止）
 
 Function LowPromoteType(a As Long, b As Long) As Long
     If a = TY_DOUBLE Or b = TY_DOUBLE Then
@@ -570,9 +691,9 @@ Function LowExprType(ctx As *LowerCtx, idx As Long) As Long
     nodes = ast->nodes
     k = nodes[idx].kind
     If k = AST_NUM Then
-        If nodes[idx].extra = AST_NUM_MILLI Then
+        If nodes[idx].extra = AST_NUM_EXTRA_F64 Then
             LowExprType = TY_DOUBLE
-        ElseIf nodes[idx].extra = 1 Then
+        ElseIf nodes[idx].extra = AST_NUM_EXTRA_SINGLE Then
             LowExprType = TY_SINGLE
         Else
             LowExprType = TY_LONG
@@ -607,18 +728,28 @@ Function LowExprType(ctx As *LowerCtx, idx As Long) As Long
         LowExprType = LowExprType(ctx, nodes[idx].left)
         Exit Function
     End If
-    If k = AST_INDEX Or k = AST_CALL Then
+    If k = AST_CALL Then
+        AstCopyStr(ast, idx, VarPtr(name))
         If nodes[idx].num = 1 Then
-            base = nodes[idx].left
-            If k = AST_CALL Then
-                AstCopyStr(ast, idx, VarPtr(name))
-            Else
-                If nodes[base].kind = AST_VAR Then
-                    AstCopyStr(ast, base, VarPtr(name))
-                Else
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_DOUBLE_ARR Then
+                    LowExprType = TY_DOUBLE
                     Exit Function
                 End If
+                If vTy = TY_SINGLE_ARR Then
+                    LowExprType = TY_SINGLE
+                    Exit Function
+                End If
+                Exit Function
             End If
+        End If
+        LowExprType = LowFindFuncRetTy(ctx, VarPtr(name))
+        Exit Function
+    End If
+    If k = AST_INDEX Then
+        base = nodes[idx].left
+        If nodes[base].kind = AST_VAR Then
+            AstCopyStr(ast, base, VarPtr(name))
             If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
                 If vTy = TY_DOUBLE_ARR Then
                     LowExprType = TY_DOUBLE
@@ -654,22 +785,34 @@ Function LowExprIsDoubleBits(ctx As *LowerCtx, idx As Long) As Long
         End If
         Exit Function
     End If
-    If k = AST_INDEX Or k = AST_CALL Then
+    If k = AST_CALL Then
+        AstCopyStr(ast, idx, VarPtr(name))
         If nodes[idx].num = 1 Then
-            base = nodes[idx].left
-            If k = AST_CALL Then
-                AstCopyStr(ast, idx, VarPtr(name))
-            Else
-                If nodes[base].kind = AST_VAR Then
-                    AstCopyStr(ast, base, VarPtr(name))
-                Else
-                    Exit Function
-                End If
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_DOUBLE_ARR Then LowExprIsDoubleBits = 1
+                Exit Function
             End If
+        End If
+        If LowFindFuncRetTy(ctx, VarPtr(name)) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+        Exit Function
+    End If
+    If k = AST_INDEX Then
+        base = nodes[idx].left
+        If nodes[base].kind = AST_VAR Then
+            AstCopyStr(ast, base, VarPtr(name))
             If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
                 If vTy = TY_DOUBLE_ARR Then LowExprIsDoubleBits = 1
             End If
         End If
+    End If
+    If k = AST_BINOP Then
+        If LowExprType(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+    End If
+    If k = AST_UNARY Then
+        If LowExprType(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+    End If
+    If k = AST_NUM Then
+        If nodes[idx].extra = AST_NUM_EXTRA_F64 Then LowExprIsDoubleBits = 1
     End If
 End Function
 
@@ -691,7 +834,7 @@ Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
     nodes = ast->nodes
     k = nodes[idx].kind
     If k = AST_NUM Then
-        If nodes[idx].extra = 1 Then LowExprIsSingleBits = 1
+        If nodes[idx].extra = AST_NUM_EXTRA_SINGLE Then LowExprIsSingleBits = 1
         Exit Function
     End If
     If k = AST_VAR Then
@@ -701,39 +844,33 @@ Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
         End If
         Exit Function
     End If
-    If k = AST_INDEX Or k = AST_CALL Then
+    If k = AST_CALL Then
+        AstCopyStr(ast, idx, VarPtr(name))
         If nodes[idx].num = 1 Then
-            base = nodes[idx].left
-            If k = AST_CALL Then
-                AstCopyStr(ast, idx, VarPtr(name))
-            Else
-                If nodes[base].kind = AST_VAR Then
-                    AstCopyStr(ast, base, VarPtr(name))
-                Else
-                    Exit Function
-                End If
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_SINGLE_ARR Then LowExprIsSingleBits = 1
+                Exit Function
             End If
+        End If
+        If LowFindFuncRetTy(ctx, VarPtr(name)) = TY_SINGLE Then LowExprIsSingleBits = 1
+        Exit Function
+    End If
+    If k = AST_INDEX Then
+        base = nodes[idx].left
+        If nodes[base].kind = AST_VAR Then
+            AstCopyStr(ast, base, VarPtr(name))
             If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
                 If vTy = TY_SINGLE_ARR Then LowExprIsSingleBits = 1
             End If
         End If
-        Exit Function
     End If
 End Function
 
 ' eax が整数のとき Single 代入用に IEEE ビットへ（既にビットなら何もしない）
 Sub LowEmitCvtToSingleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim lab As Long
     If LowExprIsSingleBits(ctx, rhsIdx) <> 0 Then Exit Sub
-    ast = ctx->ast
-    nodes = ast->nodes
-    If nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_MILLI Then
-        ' LowExpr は milli を IEEE Double にするので、Single には千分率から直す
-        IrEmit(ctx->list, OP_MOV_EAX_IMM, nodes[rhsIdx].num, 0)
-        lab = LowEnsureRtMilliToSingle(ctx)
-        LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    If LowExprIsDoubleBits(ctx, rhsIdx) <> 0 Or LowExprType(ctx, rhsIdx) = TY_DOUBLE Then
+        IrEmit(ctx->list, OP_CVT_SD_TO_SS, 0, 0)
         Exit Sub
     End If
     IrEmit(ctx->list, OP_CVT_I32_TO_SS, 0, 0)
@@ -743,20 +880,14 @@ End Sub
 Sub LowEmitCvtToDoubleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
     Dim ast As *Ast
     Dim nodes As *AstNode
-    Dim lab As Long
     Dim rty As Long
     If LowExprIsDoubleBits(ctx, rhsIdx) <> 0 Then Exit Sub
     ast = ctx->ast
     nodes = ast->nodes
     rty = LowExprType(ctx, rhsIdx)
     If rty = TY_DOUBLE Then Exit Sub
-    If rty = TY_SINGLE Or (nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = 1) Then
+    If rty = TY_SINGLE Or (nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_EXTRA_SINGLE) Then
         IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
-        Exit Sub
-    End If
-    If nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_MILLI Then
-        lab = LowEnsureRtMilliToDouble(ctx)
-        LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
         Exit Sub
     End If
     IrEmit(ctx->list, OP_CVT_I32_TO_SD, 0, 0)

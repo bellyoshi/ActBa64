@@ -19,6 +19,8 @@
 #
 # テスト対象: test\*.abp / test\*.pj のうち ' Target: actba64 があるもの
 #   ' Expect: N        … 終了コード期待値（省略時 0）
+#   ' CompileFail: 1   … コンパイル失敗が期待（.err.txt の部分一致）
+#   ' ExpectErrors: N  … 診断件数（CompileFail 時。省略時は >=1）
 #   ' Gui: 1           … 対話 UI 想定（MessageBox 等）。既定では SKIP（-IncludeGui で有効）
 #                        自動判定: #USEWINDOW=1 / ファイル名 _pe_gui*
 #   ' Target: actba64  … このランナーの対象（必須）
@@ -26,6 +28,7 @@
 # スキップ内訳は Summary 直後に表示。残りはビルド不能（no Target）・pj 包含・GUI・32bit 制限。
 # Print はコンソール WriteFile（上記ルール以外の GUI 自動判定なし）
 # .pj の #SOURCE に載る .abp は単独ビルドしない
+# CompileFail: 隣接 test/<base>.err.txt の各行がコンパイラ出力のどこかに含まれること（部分一致）
 
 param(
     [Parameter(Position = 0)]
@@ -96,6 +99,8 @@ function Get-Meta([string]$path) {
     $gui = $null
     $target = $false
     $skip32 = $false
+    $compileFail = $false
+    $expectErrors = -1
     $stdin = @()
     $base = [System.IO.Path]::GetFileName($path)
     foreach ($line in (Get-Content -LiteralPath $path -Encoding Default -ErrorAction Stop)) {
@@ -112,6 +117,12 @@ function Get-Meta([string]$path) {
         if ($line -match '(?i)^\s*''\s*Skip32\s*:\s*1\s*$') {
             $skip32 = $true
         }
+        if ($line -match '(?i)^\s*''\s*CompileFail\s*:\s*1\s*$') {
+            $compileFail = $true
+        }
+        if ($line -match '^\s*''\s*ExpectErrors\s*:\s*(-?\d+)\s*$') {
+            $expectErrors = [int]$Matches[1]
+        }
         if ($line -match '^\s*''\s*Stdin\s*:\s?(.*)$') {
             $stdin += $Matches[1]
         }
@@ -126,7 +137,7 @@ function Get-Meta([string]$path) {
             $gui = 0
         }
     }
-    return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin }
+    return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin; CompileFail = $compileFail; ExpectErrors = $expectErrors }
 }
 
 function Get-PjOwnedAbp {
@@ -203,6 +214,60 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     $ccArgs += "-o"
     $ccArgs += $exePath
     $log = & $Linker @ccArgs 2>&1 | ForEach-Object { "$_" }
+    $logText = ($log -join "`n")
+
+    if ($meta.CompileFail) {
+        $built = ($LASTEXITCODE -eq 0) -and (Test-Path -LiteralPath $exePath)
+        if ($built) {
+            $stats.fail++
+            Add-Result $name "FAIL" "expected compile failure but succeeded"
+            if (-not $KeepArtifacts) {
+                Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
+            }
+            return
+        }
+        $errCount = 0
+        foreach ($line in $log) {
+            if ($line -match '(?i)^error:\s+\d+\s+errors?\s*$') {
+                if ($line -match '(\d+)') { $errCount = [int]$Matches[1] }
+            } elseif ($line -match '(?i)^error:\s+1\s+error\s*$') {
+                $errCount = 1
+            }
+        }
+        # Prefer summary line; else count "error: ...: message" lines (exclude summary)
+        if ($errCount -le 0) {
+            foreach ($line in $log) {
+                if ($line -match '(?i)^error:\s+.+:\s+') { $errCount++ }
+            }
+        }
+        $need = $meta.ExpectErrors
+        if ($need -lt 0) { $need = 1 }
+        if ($errCount -lt $need) {
+            $stats.fail++
+            Add-Result $name "FAIL" ("error count=$errCount expect>=$need")
+            return
+        }
+        $errFile = [System.IO.Path]::ChangeExtension($src, ".err.txt")
+        if (Test-Path -LiteralPath $errFile) {
+            $missing = @()
+            foreach ($pat in (Get-Content -LiteralPath $errFile -Encoding UTF8 -ErrorAction Stop)) {
+                $pat = $pat.Trim()
+                if ($pat -eq "" -or $pat.StartsWith("#")) { continue }
+                if ($logText -notlike "*$pat*") {
+                    $missing += $pat
+                }
+            }
+            if ($missing.Count -gt 0) {
+                $stats.fail++
+                Add-Result $name "FAIL" ("missing diag: " + ($missing -join " / "))
+                return
+            }
+        }
+        $stats.pass++
+        Add-Result $name "PASS" ("compile fail ok errors=$errCount")
+        return
+    }
+
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exePath)) {
         $stats.fail++
         $hint = ($log | Select-Object -Last 3) -join " / "
