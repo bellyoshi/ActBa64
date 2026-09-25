@@ -533,23 +533,28 @@ Function LowStmtAssignVar(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(63) As Byte
+    Dim folded As Long
 
     LowStmtAssignVar = 0
     ast = ctx->ast
     nodes = ast->nodes
-    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
     AstCopyStr(ast, nodes[idx].left, VarPtr(name))
     If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
         LowerDiagError(ctx, idx, "assign to undefined '" + MakeStr(VarPtr(name)) + "'")
         Exit Function
     End If
     LowStrictCheckAssign(ctx, idx, vTy, vTypeIdx, nodes[idx].right)
-    If vTy = TY_SINGLE Then
-        LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
-    ElseIf vTy = TY_DOUBLE Then
-        LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
-    Else
-        LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, vTy)
+    folded = 0
+    If vTy = TY_SINGLE Then folded = LowEmitSingleF64Lit(ctx, nodes[idx].right)
+    If folded = 0 Then
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        If vTy = TY_SINGLE Then
+            LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+        ElseIf vTy = TY_DOUBLE Then
+            LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+        Else
+            LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, vTy)
+        End If
     End If
     If vByRef <> 0 Then
         IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)

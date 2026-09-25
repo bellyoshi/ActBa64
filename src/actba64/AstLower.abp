@@ -939,6 +939,72 @@ Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
     End If
 End Function
 
+Function LowF64Top3(lo As Long) As Long
+    LowF64Top3 = 0
+    If lo < 0 Then LowF64Top3 = 4
+    If (lo And &H40000000) <> 0 Then LowF64Top3 = LowF64Top3 + 2
+    If (lo And &H20000000) <> 0 Then LowF64Top3 = LowF64Top3 + 1
+End Function
+
+Function LowF64RoundMant(lo As Long, mant As Long) As Long
+    LowF64RoundMant = mant
+    If (lo And &H10000000) = 0 Then Exit Function
+    If (lo And &H0FFFFFFF) = 0 And (mant And 1) = 0 Then Exit Function
+    LowF64RoundMant = mant + 1
+End Function
+
+' Double ビット (lo, hi) → Single ビット。32bit では cvtsd2ss を出さない
+Function LowF64ToSingleBits(lo As Long, hi As Long) As Long
+    Dim sign As Long
+    Dim exp As Long
+    Dim mant As Long
+    Dim sexp As Long
+
+    sign = 0
+    If hi < 0 Then sign = &H80000000
+    exp = (hi And &H7FF00000) \ &H100000
+    If exp = 0 Then
+        LowF64ToSingleBits = sign
+        Exit Function
+    End If
+    If exp = 2047 Then
+        LowF64ToSingleBits = sign Or &H7F800000
+        Exit Function
+    End If
+    sexp = exp - 896
+    mant = ((hi And &HFFFFF) * 8) + LowF64Top3(lo)
+    mant = LowF64RoundMant(lo, mant)
+    If mant >= &H800000 Then
+        mant = 0
+        sexp = sexp + 1
+    End If
+    If sexp <= 0 Then
+        LowF64ToSingleBits = sign
+        Exit Function
+    End If
+    If sexp >= 255 Then
+        LowF64ToSingleBits = sign Or &H7F800000
+        Exit Function
+    End If
+    LowF64ToSingleBits = sign Or (sexp * &H800000) Or (mant And &H7FFFFF)
+End Function
+
+Function LowEmitSingleF64Lit(ctx As *LowerCtx, rhsIdx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim bits As Long
+
+    LowEmitSingleF64Lit = 0
+    If rhsIdx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[rhsIdx].kind <> AST_NUM Then Exit Function
+    If nodes[rhsIdx].extra <> AST_NUM_EXTRA_F64 Then Exit Function
+    bits = LowF64ToSingleBits(nodes[rhsIdx].num, nodes[rhsIdx].left)
+    IrEmit(ctx->list, OP_MOV_EAX_IMM, bits, 0)
+    LowEmitSingleF64Lit = 1
+End Function
+
 ' eax が整数のとき Single 代入用に IEEE ビットへ（既にビットなら何もしない）
 Sub LowEmitCvtToSingleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
     If LowExprIsSingleBits(ctx, rhsIdx) <> 0 Then Exit Sub
