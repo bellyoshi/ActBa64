@@ -609,29 +609,10 @@ Sub LowStrMid(dst As *Byte, s As *Byte, start1 As Long, count As Long, maxLen As
     dst[i] = 0
 End Sub
 
-Sub LowIntToStr(dst As *Byte, v As Long, maxLen As Long)
-    Dim neg As Long
-    Dim n As Long
-    Dim tmp(31) As Byte
+Sub LowIntToStrDigits(n As Long, tmp As *Byte, ByRef iOut As Long)
     Dim i As Long
     Dim j As Long
     Dim d As Long
-
-    If maxLen < 2 Then
-        dst[0] = 0
-        Exit Sub
-    End If
-    neg = 0
-    n = v
-    If n < 0 Then
-        neg = 1
-        n = 0 - n
-    End If
-    If n = 0 Then
-        dst[0] = 48
-        dst[1] = 0
-        Exit Sub
-    End If
     i = 0
     While n > 0
         d = n
@@ -648,6 +629,34 @@ Sub LowIntToStr(dst As *Byte, v As Long, maxLen As Long)
         Wend
         n = j
     Wend
+    iOut = i
+End Sub
+
+Sub LowIntToStr(dst As *Byte, v As Long, maxLen As Long)
+    Dim neg As Long
+    Dim n As Long
+    Dim tmp(31) As Byte
+    Dim i As Long
+    Dim j As Long
+    Dim tmpBase As *Byte
+
+    If maxLen < 2 Then
+        dst[0] = 0
+        Exit Sub
+    End If
+    neg = 0
+    n = v
+    If n < 0 Then
+        neg = 1
+        n = 0 - n
+    End If
+    If n = 0 Then
+        dst[0] = 48
+        dst[1] = 0
+        Exit Sub
+    End If
+    tmpBase = VarPtr(tmp(0))
+    LowIntToStrDigits(n, tmpBase, i)
     j = 0
     If neg <> 0 Then
         If j < maxLen - 1 Then
@@ -665,17 +674,39 @@ Sub LowIntToStr(dst As *Byte, v As Long, maxLen As Long)
     dst[j] = 0
 End Sub
 
+Function LowConstStrMid(ast As *Ast, idx As Long, dst As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim a(63) As Byte
+    Dim start1 As Long
+    Dim count As Long
+    Dim rIdx As Long
+    Dim eIdx As Long
+
+    LowConstStrMid = 0
+    nodes = ast->nodes
+    If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
+    rIdx = nodes[idx].right
+    If rIdx < 0 Then Exit Function
+    If nodes[rIdx].kind <> AST_NUM Then Exit Function
+    start1 = nodes[rIdx].num
+    count = -1
+    eIdx = nodes[idx].extra
+    If eIdx >= 0 Then
+        If nodes[eIdx].kind <> AST_NUM Then Exit Function
+        count = nodes[eIdx].num
+    End If
+    LowStrMid(dst, VarPtr(a), start1, count, 64)
+    LowConstStrMid = 1
+End Function
+
 ' Fold const string expression into dst. Returns 1 on success.
 Function LowConstStr(ast As *Ast, idx As Long, dst As *Byte) As Long
     Dim nodes As *AstNode
     Dim a(63) As Byte
     Dim b(63) As Byte
     Dim n As Long
-    Dim start1 As Long
-    Dim count As Long
     Dim bi As Long
     Dim rIdx As Long
-    Dim eIdx As Long
 
     LowConstStr = 0
     If idx < 0 Then Exit Function
@@ -701,19 +732,7 @@ Function LowConstStr(ast As *Ast, idx As Long, dst As *Byte) As Long
             LowStrLeft(dst, VarPtr(a), n, 64)
             LowConstStr = 1
         ElseIf bi = BI_MID Then
-            If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
-            rIdx = nodes[idx].right
-            If rIdx < 0 Then Exit Function
-            If nodes[rIdx].kind <> AST_NUM Then Exit Function
-            start1 = nodes[rIdx].num
-            count = -1
-            eIdx = nodes[idx].extra
-            If eIdx >= 0 Then
-                If nodes[eIdx].kind <> AST_NUM Then Exit Function
-                count = nodes[eIdx].num
-            End If
-            LowStrMid(dst, VarPtr(a), start1, count, 64)
-            LowConstStr = 1
+            LowConstStr = LowConstStrMid(ast, idx, dst)
         ' BI_STR: const-fold はホスト ByRef/バッファで不安定なため実行時 Str$ に任せる
         End If
     End If
@@ -826,7 +845,45 @@ Sub LowEmitHeapFreeRax(list As *IrList)
     IrEmit(list, OP_POP_RCX, 0, 0)
 End Sub
 
-Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
+Function LowIsStringExprOp(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+    Dim bi As Long
+
+    LowIsStringExprOp = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_BINOP Then
+        If nodes[idx].num = BOP_ADD Or nodes[idx].num = BOP_CAT Then
+            If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Then
+                LowIsStringExprOp = 1
+                Exit Function
+            End If
+            If LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then
+                LowIsStringExprOp = 1
+                Exit Function
+            End If
+        End If
+        Exit Function
+    End If
+    bi = nodes[idx].num
+    If bi = BI_LEFT Or bi = BI_MID Or bi = BI_RIGHT Then
+        LowIsStringExprOp = 1
+    End If
+    If bi = BI_CHR Then
+        LowIsStringExprOp = 1
+    End If
+    If bi = BI_STR Then
+        LowIsStringExprOp = 1
+    End If
+    If bi = BI_MAKESTR Then
+        LowIsStringExprOp = 1
+    End If
+End Function
+
+Function LowIsStringExprName(ctx As *LowerCtx, idx As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -837,12 +894,43 @@ Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
     Dim k As Long
     Dim si As Long
     Dim name(63) As Byte
-    Dim bi As Long
-    Dim off As Long
-    Dim ty As Long
-    Dim typeIdx As Long
-    Dim byRef As Long
-    Dim isGlob As Long
+
+    LowIsStringExprName = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    AstCopyStr(ast, idx, VarPtr(name))
+    If k = AST_VAR Then
+        If LowFindStrConst(ctx, VarPtr(name)) >= 0 Then
+            LowIsStringExprName = 1
+            Exit Function
+        End If
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_STRING Then LowIsStringExprName = 1
+        End If
+        Exit Function
+    End If
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+        If vTy = TY_STRING_ARR Then
+            If nodes[idx].num = 1 Then LowIsStringExprName = 1
+        End If
+    Else
+        If LowFindFunc(ctx, VarPtr(name)) >= 0 Then
+            si = 0
+            While name[si] <> 0
+                si = si + 1
+            Wend
+            If si > 0 Then
+                If name[si - 1] = 36 Then LowIsStringExprName = 1
+            End If
+        End If
+    End If
+End Function
+
+Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
 
     LowIsStringExpr = 0
     If idx < 0 Then Exit Function
@@ -854,63 +942,19 @@ Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     If k = AST_BINOP Then
-        If nodes[idx].num = BOP_ADD Or nodes[idx].num = BOP_CAT Then
-            If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Then
-                LowIsStringExpr = 1
-                Exit Function
-            End If
-            If LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then
-                LowIsStringExpr = 1
-                Exit Function
-            End If
-        End If
+        LowIsStringExpr = LowIsStringExprOp(ctx, idx)
         Exit Function
     End If
     If k = AST_BUILTIN Then
-        bi = nodes[idx].num
-        If bi = BI_LEFT Or bi = BI_MID Or bi = BI_RIGHT Then
-            LowIsStringExpr = 1
-        End If
-        If bi = BI_CHR Then
-            LowIsStringExpr = 1
-        End If
-        If bi = BI_STR Then
-            LowIsStringExpr = 1
-        End If
-        If bi = BI_MAKESTR Then
-            LowIsStringExpr = 1
-        End If
+        LowIsStringExpr = LowIsStringExprOp(ctx, idx)
         Exit Function
     End If
     If k = AST_VAR Then
-        AstCopyStr(ast, idx, VarPtr(name))
-        If LowFindStrConst(ctx, VarPtr(name)) >= 0 Then
-            LowIsStringExpr = 1
-            Exit Function
-        End If
-        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-            If vTy = TY_STRING Then LowIsStringExpr = 1
-        End If
+        LowIsStringExpr = LowIsStringExprName(ctx, idx)
         Exit Function
     End If
     If k = AST_CALL Then
-        AstCopyStr(ast, idx, VarPtr(name))
-        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-            If vTy = TY_STRING_ARR Then
-                If nodes[idx].num = 1 Then LowIsStringExpr = 1
-            End If
-        Else
-            If LowFindFunc(ctx, VarPtr(name)) >= 0 Then
-                si = 0
-                While name[si] <> 0
-                    si = si + 1
-                Wend
-                If si > 0 Then
-                    If name[si - 1] = 36 Then LowIsStringExpr = 1
-                End If
-            End If
-        End If
-        Exit Function
+        LowIsStringExpr = LowIsStringExprName(ctx, idx)
     End If
 End Function
 

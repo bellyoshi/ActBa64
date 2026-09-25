@@ -92,23 +92,9 @@ Function ParseStmtListUntil3(p As *Parser, stop1 As *Byte, stop2 As *Byte, stop3
     ParseStmtListUntil3 = nFirst
 End Function
 
-Function ParsePrintStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nPrint As Long
-    Dim nFile As Long
-    Dim nArg As Long
-    Dim nFirst As Long
-    Dim nPrev As Long
-    Dim stay As Long
-    Dim e As Long
-
-    ParsePrintStmt = -1
-    p->pos = p->pos + 1
+Function ParseHashFilePrefix(p As *Parser, ByRef nFile As Long) As Long
+    ParseHashFilePrefix = 0
     nFile = -1
-    nFirst = -1
-    nPrev = -1
-    stay = 0
     If ParseTokKind(p) = TK_HASH Then
         p->pos = p->pos + 1
         nFile = ParseExpr(p)
@@ -117,6 +103,44 @@ Function ParsePrintStmt(p As *Parser) As Long
             p->pos = p->pos + 1
         End If
     End If
+    ParseHashFilePrefix = 1
+End Function
+
+Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+    Dim nodes As *AstNode
+    Dim nArg As Long
+    Dim e As Long
+
+    ParseIoExprArgs = 0
+    Do
+        e = ParseExpr(p)
+        If e < 0 Then Exit Function
+        nArg = AstAddNode(ast, AST_ARG)
+        If nArg < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[nArg].left = e
+        If nFirst < 0 Then
+            nFirst = nArg
+        Else
+            nodes[nPrev].nxt = nArg
+        End If
+        nPrev = nArg
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p->pos = p->pos + 1
+    Loop
+    ParseIoExprArgs = 1
+End Function
+
+Function ParsePrintItems(p As *Parser, ByRef nFirst As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nArg As Long
+    Dim nPrev As Long
+    Dim e As Long
+
+    ParsePrintItems = 0
+    nFirst = -1
+    nPrev = -1
     If ParseTokKind(p) = TK_LPAREN Then
         p->pos = p->pos + 1
         e = ParseExpr(p)
@@ -130,25 +154,26 @@ Function ParsePrintStmt(p As *Parser) As Long
         nFirst = nArg
     ElseIf ParseTokKind(p) <> TK_SEMI Then
         If ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_FLOAT Or ParseTokKind(p) = TK_STRING Or ParseTokKind(p) = TK_IDENT Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_PLUS Then
-            Do
-                e = ParseExpr(p)
-                If e < 0 Then Exit Function
-                ast = p->ast
-                nArg = AstAddNode(ast, AST_ARG)
-                If nArg < 0 Then Exit Function
-                nodes = ast->nodes
-                nodes[nArg].left = e
-                If nFirst < 0 Then
-                    nFirst = nArg
-                Else
-                    nodes[nPrev].nxt = nArg
-                End If
-                nPrev = nArg
-                If ParseTokKind(p) <> TK_COMMA Then Exit Do
-                p->pos = p->pos + 1
-            Loop
+            ast = p->ast
+            If ParseIoExprArgs(p, ast, nFirst, nPrev) = 0 Then Exit Function
         End If
     End If
+    ParsePrintItems = 1
+End Function
+
+Function ParsePrintStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nPrint As Long
+    Dim nFile As Long
+    Dim nFirst As Long
+    Dim stay As Long
+
+    ParsePrintStmt = -1
+    p->pos = p->pos + 1
+    stay = 0
+    If ParseHashFilePrefix(p, nFile) = 0 Then Exit Function
+    If ParsePrintItems(p, nFirst) = 0 Then Exit Function
     If ParseTokKind(p) = TK_SEMI Then
         p->pos = p->pos + 1
         stay = 1
@@ -164,9 +189,7 @@ Function ParsePrintStmt(p As *Parser) As Long
     ParsePrintStmt = nPrint
 End Function
 
-' Input var ― stdin から1行読み取り、文字列または数値変数へ代入
-' Input #n, var[, ...] ― ファイルからフィールド読み取り
-Function ParseInputStmt(p As *Parser) As Long
+Function ParseInputFileVars(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nInput As Long
@@ -174,57 +197,81 @@ Function ParseInputStmt(p As *Parser) As Long
     Dim nFile As Long
     Dim nFirst As Long
     Dim nPrev As Long
-    Dim nPrompt As Long
     Dim name(63) As Byte
 
-    ParseInputStmt = -1
+    ParseInputFileVars = -1
     p->pos = p->pos + 1
-    If ParseTokKind(p) = TK_HASH Then
-        p->pos = p->pos + 1
-        nFile = ParseExpr(p)
-        If nFile < 0 Then Exit Function
-        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
-        nFirst = -1
-        nPrev = -1
-        Do
-            If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-            ast = p->ast
-            nVar = AstAddNode(ast, AST_VAR)
-            If nVar < 0 Then Exit Function
-            AstSetStr(ast, nVar, VarPtr(name))
-            If nFirst < 0 Then
-                nFirst = nVar
-            Else
-                nodes = ast->nodes
-                nodes[nPrev].nxt = nVar
-            End If
-            nPrev = nVar
-            If ParseTokKind(p) <> TK_COMMA Then Exit Do
-            p->pos = p->pos + 1
-        Loop
-        nInput = AstAddNode(ast, AST_FINPUT)
-        If nInput < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[nInput].left = nFile
-        nodes[nInput].right = nFirst
-        ParseInputStmt = nInput
-        Exit Function
-    End If
-    If ParseTokKind(p) = TK_STRING Then
-        nPrompt = ParseExpr(p)
-        If nPrompt < 0 Then Exit Function
-        If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    nFile = ParseExpr(p)
+    If nFile < 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    nFirst = -1
+    nPrev = -1
+    Do
         If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
         ast = p->ast
         nVar = AstAddNode(ast, AST_VAR)
         If nVar < 0 Then Exit Function
         AstSetStr(ast, nVar, VarPtr(name))
-        nInput = AstAddNode(ast, AST_INPUT)
-        If nInput < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[nInput].left = nPrompt
-        nodes[nInput].right = nVar
-        ParseInputStmt = nInput
+        If nFirst < 0 Then
+            nFirst = nVar
+        Else
+            nodes = ast->nodes
+            nodes[nPrev].nxt = nVar
+        End If
+        nPrev = nVar
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p->pos = p->pos + 1
+    Loop
+    nInput = AstAddNode(ast, AST_FINPUT)
+    If nInput < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nInput].left = nFile
+    nodes[nInput].right = nFirst
+    ParseInputFileVars = nInput
+End Function
+
+Function ParseInputPrompt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nInput As Long
+    Dim nVar As Long
+    Dim nPrompt As Long
+    Dim name(63) As Byte
+
+    ParseInputPrompt = -1
+    nPrompt = ParseExpr(p)
+    If nPrompt < 0 Then Exit Function
+    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    ast = p->ast
+    nVar = AstAddNode(ast, AST_VAR)
+    If nVar < 0 Then Exit Function
+    AstSetStr(ast, nVar, VarPtr(name))
+    nInput = AstAddNode(ast, AST_INPUT)
+    If nInput < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nInput].left = nPrompt
+    nodes[nInput].right = nVar
+    ParseInputPrompt = nInput
+End Function
+
+' Input var ― stdin から1行読み取り、文字列または数値変数へ代入
+' Input #n, var[, ...] ― ファイルからフィールド読み取り
+Function ParseInputStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nInput As Long
+    Dim nVar As Long
+    Dim name(63) As Byte
+
+    ParseInputStmt = -1
+    p->pos = p->pos + 1
+    If ParseTokKind(p) = TK_HASH Then
+        ParseInputStmt = ParseInputFileVars(p)
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_STRING Then
+        ParseInputStmt = ParseInputPrompt(p)
         Exit Function
     End If
     If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
@@ -240,21 +287,10 @@ Function ParseInputStmt(p As *Parser) As Long
     ParseInputStmt = nInput
 End Function
 
-' Open path [For Input|Output|Append] As [#]num
-Function ParseOpenStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nOpen As Long
-    Dim path As Long
-    Dim num As Long
-    Dim mode As Long
+Function ParseOpenMode(p As *Parser, ByRef mode As Long) As Long
     Dim k(15) As Byte
 
-    ParseOpenStmt = -1
-    p->pos = p->pos + 1
-    ' path のあと As が続くため As キャストを含めない
-    path = ParseExprNoAs(p)
-    If path < 0 Then Exit Function
+    ParseOpenMode = 0
     mode = OPEN_MODE_ALL
     lstrcpy(VarPtr(k), "for")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
@@ -280,6 +316,25 @@ Function ParseOpenStmt(p As *Parser) As Long
             End If
         End If
     End If
+    ParseOpenMode = 1
+End Function
+
+' Open path [For Input|Output|Append] As [#]num
+Function ParseOpenStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nOpen As Long
+    Dim path As Long
+    Dim num As Long
+    Dim mode As Long
+    Dim k(15) As Byte
+
+    ParseOpenStmt = -1
+    p->pos = p->pos + 1
+    ' path のあと As が続くため As キャストを含めない
+    path = ParseExprNoAs(p)
+    If path < 0 Then Exit Function
+    If ParseOpenMode(p, mode) = 0 Then Exit Function
     lstrcpy(VarPtr(k), "as")
     If ParseIdentIs(p, VarPtr(k)) = 0 Then
         p->err = 1
@@ -421,46 +476,21 @@ Function ParseWriteStmt(p As *Parser) As Long
     Dim nodes As *AstNode
     Dim nWrite As Long
     Dim nFile As Long
-    Dim nArg As Long
     Dim nFirst As Long
     Dim nPrev As Long
-    Dim e As Long
     Dim stay As Long
 
     ParseWriteStmt = -1
     p->pos = p->pos + 1
-    nFile = -1
     nFirst = -1
     nPrev = -1
     stay = 0
-    If ParseTokKind(p) = TK_HASH Then
-        p->pos = p->pos + 1
-        nFile = ParseExpr(p)
-        If nFile < 0 Then Exit Function
-        If ParseTokKind(p) = TK_COMMA Then
-            p->pos = p->pos + 1
-        End If
-    End If
+    If ParseHashFilePrefix(p, nFile) = 0 Then Exit Function
     ' optional data list
     If ParseTokKind(p) <> TK_SEMI Then
         If ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_FLOAT Or ParseTokKind(p) = TK_STRING Or ParseTokKind(p) = TK_IDENT Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_PLUS Then
-            Do
-                e = ParseExpr(p)
-                If e < 0 Then Exit Function
-                ast = p->ast
-                nArg = AstAddNode(ast, AST_ARG)
-                If nArg < 0 Then Exit Function
-                nodes = ast->nodes
-                nodes[nArg].left = e
-                If nFirst < 0 Then
-                    nFirst = nArg
-                Else
-                    nodes[nPrev].nxt = nArg
-                End If
-                nPrev = nArg
-                If ParseTokKind(p) <> TK_COMMA Then Exit Do
-                p->pos = p->pos + 1
-            Loop
+            ast = p->ast
+            If ParseIoExprArgs(p, ast, nFirst, nPrev) = 0 Then Exit Function
         End If
     End If
     If ParseTokKind(p) = TK_SEMI Then

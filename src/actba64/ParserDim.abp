@@ -74,37 +74,32 @@ Function ParseAsPtrType(p As *Parser, ByRef ty As Long, ByRef ti As Long) As Lon
     ParseAsPtrType = 1
 End Function
 
-Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long) As Long
-    Dim typeName(63) As Byte
-    Dim k(15) As Byte
-    Dim types As *TypeTable
-    Dim ast As *Ast
+Sub ParseAsLongTy(bound As Long, ByRef ty As Long)
+    If bound >= 0 Then
+        ty = TY_LONG_ARR
+    Else
+        ty = TY_LONG
+    End If
+End Sub
 
-    ParseAsPrimType = 0
-    ast = p->ast
-    types = ast->types
+Function ParseAsIntType(p As *Parser, bound As Long, ByRef ty As Long) As Long
+    Dim k(15) As Byte
+
+    ParseAsIntType = 0
     lstrcpy(VarPtr(k), "long")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        If bound >= 0 Then
-            ty = TY_LONG_ARR
-        Else
-            ty = TY_LONG
-        End If
-        p->pos = p->pos + 1
-        ParseAsPrimType = 1
-        Exit Function
+    If ParseIdentIs(p, VarPtr(k)) = 0 Then
+        lstrcpy(VarPtr(k), "integer")
+        If ParseIdentIs(p, VarPtr(k)) = 0 Then Exit Function
     End If
-    lstrcpy(VarPtr(k), "integer")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        If bound >= 0 Then
-            ty = TY_LONG_ARR
-        Else
-            ty = TY_LONG
-        End If
-        p->pos = p->pos + 1
-        ParseAsPrimType = 1
-        Exit Function
-    End If
+    ParseAsLongTy(bound, ty)
+    p->pos = p->pos + 1
+    ParseAsIntType = 1
+End Function
+
+Function ParseAsStrByteType(p As *Parser, bound As Long, ByRef ty As Long) As Long
+    Dim k(15) As Byte
+
+    ParseAsStrByteType = 0
     lstrcpy(VarPtr(k), "string")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         If bound >= 0 Then
@@ -113,7 +108,7 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
             ty = TY_STRING
         End If
         p->pos = p->pos + 1
-        ParseAsPrimType = 1
+        ParseAsStrByteType = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "byte")
@@ -124,9 +119,14 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
         Else
             ty = TY_BYTE
         End If
-        ParseAsPrimType = 1
-        Exit Function
+        ParseAsStrByteType = 1
     End If
+End Function
+
+Function ParseAsFloatType(p As *Parser, bound As Long, ByRef ty As Long) As Long
+    Dim k(15) As Byte
+
+    ParseAsFloatType = 0
     lstrcpy(VarPtr(k), "double")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
@@ -135,7 +135,7 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
         Else
             ty = TY_DOUBLE
         End If
-        ParseAsPrimType = 1
+        ParseAsFloatType = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "single")
@@ -146,25 +146,30 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
         Else
             ty = TY_SINGLE
         End If
-        ParseAsPrimType = 1
-        Exit Function
+        ParseAsFloatType = 1
     End If
+End Function
+
+Function ParseAsAliasOrUdt(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long) As Long
+    Dim typeName(63) As Byte
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseAsAliasOrUdt = 0
+    ast = p->ast
+    types = ast->types
     If ParseEatBytePtrAlias(p) <> 0 Then
         If bound >= 0 Then
             p->err = 1
             Exit Function
         End If
         ty = TY_PTR_BYTE
-        ParseAsPrimType = 1
+        ParseAsAliasOrUdt = 1
         Exit Function
     End If
     If ParseEatLongAlias(p) <> 0 Then
-        If bound >= 0 Then
-            ty = TY_LONG_ARR
-        Else
-            ty = TY_LONG
-        End If
-        ParseAsPrimType = 1
+        ParseAsLongTy(bound, ty)
+        ParseAsAliasOrUdt = 1
         Exit Function
     End If
     If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
@@ -181,7 +186,24 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
     Else
         ty = TY_UDT
     End If
-    ParseAsPrimType = 1
+    ParseAsAliasOrUdt = 1
+End Function
+
+Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long) As Long
+    ParseAsPrimType = 0
+    If ParseAsIntType(p, bound, ty) <> 0 Then
+        ParseAsPrimType = 1
+        Exit Function
+    End If
+    If ParseAsStrByteType(p, bound, ty) <> 0 Then
+        ParseAsPrimType = 1
+        Exit Function
+    End If
+    If ParseAsFloatType(p, bound, ty) <> 0 Then
+        ParseAsPrimType = 1
+        Exit Function
+    End If
+    ParseAsPrimType = ParseAsAliasOrUdt(p, bound, ty, ti)
 End Function
 
 Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As Long
@@ -227,10 +249,35 @@ Function ParseDimClassCtor(p As *Parser, ty As Long, ti As Long, ByRef initE As 
     ParseDimClassCtor = 1
 End Function
 
-Function ParseDimOne(p As *Parser) As Long
+Function ParseDimBoundTyOk(ty As Long) As Long
+    ParseDimBoundTyOk = 0
+    If ty = TY_BYTE_ARR Then ParseDimBoundTyOk = 1
+    If ty = TY_LONG_ARR Then ParseDimBoundTyOk = 1
+    If ty = TY_STRING_ARR Then ParseDimBoundTyOk = 1
+    If ty = TY_DOUBLE_ARR Then ParseDimBoundTyOk = 1
+    If ty = TY_SINGLE_ARR Then ParseDimBoundTyOk = 1
+    If ty = TY_UDT_ARR Then ParseDimBoundTyOk = 1
+End Function
+
+Function ParseDimMakeNode(p As *Parser, name As *Byte, ty As Long, bound As Long, initE As Long, ti As Long) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nDim As Long
+
+    ParseDimMakeNode = -1
+    ast = p->ast
+    nDim = AstAddNode(ast, AST_DIM)
+    If nDim < 0 Then Exit Function
+    AstSetStr(ast, nDim, name)
+    nodes = ast->nodes
+    nodes[nDim].num = ty
+    nodes[nDim].left = bound
+    nodes[nDim].right = initE
+    nodes[nDim].extra = ti
+    ParseDimMakeNode = nDim
+End Function
+
+Function ParseDimOne(p As *Parser) As Long
     Dim name(63) As Byte
     Dim ty As Long
     Dim bound As Long
@@ -252,19 +299,9 @@ Function ParseDimOne(p As *Parser) As Long
         Exit Function
     End If
     If bound >= 0 Then
-        If ty <> TY_BYTE_ARR Then
-            If ty <> TY_LONG_ARR Then
-                If ty <> TY_STRING_ARR Then
-                    If ty <> TY_DOUBLE_ARR Then
-                        If ty <> TY_SINGLE_ARR Then
-                            If ty <> TY_UDT_ARR Then
-                                p->err = 1
-                                Exit Function
-                            End If
-                        End If
-                    End If
-                End If
-            End If
+        If ParseDimBoundTyOk(ty) = 0 Then
+            p->err = 1
+            Exit Function
         End If
     End If
     If ParseDimClassCtor(p, ty, ti, initE) = 0 Then Exit Function
@@ -277,16 +314,7 @@ Function ParseDimOne(p As *Parser) As Long
         initE = ParseExprNoAs(p)
         If initE < 0 Then Exit Function
     End If
-    ast = p->ast
-    nDim = AstAddNode(ast, AST_DIM)
-    If nDim < 0 Then Exit Function
-    AstSetStr(ast, nDim, VarPtr(name))
-    nodes = ast->nodes
-    nodes[nDim].num = ty
-    nodes[nDim].left = bound
-    nodes[nDim].right = initE
-    nodes[nDim].extra = ti
-    ParseDimOne = nDim
+    ParseDimOne = ParseDimMakeNode(p, VarPtr(name), ty, bound, initE, ti)
 End Function
 
 Function ParseDimStmt(p As *Parser) As Long
@@ -317,36 +345,38 @@ Function ParseDimStmt(p As *Parser) As Long
     ParseDimStmt = nFirst
 End Function
 
-Function ParseConstStmt(p As *Parser) As Long
+Function ParseConstString(p As *Parser, name As *Byte) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nConst As Long
     Dim nStr As Long
-    Dim name(63) As Byte
     Dim s(255) As Byte
+
+    ParseConstString = -1
+    ast = p->ast
+    If ParseStringArg(p, VarPtr(s)) = 0 Then Exit Function
+    nStr = AstAddNode(ast, AST_STRING)
+    If nStr < 0 Then Exit Function
+    AstSetStr(ast, nStr, VarPtr(s))
+    nConst = AstAddNode(ast, AST_CONST)
+    If nConst < 0 Then Exit Function
+    AstSetStr(ast, nConst, name)
+    nodes = ast->nodes
+    nodes[nConst].num = 0
+    nodes[nConst].left = nStr
+    nodes[nConst].extra = 1
+    ParseConstString = nConst
+End Function
+
+Function ParseConstNumber(p As *Parser, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nConst As Long
     Dim neg As Long
     Dim v As Long
 
-    ParseConstStmt = -1
-    p->pos = p->pos + 1
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-    If ParseExpect(p, TK_EQ) = 0 Then Exit Function
+    ParseConstNumber = -1
     ast = p->ast
-    If ParseTokKind(p) = TK_STRING Then
-        If ParseStringArg(p, VarPtr(s)) = 0 Then Exit Function
-        nStr = AstAddNode(ast, AST_STRING)
-        If nStr < 0 Then Exit Function
-        AstSetStr(ast, nStr, VarPtr(s))
-        nConst = AstAddNode(ast, AST_CONST)
-        If nConst < 0 Then Exit Function
-        AstSetStr(ast, nConst, VarPtr(name))
-        nodes = ast->nodes
-        nodes[nConst].num = 0
-        nodes[nConst].left = nStr
-        nodes[nConst].extra = 1
-        ParseConstStmt = nConst
-        Exit Function
-    End If
     neg = 0
     If ParseTokKind(p) = TK_MINUS Then
         p->pos = p->pos + 1
@@ -361,12 +391,26 @@ Function ParseConstStmt(p As *Parser) As Long
     p->pos = p->pos + 1
     nConst = AstAddNode(ast, AST_CONST)
     If nConst < 0 Then Exit Function
-    AstSetStr(ast, nConst, VarPtr(name))
+    AstSetStr(ast, nConst, name)
     nodes = ast->nodes
     nodes[nConst].num = v
     nodes[nConst].left = -1
     nodes[nConst].extra = 0
-    ParseConstStmt = nConst
+    ParseConstNumber = nConst
+End Function
+
+Function ParseConstStmt(p As *Parser) As Long
+    Dim name(63) As Byte
+
+    ParseConstStmt = -1
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseExpect(p, TK_EQ) = 0 Then Exit Function
+    If ParseTokKind(p) = TK_STRING Then
+        ParseConstStmt = ParseConstString(p, VarPtr(name))
+    Else
+        ParseConstStmt = ParseConstNumber(p, VarPtr(name))
+    End If
 End Function
 
 Function ParseAssignWithDot(p As *Parser) As Long
