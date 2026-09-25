@@ -2,39 +2,107 @@
 '  ParserExpr - factor / expression
 ' ===================================================
 
-' 十進テキスト → Double（ホスト演算）。
-' 小数リテラル定数は使わない（自己ホスト時の鶏卵を避ける）。
-Function ParseFloatTextToDouble(text As *Byte) As Double
-    Dim d As Double
-    Dim scale As Double
-    Dim ten As Double
+' num/den (>0) → IEEE754 Double ビット（Long 演算のみ。AB4.20 の Double 変換を避ける）
+Sub ParseEncodeNumDen(num As Long, den As Long, ByRef outLo As Long, ByRef outHi As Long)
+    Dim n As Long
+    Dim d As Long
+    Dim exp As Long
+    Dim i As Long
+    Dim bit As Long
+    Dim place As Long
+
+    outLo = 0
+    outHi = 0
+    If num <= 0 Or den <= 0 Then Exit Sub
+    n = num
+    d = den
+    exp = 1023
+    While n < d
+        If n > 1073741823 Then Exit Sub
+        n = n * 2
+        exp = exp - 1
+    Wend
+    While n / 2 >= d
+        If d > 1073741823 Then Exit Sub
+        d = d * 2
+        exp = exp + 1
+    Wend
+    n = n - d
+    outHi = exp * 1048576
+    i = 0
+    While i < 52
+        n = n * 2
+        bit = 0
+        If n >= d Then
+            n = n - d
+            bit = 1
+        End If
+        If i < 20 Then
+            place = 1
+            place = place << (19 - i)
+            If bit <> 0 Then outHi = outHi + place
+        Else
+            place = 1
+            place = place << (51 - i)
+            If bit <> 0 Then outLo = outLo + place
+        End If
+        i = i + 1
+    Wend
+End Sub
+
+' 十進テキスト → IEEE Double ビット（整数のみ）
+Sub ParseFloatTextToBits(text As *Byte, ByRef outLo As Long, ByRef outHi As Long)
     Dim i As Long
     Dim c As Long
     Dim dig As Long
+    Dim sig As Long
+    Dim nd As Long
+    Dim den As Long
+    Dim j As Long
 
-    d = 0
-    ten = 10
+    outLo = 0
+    outHi = 0
     i = 0
+    sig = 0
+    nd = 0
     c = text[i]
     While c >= 48 And c <= 57
         dig = c - 48
-        d = d * ten + dig
+        If sig <= 214748363 Then
+            sig = sig * 10 + dig
+        End If
         i = i + 1
         c = text[i]
     Wend
     If c = 46 Then
         i = i + 1
-        scale = 1
-        scale = scale / ten
         c = text[i]
         While c >= 48 And c <= 57
             dig = c - 48
-            d = d + dig * scale
-            scale = scale / ten
+            If sig <= 214748363 And nd < 9 Then
+                sig = sig * 10 + dig
+                nd = nd + 1
+            End If
             i = i + 1
             c = text[i]
         Wend
     End If
+    If sig = 0 Then Exit Sub
+    den = 1
+    j = 0
+    While j < nd
+        den = den * 10
+        j = j + 1
+    Wend
+    ParseEncodeNumDen(sig, den, outLo, outHi)
+End Sub
+
+' 十進テキスト → Double（ビット組み立て後に載せる）
+Function ParseFloatTextToDouble(text As *Byte) As Double
+    Dim d As Double
+    Dim bits(1) As Long
+    ParseFloatTextToBits(text, bits[0], bits[1])
+    memcpy(VarPtr(d), VarPtr(bits), 8)
     ParseFloatTextToDouble = d
 End Function
 
@@ -47,22 +115,21 @@ Function ParseMakeFloatAst(p As *Parser, neg As Long) As Long
     Dim buf(255) As Byte
     Dim lx As *Lexer
     Dim toks As *Tok
-    Dim d As Double
-    Dim bits(1) As Long
+    Dim lo As Long
+    Dim hi As Long
 
     ParseMakeFloatAst = -1
     lx = p->lx
     toks = lx->toks
     LexCopyText(lx, toks[p->pos].textOff, VarPtr(buf))
-    d = ParseFloatTextToDouble(VarPtr(buf))
-    If neg <> 0 Then d = 0 - d
-    memcpy(VarPtr(bits), VarPtr(d), 8)
+    ParseFloatTextToBits(VarPtr(buf), lo, hi)
+    If neg <> 0 Then hi = hi Or &H80000000
     ast = p->ast
     n = AstAddNode(ast, AST_NUM)
     If n < 0 Then Exit Function
     nodes = ast->nodes
-    nodes[n].num = bits[0]
-    nodes[n].left = bits[1]
+    nodes[n].num = lo
+    nodes[n].left = hi
     nodes[n].extra = AST_NUM_EXTRA_F64
     ParseMakeFloatAst = n
 End Function
