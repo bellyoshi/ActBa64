@@ -1,0 +1,339 @@
+' --- split from AstLowerStmtCtrl.abp (part 3) ---
+Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim nm(63) As Byte
+    Dim ty As Long
+    Dim nbytes As Long
+    Dim ti As Long
+    Dim bound As Long
+    Dim tt As *TypeTable
+    Dim tsizes As *Long
+
+    LowRegisterDimNode = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    AstCopyStr(ast, dimIdx, VarPtr(nm))
+    ty = nodes[dimIdx].num
+    nbytes = 8
+    ti = -1
+    If ty = TY_BYTE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = bound + 1
+    ElseIf ty = TY_LONG_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 4
+    ElseIf ty = TY_DOUBLE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 8
+    ElseIf ty = TY_SINGLE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 4
+    ElseIf ty = TY_STRING_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * TyPtrSize()
+    ElseIf ty = TY_BYTE Then
+        nbytes = 1
+    ElseIf ty = TY_DOUBLE Then
+        nbytes = 8
+    ElseIf ty = TY_SINGLE Then
+        nbytes = 4
+    ElseIf ty = TY_UDT_ARR Then
+        ti = nodes[dimIdx].extra
+        If ti < 0 Then
+            Print "error: Dim UDT[] missing type '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        tsizes = tt->typeSizes
+        nbytes = tsizes[ti]
+        If nbytes <= 0 Then
+            Print "error: Dim UDT[] size 0 '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
+        nbytes = nbytes * (bound + 1)
+    ElseIf ty = TY_UDT Then
+        ti = nodes[dimIdx].extra
+        If ti < 0 Then
+            Print "error: Dim UDT missing type '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
+        tsizes = tt->typeSizes
+        nbytes = tsizes[ti]
+        If nbytes <= 0 Then
+            Print "error: Dim UDT size 0 '" + MakeStr(VarPtr(nm)) + "'"
+            Exit Function
+        End If
+    ElseIf ty = TY_PTR_UDT Then
+        ti = nodes[dimIdx].extra
+        If ti < 0 Then Exit Function
+        nbytes = TyPtrSize()
+    End If
+    If asGlob <> 0 Then
+        If LowAddGlob(ctx, VarPtr(nm), ty, nbytes, ti) < 0 Then
+            Print "error: register global '" + MakeStr(VarPtr(nm)) + "' ty=" + Str$(ty)
+            Exit Function
+        End If
+    Else
+        If LowAddSym(ctx, VarPtr(nm), ty, nbytes, ti, 0) < 0 Then
+            Print "error: register local '" + MakeStr(VarPtr(nm)) + "' ty=" + Str$(ty)
+            Exit Function
+        End If
+    End If
+    LowRegisterDimNode = 1
+End Function
+
+' Walk statement list (and nested If/While/For/Do bodies) to register Dims.
+Function LowCollectDimsInList(ctx As *LowerCtx, idx As Long, asGlob As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim cur As Long
+    Dim k As Long
+
+    LowCollectDimsInList = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    cur = idx
+    While cur >= 0
+        k = nodes[cur].kind
+        If k = AST_DIM Then
+            If LowRegisterDimNode(ctx, cur, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_IF Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+            If LowCollectDimsInList(ctx, nodes[cur].extra, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_WHILE Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_DO Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_FOR Then
+            If LowCollectDimsInList(ctx, nodes[cur].num, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_WITH Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+        End If
+        cur = nodes[cur].nxt
+    Wend
+    LowCollectDimsInList = 1
+End Function
+
+Function AstToIrRegDecls(ctx As *LowerCtx, prog As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim stmt As Long
+    Dim param As Long
+    Dim nm(63) As Byte
+    Dim apiBuf(63) As Byte
+    Dim libBuf(63) As Byte
+    Dim dllKind As Long
+    Dim byRefBits As Long
+    Dim bit As Long
+
+    AstToIrRegDecls = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_DECLARE Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            libBuf[0] = 0
+            apiBuf[0] = 0
+            If nodes[stmt].right >= 0 Then
+                AstCopyStr(ast, nodes[stmt].right, VarPtr(libBuf))
+            End If
+            If nodes[stmt].extra >= 0 Then
+                AstCopyStr(ast, nodes[stmt].extra, VarPtr(apiBuf))
+            End If
+            If apiBuf[0] = 0 Then
+                AstCopyStr(ast, stmt, VarPtr(apiBuf))
+            End If
+            dllKind = LowDllKindFromLib(VarPtr(libBuf))
+            If dllKind = 0 Then
+                Print "error: unknown Declare Lib '" + MakeStr(VarPtr(libBuf)) + "' for '" + MakeStr(VarPtr(nm)) + "'"
+                Exit Function
+            End If
+            byRefBits = 0
+            bit = 1
+            param = nodes[stmt].left
+            While param >= 0
+                If nodes[param].num <> 0 Then
+                    byRefBits = byRefBits + bit
+                End If
+                bit = bit * 2
+                param = nodes[param].nxt
+            Wend
+            If LowAddDecl(ctx, VarPtr(nm), VarPtr(apiBuf), dllKind, byRefBits) = 0 Then Exit Function
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+    AstToIrRegDecls = 1
+End Function
+
+Function AstToIrRegEnum(ctx As *LowerCtx, enumIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim mem As Long
+    Dim nm(63) As Byte
+    Dim v As Long
+    Dim last As Long
+    Dim hasLast As Long
+
+    AstToIrRegEnum = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    mem = nodes[enumIdx].left
+    last = 0
+    hasLast = 0
+    While mem >= 0
+        If nodes[mem].kind <> AST_ENUMMEM Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If nodes[mem].left >= 0 Then
+            v = LowBoundVal(ctx, nodes[mem].left)
+            If v < 0 Then
+                AstCopyStr(ast, mem, VarPtr(nm))
+                Print "error: invalid enum value for '" + MakeStr(VarPtr(nm)) + "'"
+                ctx->err = 1
+                Exit Function
+            End If
+        Else
+            If hasLast = 0 Then
+                v = 1
+            Else
+                v = last + 1
+            End If
+        End If
+        AstCopyStr(ast, mem, VarPtr(nm))
+        If LowAddConst(ctx, VarPtr(nm), v) = 0 Then Exit Function
+        last = v
+        hasLast = 1
+        mem = nodes[mem].nxt
+    Wend
+    AstToIrRegEnum = 1
+End Function
+
+Function AstToIrRegConsts(ctx As *LowerCtx, prog As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim stmt As Long
+    Dim nm(63) As Byte
+    Dim sConst(255) As Byte
+
+    AstToIrRegConsts = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowAddBuiltinConsts(ctx)
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_CONST Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            If nodes[stmt].extra <> 0 Then
+                sConst[0] = 0
+                If nodes[stmt].left >= 0 Then
+                    AstCopyStr(ast, nodes[stmt].left, VarPtr(sConst))
+                End If
+                If LowAddStrConst(ctx, VarPtr(nm), VarPtr(sConst)) = 0 Then Exit Function
+            Else
+                If LowAddConst(ctx, VarPtr(nm), nodes[stmt].num) = 0 Then Exit Function
+            End If
+        ElseIf nodes[stmt].kind = AST_ENUM Then
+            If AstToIrRegEnum(ctx, stmt) = 0 Then Exit Function
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+    AstToIrRegConsts = 1
+End Function
+
+Function AstToIrRegFuncs(ctx As *LowerCtx, prog As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim stmt As Long
+    Dim param As Long
+    Dim nm(63) As Byte
+    Dim labFn As Long
+    Dim byRefBits As Long
+    Dim bit As Long
+
+    AstToIrRegFuncs = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_FUNC Then
+            labFn = LowNewLab(ctx)
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            byRefBits = 0
+            bit = 1
+            param = nodes[stmt].left
+            While param >= 0
+                If nodes[param].num <> 0 Then
+                    byRefBits = byRefBits + bit
+                End If
+                bit = bit * 2
+                param = nodes[param].nxt
+            Wend
+            If LowAddFunc(ctx, VarPtr(nm), labFn, byRefBits) = 0 Then Exit Function
+            ' extra は Parser が書いた戻り型のまま残す（lab は funcLabs）。
+            ' extra を lab で上書きすると TY_STRING/TY_DOUBLE と衝突し、
+            ' String 戻りが Double 変換されたり GC ルートから外れる。
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+    AstToIrRegFuncs = 1
+End Function
+
+Function AstToIrCaptureParams(ctx As *LowerCtx, stmt As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim param As Long
+    Dim offs As *Long
+    Dim pi As Long
+    Dim j As Long
+
+    list = ctx->list
+    ast = ctx->ast
+    nodes = ast->nodes
+    offs = ctx->offs
+    pi = 0
+    param = nodes[stmt].left
+    While param >= 0
+        If TyIs32() <> 0 Then
+            offs[pi] = 8 + pi * 4
+        ElseIf pi = 0 Then
+            IrEmit(list, OP_STORE_LOCAL_ECX, offs[pi], 0)
+        ElseIf pi = 1 Then
+            IrEmit(list, OP_STORE_LOCAL_EDX, offs[pi], 0)
+        ElseIf pi = 2 Then
+            IrEmit(list, OP_STORE_LOCAL_R8, offs[pi], 0)
+        ElseIf pi = 3 Then
+            IrEmit(list, OP_STORE_LOCAL_R9, offs[pi], 0)
+        Else
+            ' stack arg already at [rbp+0x30+(pi-4)*8]
+            ' LowAddSym が付けた precise root を実オフセットへ付け替える
+            LowRetargetFnPreciseRoot(offs[pi], 48 + (pi - 4) * 8)
+            offs[pi] = 48 + (pi - 4) * 8
+        End If
+        ' Long 引数をここで ZX してはいけない。BytePtr / HWND / VoidPtr
+        ' は ParseEatLongAlias で TY_LONG になっており、ヒープの StrPtr
+        ' を 32bit に切ると D3DCompile 等が AV する。添字は LowAddr 側で ZX。
+        pi = pi + 1
+        param = nodes[param].nxt
+    Wend
+    ' 非引数ローカル（戻り値スロット含む）を 0 初期化。
+    ' String を未初期化のまま StoreString→StrFree するとスタックゴミを
+    ' HeapFree して AV するため必須。
+    j = pi
+    While j < ctx->symCount
+        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+        IrEmit(list, OP_STORE_LOCAL, offs[j], 0)
+        j = j + 1
+    Wend
+    AstToIrCaptureParams = pi
+End Function

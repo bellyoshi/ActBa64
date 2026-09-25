@@ -1,0 +1,74 @@
+' --- split from AstLowerExpr.abp (part 4) ---
+Function LowExprBuiltin(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim n As Long
+    Dim r As Long
+
+    LowExprBuiltin = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    n = nodes[idx].num
+    If n = BI_LEFT Or n = BI_MID Or n = BI_CHR Or n = BI_RIGHT Or n = BIK_RGB Or n = BI_LOWORD Or n = BI_HIBYTE Or n = BI_LOBYTE Or n = BI_HIWORD Or n = BI_MAKELONG Or n = BI_MAKEWORD Or n = BI_ELM Then
+        LowExprBuiltin = LowExprBuiltinStr(ctx, idx)
+        Exit Function
+    End If
+    If n = BI_FILLMEMORY Or n = BI_ASC Or n = BI_MEMCPY Then
+        LowExprBuiltin = LowExprBuiltinMem(ctx, idx)
+        Exit Function
+    End If
+    r = LowExprBuiltinCore(ctx, idx)
+    If r < 0 Then
+        Print "error: unsupported builtin " + Str$(n)
+        ctx->err = 1
+        Exit Function
+    End If
+    LowExprBuiltin = r
+End Function
+
+
+
+Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArgs As Long, stk As Long) As Long
+    Dim name(63) As Byte
+    Dim buf(255) As Byte
+    Dim list As *IrList
+    Dim lab As Long
+    Dim vals As *Long
+    Dim tt As *TypeTable
+    Dim j As Long
+    Dim names As *Byte
+    Dim ast As *Ast
+
+    LowExprCallMethodInvoke = 0
+    ast = ctx->ast
+    list = ctx->list
+    tt = ast->types
+    AstCopyStr(ast, idx, VarPtr(name))
+    j = ti * 48
+    names = tt->typeNames
+    lab = -1
+    vals = tt->typeVirtCount
+    If vals[ti] > 0 Then
+        lab = TyFindVirt(tt, ti, VarPtr(name))
+    End If
+    If lab >= 0 Then
+        ' COM / Virtual: call [ [*this] + slot*8 ]
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+        If lab <> 0 Then
+            IrEmit(list, OP_ADD_RAX_IMM, lab * TyPtrSize(), 0)
+        End If
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+        IrEmit(list, OP_CALL_RAX, 0, 0)
+    Else
+        LowMangleClass(VarPtr(names[j]), VarPtr(name), VarPtr(buf))
+        lab = LowFindFunc(ctx, VarPtr(buf))
+        If lab < 0 Then
+            Print "error: unknown method '" + MakeStr(VarPtr(buf)) + "'"
+            ctx->err = 1
+            Exit Function
+        End If
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+    End If    LowEmitCallFinish(list, stk)
+
+    LowExprCallMethodInvoke = 1
+End Function

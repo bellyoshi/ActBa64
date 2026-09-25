@@ -1,0 +1,76 @@
+' --- split from ParserClass.abp (part 3) ---
+Function ParseEnumStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim mname(63) As Byte
+    Dim kEnd(7) As Byte
+    Dim kEnum(7) As Byte
+    Dim ti As Long
+    Dim sizes As *Long
+    Dim nEnum As Long
+    Dim nMem As Long
+    Dim nFirst As Long
+    Dim nPrev As Long
+    Dim e As Long
+
+    ParseEnumStmt = -1
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    ast = p->ast
+    types = ast->types
+    ti = TyAdd(types, VarPtr(name))
+    If ti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    sizes = types->typeSizes
+    sizes[ti] = 4
+    TyFinalizeType(types, ti)
+    lstrcpy(VarPtr(kEnd), "end")
+    lstrcpy(VarPtr(kEnum), "enum")
+    nFirst = -1
+    nPrev = -1
+    Do
+        If ParseIdentIs(p, VarPtr(kEnd)) <> 0 Then
+            p->pos = p->pos + 1
+            If ParseIdentIs(p, VarPtr(kEnum)) = 0 Then
+                p->err = 1
+                Exit Function
+            End If
+            p->pos = p->pos + 1
+            Exit Do
+        End If
+        If ParseCopyIdent(p, VarPtr(mname)) = 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        e = -1
+        If ParseTokKind(p) = TK_EQ Then
+            p->pos = p->pos + 1
+            e = ParseExpr(p)
+            If e < 0 Or p->err <> 0 Then Exit Function
+        End If
+        nMem = AstAddNode(ast, AST_ENUMMEM)
+        If nMem < 0 Then Exit Function
+        AstSetStr(ast, nMem, VarPtr(mname))
+        nodes = ast->nodes
+        nodes[nMem].left = e
+        nodes[nMem].right = -1
+        nodes[nMem].nxt = -1
+        If nFirst < 0 Then
+            nFirst = nMem
+        Else
+            nodes[nPrev].nxt = nMem
+        End If
+        nPrev = nMem
+    Loop
+    nEnum = AstAddNode(ast, AST_ENUM)
+    If nEnum < 0 Then Exit Function
+    AstSetStr(ast, nEnum, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nEnum].left = nFirst
+    nodes[nEnum].num = ti
+    ParseEnumStmt = nEnum
+End Function

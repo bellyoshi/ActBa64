@@ -1,0 +1,371 @@
+' --- split from AstLower.abp (part 3) ---
+Function LowExprIsDoubleBits(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+    Dim base As Long
+
+    LowExprIsDoubleBits = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_VAR Then
+        If LowVarDeclTy(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+    ElseIf k = AST_CALL Then
+        If LowExprTypeCall(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+    ElseIf k = AST_INDEX Then
+        base = nodes[idx].left
+        If nodes[base].kind = AST_VAR Then
+            If LowVarDeclTy(ctx, base) = TY_DOUBLE_ARR Then LowExprIsDoubleBits = 1
+        End If
+    ElseIf k = AST_BINOP Then
+        If LowExprType(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+    ElseIf k = AST_UNARY Then
+        If LowExprType(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+    ElseIf k = AST_NUM Then
+        If nodes[idx].extra = AST_NUM_EXTRA_F64 Then LowExprIsDoubleBits = 1
+    End If
+End Function
+
+Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim k As Long
+    Dim base As Long
+
+    LowExprIsSingleBits = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_NUM Then
+        If nodes[idx].extra = AST_NUM_EXTRA_SINGLE Then LowExprIsSingleBits = 1
+        Exit Function
+    End If
+    If k = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+            If vTy = TY_SINGLE Then LowExprIsSingleBits = 1
+        End If
+        Exit Function
+    End If
+    If k = AST_CALL Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If nodes[idx].num = 1 Then
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_SINGLE_ARR Then LowExprIsSingleBits = 1
+                Exit Function
+            End If
+        End If
+        If LowFindFuncRetTy(ctx, VarPtr(name)) = TY_SINGLE Then LowExprIsSingleBits = 1
+        Exit Function
+    End If
+    If k = AST_INDEX Then
+        base = nodes[idx].left
+        If nodes[base].kind = AST_VAR Then
+            AstCopyStr(ast, base, VarPtr(name))
+            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+                If vTy = TY_SINGLE_ARR Then LowExprIsSingleBits = 1
+            End If
+        End If
+    End If
+End Function
+
+' eax が整数のとき Single 代入用に IEEE ビットへ（既にビットなら何もしない）
+Sub LowEmitCvtToSingleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
+    If LowExprIsSingleBits(ctx, rhsIdx) <> 0 Then Exit Sub
+    If LowExprIsDoubleBits(ctx, rhsIdx) <> 0 Or LowExprType(ctx, rhsIdx) = TY_DOUBLE Then
+        IrEmit(ctx->list, OP_CVT_SD_TO_SS, 0, 0)
+        Exit Sub
+    End If
+    IrEmit(ctx->list, OP_CVT_I32_TO_SS, 0, 0)
+End Sub
+
+' rax が Double ビットでないとき IEEE Double へ
+Sub LowEmitCvtToDoubleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim rty As Long
+    If LowExprIsDoubleBits(ctx, rhsIdx) <> 0 Then Exit Sub
+    ast = ctx->ast
+    nodes = ast->nodes
+    rty = LowExprType(ctx, rhsIdx)
+    If rty = TY_DOUBLE Then Exit Sub
+    If rty = TY_SINGLE Or (nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_EXTRA_SINGLE) Then
+        IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+        Exit Sub
+    End If
+    IrEmit(ctx->list, OP_CVT_I32_TO_SD, 0, 0)
+End Sub
+
+' Double 式を Long 変数へ格納するとき trunc
+Sub LowEmitCvtToLongIfNeeded(ctx As *LowerCtx, rhsIdx As Long, dstTy As Long)
+    If dstTy <> TY_LONG And dstTy <> TY_BYTE Then Exit Sub
+    If LowExprType(ctx, rhsIdx) = TY_DOUBLE Then
+        IrEmit(ctx->list, OP_CVT_SD_TO_I32, 0, 0)
+    ElseIf LowExprType(ctx, rhsIdx) = TY_SINGLE Then
+        IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+        IrEmit(ctx->list, OP_CVT_SD_TO_I32, 0, 0)
+    End If
+End Sub
+
+' 評価済み rax を式型に合わせて Double へ
+Sub LowEmitCvtRaxToDoubleFromTy(ctx As *LowerCtx, ty As Long)
+    If ty = TY_DOUBLE Then Exit Sub
+    If ty = TY_SINGLE Then
+        IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+    Else
+        IrEmit(ctx->list, OP_CVT_I32_TO_SD, 0, 0)
+    End If
+End Sub
+
+Function LowFindConst(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindConst = -1
+    names = ctx->constNames
+    i = 0
+    While i < ctx->constCount
+        off = i * SYM_NAME_LEN
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
+            LowFindConst = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Sub LowAddBuiltinConsts(ctx As *LowerCtx)
+    Dim t(7) As Byte
+    Dim f(7) As Byte
+    lstrcpy(VarPtr(t), "TRUE")
+    lstrcpy(VarPtr(f), "FALSE")
+    LowAddConst(ctx, VarPtr(t), 1)
+    LowAddConst(ctx, VarPtr(f), 0)
+End Sub
+
+Function LowAddConst(ctx As *LowerCtx, name As *Byte, v As Long) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim vals As *Long
+    Dim j As Long
+    Dim off As Long
+
+    LowAddConst = 0
+    If LowFindConst(ctx, name) >= 0 Then
+        LowAddConst = 1
+        Exit Function
+    End If
+    If LowEnsureConstCap(ctx) = 0 Then
+        Print "error: out of memory (consts)"
+        ctx->err = 1
+        Exit Function
+    End If
+    i = ctx->constCount
+    names = ctx->constNames
+    vals = ctx->constVals
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    vals[i] = v
+    ctx->constCount = i + 1
+    LowAddConst = 1
+End Function
+
+Function LowFindStrConst(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindStrConst = -1
+    names = ctx->constStrNames
+    If names = NULL Then Exit Function
+    i = 0
+    While i < ctx->constStrCount
+        off = i * SYM_NAME_LEN
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
+            LowFindStrConst = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowAddStrConst(ctx As *LowerCtx, name As *Byte, s As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim vals As *Byte
+    Dim j As Long
+    Dim off As Long
+
+    LowAddStrConst = 0
+    If LowFindStrConst(ctx, name) >= 0 Then
+        LowAddStrConst = 1
+        Exit Function
+    End If
+    If LowEnsureConstStrCap(ctx) = 0 Then
+        Print "error: out of memory (string consts)"
+        ctx->err = 1
+        Exit Function
+    End If
+    If ctx->constStrNames = NULL Or ctx->constStrVals = NULL Then
+        ctx->err = 1
+        Exit Function
+    End If
+    i = ctx->constStrCount
+    names = ctx->constStrNames
+    vals = ctx->constStrVals
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    off = i * AST_STR_LEN
+    j = 0
+    While s[j] <> 0 And j < AST_STR_LEN - 1
+        vals[off + j] = s[j]
+        j = j + 1
+    Wend
+    vals[off + j] = 0
+    ctx->constStrCount = i + 1
+    LowAddStrConst = 1
+End Function
+
+' 定数畳み込みのシフト・べき乗（畳めなければ -1）
+Function LowBoundShift(op As Long, lv As Long, rv As Long) As Long
+    Dim acc As Long
+
+    LowBoundShift = -1
+    If op = BOP_SHL Then
+        If rv < 0 Or rv >= 32 Then Exit Function
+        acc = lv
+        While rv > 0
+            acc = acc * 2
+            rv = rv - 1
+        Wend
+    ElseIf op = BOP_SHR Then
+        If rv < 0 Or rv >= 32 Then Exit Function
+        acc = lv
+        While rv > 0
+            acc = acc \ 2
+            rv = rv - 1
+        Wend
+    ElseIf op = BOP_POW Then
+        If rv < 0 Then Exit Function
+        acc = 1
+        While rv > 0
+            acc = acc * lv
+            rv = rv - 1
+        Wend
+    Else
+        Exit Function
+    End If
+    LowBoundShift = acc
+End Function
+
+' 二項定数演算（畳めなければ -1）
+Function LowBoundBinop(op As Long, lv As Long, rv As Long) As Long
+    LowBoundBinop = -1
+    If op = BOP_ADD Then
+        LowBoundBinop = lv + rv
+    ElseIf op = BOP_SUB Then
+        LowBoundBinop = lv - rv
+    ElseIf op = BOP_MUL Then
+        LowBoundBinop = lv * rv
+    ElseIf op = BOP_OR Then
+        LowBoundBinop = lv Or rv
+    ElseIf op = BOP_AND Then
+        LowBoundBinop = lv And rv
+    ElseIf op = BOP_IDIV Or op = BOP_DIV Then
+        If rv <> 0 Then LowBoundBinop = lv \ rv
+    ElseIf op = BOP_MOD Then
+        If rv <> 0 Then LowBoundBinop = lv - (lv \ rv) * rv
+    ElseIf op = BOP_XOR Then
+        LowBoundBinop = (lv Or rv) - (lv And rv)
+    Else
+        LowBoundBinop = LowBoundShift(op, lv, rv)
+    End If
+End Function
+
+Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim ci As Long
+    Dim vals As *Long
+    Dim lv As Long
+    Dim rv As Long
+    Dim leftIdx As Long
+    Dim rightIdx As Long
+
+    LowBoundVal = -1
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_NUM Then
+        LowBoundVal = nodes[idx].num
+    ElseIf nodes[idx].kind = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        ci = LowFindConst(ctx, VarPtr(name))
+        If ci < 0 Then Exit Function
+        vals = ctx->constVals
+        LowBoundVal = vals[ci]
+    ElseIf nodes[idx].kind = AST_BINOP Then
+        leftIdx = nodes[idx].left
+        rightIdx = nodes[idx].right
+        If leftIdx < 0 Or rightIdx < 0 Then Exit Function
+        lv = LowBoundVal(ctx, leftIdx)
+        If lv < 0 Then Exit Function
+        rv = LowBoundVal(ctx, rightIdx)
+        If rv < 0 Then Exit Function
+        LowBoundVal = LowBoundBinop(nodes[idx].num, lv, rv)
+    ElseIf nodes[idx].kind = AST_BUILTIN Then
+        If nodes[idx].num = BI_ELM Then
+            lv = LowBoundVal(ctx, nodes[idx].left)
+            If lv >= 0 Then
+                LowBoundVal = lv + 1
+            End If
+        End If
+    End If
+End Function
+
+Function LowNewLab(ctx As *LowerCtx) As Long
+    Dim id As Long
+    id = ctx->nextLab
+    ctx->nextLab = id + 1
+    LowNewLab = id
+End Function
+
+' 既知 kernel32 API 名へ正規化（小文字比較）。成功時 apiOut に正式名を書く
+Function LowKernelApiHit(name As *Byte, key As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiHit = 0
+    If LowNameEq(name, key) = 0 Then Exit Function
+    lstrcpy(apiOut, exp)
+    LowKernelApiHit = 1
+End Function
+
+Function LowKernelApiHit2(name As *Byte, key1 As *Byte, key2 As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiHit2 = 0
+    If LowNameEq(name, key1) <> 0 Then
+        lstrcpy(apiOut, exp)
+        LowKernelApiHit2 = 1
+        Exit Function
+    End If
+    If LowNameEq(name, key2) <> 0 Then
+        lstrcpy(apiOut, exp)
+        LowKernelApiHit2 = 1
+    End If
+End Function
