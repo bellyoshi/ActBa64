@@ -251,30 +251,13 @@ Function ParseClassIdentExpr(p As *Parser, name As *Byte) As Long
     ParseClassIdentExpr = n
 End Function
 
-' With ブロック内の .field / .Method(...) — g_withBase を起点にメンバ鎖を構築
-Function ParseWithLval(p As *Parser) As Long
-    Dim ast As *Ast
+Function ParseWithChain(p As *Parser, ast As *Ast, ByRef cur As Long) As Long
     Dim nodes As *AstNode
-    Dim cur As Long
     Dim name(63) As Byte
     Dim e As Long
     Dim arg0 As Long
-    Dim arg1 As Long
-    Dim arg2 As Long
-    Dim nArgs As Long
-    Dim nPrev As Long
 
-    ParseWithLval = -1
-    If p->withBase < 0 Then
-        ParseFail(p, "'.' member access outside With block")
-        Exit Function
-    End If
-    If ParseTokKind(p) <> TK_DOT Then
-        ParseFail(p, "expected '.'")
-        Exit Function
-    End If
-    ast = p->ast
-    cur = p->withBase
+    ParseWithChain = 0
     Do
         If ParseTokKind(p) = TK_DOT Then
             p->pos = p->pos + 1
@@ -302,46 +285,93 @@ Function ParseWithLval(p As *Parser) As Long
             Exit Do
         End If
     Loop
-    If ParseTokKind(p) = TK_LPAREN Then
-        nodes = ast->nodes
-        If nodes[cur].kind = AST_MEMBER Then
-            AstCopyStr(ast, cur, VarPtr(name))
-            arg2 = nodes[cur].left
-            p->pos = p->pos + 1
-            arg0 = -1
-            nPrev = -1
-            nArgs = 0
-            If ParseTokKind(p) <> TK_RPAREN Then
-                Do
-                    e = ParseArgExpr(p)
-                    If e < 0 Then Exit Function
-                    arg1 = AstAddNode(ast, AST_ARG)
-                    If arg1 < 0 Then Exit Function
-                    nodes = ast->nodes
-                    nodes[arg1].left = e
-                    nodes[arg1].num = g_parseArgByVal
-                    If arg0 < 0 Then
-                        arg0 = arg1
-                    Else
-                        nodes[nPrev].nxt = arg1
-                    End If
-                    nPrev = arg1
-                    nArgs = nArgs + 1
-                    If ParseTokKind(p) <> TK_COMMA Then Exit Do
-                    p->pos = p->pos + 1
-                Loop
-            End If
-            If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
-            cur = AstAddNode(ast, AST_CALL)
-            If cur < 0 Then Exit Function
-            AstSetStr(ast, cur, VarPtr(name))
+    ParseWithChain = 1
+End Function
+
+Function ParseWithCallArgs(p As *Parser, ast As *Ast, ByRef arg0 As Long, ByRef nArgs As Long) As Long
+    Dim nodes As *AstNode
+    Dim e As Long
+    Dim arg1 As Long
+    Dim nPrev As Long
+
+    ParseWithCallArgs = 0
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseTokKind(p) <> TK_RPAREN Then
+        Do
+            e = ParseArgExpr(p)
+            If e < 0 Then Exit Function
+            arg1 = AstAddNode(ast, AST_ARG)
+            If arg1 < 0 Then Exit Function
             nodes = ast->nodes
-            nodes[cur].left = arg0
-            nodes[cur].right = arg2
-            nodes[cur].extra = -3
-            nodes[cur].num = nArgs
-        End If
+            nodes[arg1].left = e
+            nodes[arg1].num = g_parseArgByVal
+            If arg0 < 0 Then
+                arg0 = arg1
+            Else
+                nodes[nPrev].nxt = arg1
+            End If
+            nPrev = arg1
+            nArgs = nArgs + 1
+            If ParseTokKind(p) <> TK_COMMA Then Exit Do
+            p->pos = p->pos + 1
+        Loop
     End If
+    ParseWithCallArgs = 1
+End Function
+
+Function ParseWithCall(p As *Parser, ast As *Ast, ByRef cur As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim arg0 As Long
+    Dim arg2 As Long
+    Dim nArgs As Long
+
+    ParseWithCall = 0
+    If ParseTokKind(p) <> TK_LPAREN Then
+        ParseWithCall = 1
+        Exit Function
+    End If
+    nodes = ast->nodes
+    If nodes[cur].kind <> AST_MEMBER Then
+        ParseWithCall = 1
+        Exit Function
+    End If
+    AstCopyStr(ast, cur, VarPtr(name))
+    arg2 = nodes[cur].left
+    p->pos = p->pos + 1
+    If ParseWithCallArgs(p, ast, arg0, nArgs) = 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    cur = AstAddNode(ast, AST_CALL)
+    If cur < 0 Then Exit Function
+    AstSetStr(ast, cur, VarPtr(name))
+    nodes = ast->nodes
+    nodes[cur].left = arg0
+    nodes[cur].right = arg2
+    nodes[cur].extra = -3
+    nodes[cur].num = nArgs
+    ParseWithCall = 1
+End Function
+
+' With ブロック内の .field / .Method(...) — g_withBase を起点にメンバ鎖を構築
+Function ParseWithLval(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim cur As Long
+
+    ParseWithLval = -1
+    If p->withBase < 0 Then
+        ParseFail(p, "'.' member access outside With block")
+        Exit Function
+    End If
+    If ParseTokKind(p) <> TK_DOT Then
+        ParseFail(p, "expected '.'")
+        Exit Function
+    End If
+    ast = p->ast
+    cur = p->withBase
+    If ParseWithChain(p, ast, cur) = 0 Then Exit Function
+    If ParseWithCall(p, ast, cur) = 0 Then Exit Function
     ParseWithLval = cur
 End Function
 
@@ -370,123 +400,138 @@ Function ParseEatAliasIf(p As *Parser, lit As *Byte) As Long
     End If
 End Function
 
-Function ParseEatLongAliasA(p As *Parser) As Long
+Function ParseEatLongWidth(p As *Parser) As Long
     Dim k(31) As Byte
 
-    ParseEatLongAliasA = 0
+    ParseEatLongWidth = 0
     lstrcpy(VarPtr(k), "dword")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
+        ParseEatLongWidth = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "word")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
+        ParseEatLongWidth = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "byte")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "handle")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "hdrop")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "hwnd")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
+        ParseEatLongWidth = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "integer")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "hdc")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "hfont")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "hmenu")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "hbrush")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "hicon")
-    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasA = 1
+        ParseEatLongWidth = 1
     End If
 End Function
 
-Function ParseEatLongAliasB(p As *Parser) As Long
+Function ParseEatLongWinH(p As *Parser) As Long
     Dim k(31) As Byte
 
-    ParseEatLongAliasB = 0
-    lstrcpy(VarPtr(k), "hcursor")
+    ParseEatLongWinH = 0
+    lstrcpy(VarPtr(k), "handle")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongWinH = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "hwnd")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongWinH = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "hinstance")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongWinH = 1
         Exit Function
     End If
+    lstrcpy(VarPtr(k), "hdrop")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongWinH = 1
+    End If
+End Function
+
+Function ParseEatLongGdiH(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseEatLongGdiH = 0
+    lstrcpy(VarPtr(k), "hdc")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongGdiH = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "hfont")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongGdiH = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "hmenu")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongGdiH = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "hbrush")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongGdiH = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "hicon")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongGdiH = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "hcursor")
+    If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
+        ParseEatLongGdiH = 1
+    End If
+End Function
+
+Function ParseEatLongParam(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseEatLongParam = 0
     lstrcpy(VarPtr(k), "wparam")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongParam = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "lparam")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongParam = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "lresult")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongParam = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "long_ptr")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongParam = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "ulong_ptr")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
-        Exit Function
+        ParseEatLongParam = 1
     End If
+End Function
+
+Function ParseEatLongStrPtr(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseEatLongStrPtr = 0
     lstrcpy(VarPtr(k), "lpstr")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongStrPtr = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "lpcstr")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongStrPtr = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "voidptr")
     If ParseEatAliasIf(p, VarPtr(k)) <> 0 Then
-        ParseEatLongAliasB = 1
+        ParseEatLongStrPtr = 1
     End If
 End Function
 
@@ -504,93 +549,144 @@ End Function
 ' dword/word/byte/handle/hwnd/integer → Long 相当（仮引数・戻り値）。一致で pos を進める
 Function ParseEatLongAlias(p As *Parser) As Long
     ParseEatLongAlias = 0
-    If ParseEatLongAliasA(p) <> 0 Then
+    If ParseEatLongWidth(p) <> 0 Then
         ParseEatLongAlias = 1
         Exit Function
     End If
-    If ParseEatLongAliasB(p) <> 0 Then
+    If ParseEatLongWinH(p) <> 0 Then
+        ParseEatLongAlias = 1
+        Exit Function
+    End If
+    If ParseEatLongGdiH(p) <> 0 Then
+        ParseEatLongAlias = 1
+        Exit Function
+    End If
+    If ParseEatLongParam(p) <> 0 Then
+        ParseEatLongAlias = 1
+        Exit Function
+    End If
+    If ParseEatLongStrPtr(p) <> 0 Then
         ParseEatLongAlias = 1
     End If
 End Function
 
-' As キャスト: mask（0=変換なし）。-1=失敗、-2=String 禁止
-Function ParseCastMask(p As *Parser) As Long
+Function ParseCastMaskNarrow(p As *Parser) As Long
     Dim k(31) As Byte
-    Dim name(63) As Byte
 
-    ParseCastMask = -1
+    ParseCastMaskNarrow = -3
     lstrcpy(VarPtr(k), "string")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseCastMask = -2
+        ParseCastMaskNarrow = -2
         Exit Function
     End If
     lstrcpy(VarPtr(k), "byte")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 255
+        ParseCastMaskNarrow = 255
         Exit Function
     End If
     lstrcpy(VarPtr(k), "char")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 255
+        ParseCastMaskNarrow = 255
         Exit Function
     End If
     lstrcpy(VarPtr(k), "word")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 65535
+        ParseCastMaskNarrow = 65535
         Exit Function
     End If
+End Function
+
+Function ParseCastMaskInt(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseCastMaskInt = -3
     lstrcpy(VarPtr(k), "long")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 0
+        ParseCastMaskInt = 0
         Exit Function
     End If
     lstrcpy(VarPtr(k), "dword")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 0
+        ParseCastMaskInt = 0
         Exit Function
     End If
     lstrcpy(VarPtr(k), "integer")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 0
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "single")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        p->pos = p->pos + 1
-        ParseCastMask = 0
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "double")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        p->pos = p->pos + 1
-        ParseCastMask = 0
+        ParseCastMaskInt = 0
         Exit Function
     End If
     lstrcpy(VarPtr(k), "int64")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 0
+        ParseCastMaskInt = 0
         Exit Function
     End If
     lstrcpy(VarPtr(k), "qword")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        ParseCastMask = 0
+        ParseCastMaskInt = 0
         Exit Function
     End If
+End Function
+
+Function ParseCastMaskFloat(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseCastMaskFloat = -3
+    lstrcpy(VarPtr(k), "single")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskFloat = 0
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "double")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskFloat = 0
+        Exit Function
+    End If
+End Function
+
+Function ParseCastMaskTail(p As *Parser) As Long
+    Dim name(63) As Byte
+
+    ParseCastMaskTail = -1
     ' ハンドル・ポインタ別名は幅変換なし
     If ParseEatLongAlias(p) <> 0 Then
-        ParseCastMask = 0
+        ParseCastMaskTail = 0
         Exit Function
     End If
     If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-    ParseCastMask = 0
+    ParseCastMaskTail = 0
+End Function
+
+' As キャスト: mask（0=変換なし）。-1=失敗、-2=String 禁止
+Function ParseCastMask(p As *Parser) As Long
+    Dim m As Long
+
+    ParseCastMask = -1
+    m = ParseCastMaskNarrow(p)
+    If m <> -3 Then
+        ParseCastMask = m
+        Exit Function
+    End If
+    m = ParseCastMaskInt(p)
+    If m <> -3 Then
+        ParseCastMask = m
+        Exit Function
+    End If
+    m = ParseCastMaskFloat(p)
+    If m <> -3 Then
+        ParseCastMask = m
+        Exit Function
+    End If
+    ParseCastMask = ParseCastMaskTail(p)
 End Function
 
 ' expression As type（失敗時 -1）
@@ -751,11 +847,10 @@ Function ParseAssignIncDec(p As *Parser, left As Long) As Long
     End If
 End Function
 
-Function ParseCompoundAssignOp(p As *Parser) As Long
-    Dim k(7) As Byte
+Function ParseCompoundTokOp(p As *Parser) As Long
     Dim op As Long
 
-    ParseCompoundAssignOp = 0
+    ParseCompoundTokOp = 0
     op = 0
     If ParseTokKind(p) = TK_PLUS Then
         If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
@@ -793,40 +888,62 @@ Function ParseCompoundAssignOp(p As *Parser) As Long
             p->pos = p->pos + 2
         End If
     Else
-        lstrcpy(VarPtr(k), "mod")
+        ParseCompoundTokOp = -2
+        Exit Function
+    End If
+    ParseCompoundTokOp = op
+End Function
+
+Function ParseCompoundKwOp(p As *Parser) As Long
+    Dim k(7) As Byte
+    Dim op As Long
+
+    ParseCompoundKwOp = 0
+    op = 0
+    lstrcpy(VarPtr(k), "mod")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_MOD
+            p->pos = p->pos + 2
+        End If
+    End If
+    If op = 0 Then
+        lstrcpy(VarPtr(k), "and")
         If ParseIdentIs(p, VarPtr(k)) <> 0 Then
             If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
-                op = BOP_MOD
+                op = BOP_AND
                 p->pos = p->pos + 2
             End If
         End If
-        If op = 0 Then
-            lstrcpy(VarPtr(k), "and")
-            If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-                If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
-                    op = BOP_AND
-                    p->pos = p->pos + 2
-                End If
+    End If
+    If op = 0 Then
+        lstrcpy(VarPtr(k), "or")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                op = BOP_OR
+                p->pos = p->pos + 2
             End If
         End If
-        If op = 0 Then
-            lstrcpy(VarPtr(k), "or")
-            If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-                If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
-                    op = BOP_OR
-                    p->pos = p->pos + 2
-                End If
+    End If
+    If op = 0 Then
+        lstrcpy(VarPtr(k), "xor")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                op = BOP_XOR
+                p->pos = p->pos + 2
             End If
         End If
-        If op = 0 Then
-            lstrcpy(VarPtr(k), "xor")
-            If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-                If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
-                    op = BOP_XOR
-                    p->pos = p->pos + 2
-                End If
-            End If
-        End If
+    End If
+    ParseCompoundKwOp = op
+End Function
+
+Function ParseCompoundAssignOp(p As *Parser) As Long
+    Dim op As Long
+
+    ParseCompoundAssignOp = 0
+    op = ParseCompoundTokOp(p)
+    If op = -2 Then
+        op = ParseCompoundKwOp(p)
     End If
     ParseCompoundAssignOp = op
 End Function
@@ -925,59 +1042,80 @@ Function ParseStringArgLen(p As *Parser, dst As *Byte) As Long
     ParseStringArgLen = n
 End Function
 
-Function ParseIsKeywordStmt(p As *Parser) As Long
+Function ParseIsKwBranch(p As *Parser) As Long
     Dim k(15) As Byte
-    ParseIsKeywordStmt = 0
-    lstrcpy(VarPtr(k), "print")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "exitprocess")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "end")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
-        Exit Function
-    End If
-    lstrcpy(VarPtr(k), "dim")
-    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
-        Exit Function
-    End If
+
+    ParseIsKwBranch = 0
     lstrcpy(VarPtr(k), "if")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
+        ParseIsKwBranch = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "else")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
+        ParseIsKwBranch = 1
         Exit Function
     End If
+    lstrcpy(VarPtr(k), "end")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKwBranch = 1
+        Exit Function
+    End If
+End Function
+
+Function ParseIsKwLoop(p As *Parser) As Long
+    Dim k(15) As Byte
+
+    ParseIsKwLoop = 0
     lstrcpy(VarPtr(k), "while")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
+        ParseIsKwLoop = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "wend")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
+        ParseIsKwLoop = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "for")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
+        ParseIsKwLoop = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "next")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-        ParseIsKeywordStmt = 1
+        ParseIsKwLoop = 1
         Exit Function
     End If
+End Function
+
+Function ParseIsKwSimple(p As *Parser) As Long
+    Dim k(15) As Byte
+
+    ParseIsKwSimple = 0
+    lstrcpy(VarPtr(k), "print")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKwSimple = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "dim")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKwSimple = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "exitprocess")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKwSimple = 1
+        Exit Function
+    End If
+End Function
+
+Function ParseIsKeywordStmt(p As *Parser) As Long
+    ParseIsKeywordStmt = ParseIsKwBranch(p)
+    If ParseIsKeywordStmt <> 0 Then Exit Function
+    ParseIsKeywordStmt = ParseIsKwLoop(p)
+    If ParseIsKeywordStmt <> 0 Then Exit Function
+    ParseIsKeywordStmt = ParseIsKwSimple(p)
 End Function
 
 Function ParseArgList(p As *Parser, ByRef arg0 As Long, ByRef nArgs As Long) As Long

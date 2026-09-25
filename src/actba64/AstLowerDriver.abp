@@ -173,6 +173,30 @@ Function AstToIrAlloc() As Long
     AstToIrAlloc = 1
 End Function
 
+Sub AstToIrInitLabs()
+    g_doEndLab = -1
+    g_doTopLab = -1
+    g_whileEndLab = -1
+    g_whileTopLab = -1
+    g_forEndLab = -1
+    g_forContLab = -1
+    g_funcEndLab = -1
+    g_rtCatLab = -1
+    g_rtMidLab = -1
+    g_rtStrLab = -1
+    g_rtPrintLab = -1
+    g_rtInputLab = -1
+    g_rtValLab = -1
+    g_rtValDoubleLab = -1
+    g_rtMakeStrLab = -1
+    g_rtStrCmpLab = -1
+    g_rtStrFreeLab = -1
+    g_rtStrHeapAllocLab = -1
+    g_rtStrGcPreciseLab = -1
+    g_rtStrGcConsLab = -1
+    g_rtStrCollectLab = -1
+End Sub
+
 Sub AstToIrInitCtx(ctx As *LowerCtx, list As *IrList, ast As *Ast)
     ctx->list = list
     ctx->ast = ast
@@ -201,32 +225,30 @@ Sub AstToIrInitCtx(ctx As *LowerCtx, list As *IrList, ast As *Ast)
     ctx->declDlls = g_fb18 As *Long
     ctx->declByRefs = g_fb19 As *Long
     ctx->declCount = 0
-    g_doEndLab = -1
-    g_doTopLab = -1
-    g_whileEndLab = -1
-    g_whileTopLab = -1
-    g_forEndLab = -1
-    g_forContLab = -1
-    g_funcEndLab = -1
-    g_rtCatLab = -1
-    g_rtMidLab = -1
-    g_rtStrLab = -1
-    g_rtPrintLab = -1
-    g_rtInputLab = -1
-    g_rtValLab = -1
-    g_rtValDoubleLab = -1
-    g_rtMakeStrLab = -1
-    g_rtStrCmpLab = -1
-    g_rtStrFreeLab = -1
-    g_rtStrHeapAllocLab = -1
-    g_rtStrGcPreciseLab = -1
-    g_rtStrGcConsLab = -1
-    g_rtStrCollectLab = -1
+    AstToIrInitLabs()
     g_gcBaseOff = 0
     g_preciseRootCount = 0
     g_fnPreciseRootCount = 0
     list->globSize = 0
 End Sub
+
+Function AstToIrBindMod(ctx As *LowerCtx, prog As Long, list As *IrList) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    AstToIrBindMod = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If AstToIrRegDecls(ctx, prog) = 0 Then Exit Function
+    If AstToIrRegConsts(ctx, prog) = 0 Then Exit Function
+    If AstToIrRegFuncs(ctx, prog) = 0 Then Exit Function
+    ' module-level Dim -> globals (before any function emit; nested Dims in main too)
+    If LowCollectDimsInList(ctx, nodes[prog].left, 1) = 0 Then Exit Function
+    LowCollectPreciseGlobRoots()
+    g_gcBaseOff = g_gSize
+    g_gSize = g_gSize + GC_REGION_SIZE
+    list->globSize = g_gSize
+    AstToIrBindMod = 1
+End Function
 
 Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Long
     Dim ctx As LowerCtx
@@ -248,28 +270,10 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     AstToIrInitCtx(VarPtr(ctx), list, ast)
 
     ' #USEWINDOW による GUI サブシステム切り替えは CompileSource 側で行う
-    If AstToIrRegDecls(VarPtr(ctx), prog) = 0 Then
+    If AstToIrBindMod(VarPtr(ctx), prog, list) = 0 Then
         LowFreeAstBufs()
         Exit Function
     End If
-    If AstToIrRegConsts(VarPtr(ctx), prog) = 0 Then
-        LowFreeAstBufs()
-        Exit Function
-    End If
-    If AstToIrRegFuncs(VarPtr(ctx), prog) = 0 Then
-        LowFreeAstBufs()
-        Exit Function
-    End If
-
-    ' module-level Dim -> globals (before any function emit; nested Dims in main too)
-    If LowCollectDimsInList(VarPtr(ctx), nodes[prog].left, 1) = 0 Then
-        LowFreeAstBufs()
-        Exit Function
-    End If
-    LowCollectPreciseGlobRoots()
-    g_gcBaseOff = g_gSize
-    g_gSize = g_gSize + GC_REGION_SIZE
-    list->globSize = g_gSize
 
     labMain = LowNewLab(VarPtr(ctx))
     IrEmit(list, OP_JMP, labMain, 0)

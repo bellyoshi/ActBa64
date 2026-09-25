@@ -2,7 +2,7 @@
 '  ParserCtrl - If / loops / Func / Declare
 ' ===================================================
 
-Function ParseIfElseParts(p As *Parser) As Long
+Function ParseIfElseIfBody(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nIf As Long
@@ -13,6 +13,39 @@ Function ParseIfElseParts(p As *Parser) As Long
     Dim kElse(7) As Byte
     Dim kElseIf(15) As Byte
     Dim kEnd(7) As Byte
+
+    ParseIfElseIfBody = -1
+    p->pos = p->pos + 1
+    cond = ParseCond(p)
+    If cond < 0 Then Exit Function
+    lstrcpy(VarPtr(kThen), "then")
+    If ParseIdentIs(p, VarPtr(kThen)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(kElse), "else")
+    lstrcpy(VarPtr(kElseIf), "elseif")
+    lstrcpy(VarPtr(kEnd), "end")
+    thenList = ParseStmtListUntil3(p, VarPtr(kElse), VarPtr(kElseIf), VarPtr(kEnd))
+    If p->err <> 0 Then Exit Function
+    elseList = ParseIfElseParts(p)
+    If p->err <> 0 Then Exit Function
+    ast = p->ast
+    nIf = AstAddNode(ast, AST_IF)
+    If nIf < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nIf].left = cond
+    nodes[nIf].right = thenList
+    nodes[nIf].extra = elseList
+    ParseIfElseIfBody = nIf
+End Function
+
+Function ParseIfElseParts(p As *Parser) As Long
+    Dim elseList As Long
+    Dim kElse(7) As Byte
+    Dim kElseIf(15) As Byte
+    Dim kEnd(7) As Byte
     Dim empty(1) As Byte
 
     ParseIfElseParts = -1
@@ -20,29 +53,9 @@ Function ParseIfElseParts(p As *Parser) As Long
     lstrcpy(VarPtr(kElseIf), "elseif")
     lstrcpy(VarPtr(kElse), "else")
     lstrcpy(VarPtr(kEnd), "end")
-    lstrcpy(VarPtr(kThen), "then")
-    ast = p->ast
 
     If ParseIdentIs(p, VarPtr(kElseIf)) <> 0 Then
-        p->pos = p->pos + 1
-        cond = ParseCond(p)
-        If cond < 0 Then Exit Function
-        If ParseIdentIs(p, VarPtr(kThen)) = 0 Then
-            p->err = 1
-            Exit Function
-        End If
-        p->pos = p->pos + 1
-        thenList = ParseStmtListUntil3(p, VarPtr(kElse), VarPtr(kElseIf), VarPtr(kEnd))
-        If p->err <> 0 Then Exit Function
-        elseList = ParseIfElseParts(p)
-        If p->err <> 0 Then Exit Function
-        nIf = AstAddNode(ast, AST_IF)
-        If nIf < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[nIf].left = cond
-        nodes[nIf].right = thenList
-        nodes[nIf].extra = elseList
-        ParseIfElseParts = nIf
+        ParseIfElseParts = ParseIfElseIfBody(p)
         Exit Function
     End If
 
@@ -57,59 +70,95 @@ Function ParseIfElseParts(p As *Parser) As Long
     ParseIfElseParts = -1
 End Function
 
-Function ParseExitKwStmt(p As *Parser) As Long
+Function ParseExitLoopArm(p As *Parser) As Long
     Dim ast As *Ast
     Dim n As Long
     Dim kDo(7) As Byte
-    Dim kFun(15) As Byte
-    Dim kSub(7) As Byte
     Dim kWhile(15) As Byte
     Dim kFor(7) As Byte
 
-    ParseExitKwStmt = -1
-    p->pos = p->pos + 1
+    ParseExitLoopArm = -2
     lstrcpy(VarPtr(kDo), "do")
-    lstrcpy(VarPtr(kFun), "function")
-    lstrcpy(VarPtr(kSub), "sub")
     lstrcpy(VarPtr(kWhile), "while")
     lstrcpy(VarPtr(kFor), "for")
     If ParseIdentIs(p, VarPtr(kDo)) <> 0 Then
         p->pos = p->pos + 1
         ast = p->ast
         n = AstAddNode(ast, AST_EXITDO)
-        If n < 0 Then Exit Function
-        ParseExitKwStmt = n
+        If n < 0 Then
+            ParseExitLoopArm = -1
+            Exit Function
+        End If
+        ParseExitLoopArm = n
         Exit Function
     End If
     If ParseIdentIs(p, VarPtr(kWhile)) <> 0 Then
         p->pos = p->pos + 1
         ast = p->ast
         n = AstAddNode(ast, AST_EXITWHILE)
-        If n < 0 Then Exit Function
-        ParseExitKwStmt = n
+        If n < 0 Then
+            ParseExitLoopArm = -1
+            Exit Function
+        End If
+        ParseExitLoopArm = n
         Exit Function
     End If
     If ParseIdentIs(p, VarPtr(kFor)) <> 0 Then
         p->pos = p->pos + 1
         ast = p->ast
         n = AstAddNode(ast, AST_EXITFOR)
-        If n < 0 Then Exit Function
-        ParseExitKwStmt = n
-        Exit Function
+        If n < 0 Then
+            ParseExitLoopArm = -1
+            Exit Function
+        End If
+        ParseExitLoopArm = n
     End If
+End Function
+
+Function ParseExitProcArm(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim n As Long
+    Dim kFun(15) As Byte
+    Dim kSub(7) As Byte
+
+    ParseExitProcArm = -2
+    lstrcpy(VarPtr(kFun), "function")
+    lstrcpy(VarPtr(kSub), "sub")
     If ParseIdentIs(p, VarPtr(kFun)) <> 0 Then
         p->pos = p->pos + 1
         ast = p->ast
         n = AstAddNode(ast, AST_EXITFUNC)
-        If n < 0 Then Exit Function
-        ParseExitKwStmt = n
+        If n < 0 Then
+            ParseExitProcArm = -1
+            Exit Function
+        End If
+        ParseExitProcArm = n
         Exit Function
     End If
     If ParseIdentIs(p, VarPtr(kSub)) <> 0 Then
         p->pos = p->pos + 1
         ast = p->ast
         n = AstAddNode(ast, AST_EXITFUNC)
-        If n < 0 Then Exit Function
+        If n < 0 Then
+            ParseExitProcArm = -1
+            Exit Function
+        End If
+        ParseExitProcArm = n
+    End If
+End Function
+
+Function ParseExitKwStmt(p As *Parser) As Long
+    Dim n As Long
+
+    ParseExitKwStmt = -1
+    p->pos = p->pos + 1
+    n = ParseExitLoopArm(p)
+    If n <> -2 Then
+        ParseExitKwStmt = n
+        Exit Function
+    End If
+    n = ParseExitProcArm(p)
+    If n <> -2 Then
         ParseExitKwStmt = n
         Exit Function
     End If
@@ -155,37 +204,13 @@ Function ParseContinueKwStmt(p As *Parser) As Long
     p->err = 1
 End Function
 
-Function ParseIfStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nIf As Long
-    Dim cond As Long
-    Dim thenList As Long
-    Dim elseList As Long
-    Dim kThen(7) As Byte
+Function ParseIfThenClause(p As *Parser, thenLine As Long, ByRef thenList As Long, ByRef singleLine As Long) As Long
     Dim kElse(7) As Byte
     Dim kElseIf(15) As Byte
     Dim kEnd(7) As Byte
-    Dim kIf(7) As Byte
-    Dim singleLine As Long
-    Dim thenLine As Long
     Dim nextLine As Long
-    Dim ifLine As Long
 
-    ParseIfStmt = -1
-    ifLine = ParseTokLine(p)
-    p->pos = p->pos + 1
-    cond = ParseCond(p)
-    If cond < 0 Then Exit Function
-    lstrcpy(VarPtr(kThen), "then")
-    If ParseIdentIs(p, VarPtr(kThen)) = 0 Then
-        DiagError(ifLine, "expected 'Then' after condition")
-        p->err = 1
-        Exit Function
-    End If
-    thenLine = ParseTokLine(p)
-    p->pos = p->pos + 1
-
+    ParseIfThenClause = 0
     lstrcpy(VarPtr(kElse), "else")
     lstrcpy(VarPtr(kElseIf), "elseif")
     lstrcpy(VarPtr(kEnd), "end")
@@ -207,11 +232,19 @@ Function ParseIfStmt(p As *Parser) As Long
         If thenList < 0 Or p->err <> 0 Then Exit Function
         singleLine = 1
     End If
+    ParseIfThenClause = 1
+End Function
 
+Function ParseIfEndClause(p As *Parser, ifLine As Long, singleLine As Long, ByRef elseList As Long) As Long
+    Dim kEnd(7) As Byte
+    Dim kIf(7) As Byte
+
+    ParseIfEndClause = 0
     elseList = -1
     If singleLine = 0 Then
         elseList = ParseIfElseParts(p)
         If p->err <> 0 Then Exit Function
+        lstrcpy(VarPtr(kEnd), "end")
         If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
             DiagError(ifLine, "expected 'End If'")
             p->err = 1
@@ -226,6 +259,36 @@ Function ParseIfStmt(p As *Parser) As Long
         End If
         p->pos = p->pos + 1
     End If
+    ParseIfEndClause = 1
+End Function
+
+Function ParseIfStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nIf As Long
+    Dim cond As Long
+    Dim thenList As Long
+    Dim elseList As Long
+    Dim kThen(7) As Byte
+    Dim singleLine As Long
+    Dim thenLine As Long
+    Dim ifLine As Long
+
+    ParseIfStmt = -1
+    ifLine = ParseTokLine(p)
+    p->pos = p->pos + 1
+    cond = ParseCond(p)
+    If cond < 0 Then Exit Function
+    lstrcpy(VarPtr(kThen), "then")
+    If ParseIdentIs(p, VarPtr(kThen)) = 0 Then
+        DiagError(ifLine, "expected 'Then' after condition")
+        p->err = 1
+        Exit Function
+    End If
+    thenLine = ParseTokLine(p)
+    p->pos = p->pos + 1
+    If ParseIfThenClause(p, thenLine, thenList, singleLine) = 0 Then Exit Function
+    If ParseIfEndClause(p, ifLine, singleLine, elseList) = 0 Then Exit Function
 
     ast = p->ast
     nIf = AstAddNode(ast, AST_IF)
@@ -237,22 +300,98 @@ Function ParseIfStmt(p As *Parser) As Long
     ParseIfStmt = nIf
 End Function
 
-Function ParseSelectStmt(p As *Parser) As Long
-    Dim ast As *Ast
+Function ParseSelectCaseElse(p As *Parser, ast As *Ast, ByRef firstIf As Long, prevIf As Long) As Long
     Dim nodes As *AstNode
-    Dim sel As Long
+    Dim elseList As Long
+    Dim kEnd(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseSelectCaseElse = 0
+    p->pos = p->pos + 1
+    empty[0] = 0
+    lstrcpy(VarPtr(kEnd), "end")
+    elseList = ParseStmtListUntil(p, VarPtr(kEnd), VarPtr(empty))
+    If p->err <> 0 Then Exit Function
+    If prevIf >= 0 Then
+        nodes = ast->nodes
+        nodes[prevIf].extra = elseList
+    Else
+        firstIf = elseList
+    End If
+    ParseSelectCaseElse = 1
+End Function
+
+Function ParseSelectCaseEq(p As *Parser, ast As *Ast, sel As Long, ByRef firstIf As Long, ByRef prevIf As Long) As Long
+    Dim nodes As *AstNode
     Dim val As Long
     Dim cond As Long
     Dim body As Long
     Dim nIf As Long
+    Dim kCase(7) As Byte
+    Dim kEnd(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseSelectCaseEq = 0
+    val = ParseExpr(p)
+    If val < 0 Then Exit Function
+    cond = AstAddNode(ast, AST_BINOP)
+    If cond < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[cond].num = BOP_EQ
+    nodes[cond].left = sel
+    nodes[cond].right = val
+    empty[0] = 0
+    lstrcpy(VarPtr(kCase), "case")
+    lstrcpy(VarPtr(kEnd), "end")
+    body = ParseStmtListUntil3(p, VarPtr(kCase), VarPtr(kEnd), VarPtr(empty))
+    If p->err <> 0 Then Exit Function
+    nIf = AstAddNode(ast, AST_IF)
+    If nIf < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nIf].left = cond
+    nodes[nIf].right = body
+    nodes[nIf].extra = -1
+    If prevIf >= 0 Then
+        nodes[prevIf].extra = nIf
+    Else
+        firstIf = nIf
+    End If
+    prevIf = nIf
+    ParseSelectCaseEq = 1
+End Function
+
+Function ParseSelectEnd(p As *Parser, ast As *Ast, firstIf As Long) As Long
+    Dim kEnd(7) As Byte
+    Dim kSel(15) As Byte
+
+    ParseSelectEnd = -1
+    lstrcpy(VarPtr(kEnd), "end")
+    If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(kSel), "select")
+    If ParseIdentIs(p, VarPtr(kSel)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If firstIf < 0 Then
+        firstIf = AstAddNode(ast, AST_END)
+        If firstIf < 0 Then Exit Function
+    End If
+    ParseSelectEnd = firstIf
+End Function
+
+Function ParseSelectStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim sel As Long
     Dim firstIf As Long
     Dim prevIf As Long
-    Dim elseList As Long
     Dim kCase(7) As Byte
     Dim kElse(7) As Byte
     Dim kEnd(7) As Byte
-    Dim kSel(15) As Byte
-    Dim empty(1) As Byte
 
     ParseSelectStmt = -1
     p->pos = p->pos + 1
@@ -265,10 +404,8 @@ Function ParseSelectStmt(p As *Parser) As Long
     sel = ParseExpr(p)
     If sel < 0 Then Exit Function
 
-    empty[0] = 0
     lstrcpy(VarPtr(kElse), "else")
     lstrcpy(VarPtr(kEnd), "end")
-    lstrcpy(VarPtr(kSel), "select")
     ast = p->ast
     firstIf = -1
     prevIf = -1
@@ -283,73 +420,20 @@ Function ParseSelectStmt(p As *Parser) As Long
         End If
         p->pos = p->pos + 1
         If ParseIdentIs(p, VarPtr(kElse)) <> 0 Then
-            p->pos = p->pos + 1
-            elseList = ParseStmtListUntil(p, VarPtr(kEnd), VarPtr(empty))
-            If p->err <> 0 Then Exit Function
-            If prevIf >= 0 Then
-                nodes = ast->nodes
-                nodes[prevIf].extra = elseList
-            Else
-                firstIf = elseList
-            End If
+            If ParseSelectCaseElse(p, ast, firstIf, prevIf) = 0 Then Exit Function
             Exit Do
         End If
-        val = ParseExpr(p)
-        If val < 0 Then Exit Function
-        cond = AstAddNode(ast, AST_BINOP)
-        If cond < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[cond].num = BOP_EQ
-        nodes[cond].left = sel
-        nodes[cond].right = val
-        body = ParseStmtListUntil3(p, VarPtr(kCase), VarPtr(kEnd), VarPtr(empty))
-        If p->err <> 0 Then Exit Function
-        nIf = AstAddNode(ast, AST_IF)
-        If nIf < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[nIf].left = cond
-        nodes[nIf].right = body
-        nodes[nIf].extra = -1
-        If prevIf >= 0 Then
-            nodes[prevIf].extra = nIf
-        Else
-            firstIf = nIf
-        End If
-        prevIf = nIf
+        If ParseSelectCaseEq(p, ast, sel, firstIf, prevIf) = 0 Then Exit Function
     Loop
 
-    If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
-        p->err = 1
-        Exit Function
-    End If
-    p->pos = p->pos + 1
-    If ParseIdentIs(p, VarPtr(kSel)) = 0 Then
-        p->err = 1
-        Exit Function
-    End If
-    p->pos = p->pos + 1
-
-    If firstIf < 0 Then
-        firstIf = AstAddNode(ast, AST_END)
-        If firstIf < 0 Then Exit Function
-    End If
-    ParseSelectStmt = firstIf
+    ParseSelectStmt = ParseSelectEnd(p, ast, firstIf)
 End Function
 
-Function ParseDoStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nDo As Long
-    Dim body As Long
-    Dim cond As Long
-    Dim doMode As Long
-    Dim kLoop(7) As Byte
+Function ParseDoHeadCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long) As Long
     Dim kWhile(7) As Byte
     Dim kUntil(7) As Byte
-    Dim empty(1) As Byte
 
-    ParseDoStmt = -1
-    p->pos = p->pos + 1
+    ParseDoHeadCond = 0
     doMode = DO_PLAIN
     cond = -1
     lstrcpy(VarPtr(kWhile), "while")
@@ -365,16 +449,17 @@ Function ParseDoStmt(p As *Parser) As Long
         If cond < 0 Then Exit Function
         doMode = DO_UNTIL_TOP
     End If
-    empty[0] = 0
-    lstrcpy(VarPtr(kLoop), "loop")
-    body = ParseStmtListUntil(p, VarPtr(kLoop), VarPtr(empty))
-    If p->err <> 0 Then Exit Function
-    If ParseIdentIs(p, VarPtr(kLoop)) = 0 Then
-        p->err = 1
-        Exit Function
-    End If
-    p->pos = p->pos + 1
+    ParseDoHeadCond = 1
+End Function
+
+Function ParseDoTailCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long) As Long
+    Dim kWhile(7) As Byte
+    Dim kUntil(7) As Byte
+
+    ParseDoTailCond = 0
     If doMode = DO_PLAIN Then
+        lstrcpy(VarPtr(kWhile), "while")
+        lstrcpy(VarPtr(kUntil), "until")
         If ParseIdentIs(p, VarPtr(kWhile)) <> 0 Then
             p->pos = p->pos + 1
             cond = ParseCond(p)
@@ -387,6 +472,32 @@ Function ParseDoStmt(p As *Parser) As Long
             doMode = DO_UNTIL_BOTTOM
         End If
     End If
+    ParseDoTailCond = 1
+End Function
+
+Function ParseDoStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nDo As Long
+    Dim body As Long
+    Dim cond As Long
+    Dim doMode As Long
+    Dim kLoop(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseDoStmt = -1
+    p->pos = p->pos + 1
+    If ParseDoHeadCond(p, cond, doMode) = 0 Then Exit Function
+    empty[0] = 0
+    lstrcpy(VarPtr(kLoop), "loop")
+    body = ParseStmtListUntil(p, VarPtr(kLoop), VarPtr(empty))
+    If p->err <> 0 Then Exit Function
+    If ParseIdentIs(p, VarPtr(kLoop)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseDoTailCond(p, cond, doMode) = 0 Then Exit Function
     ast = p->ast
     nDo = AstAddNode(ast, AST_DO)
     If nDo < 0 Then Exit Function
@@ -397,66 +508,68 @@ Function ParseDoStmt(p As *Parser) As Long
     ParseDoStmt = nDo
 End Function
 
-Function ParseParamType(p As *Parser, ByRef pty As Long, ByRef pti As Long, ByRef isByRef As Long, allowDblStar As Long, allowDouble As Long) As Long
+Function ParseParamStarType(p As *Parser, ByRef pty As Long, ByRef pti As Long, ByRef isByRef As Long, allowDblStar As Long) As Long
     Dim k(15) As Byte
     Dim typeName(63) As Byte
     Dim types As *TypeTable
     Dim ast As *Ast
 
-    ParseParamType = 0
+    ParseParamStarType = 0
     ast = p->ast
     types = ast->types
-    pty = TY_LONG
-    pti = -1
+    p->pos = p->pos + 1
+    If allowDblStar <> 0 Then
+        If ParseTokKind(p) = TK_STAR Then
+            p->pos = p->pos + 1
+            isByRef = 1
+        End If
+    End If
     lstrcpy(VarPtr(k), "byte")
-    If ParseTokKind(p) = TK_STAR Then
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        If allowDblStar <> 0 Then
-            If ParseTokKind(p) = TK_STAR Then
-                p->pos = p->pos + 1
-                isByRef = 1
-            End If
-        End If
-        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-            p->pos = p->pos + 1
-            pty = TY_PTR_BYTE
-            ParseParamType = 1
-            Exit Function
-        End If
-        lstrcpy(VarPtr(k), "long")
-        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-            p->pos = p->pos + 1
-            pty = TY_PTR_LONG
-            ParseParamType = 1
-            Exit Function
-        End If
-        If ParseEatLongAlias(p) <> 0 Then
-            pty = TY_PTR_LONG
-            ParseParamType = 1
-            Exit Function
-        End If
-        If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
-        pti = TyFind(types, VarPtr(typeName))
-        If pti < 0 Then
-            p->err = 1
-            Exit Function
-        End If
-        pty = TY_PTR_UDT
-        ParseParamType = 1
+        pty = TY_PTR_BYTE
+        ParseParamStarType = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "long")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
+        pty = TY_PTR_LONG
+        ParseParamStarType = 1
+        Exit Function
+    End If
+    If ParseEatLongAlias(p) <> 0 Then
+        pty = TY_PTR_LONG
+        ParseParamStarType = 1
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+    pti = TyFind(types, VarPtr(typeName))
+    If pti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    pty = TY_PTR_UDT
+    ParseParamStarType = 1
+End Function
+
+Function ParseParamPrimType(p As *Parser, ByRef pty As Long, allowDouble As Long) As Long
+    Dim k(15) As Byte
+    Dim typeName(63) As Byte
+
+    ParseParamPrimType = -2
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
         pty = TY_LONG
-        ParseParamType = 1
+        ParseParamPrimType = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "string")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
         pty = TY_STRING
-        ParseParamType = 1
+        ParseParamPrimType = 1
         Exit Function
     End If
     If allowDouble <> 0 Then
@@ -464,18 +577,28 @@ Function ParseParamType(p As *Parser, ByRef pty As Long, ByRef pti As Long, ByRe
         If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
             p->pos = p->pos + 1
             pty = TY_DOUBLE
-            ParseParamType = 1
+            ParseParamPrimType = 1
             Exit Function
         End If
     End If
+End Function
+
+Function ParseParamAliasUdt(p As *Parser, ByRef pty As Long, ByRef pti As Long) As Long
+    Dim typeName(63) As Byte
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseParamAliasUdt = 0
+    ast = p->ast
+    types = ast->types
     If ParseEatBytePtrAlias(p) <> 0 Then
         pty = TY_PTR_BYTE
-        ParseParamType = 1
+        ParseParamAliasUdt = 1
         Exit Function
     End If
     If ParseEatLongAlias(p) <> 0 Then
         pty = TY_LONG
-        ParseParamType = 1
+        ParseParamAliasUdt = 1
         Exit Function
     End If
     If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
@@ -488,143 +611,197 @@ Function ParseParamType(p As *Parser, ByRef pty As Long, ByRef pti As Long, ByRe
         Exit Function
     End If
     pty = TY_UDT
-    ParseParamType = 1
+    ParseParamAliasUdt = 1
 End Function
 
-Function ParseParamList(p As *Parser, ByRef nFirst As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As Long
-    Dim ast As *Ast
+Function ParseParamPlainType(p As *Parser, ByRef pty As Long, ByRef pti As Long, allowDouble As Long) As Long
+    Dim r As Long
+
+    ParseParamPlainType = 0
+    r = ParseParamPrimType(p, pty, allowDouble)
+    If r <> -2 Then
+        ParseParamPlainType = r
+        Exit Function
+    End If
+    ParseParamPlainType = ParseParamAliasUdt(p, pty, pti)
+End Function
+
+Function ParseParamType(p As *Parser, ByRef pty As Long, ByRef pti As Long, ByRef isByRef As Long, allowDblStar As Long, allowDouble As Long) As Long
+    ParseParamType = 0
+    pty = TY_LONG
+    pti = -1
+    If ParseTokKind(p) = TK_STAR Then
+        ParseParamType = ParseParamStarType(p, pty, pti, isByRef, allowDblStar)
+        Exit Function
+    End If
+    ParseParamType = ParseParamPlainType(p, pty, pti, allowDouble)
+End Function
+
+Function ParseParamOne(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As Long
     Dim nodes As *AstNode
     Dim k(15) As Byte
     Dim pname(63) As Byte
     Dim nParam As Long
-    Dim nPrev As Long
     Dim isByRef As Long
     Dim pty As Long
     Dim pti As Long
+
+    ParseParamOne = 0
+    isByRef = 0
+    lstrcpy(VarPtr(k), "byref")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        isByRef = 1
+    Else
+        lstrcpy(VarPtr(k), "byval")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            p->pos = p->pos + 1
+        End If
+    End If
+    If ParseCopyIdent(p, VarPtr(pname)) = 0 Then Exit Function
+    lstrcpy(VarPtr(k), "as")
+    If ParseIdentIs(p, VarPtr(k)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseParamType(p, pty, pti, isByRef, allowDblStar, allowDouble) = 0 Then Exit Function
+    nParam = AstAddNode(ast, AST_VAR)
+    If nParam < 0 Then Exit Function
+    AstSetStr(ast, nParam, VarPtr(pname))
+    nodes = ast->nodes
+    nodes[nParam].num = isByRef
+    nodes[nParam].extra = pty
+    nodes[nParam].right = pti
+    If nFirst < 0 Then
+        nFirst = nParam
+    Else
+        nodes[nPrev].nxt = nParam
+    End If
+    nPrev = nParam
+    nParams = nParams + 1
+    ParseParamOne = 1
+End Function
+
+Function ParseParamList(p As *Parser, ByRef nFirst As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As Long
+    Dim ast As *Ast
+    Dim nPrev As Long
 
     ParseParamList = 0
     ast = p->ast
     nFirst = -1
     nPrev = -1
     nParams = 0
-    lstrcpy(VarPtr(k), "byref")
     If ParseTokKind(p) <> TK_RPAREN Then
         Do
-            isByRef = 0
-            If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-                p->pos = p->pos + 1
-                isByRef = 1
-            Else
-                lstrcpy(VarPtr(k), "byval")
-                If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-                    p->pos = p->pos + 1
-                End If
-            End If
-            If ParseCopyIdent(p, VarPtr(pname)) = 0 Then Exit Function
-            lstrcpy(VarPtr(k), "as")
-            If ParseIdentIs(p, VarPtr(k)) = 0 Then
-                p->err = 1
-                Exit Function
-            End If
-            p->pos = p->pos + 1
-            If ParseParamType(p, pty, pti, isByRef, allowDblStar, allowDouble) = 0 Then Exit Function
-            nParam = AstAddNode(ast, AST_VAR)
-            If nParam < 0 Then Exit Function
-            AstSetStr(ast, nParam, VarPtr(pname))
-            nodes = ast->nodes
-            nodes[nParam].num = isByRef
-            nodes[nParam].extra = pty
-            nodes[nParam].right = pti
-            If nFirst < 0 Then
-                nFirst = nParam
-            Else
-                nodes[nPrev].nxt = nParam
-            End If
-            nPrev = nParam
-            nParams = nParams + 1
+            If ParseParamOne(p, ast, nFirst, nPrev, nParams, allowDblStar, allowDouble) = 0 Then Exit Function
             If ParseTokKind(p) <> TK_COMMA Then Exit Do
             p->pos = p->pos + 1
-            lstrcpy(VarPtr(k), "byref")
         Loop
     End If
     If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
     ParseParamList = 1
 End Function
 
-Function ParseFuncRetType(p As *Parser, ByRef retTy As Long) As Long
+Function ParseFuncRetLongStr(p As *Parser, ByRef retTy As Long) As Long
     Dim k(15) As Byte
-    Dim typeName(63) As Byte
-    Dim pti As Long
-    Dim types As *TypeTable
-    Dim ast As *Ast
 
-    ParseFuncRetType = 0
-    ast = p->ast
-    types = ast->types
-    retTy = TY_LONG
+    ParseFuncRetLongStr = -2
     lstrcpy(VarPtr(k), "long")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
         retTy = TY_LONG
-        ParseFuncRetType = 1
+        ParseFuncRetLongStr = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "string")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
         retTy = TY_STRING
-        ParseFuncRetType = 1
+        ParseFuncRetLongStr = 1
         Exit Function
     End If
-    If ParseTokKind(p) = TK_STAR Then
+End Function
+
+Function ParseFuncRetStar(p As *Parser, ByRef retTy As Long) As Long
+    Dim k(15) As Byte
+    Dim typeName(63) As Byte
+    Dim pti As Long
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseFuncRetStar = 0
+    ast = p->ast
+    types = ast->types
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(k), "byte")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
-        lstrcpy(VarPtr(k), "byte")
-        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-            p->pos = p->pos + 1
-            retTy = TY_PTR_BYTE
-            ParseFuncRetType = 1
-            Exit Function
-        End If
-        lstrcpy(VarPtr(k), "long")
-        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
-            p->pos = p->pos + 1
-            retTy = TY_PTR_LONG
-            ParseFuncRetType = 1
-            Exit Function
-        End If
-        If ParseEatLongAlias(p) <> 0 Then
-            retTy = TY_PTR_LONG
-            ParseFuncRetType = 1
-            Exit Function
-        End If
-        If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
-        pti = TyFind(types, VarPtr(typeName))
-        If pti < 0 Then
-            p->err = 1
-            Exit Function
-        End If
-        retTy = TY_PTR_UDT
-        ParseFuncRetType = 1
+        retTy = TY_PTR_BYTE
+        ParseFuncRetStar = 1
         Exit Function
     End If
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        retTy = TY_PTR_LONG
+        ParseFuncRetStar = 1
+        Exit Function
+    End If
+    If ParseEatLongAlias(p) <> 0 Then
+        retTy = TY_PTR_LONG
+        ParseFuncRetStar = 1
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+    pti = TyFind(types, VarPtr(typeName))
+    If pti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    retTy = TY_PTR_UDT
+    ParseFuncRetStar = 1
+End Function
+
+Function ParseFuncRetTail(p As *Parser, ByRef retTy As Long) As Long
+    Dim typeName(63) As Byte
+
+    ParseFuncRetTail = 0
     lstrcpy(VarPtr(typeName), "double")
     If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
         p->pos = p->pos + 1
         retTy = TY_DOUBLE
-        ParseFuncRetType = 1
+        ParseFuncRetTail = 1
         Exit Function
     End If
     If ParseEatBytePtrAlias(p) <> 0 Then
         retTy = TY_PTR_BYTE
-        ParseFuncRetType = 1
+        ParseFuncRetTail = 1
         Exit Function
     End If
     If ParseEatLongAlias(p) <> 0 Then
         retTy = TY_LONG
-        ParseFuncRetType = 1
+        ParseFuncRetTail = 1
         Exit Function
     End If
     p->err = 1
+End Function
+
+Function ParseFuncRetType(p As *Parser, ByRef retTy As Long) As Long
+    Dim r As Long
+
+    ParseFuncRetType = 0
+    retTy = TY_LONG
+    r = ParseFuncRetLongStr(p, retTy)
+    If r <> -2 Then
+        ParseFuncRetType = r
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_STAR Then
+        ParseFuncRetType = ParseFuncRetStar(p, retTy)
+        Exit Function
+    End If
+    ParseFuncRetType = ParseFuncRetTail(p, retTy)
 End Function
 
 Function ParseSubStmt(p As *Parser) As Long
@@ -702,24 +879,13 @@ Function ParseWhileStmt(p As *Parser) As Long
     ParseWhileStmt = nWhile
 End Function
 
-Function ParseForStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nFor As Long
-    Dim name(63) As Byte
-    Dim nVar As Long
-    Dim fromE As Long
-    Dim toE As Long
-    Dim stepE As Long
-    Dim body As Long
+Function ParseForHeader(p As *Parser, ast As *Ast, name As *Byte, ByRef fromE As Long, ByRef toE As Long, ByRef stepE As Long) As Long
     Dim kTo(7) As Byte
     Dim kStep(7) As Byte
-    Dim kNext(7) As Byte
-    Dim empty(1) As Byte
 
-    ParseForStmt = -1
+    ParseForHeader = 0
     p->pos = p->pos + 1
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseCopyIdent(p, name) = 0 Then Exit Function
     If ParseExpect(p, TK_EQ) = 0 Then Exit Function
     fromE = ParseExpr(p)
     If fromE < 0 Then Exit Function
@@ -731,7 +897,6 @@ Function ParseForStmt(p As *Parser) As Long
     p->pos = p->pos + 1
     toE = ParseExpr(p)
     If toE < 0 Then Exit Function
-    ast = p->ast
     stepE = ParseMakeNum(ast, 1)
     If stepE < 0 Then Exit Function
     lstrcpy(VarPtr(kStep), "step")
@@ -740,6 +905,25 @@ Function ParseForStmt(p As *Parser) As Long
         stepE = ParseExpr(p)
         If stepE < 0 Then Exit Function
     End If
+    ParseForHeader = 1
+End Function
+
+Function ParseForStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nFor As Long
+    Dim name(63) As Byte
+    Dim nVar As Long
+    Dim fromE As Long
+    Dim toE As Long
+    Dim stepE As Long
+    Dim body As Long
+    Dim kNext(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseForStmt = -1
+    ast = p->ast
+    If ParseForHeader(p, ast, VarPtr(name), fromE, toE, stepE) = 0 Then Exit Function
 
     empty[0] = 0
     lstrcpy(VarPtr(kNext), "next")
@@ -805,10 +989,24 @@ Function ParseWithStmt(p As *Parser) As Long
     ParseWithStmt = nWith
 End Function
 
-Function ParseFuncStmt(p As *Parser) As Long
-    Dim ast As *Ast
+Function ParseFuncMakeNode(ast As *Ast, name As *Byte, nFirst As Long, body As Long, nParams As Long, retTy As Long) As Long
     Dim nodes As *AstNode
     Dim nFunc As Long
+
+    ParseFuncMakeNode = -1
+    nFunc = AstAddNode(ast, AST_FUNC)
+    If nFunc < 0 Then Exit Function
+    AstSetStr(ast, nFunc, name)
+    nodes = ast->nodes
+    nodes[nFunc].left = nFirst
+    nodes[nFunc].right = body
+    nodes[nFunc].num = nParams
+    nodes[nFunc].extra = retTy
+    ParseFuncMakeNode = nFunc
+End Function
+
+Function ParseFuncStmt(p As *Parser) As Long
+    Dim ast As *Ast
     Dim name(63) As Byte
     Dim nFirst As Long
     Dim body As Long
@@ -847,15 +1045,7 @@ Function ParseFuncStmt(p As *Parser) As Long
         Exit Function
     End If
     p->pos = p->pos + 1
-    nFunc = AstAddNode(ast, AST_FUNC)
-    If nFunc < 0 Then Exit Function
-    AstSetStr(ast, nFunc, VarPtr(name))
-    nodes = ast->nodes
-    nodes[nFunc].left = nFirst
-    nodes[nFunc].right = body
-    nodes[nFunc].num = nParams
-    nodes[nFunc].extra = retTy
-    ParseFuncStmt = nFunc
+    ParseFuncStmt = ParseFuncMakeNode(ast, VarPtr(name), nFirst, body, nParams, retTy)
 End Function
 
 ' Declare Function|Sub Name Lib "dll" [Alias "api"] (params) [As Type]
@@ -985,52 +1175,60 @@ Function ParseDeclareStmt(p As *Parser) As Long
     ParseDeclareStmt = nDecl
 End Function
 
+Function ParseInsMenuArg(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    Dim nodes As *AstNode
+    Dim nArg As Long
+    Dim e As Long
+    Dim kEx(7) As Byte
+    Dim s(255) As Byte
+
+    ParseInsMenuArg = 0
+    e = -1
+    lstrcpy(VarPtr(kEx), "ex")
+    If ParseIdentIs(p, VarPtr(kEx)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_STRING Then
+            p->pos = p->pos + 1
+            If ParseStringArg(p, VarPtr(s)) = 0 Then Exit Function
+            e = AstAddNode(ast, AST_STRING)
+            If e < 0 Then Exit Function
+            AstSetStr(ast, e, VarPtr(s))
+        End If
+    End If
+    If e < 0 Then
+        e = ParseExpr(p)
+        If e < 0 Then Exit Function
+    End If
+    nArg = AstAddNode(ast, AST_ARG)
+    If nArg < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nArg].left = e
+    If nFirst < 0 Then
+        nFirst = nArg
+    Else
+        nodes[nPrev].nxt = nArg
+    End If
+    nPrev = nArg
+    nArgs = nArgs + 1
+    ParseInsMenuArg = 1
+End Function
+
 ' InsMenu hMenu, pos, flags [, caption [, id [, hSubMenu [, ignored]]]]
 Function ParseInsMenuStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nIns As Long
-    Dim nArg As Long
     Dim nFirst As Long
     Dim nPrev As Long
     Dim nArgs As Long
-    Dim e As Long
-    Dim kEx(7) As Byte
-    Dim s(255) As Byte
 
     ParseInsMenuStmt = -1
     p->pos = p->pos + 1
     ast = p->ast
-    lstrcpy(VarPtr(kEx), "ex")
     nFirst = -1
     nPrev = -1
     nArgs = 0
     Do
-        e = -1
-        If ParseIdentIs(p, VarPtr(kEx)) <> 0 Then
-            If ParseTokKindAt(p, p->pos + 1) = TK_STRING Then
-                p->pos = p->pos + 1
-                If ParseStringArg(p, VarPtr(s)) = 0 Then Exit Function
-                e = AstAddNode(ast, AST_STRING)
-                If e < 0 Then Exit Function
-                AstSetStr(ast, e, VarPtr(s))
-            End If
-        End If
-        If e < 0 Then
-            e = ParseExpr(p)
-            If e < 0 Then Exit Function
-        End If
-        nArg = AstAddNode(ast, AST_ARG)
-        If nArg < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[nArg].left = e
-        If nFirst < 0 Then
-            nFirst = nArg
-        Else
-            nodes[nPrev].nxt = nArg
-        End If
-        nPrev = nArg
-        nArgs = nArgs + 1
+        If ParseInsMenuArg(p, ast, nFirst, nPrev, nArgs) = 0 Then Exit Function
         If ParseTokKind(p) <> TK_COMMA Then Exit Do
         p->pos = p->pos + 1
     Loop
