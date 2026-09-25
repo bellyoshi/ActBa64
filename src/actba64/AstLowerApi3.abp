@@ -1,0 +1,301 @@
+' --- split from AstLowerApi.abp (part 3) ---
+Sub LowEmitApiCallShadow(list As *IrList, dllKind As Long, apiName As *Byte)
+    Dim stk As Long
+    stk = LowCallStk(0)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+' rax = byte count; HeapAlloc(GetProcessHeap(), flags, rax)
+Sub LowEmitHeapAllocRax(list As *IrList, flags As DWord)
+    Dim stk As Long
+    Dim sApi(15) As Byte
+    Dim ps As Long
+    ps = TyPtrSize()
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, flags, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
+    LowEmitLoadRegArgs(list, 3)
+    lstrcpy(VarPtr(sApi), "HeapAlloc")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    LowEmitCallFinish(list, stk)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+End Sub
+
+' rax = block; HeapFree(GetProcessHeap(), 0, rax)
+Sub LowEmitHeapFreeRax(list As *IrList)
+    Dim stk As Long
+    Dim sApi(15) As Byte
+    Dim ps As Long
+    ps = TyPtrSize()
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
+    LowEmitLoadRegArgs(list, 3)
+    lstrcpy(VarPtr(sApi), "HeapFree")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    LowEmitCallFinish(list, stk)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+End Sub
+
+' 名前の末尾が '$' なら 1
+Function LowNameHasStrSuffix(name As *Byte) As Long
+    Dim si As Long
+
+    LowNameHasStrSuffix = 0
+    si = 0
+    While name[si] <> 0
+        si = si + 1
+    Wend
+    If si > 0 Then
+        If name[si - 1] = 36 Then LowNameHasStrSuffix = 1
+    End If
+End Function
+
+' String 定数か String 変数なら 1
+Function LowIsStringExprVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim name(63) As Byte
+
+    LowIsStringExprVar = 0
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If LowFindStrConst(ctx, VarPtr(name)) >= 0 Then
+        LowIsStringExprVar = 1
+        Exit Function
+    End If
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+        If vTy = TY_STRING Then LowIsStringExprVar = 1
+    End If
+End Function
+
+' String 配列の添字、または '$' 付き関数の呼び出しなら 1
+Function LowIsStringExprCall(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+
+    LowIsStringExprCall = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+        If vTy = TY_STRING_ARR Then
+            If nodes[idx].num = 1 Then LowIsStringExprCall = 1
+        End If
+        Exit Function
+    End If
+    If LowFindFunc(ctx, VarPtr(name)) >= 0 Then
+        LowIsStringExprCall = LowNameHasStrSuffix(VarPtr(name))
+    End If
+End Function
+
+Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim k As Long
+    Dim bi As Long
+
+    LowIsStringExpr = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    k = nodes[idx].kind
+    If k = AST_STRING Then
+        LowIsStringExpr = 1
+    ElseIf k = AST_BINOP Then
+        If nodes[idx].num = BOP_ADD Or nodes[idx].num = BOP_CAT Then
+            If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Then
+                LowIsStringExpr = 1
+                Exit Function
+            End If
+            If LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then LowIsStringExpr = 1
+        End If
+    ElseIf k = AST_BUILTIN Then
+        bi = nodes[idx].num
+        If bi = BI_LEFT Or bi = BI_MID Or bi = BI_RIGHT Or bi = BI_CHR Or bi = BI_STR Or bi = BI_MAKESTR Then
+            LowIsStringExpr = 1
+        End If
+    ElseIf k = AST_VAR Then
+        LowIsStringExpr = LowIsStringExprVar(ctx, idx)
+    ElseIf k = AST_CALL Then
+        LowIsStringExpr = LowIsStringExprCall(ctx, idx)
+    End If
+End Function
+
+Function LowEnsureRtCat(ctx As *LowerCtx) As Long
+    If g_rtCatLab < 0 Then
+        g_rtCatLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtCat = g_rtCatLab
+End Function
+
+Function LowEnsureRtMid(ctx As *LowerCtx) As Long
+    If g_rtMidLab < 0 Then
+        g_rtMidLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtMid = g_rtMidLab
+End Function
+
+Function LowEnsureRtStr(ctx As *LowerCtx) As Long
+    If g_rtStrLab < 0 Then
+        g_rtStrLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtStr = g_rtStrLab
+End Function
+
+Function LowEnsureRtPrint(ctx As *LowerCtx) As Long
+    If g_rtPrintLab < 0 Then
+        g_rtPrintLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtPrint = g_rtPrintLab
+End Function
+
+Function LowEnsureRtInput(ctx As *LowerCtx) As Long
+    If g_rtInputLab < 0 Then
+        g_rtInputLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtInput = g_rtInputLab
+End Function
+
+Function LowEnsureRtVal(ctx As *LowerCtx) As Long
+    If g_rtValLab < 0 Then
+        g_rtValLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtVal = g_rtValLab
+End Function
+
+Function LowEnsureRtValDouble(ctx As *LowerCtx) As Long
+    If g_rtValDoubleLab < 0 Then
+        g_rtValDoubleLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtValDouble = g_rtValDoubleLab
+End Function
+
+Function LowEnsureRtMakeStr(ctx As *LowerCtx) As Long
+    If g_rtMakeStrLab < 0 Then
+        g_rtMakeStrLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtMakeStr = g_rtMakeStrLab
+End Function
+
+Function LowEnsureRtStrCmp(ctx As *LowerCtx) As Long
+    If g_rtStrCmpLab < 0 Then
+        g_rtStrCmpLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtStrCmp = g_rtStrCmpLab
+End Function
+
+Function LowEnsureRtStrFree(ctx As *LowerCtx) As Long
+    If g_rtStrFreeLab < 0 Then
+        g_rtStrFreeLab = LowNewLab(ctx)
+    End If
+    LowEnsureRtStrFree = g_rtStrFreeLab
+End Function
+
+Sub LowResetFnPreciseRoots()
+    g_fnPreciseRootCount = 0
+End Sub
+
+Sub LowAppendFnPreciseRoot(off As Long)
+    If g_fnPreciseRoots = NULL Then Exit Sub
+    If g_fnPreciseRootCount >= GC_MAX_PRECISE Then Exit Sub
+    g_fnPreciseRoots[g_fnPreciseRootCount] = off
+    g_fnPreciseRootCount = g_fnPreciseRootCount + 1
+End Sub
+
+Sub LowRetargetFnPreciseRoot(oldOff As Long, newOff As Long)
+    Dim i As Long
+    If g_fnPreciseRoots = NULL Then Exit Sub
+    i = 0
+    While i < g_fnPreciseRootCount
+        If g_fnPreciseRoots[i] = oldOff Then
+            g_fnPreciseRoots[i] = newOff
+        End If
+        i = i + 1
+    Wend
+End Sub
+
+Sub LowAppendFnPreciseStringArr(baseOff As Long, nbytes As Long)
+    Dim j As Long
+    Dim n As Long
+    n = nbytes \ TyPtrSize()
+    j = 0
+    While j < n
+        LowAppendFnPreciseRoot(baseOff + j * TyPtrSize())
+        j = j + 1
+    Wend
+End Sub
+
+Sub LowAppendPreciseGlobRoot(off As Long)
+    If g_preciseRoots = NULL Then Exit Sub
+    If g_preciseRootCount >= GC_MAX_PRECISE Then Exit Sub
+    g_preciseRoots[g_preciseRootCount] = off
+    g_preciseRootCount = g_preciseRootCount + 1
+End Sub
+
+Sub LowAppendPreciseGlobStringArr(baseOff As Long, nbytes As Long)
+    Dim j As Long
+    Dim n As Long
+    n = nbytes \ TyPtrSize()
+    j = 0
+    While j < n
+        LowAppendPreciseGlobRoot(baseOff + j * TyPtrSize())
+        j = j + 1
+    Wend
+End Sub
+
+Sub LowCollectPreciseGlobRoots()
+    Dim i As Long
+    Dim ty As Long
+    Dim off As Long
+    Dim sz As Long
+    Dim types As *Long
+    Dim offs As *Long
+    Dim nb As *Long
+    types = g_gTypes As *Long
+    offs = g_gOffs As *Long
+    nb = g_gNbytes
+    g_preciseRootCount = 0
+    i = 0
+    While i < g_gCount
+        ty = types[i]
+        off = offs[i]
+        sz = nb[i]
+        If ty = TY_STRING Then
+            LowAppendPreciseGlobRoot(off)
+        ElseIf ty = TY_STRING_ARR Then
+            LowAppendPreciseGlobStringArr(off, sz)
+        End If
+        i = i + 1
+    Wend
+End Sub

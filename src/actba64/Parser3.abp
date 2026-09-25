@@ -1,0 +1,348 @@
+' --- split from Parser.abp (part 3) ---
+Function ParseCompoundAssignOp(p As *Parser) As Long
+    Dim k(7) As Byte
+    Dim op As Long
+
+    ParseCompoundAssignOp = 0
+    op = 0
+    If ParseTokKind(p) = TK_PLUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_ADD
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_MINUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_SUB
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_STAR Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_MUL
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_SLASH Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_DIV
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_BACKSLASH Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_IDIV
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_SHL Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_SHL
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_SHR Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_SHR
+            p->pos = p->pos + 2
+        End If
+    Else
+        lstrcpy(VarPtr(k), "mod")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                op = BOP_MOD
+                p->pos = p->pos + 2
+            End If
+        End If
+        If op = 0 Then
+            lstrcpy(VarPtr(k), "and")
+            If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+                If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                    op = BOP_AND
+                    p->pos = p->pos + 2
+                End If
+            End If
+        End If
+        If op = 0 Then
+            lstrcpy(VarPtr(k), "or")
+            If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+                If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                    op = BOP_OR
+                    p->pos = p->pos + 2
+                End If
+            End If
+        End If
+        If op = 0 Then
+            lstrcpy(VarPtr(k), "xor")
+            If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+                If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                    op = BOP_XOR
+                    p->pos = p->pos + 2
+                End If
+            End If
+        End If
+    End If
+    ParseCompoundAssignOp = op
+End Function
+
+Function ParseAssignOpRhs(p As *Parser, left As Long) As Long
+    Dim e As Long
+    Dim op As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nAsg As Long
+    Dim nInc As Long
+
+    ParseAssignOpRhs = -1
+    If left < 0 Then Exit Function
+    ast = p->ast
+    nInc = ParseAssignIncDec(p, left)
+    If nInc <> -2 Then
+        ParseAssignOpRhs = nInc
+        Exit Function
+    End If
+    op = ParseCompoundAssignOp(p)
+    If op <> 0 Then
+        e = ParseExpr(p)
+        If e < 0 Then Exit Function
+        ParseAssignOpRhs = ParseMakeAssignBin(p, left, op, e)
+        Exit Function
+    End If
+    If ParseExpect(p, TK_EQ) = 0 Then Exit Function
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    nAsg = AstAddNode(ast, AST_ASSIGN)
+    If nAsg < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nAsg].left = left
+    nodes[nAsg].right = e
+    ParseAssignOpRhs = nAsg
+End Function
+
+Function ParseStringArg(p As *Parser, dst As *Byte) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim i As Long
+    ParseStringArg = 0
+    lx = p->lx
+    toks = lx->toks
+    i = p->pos
+    If toks[i].kind <> TK_STRING Then
+        p->err = 1
+        Exit Function
+    End If
+    LexCopyText(lx, toks[i].textOff, dst)
+    p->pos = p->pos + 1
+    ParseStringArg = 1
+End Function
+
+Function ParseStringArgLen(p As *Parser, dst As *Byte) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim texts As *Byte
+    Dim ti As Long
+    Dim j As Long
+    Dim off As Long
+    Dim n As Long
+    ParseStringArgLen = -1
+    lx = p->lx
+    toks = lx->toks
+    ti = p->pos
+    If toks[ti].kind <> TK_STRING Then
+        p->err = 1
+        Exit Function
+    End If
+    n = toks[ti].num
+    If n <= 0 Then
+        off = toks[ti].textOff * LEX_TEXT_LEN
+        texts = lx->texts
+        n = texts[off + LEX_TEXT_LEN - 1]
+    End If
+    If n <= 0 Then
+        LexCopyText(lx, toks[ti].textOff, dst)
+        n = 0
+        While dst[n] <> 0 And n < AST_STR_LEN - 1
+            n = n + 1
+        Wend
+    Else
+        texts = lx->texts
+        off = toks[ti].textOff * LEX_TEXT_LEN
+        If n > AST_STR_LEN - 1 Then n = AST_STR_LEN - 1
+        j = 0
+        While j < n
+            dst[j] = texts[off + j]
+            j = j + 1
+        Wend
+        dst[j] = 0
+    End If
+    p->pos = p->pos + 1
+    ParseStringArgLen = n
+End Function
+
+Function ParseIsKeywordStmt(p As *Parser) As Long
+    Dim k(15) As Byte
+    ParseIsKeywordStmt = 0
+    lstrcpy(VarPtr(k), "print")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "exitprocess")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "end")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "dim")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "if")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "else")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "while")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "wend")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "for")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "next")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseIsKeywordStmt = 1
+        Exit Function
+    End If
+End Function
+
+Function ParseArgList(p As *Parser, ByRef arg0 As Long, ByRef nArgs As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim e As Long
+    Dim arg1 As Long
+    Dim nPrev As Long
+
+    ParseArgList = 0
+    ast = p->ast
+    arg0 = -1
+    nArgs = 0
+    nPrev = -1
+    If ParseTokKind(p) <> TK_RPAREN Then
+        Do
+            e = ParseArgExpr(p)
+            If e < 0 Then Exit Function
+            arg1 = AstAddNode(ast, AST_ARG)
+            If arg1 < 0 Then Exit Function
+            nodes = ast->nodes
+            nodes[arg1].left = e
+            nodes[arg1].num = g_parseArgByVal
+            If arg0 < 0 Then
+                arg0 = arg1
+            Else
+                nodes[nPrev].nxt = arg1
+            End If
+            nPrev = arg1
+            nArgs = nArgs + 1
+            If ParseTokKind(p) <> TK_COMMA Then Exit Do
+            p->pos = p->pos + 1
+        Loop
+    End If
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    ParseArgList = 1
+End Function
+
+Function ParsePostfixMemIdx(p As *Parser, n As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim e As Long
+    Dim arg0 As Long
+
+    ParsePostfixMemIdx = -1
+    ast = p->ast
+    Do
+        If ParseTokKind(p) = TK_DOT Then
+            p->pos = p->pos + 1
+            If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+            arg0 = AstAddNode(ast, AST_MEMBER)
+            If arg0 < 0 Then Exit Function
+            AstSetStr(ast, arg0, VarPtr(name))
+            nodes = ast->nodes
+            nodes[arg0].left = n
+            nodes[arg0].num = 0
+            n = arg0
+        ElseIf ParseTokKind(p) = TK_ARROW Then
+            p->pos = p->pos + 1
+            If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+            arg0 = AstAddNode(ast, AST_MEMBER)
+            If arg0 < 0 Then Exit Function
+            AstSetStr(ast, arg0, VarPtr(name))
+            nodes = ast->nodes
+            nodes[arg0].left = n
+            nodes[arg0].num = 1
+            n = arg0
+        ElseIf ParseTokKind(p) = TK_LBRACK Then
+            p->pos = p->pos + 1
+            e = ParseExpr(p)
+            If e < 0 Then Exit Function
+            If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
+            arg0 = AstAddNode(ast, AST_INDEX)
+            If arg0 < 0 Then Exit Function
+            nodes = ast->nodes
+            nodes[arg0].left = n
+            nodes[arg0].right = e
+            nodes[arg0].num = 1
+            n = arg0
+        Else
+            Exit Do
+        End If
+    Loop
+    ParsePostfixMemIdx = n
+End Function
+
+Function ParseMemberCall(p As *Parser, n As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim arg0 As Long
+    Dim nArgs As Long
+    Dim rec As Long
+
+    ParseMemberCall = n
+    If ParseTokKind(p) <> TK_LPAREN Then Exit Function
+    ast = p->ast
+    nodes = ast->nodes
+    If nodes[n].kind <> AST_MEMBER Then Exit Function
+    AstCopyStr(ast, n, VarPtr(name))
+    rec = nodes[n].left
+    p->pos = p->pos + 1
+    If ParseArgList(p, arg0, nArgs) = 0 Then
+        ParseMemberCall = -1
+        Exit Function
+    End If
+    n = AstAddNode(ast, AST_CALL)
+    If n < 0 Then
+        ParseMemberCall = -1
+        Exit Function
+    End If
+    AstSetStr(ast, n, VarPtr(name))
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].right = rec
+    nodes[n].extra = -3
+    nodes[n].num = nArgs
+    ParseMemberCall = n
+End Function
