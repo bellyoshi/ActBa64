@@ -1,0 +1,379 @@
+' ParserExprPrec - 演算子の優先順位
+
+' ^ は単項 - より高優先（-2^2 = -(2^2)）。右結合。As は primary 直後
+Function ParsePower(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+
+    ParsePower = -1
+    left = ParseFactor(p)
+    If left < 0 Then Exit Function
+    If ParseTokKind(p) <> TK_CARET Then
+        ParsePower = left
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    right = ParsePower(p)
+    If right < 0 Then Exit Function
+    ast = p->ast
+    n = AstAddNode(ast, AST_BINOP)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = BOP_POW
+    nodes[n].left = left
+    nodes[n].right = right
+    ParsePower = n
+End Function
+
+Function ParseUnary(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim e As Long
+    Dim n As Long
+    Dim bits As Long
+
+    ParseUnary = -1
+    If ParseTokKind(p) = TK_MINUS Then
+        ' -1.5 → IEEE Double ビット（符号付き）
+        If ParseTokKindAt(p, p->pos + 1) = TK_FLOAT Then
+            p->pos = p->pos + 1
+            n = ParseMakeFloatAst(p, 1)
+            If n < 0 Then Exit Function
+            p->pos = p->pos + 1
+            ParseUnary = n
+            Exit Function
+        End If
+        p->pos = p->pos + 1
+        e = ParseUnary(p)
+        If e < 0 Then Exit Function
+        ast = p->ast
+        n = AstAddNode(ast, AST_UNARY)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = UOP_NEG
+        nodes[n].left = e
+        ParseUnary = n
+        Exit Function
+    End If
+    ParseUnary = ParsePower(p)
+End Function
+
+Function ParseTerm(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+    Dim op As Long
+    Dim kMod(7) As Byte
+
+    ParseTerm = -1
+    left = ParseUnary(p)
+    If left < 0 Then Exit Function
+    lstrcpy(VarPtr(kMod), "mod")
+    ast = p->ast
+    Do
+        If ParseTokKind(p) = TK_STAR Then
+            op = BOP_MUL
+        ElseIf ParseTokKind(p) = TK_SLASH Then
+            op = BOP_DIV
+        ElseIf ParseTokKind(p) = TK_BACKSLASH Then
+            op = BOP_IDIV
+        ElseIf ParseIdentIs(p, VarPtr(kMod)) <> 0 Then
+            op = BOP_MOD
+        Else
+            Exit Do
+        End If
+        p->pos = p->pos + 1
+        right = ParseUnary(p)
+        If right < 0 Then Exit Function
+        n = AstAddNode(ast, AST_BINOP)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = op
+        nodes[n].left = left
+        nodes[n].right = right
+        left = n
+    Loop
+    ParseTerm = left
+End Function
+
+Function ParseAddExpr(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+    Dim op As Long
+
+    ParseAddExpr = -1
+    left = ParseTerm(p)
+    If left < 0 Then Exit Function
+    ast = p->ast
+    Do
+        If ParseTokKind(p) = TK_PLUS Then
+            op = BOP_ADD
+        ElseIf ParseTokKind(p) = TK_MINUS Then
+            op = BOP_SUB
+        ElseIf ParseTokKind(p) = TK_AMP Then
+            op = BOP_CAT
+        Else
+            Exit Do
+        End If
+        p->pos = p->pos + 1
+        right = ParseTerm(p)
+        If right < 0 Then Exit Function
+        n = AstAddNode(ast, AST_BINOP)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = op
+        nodes[n].left = left
+        nodes[n].right = right
+        left = n
+    Loop
+    ParseAddExpr = left
+End Function
+
+Function ParseShiftExpr(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+    Dim op As Long
+
+    ParseShiftExpr = -1
+    left = ParseAddExpr(p)
+    If left < 0 Then Exit Function
+    ast = p->ast
+    Do
+        If ParseTokKind(p) = TK_SHL Then
+            op = BOP_SHL
+        ElseIf ParseTokKind(p) = TK_SHR Then
+            op = BOP_SHR
+        Else
+            Exit Do
+        End If
+        p->pos = p->pos + 1
+        right = ParseAddExpr(p)
+        If right < 0 Then Exit Function
+        n = AstAddNode(ast, AST_BINOP)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = op
+        nodes[n].left = left
+        nodes[n].right = right
+        left = n
+    Loop
+    ParseShiftExpr = left
+End Function
+
+Function ParseRelExpr(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+    Dim op As Long
+
+    ParseRelExpr = -1
+    left = ParseShiftExpr(p)
+    If left < 0 Then Exit Function
+    op = ParseCmpOp(p)
+    If op = 0 Then
+        ParseRelExpr = left
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    right = ParseShiftExpr(p)
+    If right < 0 Then Exit Function
+    ast = p->ast
+    n = AstAddNode(ast, AST_BINOP)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = op
+    nodes[n].left = left
+    nodes[n].right = right
+    ParseRelExpr = n
+End Function
+
+Function ParseNotExpr(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim e As Long
+    Dim n As Long
+    Dim kNot(7) As Byte
+
+    ParseNotExpr = -1
+    lstrcpy(VarPtr(kNot), "not")
+    If ParseIdentIs(p, VarPtr(kNot)) <> 0 Then
+        p->pos = p->pos + 1
+        e = ParseNotExpr(p)
+        If e < 0 Then Exit Function
+        ast = p->ast
+        n = AstAddNode(ast, AST_UNARY)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = UOP_NOT
+        nodes[n].left = e
+        ParseNotExpr = n
+        Exit Function
+    End If
+    ParseNotExpr = ParseRelExpr(p)
+End Function
+
+Function ParseAndExpr(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+    Dim kAnd(7) As Byte
+
+    ParseAndExpr = -1
+    left = ParseNotExpr(p)
+    If left < 0 Then Exit Function
+    lstrcpy(VarPtr(kAnd), "and")
+    ast = p->ast
+    While ParseIdentIs(p, VarPtr(kAnd)) <> 0
+        p->pos = p->pos + 1
+        right = ParseNotExpr(p)
+        If right < 0 Then Exit Function
+        n = AstAddNode(ast, AST_BINOP)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = BOP_AND
+        nodes[n].left = left
+        nodes[n].right = right
+        left = n
+    Wend
+    ParseAndExpr = left
+End Function
+
+Function ParseOrExpr(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+    Dim kOr(7) As Byte
+
+    ParseOrExpr = -1
+    left = ParseAndExpr(p)
+    If left < 0 Then Exit Function
+    lstrcpy(VarPtr(kOr), "or")
+    ast = p->ast
+    While ParseIdentIs(p, VarPtr(kOr)) <> 0
+        p->pos = p->pos + 1
+        right = ParseAndExpr(p)
+        If right < 0 Then Exit Function
+        n = AstAddNode(ast, AST_BINOP)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = BOP_OR
+        nodes[n].left = left
+        nodes[n].right = right
+        left = n
+    Wend
+    ParseOrExpr = left
+End Function
+
+' 式（末尾の As キャストなし）。Dim 初期化など As が宣言に属する場合用
+Function ParseExprNoAs(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    Dim n As Long
+    Dim kXor(7) As Byte
+
+    ParseExprNoAs = -1
+    left = ParseOrExpr(p)
+    If left < 0 Then Exit Function
+    lstrcpy(VarPtr(kXor), "xor")
+    ast = p->ast
+    While ParseIdentIs(p, VarPtr(kXor)) <> 0
+        p->pos = p->pos + 1
+        right = ParseOrExpr(p)
+        If right < 0 Then Exit Function
+        n = AstAddNode(ast, AST_BINOP)
+        If n < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[n].num = BOP_XOR
+        nodes[n].left = left
+        nodes[n].right = right
+        left = n
+    Wend
+    ParseExprNoAs = left
+End Function
+
+Function ParseExpr(p As *Parser) As Long
+    Dim e As Long
+
+    ParseExpr = -1
+    e = ParseExprNoAs(p)
+    If e < 0 Then Exit Function
+    ParseExpr = ParseApplyAs(p, e)
+End Function
+
+' Parse expr then optional "As Type" cast (call args only)
+Function ParseArgExpr(p As *Parser) As Long
+    Dim kAs(7) As Byte
+    Dim kByVal(7) As Byte
+    Dim tname(63) As Byte
+    Dim e As Long
+
+    ParseArgExpr = -1
+    g_parseArgByVal = 0
+    lstrcpy(VarPtr(kByVal), "byval")
+    If ParseIdentIs(p, VarPtr(kByVal)) <> 0 Then
+        p->pos = p->pos + 1
+        g_parseArgByVal = 1
+    End If
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    lstrcpy(VarPtr(kAs), "as")
+    If ParseIdentIs(p, VarPtr(kAs)) <> 0 Then
+        p->pos = p->pos + 1
+        If ParseTokKind(p) = TK_STAR Then
+            p->pos = p->pos + 1
+        End If
+        If ParseCopyIdent(p, VarPtr(tname)) = 0 Then Exit Function
+    End If
+    ParseArgExpr = e
+End Function
+
+Function ParseCmpOp(p As *Parser) As Long
+    Dim k As Long
+    ParseCmpOp = 0
+    k = ParseTokKind(p)
+    If k = TK_EQ Then
+        ParseCmpOp = BOP_EQ
+    ElseIf k = TK_NE Then
+        ParseCmpOp = BOP_NE
+    ElseIf k = TK_LT Then
+        ParseCmpOp = BOP_LT
+    ElseIf k = TK_LE Then
+        ParseCmpOp = BOP_LE
+    ElseIf k = TK_GT Then
+        ParseCmpOp = BOP_GT
+    ElseIf k = TK_GE Then
+        ParseCmpOp = BOP_GE
+    End If
+End Function
+
+Function ParseCmp(p As *Parser) As Long
+    ' 互換: 条件式は ParseExpr に統一（関係・論理・算術）
+    ParseCmp = ParseRelExpr(p)
+End Function
+
+Function ParseCondAnd(p As *Parser) As Long
+    ParseCondAnd = ParseAndExpr(p)
+End Function
+
+Function ParseCond(p As *Parser) As Long
+    ParseCond = ParseExpr(p)
+End Function

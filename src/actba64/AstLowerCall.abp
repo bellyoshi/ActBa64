@@ -1,0 +1,234 @@
+' AstLowerCall - 呼び出しシーケンスとヒープ
+
+Function LowAlign16(n As Long) As Long
+    LowAlign16 = (n + 15) And (0 - 16)
+End Function
+
+Function LowCallStk(nArgs As Long) As Long
+    Dim stk As Long
+    If TyIs32() <> 0 Then
+        LowCallStk = nArgs * 4
+        Exit Function
+    End If
+    stk = 32
+    If nArgs > 4 Then
+        stk = stk + (nArgs - 4) * 8
+    End If
+    LowCallStk = (stk + 15) And (0 - 16)
+End Function
+
+Sub LowEmitLoadRegArgs(list As *IrList, nArgs As Long)
+    Dim ps As Long
+    If TyIs32() <> 0 Then Exit Sub
+    ps = 8
+    If nArgs >= 4 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
+        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+    End If
+    If nArgs >= 3 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    End If
+    If nArgs >= 2 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    End If
+    If nArgs >= 1 Then
+        IrEmit(list, OP_LOAD_RSP_RAX, 0, 0)
+        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    End If
+End Sub
+
+Sub LowEmitCallFinish(list As *IrList, stk As Long)
+    If TyIs32() <> 0 Then Exit Sub
+    If stk <= 0 Then Exit Sub
+    IrEmit(list, OP_ADD_RSP, stk, 0)
+End Sub
+
+' rax already holds arg0
+Sub LowEmitCall1Rax(list As *IrList, isApi As Long, dllKind As Long, apiName As *Byte, lab As Long)
+    Dim stk As Long
+    stk = LowCallStk(1)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(list, 1)
+    If isApi <> 0 Then
+        IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    Else
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+    End If
+    LowEmitCallFinish(list, stk)
+End Sub
+
+' 32bit stdcall: ecx=arg0, edx=arg1 をスタックへ積んで呼ぶ。64bit は既に rcx/rdx。
+Sub LowEmitCallLab2(list As *IrList, lab As Long)
+    Dim stk As Long
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
+    stk = LowCallStk(2)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+' 32bit stdcall: ecx=arg0, edx=arg1, eax=arg2。64bit は rcx/rdx/r8。
+Sub LowEmitCallLab3(list As *IrList, lab As Long)
+    Dim stk As Long
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_CALL_LAB, lab, 0)
+        Exit Sub
+    End If
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+Sub LowEmitApiImm1(list As *IrList, dllKind As Long, apiName As *Byte, imm As DWord)
+    Dim stk As Long
+    stk = LowCallStk(1)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_MOV_EAX_IMM, imm, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(list, 1)
+    IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+Sub LowEmitCaptureArg0(list As *IrList, disp As Long)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_LOAD_LOCAL, 8, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    Else
+        IrEmit(list, OP_STORE_LOCAL_ECX, disp, 0)
+    End If
+End Sub
+
+Sub LowEmitCaptureArg1(list As *IrList, disp As Long)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_LOAD_LOCAL, 12, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    Else
+        IrEmit(list, OP_STORE_LOCAL_EDX, disp, 0)
+    End If
+End Sub
+
+Sub LowEmitCaptureArg2(list As *IrList, disp As Long)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_LOAD_LOCAL, 16, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    Else
+        IrEmit(list, OP_MOV_RAX_R8, 0, 0)
+        IrEmit(list, OP_STORE_LOCAL, disp, 0)
+    End If
+End Sub
+
+Sub LowEmitLeaveN(list As *IrList, nArgs As Long)
+    Dim n As Long
+    n = 0
+    If TyIs32() <> 0 Then
+        n = nArgs * 4
+    End If
+    IrEmit(list, OP_LEAVE, n, 0)
+End Sub
+
+Sub LowEmitScalePtr(list As *IrList)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_SHL_ECX_2, 0, 0)
+    Else
+        IrEmit(list, OP_SHL_ECX_3, 0, 0)
+    End If
+End Sub
+
+Sub LowEmitExitEax(ctx As *LowerCtx)
+    Dim sExit(15) As Byte
+    lstrcpy(VarPtr(sExit), "ExitProcess")
+    LowEmitCall1Rax(ctx->list, 1, IR_DLL_KERNEL32, VarPtr(sExit), 0)
+End Sub
+
+Sub LowEmitExitImm(ctx As *LowerCtx, code As DWord)
+    Dim sExit(15) As Byte
+    lstrcpy(VarPtr(sExit), "ExitProcess")
+    IrEmit(ctx->list, OP_MOV_EAX_IMM, code, 0)
+    LowEmitCall1Rax(ctx->list, 1, IR_DLL_KERNEL32, VarPtr(sExit), 0)
+End Sub
+
+' Nested API call. 64-bit allocates shadow space; 32-bit stdcall uses regs already set via stack in emit32.
+Sub LowEmitApiCallShadow(list As *IrList, dllKind As Long, apiName As *Byte)
+    Dim stk As Long
+    stk = LowCallStk(0)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+    LowEmitCallFinish(list, stk)
+End Sub
+
+' rax = byte count; HeapAlloc(GetProcessHeap(), flags, rax)
+Sub LowEmitHeapAllocRax(list As *IrList, flags As DWord)
+    Dim stk As Long
+    Dim sApi(15) As Byte
+    Dim ps As Long
+    ps = TyPtrSize()
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, flags, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
+    LowEmitLoadRegArgs(list, 3)
+    lstrcpy(VarPtr(sApi), "HeapAlloc")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    LowEmitCallFinish(list, stk)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+End Sub
+
+' rax = block; HeapFree(GetProcessHeap(), 0, rax)
+Sub LowEmitHeapFreeRax(list As *IrList)
+    Dim stk As Long
+    Dim sApi(15) As Byte
+    Dim ps As Long
+    ps = TyPtrSize()
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "GetProcessHeap")
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
+    stk = LowCallStk(3)
+    If stk > 0 Then
+        IrEmit(list, OP_SUB_RSP, stk, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
+    LowEmitLoadRegArgs(list, 3)
+    lstrcpy(VarPtr(sApi), "HeapFree")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
+    LowEmitCallFinish(list, stk)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+End Sub

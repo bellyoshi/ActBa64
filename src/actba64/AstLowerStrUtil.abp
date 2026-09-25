@@ -1,0 +1,229 @@
+' AstLowerStrUtil - 文字列加工と定数の展開
+
+Function LowStrLen(s As *Byte) As Long
+    Dim n As Long
+    n = 0
+    While s[n] <> 0
+        n = n + 1
+    Wend
+    LowStrLen = n
+End Function
+
+Sub LowStrCat(dst As *Byte, a As *Byte, b As *Byte, maxLen As Long)
+    Dim i As Long
+    Dim j As Long
+    i = 0
+    While a[i] <> 0 And i < maxLen - 1
+        dst[i] = a[i]
+        i = i + 1
+    Wend
+    j = 0
+    While b[j] <> 0 And i < maxLen - 1
+        dst[i] = b[j]
+        i = i + 1
+        j = j + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub LowStrLeft(dst As *Byte, s As *Byte, n As Long, maxLen As Long)
+    Dim i As Long
+    Dim ln As Long
+    ln = LowStrLen(s)
+    If n < 0 Then n = 0
+    If n > ln Then n = ln
+    If n > maxLen - 1 Then n = maxLen - 1
+    i = 0
+    While i < n
+        dst[i] = s[i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub LowStrMid(dst As *Byte, s As *Byte, start1 As Long, count As Long, maxLen As Long)
+    Dim ln As Long
+    Dim idx As Long
+    Dim i As Long
+    Dim take As Long
+    ln = LowStrLen(s)
+    If start1 < 1 Then start1 = 1
+    idx = start1 - 1
+    If idx > ln Then idx = ln
+    If count < 0 Then
+        take = ln - idx
+    Else
+        take = count
+    End If
+    If idx + take > ln Then take = ln - idx
+    If take < 0 Then take = 0
+    If take > maxLen - 1 Then take = maxLen - 1
+    i = 0
+    While i < take
+        dst[i] = s[idx + i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub LowIntToStrDigits(n As Long, tmp As *Byte, ByRef iOut As Long)
+    Dim i As Long
+    Dim j As Long
+    Dim d As Long
+    i = 0
+    While n > 0
+        d = n
+        While d >= 10
+            d = d - 10
+        Wend
+        tmp[i] = d + 48
+        i = i + 1
+        ' n = n / 10
+        j = 0
+        While n >= 10
+            n = n - 10
+            j = j + 1
+        Wend
+        n = j
+    Wend
+    iOut = i
+End Sub
+
+Sub LowIntToStr(dst As *Byte, v As Long, maxLen As Long)
+    Dim neg As Long
+    Dim n As Long
+    Dim tmp(31) As Byte
+    Dim i As Long
+    Dim j As Long
+    Dim tmpBase As *Byte
+
+    If maxLen < 2 Then
+        dst[0] = 0
+        Exit Sub
+    End If
+    neg = 0
+    n = v
+    If n < 0 Then
+        neg = 1
+        n = 0 - n
+    End If
+    If n = 0 Then
+        dst[0] = 48
+        dst[1] = 0
+        Exit Sub
+    End If
+    tmpBase = VarPtr(tmp(0))
+    LowIntToStrDigits(n, tmpBase, i)
+    j = 0
+    If neg <> 0 Then
+        If j < maxLen - 1 Then
+            dst[j] = 45
+            j = j + 1
+        End If
+    End If
+    While i > 0
+        i = i - 1
+        If j < maxLen - 1 Then
+            dst[j] = tmp[i]
+            j = j + 1
+        End If
+    Wend
+    dst[j] = 0
+End Sub
+
+Function LowConstStrMid(ast As *Ast, idx As Long, dst As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim a(63) As Byte
+    Dim start1 As Long
+    Dim count As Long
+    Dim rIdx As Long
+    Dim eIdx As Long
+
+    LowConstStrMid = 0
+    nodes = ast->nodes
+    If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
+    rIdx = nodes[idx].right
+    If rIdx < 0 Then Exit Function
+    If nodes[rIdx].kind <> AST_NUM Then Exit Function
+    start1 = nodes[rIdx].num
+    count = -1
+    eIdx = nodes[idx].extra
+    If eIdx >= 0 Then
+        If nodes[eIdx].kind <> AST_NUM Then Exit Function
+        count = nodes[eIdx].num
+    End If
+    LowStrMid(dst, VarPtr(a), start1, count, 64)
+    LowConstStrMid = 1
+End Function
+
+' Fold const string expression into dst. Returns 1 on success.
+Function LowConstStr(ast As *Ast, idx As Long, dst As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim a(63) As Byte
+    Dim b(63) As Byte
+    Dim n As Long
+    Dim bi As Long
+    Dim rIdx As Long
+
+    LowConstStr = 0
+    If idx < 0 Then Exit Function
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_STRING Then
+        AstCopyStr(ast, idx, dst)
+        LowConstStr = 1
+    ElseIf nodes[idx].kind = AST_BINOP Then
+        If nodes[idx].num = BOP_ADD Or nodes[idx].num = BOP_CAT Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
+            If LowConstStr(ast, nodes[idx].right, VarPtr(b)) = 0 Then Exit Function
+            LowStrCat(dst, VarPtr(a), VarPtr(b), 64)
+            LowConstStr = 1
+        End If
+    ElseIf nodes[idx].kind = AST_BUILTIN Then
+        bi = nodes[idx].num
+        If bi = BI_LEFT Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(a)) = 0 Then Exit Function
+            rIdx = nodes[idx].right
+            If rIdx < 0 Then Exit Function
+            If nodes[rIdx].kind <> AST_NUM Then Exit Function
+            n = nodes[rIdx].num
+            LowStrLeft(dst, VarPtr(a), n, 64)
+            LowConstStr = 1
+        ElseIf bi = BI_MID Then
+            LowConstStr = LowConstStrMid(ast, idx, dst)
+        ' BI_STR: const-fold はホスト ByRef/バッファで不安定なため実行時 Str$ に任せる
+        End If
+    End If
+End Function
+
+Function LowConstInt(ast As *Ast, idx As Long, ByRef outV As Long) As Long
+    Dim nodes As *AstNode
+    Dim buf(63) As Byte
+    Dim bi As Long
+
+    LowConstInt = 0
+    If idx < 0 Then Exit Function
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_NUM Then
+        If nodes[idx].extra = AST_NUM_EXTRA_F64 Then Exit Function
+        If nodes[idx].extra = AST_NUM_EXTRA_SINGLE Then Exit Function
+        outV = nodes[idx].num
+        LowConstInt = 1
+    ElseIf nodes[idx].kind = AST_BUILTIN Then
+        bi = nodes[idx].num
+        If bi = BI_LEN Then
+            If nodes[nodes[idx].left].kind = AST_STRING Then
+                outV = AstStrByteLen(ast, nodes[idx].left)
+                LowConstInt = 1
+            ElseIf LowConstStr(ast, nodes[idx].left, VarPtr(buf)) = 0 Then
+                Exit Function
+            Else
+                outV = LowStrLen(VarPtr(buf))
+                LowConstInt = 1
+            End If
+        ElseIf bi = BI_ASC Then
+            If LowConstStr(ast, nodes[idx].left, VarPtr(buf)) = 0 Then Exit Function
+            outV = buf[0]
+            LowConstInt = 1
+        End If
+    End If
+End Function

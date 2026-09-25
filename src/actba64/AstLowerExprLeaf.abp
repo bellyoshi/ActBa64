@@ -1,0 +1,282 @@
+' AstLowerExprLeaf - リテラル、変数、メンバ、添字
+
+Function LowExprNum(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim offs As *Long
+    Dim types As *Long
+    Dim list As *IrList
+    Dim tt As *TypeTable
+    Dim typeIdxs As *Long
+    Dim byRefs As *Long
+
+    LowExprNum = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    tt = ast->types
+    offs = ctx->offs
+    types = ctx->types
+    typeIdxs = ctx->typeIdxs
+    byRefs = ctx->byRefs
+
+    If nodes[idx].extra = AST_NUM_EXTRA_SINGLE Then
+        IrEmit(list, OP_MOV_EAX_IMM, nodes[idx].num, 0)
+    ElseIf nodes[idx].extra = AST_NUM_EXTRA_F64 Then
+        IrEmit(list, OP_MOV_RAX_IMM64, nodes[idx].num, nodes[idx].left)
+    Else
+        IrEmit(list, OP_MOV_EAX_IMM, nodes[idx].num, 0)
+    End If
+    LowExprNum = 1
+End Function
+
+Function LowExprString(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim buf(255) As Byte
+    Dim offs As *Long
+    Dim types As *Long
+    Dim list As *IrList
+    Dim tt As *TypeTable
+    Dim typeIdxs As *Long
+    Dim byRefs As *Long
+    Dim slen As Long
+    Dim strs As *Byte
+    Dim stOff As Long
+    Dim j As Long
+    Dim irIdx As Long
+
+    LowExprString = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    tt = ast->types
+    offs = ctx->offs
+    types = ctx->types
+    typeIdxs = ctx->typeIdxs
+    byRefs = ctx->byRefs
+
+    slen = AstStrByteLen(ast, idx)
+    If slen <= 0 Then
+        AstCopyStr(ast, idx, VarPtr(buf))
+        slen = 0
+        While buf[slen] <> 0
+            slen = slen + 1
+        Wend
+    Else
+        AstCopyStrTo(ast, idx, VarPtr(buf), slen)
+    End If
+    irIdx = IrEmit(list, OP_LEA_RAX_STR, 0, slen)
+    If irIdx < 0 Then Exit Function
+    IrSetStrAtN(list, irIdx, VarPtr(buf), slen)
+    LowExprString = 1
+End Function
+
+' 定数（数値／文字列）なら rax へ積んで 1 を返す
+Function LowExprVarConst(ctx As *LowerCtx, name As *Byte) As Long
+    Dim list As *IrList
+    Dim ci As Long
+    Dim vals As *Long
+    Dim strs As *Byte
+
+    LowExprVarConst = 0
+    list = ctx->list
+    ci = LowFindConst(ctx, name)
+    If ci >= 0 Then
+        vals = ctx->constVals
+        IrEmit(list, OP_MOV_EAX_IMM, vals[ci], 0)
+        LowExprVarConst = 1
+        Exit Function
+    End If
+    ci = LowFindStrConst(ctx, name)
+    If ci >= 0 Then
+        strs = ctx->constStrVals
+        IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(strs[ci * AST_STR_LEN]))
+        LowExprVarConst = 1
+    End If
+End Function
+
+Function LowExprVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim list As *IrList
+
+    LowExprVar = 0
+    ast = ctx->ast
+    list = ctx->list
+
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowExprVarConst(ctx, VarPtr(name)) <> 0 Then
+        LowExprVar = 1
+        Exit Function
+    End If
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        LowerDiagError(ctx, idx, "undefined variable '" + MakeStr(VarPtr(name)) + "'")
+        Exit Function
+    End If
+    LowEmitLoadOff(list, vOff, vGlob)
+    If vByRef <> 0 Then
+        IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    End If
+    LowExprVar = 1
+End Function
+
+Function LowExprMember(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim buf(255) As Byte
+    Dim list As *IrList
+    Dim tt As *TypeTable
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim ti As Long
+
+    LowExprMember = 0
+    ast = ctx->ast
+    list = ctx->list
+    tt = ast->types
+
+    If LowAddr(ctx, idx) = 0 Then Exit Function
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowMemberBaseName(ctx, idx, VarPtr(buf)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    ti = vTypeIdx
+    If TyFindField(tt, ti, VarPtr(name), foff, fsz, fcnt) = 0 Then
+        LowLoadSized(list, LowTyNbytes(vTy))
+        LowExprMember = 1
+        Exit Function
+    End If
+    LowLoadSized(list, fsz)
+    LowExprMember = 1
+End Function
+
+' base が AST_MEMBER の添字（UDT 配列フィールド / ポインタフィールド）
+Function LowExprIndexMember(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim buf(255) As Byte
+    Dim list As *IrList
+    Dim tt As *TypeTable
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim fieldTy As Long
+    Dim ti As Long
+    Dim base As Long
+
+    LowExprIndexMember = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    tt = ast->types
+    base = nodes[idx].left
+    If LowAddr(ctx, idx) = 0 Then Exit Function
+    AstCopyStr(ast, base, VarPtr(name))
+    If LowMemberBaseName(ctx, base, VarPtr(buf)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    ti = vTypeIdx
+    If TyFindFieldEx(tt, ti, VarPtr(name), foff, fsz, fcnt, fieldTy) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If fcnt > 1 Then
+        LowLoadSized(list, fsz)
+    ElseIf fsz = TyPtrSize() Then
+        LowLoadSized(list, LowPtrFieldElemSize(fieldTy))
+    Else
+        ctx->err = 1
+        Exit Function
+    End If
+    LowExprIndexMember = 1
+End Function
+
+' base が単純変数／ポインタの添字
+Function LowExprIndexBase(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim buf(255) As Byte
+    Dim list As *IrList
+    Dim base As Long
+
+    LowExprIndexBase = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    base = nodes[idx].left
+    If LowAddr(ctx, idx) = 0 Then Exit Function
+    AstCopyStr(ast, base, VarPtr(buf))
+    If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+        If vTy = TY_PTR_LONG Or vTy = TY_LONG_ARR Then
+            LowLoadSized(list, 4)
+        ElseIf vTy = TY_PTR_BYTE Then
+            IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+        ElseIf vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+            LowLoadSized(list, 8)
+        ElseIf vTy = TY_SINGLE_ARR Then
+            LowLoadSized(list, 4)
+        ElseIf vTy = TY_UDT_ARR Then
+            ' 要素全体の値ロードはしない（メンバアクセス経由）
+            ctx->err = 1
+            Exit Function
+        Else
+            IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+        End If
+    Else
+        IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    End If
+    LowExprIndexBase = 1
+End Function
+
+Function LowExprIndex(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim base As Long
+
+    ast = ctx->ast
+    nodes = ast->nodes
+    base = nodes[idx].left
+    If nodes[base].kind = AST_MEMBER Then
+        LowExprIndex = LowExprIndexMember(ctx, idx)
+    Else
+        LowExprIndex = LowExprIndexBase(ctx, idx)
+    End If
+End Function

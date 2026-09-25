@@ -1,0 +1,264 @@
+' AstLowerConst - 定数登録と定数畳み込み
+
+Function LowFindConst(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindConst = -1
+    names = ctx->constNames
+    i = 0
+    While i < ctx->constCount
+        off = i * SYM_NAME_LEN
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
+            LowFindConst = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Sub LowAddBuiltinConsts(ctx As *LowerCtx)
+    Dim t(7) As Byte
+    Dim f(7) As Byte
+    lstrcpy(VarPtr(t), "TRUE")
+    lstrcpy(VarPtr(f), "FALSE")
+    LowAddConst(ctx, VarPtr(t), 1)
+    LowAddConst(ctx, VarPtr(f), 0)
+End Sub
+
+Function LowAddConst(ctx As *LowerCtx, name As *Byte, v As Long) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim vals As *Long
+    Dim j As Long
+    Dim off As Long
+
+    LowAddConst = 0
+    If LowFindConst(ctx, name) >= 0 Then
+        LowAddConst = 1
+        Exit Function
+    End If
+    If LowEnsureConstCap(ctx) = 0 Then
+        Print "error: out of memory (consts)"
+        ctx->err = 1
+        Exit Function
+    End If
+    i = ctx->constCount
+    names = ctx->constNames
+    vals = ctx->constVals
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    vals[i] = v
+    ctx->constCount = i + 1
+    LowAddConst = 1
+End Function
+
+Function LowFindStrConst(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim off As Long
+    LowFindStrConst = -1
+    names = ctx->constStrNames
+    If names = NULL Then Exit Function
+    i = 0
+    While i < ctx->constStrCount
+        off = i * SYM_NAME_LEN
+        If LowNameEqExact(VarPtr(names[off]), name) <> 0 Then
+            LowFindStrConst = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function LowAddStrConst(ctx As *LowerCtx, name As *Byte, s As *Byte) As Long
+    Dim i As Long
+    Dim names As *Byte
+    Dim vals As *Byte
+    Dim j As Long
+    Dim off As Long
+
+    LowAddStrConst = 0
+    If LowFindStrConst(ctx, name) >= 0 Then
+        LowAddStrConst = 1
+        Exit Function
+    End If
+    If LowEnsureConstStrCap(ctx) = 0 Then
+        Print "error: out of memory (string consts)"
+        ctx->err = 1
+        Exit Function
+    End If
+    If ctx->constStrNames = NULL Or ctx->constStrVals = NULL Then
+        ctx->err = 1
+        Exit Function
+    End If
+    i = ctx->constStrCount
+    names = ctx->constStrNames
+    vals = ctx->constStrVals
+    off = i * SYM_NAME_LEN
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        names[off + j] = name[j]
+        j = j + 1
+    Wend
+    names[off + j] = 0
+    off = i * AST_STR_LEN
+    j = 0
+    While s[j] <> 0 And j < AST_STR_LEN - 1
+        vals[off + j] = s[j]
+        j = j + 1
+    Wend
+    vals[off + j] = 0
+    ctx->constStrCount = i + 1
+    LowAddStrConst = 1
+End Function
+
+Function LowBoundValArithOps(op As Long, lv As Long, rv As Long) As Long
+    LowBoundValArithOps = -1
+    If op = BOP_ADD Then
+        LowBoundValArithOps = lv + rv
+    ElseIf op = BOP_SUB Then
+        LowBoundValArithOps = lv - rv
+    ElseIf op = BOP_MUL Then
+        LowBoundValArithOps = lv * rv
+    ElseIf op = BOP_OR Then
+        LowBoundValArithOps = lv Or rv
+    ElseIf op = BOP_AND Then
+        LowBoundValArithOps = lv And rv
+    ElseIf op = BOP_IDIV Or op = BOP_DIV Then
+        If rv <> 0 Then
+            LowBoundValArithOps = lv \ rv
+        End If
+    ElseIf op = BOP_MOD Then
+        If rv <> 0 Then
+            LowBoundValArithOps = lv - (lv \ rv) * rv
+        End If
+    ElseIf op = BOP_XOR Then
+        LowBoundValArithOps = (lv Or rv) - (lv And rv)
+    End If
+End Function
+
+Function LowBoundValShiftPow(op As Long, lv As Long, rv As Long) As Long
+    Dim acc As Long
+    LowBoundValShiftPow = -1
+    If op = BOP_SHL Then
+        If rv >= 0 And rv < 32 Then
+            acc = lv
+            While rv > 0
+                acc = acc * 2
+                rv = rv - 1
+            Wend
+            LowBoundValShiftPow = acc
+        End If
+    ElseIf op = BOP_SHR Then
+        If rv >= 0 And rv < 32 Then
+            acc = lv
+            While rv > 0
+                acc = acc \ 2
+                rv = rv - 1
+            Wend
+            LowBoundValShiftPow = acc
+        End If
+    ElseIf op = BOP_POW Then
+        If rv >= 0 Then
+            acc = 1
+            While rv > 0
+                acc = acc * lv
+                rv = rv - 1
+            Wend
+            LowBoundValShiftPow = acc
+        End If
+    End If
+End Function
+
+Function LowBoundValBin(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim lv As Long
+    Dim rv As Long
+    Dim op As Long
+    Dim leftIdx As Long
+    Dim rightIdx As Long
+
+    LowBoundValBin = -1
+    ast = ctx->ast
+    nodes = ast->nodes
+    op = nodes[idx].num
+    leftIdx = nodes[idx].left
+    rightIdx = nodes[idx].right
+    If leftIdx < 0 Or rightIdx < 0 Then Exit Function
+    lv = LowBoundVal(ctx, leftIdx)
+    If lv < 0 Then Exit Function
+    rv = LowBoundVal(ctx, rightIdx)
+    If rv < 0 Then Exit Function
+    If op = BOP_SHL Or op = BOP_SHR Or op = BOP_POW Then
+        LowBoundValBin = LowBoundValShiftPow(op, lv, rv)
+    Else
+        LowBoundValBin = LowBoundValArithOps(op, lv, rv)
+    End If
+End Function
+
+Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim ci As Long
+    Dim vals As *Long
+    Dim lv As Long
+
+    LowBoundVal = -1
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_NUM Then
+        LowBoundVal = nodes[idx].num
+    ElseIf nodes[idx].kind = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        ci = LowFindConst(ctx, VarPtr(name))
+        If ci < 0 Then Exit Function
+        vals = ctx->constVals
+        LowBoundVal = vals[ci]
+    ElseIf nodes[idx].kind = AST_BINOP Then
+        LowBoundVal = LowBoundValBin(ctx, idx)
+    ElseIf nodes[idx].kind = AST_BUILTIN Then
+        If nodes[idx].num = BI_ELM Then
+            lv = LowBoundVal(ctx, nodes[idx].left)
+            If lv >= 0 Then
+                LowBoundVal = lv + 1
+            End If
+        End If
+    End If
+End Function
+
+Function LowNewLab(ctx As *LowerCtx) As Long
+    Dim id As Long
+    id = ctx->nextLab
+    ctx->nextLab = id + 1
+    LowNewLab = id
+End Function
+
+' 既知 kernel32 API 名へ正規化（小文字比較）。成功時 apiOut に正式名を書く
+Function LowKernelApiHit(name As *Byte, key As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiHit = 0
+    If LowNameEq(name, key) = 0 Then Exit Function
+    lstrcpy(apiOut, exp)
+    LowKernelApiHit = 1
+End Function
+
+Function LowKernelApiHit2(name As *Byte, key1 As *Byte, key2 As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiHit2 = 0
+    If LowNameEq(name, key1) <> 0 Then
+        lstrcpy(apiOut, exp)
+        LowKernelApiHit2 = 1
+        Exit Function
+    End If
+    If LowNameEq(name, key2) <> 0 Then
+        lstrcpy(apiOut, exp)
+        LowKernelApiHit2 = 1
+    End If
+End Function

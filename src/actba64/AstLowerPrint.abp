@@ -1,0 +1,175 @@
+' AstLowerPrint - Print
+
+' Print 対象が単純変数のときその宣言型、それ以外／文字列式なら -1
+Function LowPrintVarTy(ctx As *LowerCtx, exprIdx As Long) As Long
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+
+    LowPrintVarTy = -1
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowIsStringExpr(ctx, exprIdx) <> 0 Then Exit Function
+    If nodes[exprIdx].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, exprIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    LowPrintVarTy = vTy
+End Function
+
+' Print 対象を rax の文字列ポインタへ
+Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Long
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim labStr As Long
+    Dim exprTy As Long
+
+    LowEmitPrintValue = 0
+    exprTy = LowExprType(ctx, exprIdx)
+    If vTy = TY_BYTE_ARR Then
+        If LowExprArg(ctx, exprIdx) = 0 Then Exit Function
+    ElseIf vTy = TY_PTR_BYTE Then
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+    ElseIf LowIsStringExpr(ctx, exprIdx) = 0 And exprTy = TY_DOUBLE And TyIs32() = 0 Then
+        lstrcpy(VarPtr(name), "StrD$")
+        lab = LowFindFunc(ctx, VarPtr(name))
+        If lab < 0 Then
+            Print "error: missing 'StrD$' (Include\default\DoubleStr.abp)"
+            ctx->err = 1
+            Exit Function
+        End If
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
+    ElseIf LowIsStringExpr(ctx, exprIdx) = 0 Then
+        labStr = LowEnsureRtStr(ctx)
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), labStr)
+    Else
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+    End If
+    LowEmitPrintValue = 1
+End Function
+
+' rax の文字列を出力（N88 モードは N88_Print へ）
+Function LowEmitPrintCall(ctx As *LowerCtx, stay As Long) As Long
+    Dim name(63) As Byte
+    Dim lab As Long
+
+    LowEmitPrintCall = 0
+    If PpIsN88Basic() <> 0 Then
+        lstrcpy(VarPtr(name), "N88_Print")
+        If stay <> 0 Then
+            lstrcpy(VarPtr(name), "N88_PrintStay")
+        End If
+        lab = LowFindFunc(ctx, VarPtr(name))
+        If lab < 0 Then
+            Print "error: missing '" + MakeStr(VarPtr(name)) + "'"
+            ctx->err = 1
+            Exit Function
+        End If
+        IrEmit(ctx->list, OP_SUB_RSP, LowCallStk(1), 0)
+        IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+        LowEmitLoadRegArgs(ctx->list, 1)
+        IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+        LowEmitCallFinish(ctx->list, LowCallStk(1))
+    Else
+        lab = LowEnsureRtPrint(ctx)
+        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
+    End If
+    LowEmitPrintCall = 1
+End Function
+
+Function LowStmtPrintOneConsole(ctx As *LowerCtx, exprIdx As Long, stay As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim vTy As Long
+
+    LowStmtPrintOneConsole = 0
+    If exprIdx < 0 Then
+        LowStmtPrintOneConsole = 1
+        Exit Function
+    End If
+    vTy = LowPrintVarTy(ctx, exprIdx)
+    If LowEmitPrintValue(ctx, exprIdx, vTy) = 0 Then Exit Function
+    If LowEmitPrintCall(ctx, stay) = 0 Then Exit Function
+    LowStmtPrintOneConsole = 1
+End Function
+
+Function LowStmtPrint(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim cur As Long
+    Dim fileIdx As Long
+
+    LowStmtPrint = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    fileIdx = nodes[idx].left
+    If fileIdx >= 0 Then
+        LowStmtPrint = LowStmtPrintFile(ctx, idx, fileIdx)
+        Exit Function
+    End If
+    cur = nodes[idx].right
+    If cur < 0 Then
+        LowStmtPrint = 1
+        Exit Function
+    End If
+    If LowStmtPrintOneConsole(ctx, nodes[cur].left, nodes[idx].num) = 0 Then Exit Function
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtPrint = 1
+End Function
+
+' Print #n, ... — BaFileWrite* 経由
+Function LowStmtPrintFile(ctx As *LowerCtx, idx As Long, fileIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim labItem As Long
+    Dim labSp As Long
+    Dim labNl As Long
+    Dim list As *IrList
+    Dim cur As Long
+    Dim first As Long
+
+    LowStmtPrintFile = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    lstrcpy(VarPtr(name), "BaFileWriteItem")
+    labItem = LowFindFunc(ctx, VarPtr(name))
+    lstrcpy(VarPtr(name), "BaFileWriteComma")
+    labSp = LowFindFunc(ctx, VarPtr(name))
+    lstrcpy(VarPtr(name), "BaFileWriteNl")
+    labNl = LowFindFunc(ctx, VarPtr(name))
+    If labItem < 0 Or labSp < 0 Or labNl < 0 Then
+        Print "error: missing BaFileWrite*"
+        ctx->err = 1
+        Exit Function
+    End If
+    first = 1
+    cur = nodes[idx].right
+    While cur >= 0
+        If first = 0 Then
+            If LowExpr(ctx, fileIdx) = 0 Then Exit Function
+            LowEmitCall1Rax(list, 0, 0, 0, labSp)
+        End If
+        first = 0
+        If LowEmitToStringRax(ctx, nodes[cur].left) = 0 Then Exit Function
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        If LowExpr(ctx, fileIdx) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+        IrEmit(list, OP_POP_RAX, 0, 0)
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+        LowEmitCallLab2(list, labItem)
+        cur = nodes[cur].nxt
+    Wend
+    If nodes[idx].num = 0 Then
+        If LowExpr(ctx, fileIdx) = 0 Then Exit Function
+        LowEmitCall1Rax(list, 0, 0, 0, labNl)
+    End If
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtPrintFile = 1
+End Function

@@ -1,0 +1,245 @@
+' ParserProc - Sub、Function、ループの頭
+
+Function ParseSubStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nFunc As Long
+    Dim name(63) As Byte
+    Dim nFirst As Long
+    Dim body As Long
+    Dim kEnd(7) As Byte
+    Dim kSub(7) As Byte
+    Dim empty(1) As Byte
+    Dim nParams As Long
+
+    ParseSubStmt = -1
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    ast = p->ast
+    If ParseParamList(p, nFirst, nParams, 0, 1) = 0 Then Exit Function
+    empty[0] = 0
+    lstrcpy(VarPtr(kEnd), "end")
+    lstrcpy(VarPtr(kSub), "sub")
+    body = ParseStmtListUntilEndPair(p, VarPtr(kSub))
+    If p->err <> 0 Then Exit Function
+    If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseIdentIs(p, VarPtr(kSub)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    nFunc = AstAddNode(ast, AST_FUNC)
+    If nFunc < 0 Then Exit Function
+    AstSetStr(ast, nFunc, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nFunc].left = nFirst
+    nodes[nFunc].right = body
+    nodes[nFunc].num = nParams Or 256
+    ParseSubStmt = nFunc
+End Function
+
+Function ParseWhileStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nWhile As Long
+    Dim cond As Long
+    Dim body As Long
+    Dim kWend(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseWhileStmt = -1
+    p->pos = p->pos + 1
+    cond = ParseCond(p)
+    If cond < 0 Then Exit Function
+    empty[0] = 0
+    lstrcpy(VarPtr(kWend), "wend")
+    body = ParseStmtListUntil(p, VarPtr(kWend), VarPtr(empty))
+    If p->err <> 0 Then Exit Function
+    If ParseIdentIs(p, VarPtr(kWend)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+
+    ast = p->ast
+    nWhile = AstAddNode(ast, AST_WHILE)
+    If nWhile < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nWhile].left = cond
+    nodes[nWhile].right = body
+    ParseWhileStmt = nWhile
+End Function
+
+Function ParseForHeader(p As *Parser, ast As *Ast, name As *Byte, ByRef fromE As Long, ByRef toE As Long, ByRef stepE As Long) As Long
+    Dim kTo(7) As Byte
+    Dim kStep(7) As Byte
+
+    ParseForHeader = 0
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, name) = 0 Then Exit Function
+    If ParseExpect(p, TK_EQ) = 0 Then Exit Function
+    fromE = ParseExpr(p)
+    If fromE < 0 Then Exit Function
+    lstrcpy(VarPtr(kTo), "to")
+    If ParseIdentIs(p, VarPtr(kTo)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    toE = ParseExpr(p)
+    If toE < 0 Then Exit Function
+    stepE = ParseMakeNum(ast, 1)
+    If stepE < 0 Then Exit Function
+    lstrcpy(VarPtr(kStep), "step")
+    If ParseIdentIs(p, VarPtr(kStep)) <> 0 Then
+        p->pos = p->pos + 1
+        stepE = ParseExpr(p)
+        If stepE < 0 Then Exit Function
+    End If
+    ParseForHeader = 1
+End Function
+
+Function ParseForStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nFor As Long
+    Dim name(63) As Byte
+    Dim nVar As Long
+    Dim fromE As Long
+    Dim toE As Long
+    Dim stepE As Long
+    Dim body As Long
+    Dim kNext(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseForStmt = -1
+    ast = p->ast
+    If ParseForHeader(p, ast, VarPtr(name), fromE, toE, stepE) = 0 Then Exit Function
+
+    empty[0] = 0
+    lstrcpy(VarPtr(kNext), "next")
+    body = ParseStmtListUntil(p, VarPtr(kNext), VarPtr(empty))
+    If p->err <> 0 Then Exit Function
+    If ParseIdentIs(p, VarPtr(kNext)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+
+    nVar = AstAddNode(ast, AST_VAR)
+    If nVar < 0 Then Exit Function
+    AstSetStr(ast, nVar, VarPtr(name))
+    nFor = AstAddNode(ast, AST_FOR)
+    If nFor < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nFor].left = nVar
+    nodes[nFor].right = fromE
+    nodes[nFor].extra = toE
+    nodes[nFor].num = body
+    nodes[nFor].strId = stepE
+    ParseForStmt = nFor
+End Function
+
+Function ParseWithStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nWith As Long
+    Dim expr As Long
+    Dim body As Long
+    Dim kEnd(7) As Byte
+    Dim kWith(7) As Byte
+    Dim saveBase As Long
+
+    ParseWithStmt = -1
+    p->pos = p->pos + 1
+    expr = ParseExpr(p)
+    If expr < 0 Then Exit Function
+    saveBase = p->withBase
+    p->withBase = expr
+    lstrcpy(VarPtr(kWith), "with")
+    body = ParseStmtListUntilEndPair(p, VarPtr(kWith))
+    p->withBase = saveBase
+    If p->err <> 0 Then Exit Function
+    lstrcpy(VarPtr(kEnd), "end")
+    If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseIdentIs(p, VarPtr(kWith)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    ast = p->ast
+    nWith = AstAddNode(ast, AST_WITH)
+    If nWith < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nWith].left = expr
+    nodes[nWith].right = body
+    ParseWithStmt = nWith
+End Function
+
+Function ParseFuncMakeNode(ast As *Ast, name As *Byte, nFirst As Long, body As Long, nParams As Long, retTy As Long) As Long
+    Dim nodes As *AstNode
+    Dim nFunc As Long
+
+    ParseFuncMakeNode = -1
+    nFunc = AstAddNode(ast, AST_FUNC)
+    If nFunc < 0 Then Exit Function
+    AstSetStr(ast, nFunc, name)
+    nodes = ast->nodes
+    nodes[nFunc].left = nFirst
+    nodes[nFunc].right = body
+    nodes[nFunc].num = nParams
+    nodes[nFunc].extra = retTy
+    ParseFuncMakeNode = nFunc
+End Function
+
+Function ParseFuncStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim nFirst As Long
+    Dim body As Long
+    Dim kAs(7) As Byte
+    Dim kEnd(7) As Byte
+    Dim kFun(15) As Byte
+    Dim empty(1) As Byte
+    Dim nParams As Long
+    Dim retTy As Long
+
+    ParseFuncStmt = -1
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    ast = p->ast
+    If ParseParamList(p, nFirst, nParams, 1, 1) = 0 Then Exit Function
+    lstrcpy(VarPtr(kAs), "as")
+    If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseFuncRetType(p, retTy) = 0 Then Exit Function
+    empty[0] = 0
+    lstrcpy(VarPtr(kEnd), "end")
+    lstrcpy(VarPtr(kFun), "function")
+    body = ParseStmtListUntilEndPair(p, VarPtr(kFun))
+    If p->err <> 0 Then Exit Function
+    If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseIdentIs(p, VarPtr(kFun)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    ParseFuncStmt = ParseFuncMakeNode(ast, VarPtr(name), nFirst, body, nParams, retTy)
+End Function

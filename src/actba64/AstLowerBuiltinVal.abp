@@ -1,0 +1,230 @@
+' AstLowerBuiltinVal - Chr、RGB、ビットパック、Str$
+
+Function LowExprBuiltinChr(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
+    LowExprBuiltinChr = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 6, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    LowEmitCallStrHeapAlloc(ctx)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000001, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_MOV_ECX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    LowExprBuiltinChr = 1
+End Function
+
+Function LowExprBuiltinRgb(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
+    LowExprBuiltinRgb = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If nodes[idx].right < 0 Or nodes[idx].extra < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX, 256, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].extra) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX, 65536, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    LowExprBuiltinRgb = 1
+End Function
+
+Function LowExprBuiltinMakeLong(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
+    LowExprBuiltinMakeLong = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If nodes[idx].right < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX, 16, 0)
+    IrEmit(list, OP_SHL_EAX_CL, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    LowExprBuiltinMakeLong = 1
+End Function
+
+Function LowExprBuiltinMakeWord(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+
+    LowExprBuiltinMakeWord = 0
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    If nodes[idx].right < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX, 255, 0)
+    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX, 255, 0)
+    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, 8, 0)
+    IrEmit(list, OP_SHL_EAX_CL, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    LowExprBuiltinMakeWord = 1
+End Function
+
+' LoWord / LoByte / HiByte / HiWord / Elm。未対応なら -1
+Function LowExprBuiltinMask(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim n As Long
+
+    LowExprBuiltinMask = -1
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    n = nodes[idx].num
+    If n <> BI_LOWORD And n <> BI_LOBYTE And n <> BI_HIBYTE And n <> BI_HIWORD And n <> BI_ELM Then Exit Function
+    LowExprBuiltinMask = 0
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    If n = BI_LOWORD Then
+        IrEmit(list, OP_MOV_ECX, 65535, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    ElseIf n = BI_LOBYTE Then
+        IrEmit(list, OP_MOV_ECX, 255, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    ElseIf n = BI_HIBYTE Then
+        IrEmit(list, OP_MOV_ECX, 8, 0)
+        IrEmit(list, OP_SAR_EAX_CL, 0, 0)
+        IrEmit(list, OP_MOV_ECX, 255, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    ElseIf n = BI_HIWORD Then
+        IrEmit(list, OP_MOV_ECX, 16, 0)
+        IrEmit(list, OP_SAR_EAX_CL, 0, 0)
+        IrEmit(list, OP_MOV_ECX, 65535, 0)
+        IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    Else
+        IrEmit(list, OP_MOV_ECX, 1, 0)
+        IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+    End If
+    LowExprBuiltinMask = 1
+End Function
+
+' ビット合成／抽出系。未対応なら -1
+Function LowExprBuiltinBits(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim n As Long
+
+    ast = ctx->ast
+    nodes = ast->nodes
+    n = nodes[idx].num
+    If n = BIK_RGB Then
+        LowExprBuiltinBits = LowExprBuiltinRgb(ctx, idx)
+    ElseIf n = BI_MAKELONG Then
+        LowExprBuiltinBits = LowExprBuiltinMakeLong(ctx, idx)
+    ElseIf n = BI_MAKEWORD Then
+        LowExprBuiltinBits = LowExprBuiltinMakeWord(ctx, idx)
+    Else
+        LowExprBuiltinBits = LowExprBuiltinMask(ctx, idx)
+    End If
+End Function
+
+Function LowExprBuiltinStr(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim n As Long
+    Dim r As Long
+
+    LowExprBuiltinStr = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    n = nodes[idx].num
+    If n = BI_LEFT Then
+        LowExprBuiltinStr = LowExprBuiltinLeft(ctx, idx)
+        Exit Function
+    End If
+    If n = BI_MID Then
+        LowExprBuiltinStr = LowExprBuiltinMid(ctx, idx)
+        Exit Function
+    End If
+    If n = BI_CHR Then
+        LowExprBuiltinStr = LowExprBuiltinChr(ctx, idx)
+        Exit Function
+    End If
+    If n = BI_RIGHT Then
+        LowExprBuiltinStr = LowExprBuiltinRight(ctx, idx)
+        Exit Function
+    End If
+    r = LowExprBuiltinBits(ctx, idx)
+    If r < 0 Then
+        Print "error: unsupported builtin " + Str$(n)
+        ctx->err = 1
+        Exit Function
+    End If
+    LowExprBuiltinStr = r
+End Function
+
+Function LowExprBuiltin(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim n As Long
+    Dim r As Long
+
+    LowExprBuiltin = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    n = nodes[idx].num
+    If n = BI_LEFT Or n = BI_MID Or n = BI_CHR Or n = BI_RIGHT Or n = BIK_RGB Or n = BI_LOWORD Or n = BI_HIBYTE Or n = BI_LOBYTE Or n = BI_HIWORD Or n = BI_MAKELONG Or n = BI_MAKEWORD Or n = BI_ELM Then
+        LowExprBuiltin = LowExprBuiltinStr(ctx, idx)
+        Exit Function
+    End If
+    If n = BI_FILLMEMORY Or n = BI_ASC Or n = BI_MEMCPY Then
+        LowExprBuiltin = LowExprBuiltinMem(ctx, idx)
+        Exit Function
+    End If
+    r = LowExprBuiltinCore(ctx, idx)
+    If r < 0 Then
+        Print "error: unsupported builtin " + Str$(n)
+        ctx->err = 1
+        Exit Function
+    End If
+    LowExprBuiltin = r
+End Function

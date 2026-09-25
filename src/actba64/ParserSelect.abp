@@ -1,0 +1,130 @@
+' ParserSelect - Select Case
+
+Function ParseSelectCaseElse(p As *Parser, ast As *Ast, ByRef firstIf As Long, prevIf As Long) As Long
+    Dim nodes As *AstNode
+    Dim elseList As Long
+    Dim kEnd(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseSelectCaseElse = 0
+    p->pos = p->pos + 1
+    empty[0] = 0
+    lstrcpy(VarPtr(kEnd), "end")
+    elseList = ParseStmtListUntil(p, VarPtr(kEnd), VarPtr(empty))
+    If p->err <> 0 Then Exit Function
+    If prevIf >= 0 Then
+        nodes = ast->nodes
+        nodes[prevIf].extra = elseList
+    Else
+        firstIf = elseList
+    End If
+    ParseSelectCaseElse = 1
+End Function
+
+Function ParseSelectCaseEq(p As *Parser, ast As *Ast, sel As Long, ByRef firstIf As Long, ByRef prevIf As Long) As Long
+    Dim nodes As *AstNode
+    Dim val As Long
+    Dim cond As Long
+    Dim body As Long
+    Dim nIf As Long
+    Dim kCase(7) As Byte
+    Dim kEnd(7) As Byte
+    Dim empty(1) As Byte
+
+    ParseSelectCaseEq = 0
+    val = ParseExpr(p)
+    If val < 0 Then Exit Function
+    cond = AstAddNode(ast, AST_BINOP)
+    If cond < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[cond].num = BOP_EQ
+    nodes[cond].left = sel
+    nodes[cond].right = val
+    empty[0] = 0
+    lstrcpy(VarPtr(kCase), "case")
+    lstrcpy(VarPtr(kEnd), "end")
+    body = ParseStmtListUntil3(p, VarPtr(kCase), VarPtr(kEnd), VarPtr(empty))
+    If p->err <> 0 Then Exit Function
+    nIf = AstAddNode(ast, AST_IF)
+    If nIf < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nIf].left = cond
+    nodes[nIf].right = body
+    nodes[nIf].extra = -1
+    If prevIf >= 0 Then
+        nodes[prevIf].extra = nIf
+    Else
+        firstIf = nIf
+    End If
+    prevIf = nIf
+    ParseSelectCaseEq = 1
+End Function
+
+Function ParseSelectEnd(p As *Parser, ast As *Ast, firstIf As Long) As Long
+    Dim kEnd(7) As Byte
+    Dim kSel(15) As Byte
+
+    ParseSelectEnd = -1
+    lstrcpy(VarPtr(kEnd), "end")
+    If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(kSel), "select")
+    If ParseIdentIs(p, VarPtr(kSel)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If firstIf < 0 Then
+        firstIf = AstAddNode(ast, AST_END)
+        If firstIf < 0 Then Exit Function
+    End If
+    ParseSelectEnd = firstIf
+End Function
+
+Function ParseSelectStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim sel As Long
+    Dim firstIf As Long
+    Dim prevIf As Long
+    Dim kCase(7) As Byte
+    Dim kElse(7) As Byte
+    Dim kEnd(7) As Byte
+
+    ParseSelectStmt = -1
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(kCase), "case")
+    If ParseIdentIs(p, VarPtr(kCase)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    sel = ParseExpr(p)
+    If sel < 0 Then Exit Function
+
+    lstrcpy(VarPtr(kElse), "else")
+    lstrcpy(VarPtr(kEnd), "end")
+    ast = p->ast
+    firstIf = -1
+    prevIf = -1
+
+    Do
+        If ParseIdentIs(p, VarPtr(kEnd)) <> 0 Then
+            Exit Do
+        End If
+        If ParseIdentIs(p, VarPtr(kCase)) = 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        p->pos = p->pos + 1
+        If ParseIdentIs(p, VarPtr(kElse)) <> 0 Then
+            If ParseSelectCaseElse(p, ast, firstIf, prevIf) = 0 Then Exit Function
+            Exit Do
+        End If
+        If ParseSelectCaseEq(p, ast, sel, firstIf, prevIf) = 0 Then Exit Function
+    Loop
+
+    ParseSelectStmt = ParseSelectEnd(p, ast, firstIf)
+End Function

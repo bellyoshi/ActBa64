@@ -1,0 +1,117 @@
+' AstLowerInsMenu - InsertMenu
+
+
+' AST_ARG チェーン n 番目の実引数式（無ければ -1）
+Function LowArgExpr(ctx As *LowerCtx, idx As Long, n As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim argn As Long
+    Dim i As Long
+
+    LowArgExpr = -1
+    ast = ctx->ast
+    nodes = ast->nodes
+    argn = nodes[idx].left
+    i = 0
+    While argn >= 0 And i < n
+        argn = nodes[argn].nxt
+        i = i + 1
+    Wend
+    If argn < 0 Then Exit Function
+    LowArgExpr = nodes[argn].left
+End Function
+
+' lpNewItem（第5引数）を rsp+32 へ
+Function LowEmitInsMenuItem(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
+    Dim list As *IrList
+
+    LowEmitInsMenuItem = 0
+    list = ctx->list
+    If nArgs >= 4 Then
+        If LowExpr(ctx, LowArgExpr(ctx, idx, 3)) = 0 Then Exit Function
+    Else
+        IrEmit(list, OP_XOR_EAX, 0, 0)
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, 32, 0)
+    LowEmitInsMenuItem = 1
+End Function
+
+' uIDNewItem を r9、flags を r8 へ
+Function LowEmitInsMenuFlags(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
+    Dim list As *IrList
+    Dim labSub As Long
+    Dim labDone As Long
+
+    LowEmitInsMenuFlags = 0
+    list = ctx->list
+    If nArgs >= 6 Then
+        ' hSubMenu <> 0 なら uIDNewItem = hSubMenu かつ MF_POPUP
+        labSub = LowNewLab(ctx)
+        labDone = LowNewLab(ctx)
+        If LowExpr(ctx, LowArgExpr(ctx, idx, 5)) = 0 Then Exit Function
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_TEST_RAX, 0, 0)
+        IrEmit(list, OP_JNZ, labSub, 0)
+        IrEmit(list, OP_POP_RAX, 0, 0)
+        If LowExpr(ctx, LowArgExpr(ctx, idx, 4)) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+        If LowExpr(ctx, LowArgExpr(ctx, idx, 2)) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+        IrEmit(list, OP_JMP, labDone, 0)
+        IrEmit(list, OP_LABEL, labSub, 0)
+        IrEmit(list, OP_POP_RAX, 0, 0)
+        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+        If LowExpr(ctx, LowArgExpr(ctx, idx, 2)) = 0 Then Exit Function
+        IrEmit(list, OP_MOV_ECX, LOW_MF_POPUP, 0)
+        IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+        IrEmit(list, OP_LABEL, labDone, 0)
+    Else
+        If nArgs >= 5 Then
+            If LowExpr(ctx, LowArgExpr(ctx, idx, 4)) = 0 Then Exit Function
+        Else
+            IrEmit(list, OP_XOR_EAX, 0, 0)
+        End If
+        IrEmit(list, OP_MOV_R9_RAX, 0, 0)
+        If LowExpr(ctx, LowArgExpr(ctx, idx, 2)) = 0 Then Exit Function
+        If nArgs = 3 Then
+            IrEmit(list, OP_MOV_ECX, LOW_MF_SEPARATOR, 0)
+            IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+        End If
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    End If
+    LowEmitInsMenuFlags = 1
+End Function
+
+Function LowStmtInsMenu(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim list As *IrList
+    Dim nArgs As Long
+    Dim stk As Long
+    Dim sApi(31) As Byte
+
+    LowStmtInsMenu = 0
+    list = ctx->list
+    ' InsertMenuA(hMenu, pos, flags, uIDNewItem, lpNewItem)
+    nArgs = LowCountCallArgs(ctx, idx, 0)
+    If nArgs < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If nArgs < 3 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    stk = 48
+    IrEmit(list, OP_SUB_RSP, stk, 0)
+    If LowEmitInsMenuItem(ctx, idx, nArgs) = 0 Then Exit Function
+    If LowEmitInsMenuFlags(ctx, idx, nArgs) = 0 Then Exit Function
+    If LowExpr(ctx, LowArgExpr(ctx, idx, 1)) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    If LowExpr(ctx, LowArgExpr(ctx, idx, 0)) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    lstrcpy(VarPtr(sApi), "InsertMenuA")
+    IrEmitStr(list, OP_CALL_API, IR_DLL_USER32, VarPtr(sApi))
+    LowEmitCallFinish(list, stk)
+    LowStmtInsMenu = 1
+End Function
