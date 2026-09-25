@@ -1,0 +1,177 @@
+' AstLowerDim - 配列サイズと Dim の収集
+
+
+Function LowStmtList(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim cur As Long
+    Dim savedErr As Long
+    Dim anyFail As Long
+
+    LowStmtList = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    cur = idx
+    anyFail = 0
+    While cur >= 0
+        savedErr = ctx->err
+        ctx->err = 0
+        If LowStmt(ctx, cur) = 0 Then
+            anyFail = 1
+        End If
+        If ctx->err <> 0 Then anyFail = 1
+        If savedErr <> 0 Then ctx->err = 1
+        cur = nodes[cur].nxt
+    Wend
+    If anyFail <> 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    LowStmtList = 1
+End Function
+
+Function LowDimArrBytes(ctx As *LowerCtx, dimIdx As Long, ty As Long, ByRef nbytes As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim bound As Long
+    LowDimArrBytes = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If ty = TY_BYTE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = bound + 1
+    ElseIf ty = TY_LONG_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 4
+    ElseIf ty = TY_DOUBLE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 8
+    ElseIf ty = TY_SINGLE_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * 4
+    ElseIf ty = TY_STRING_ARR Then
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        nbytes = (bound + 1) * TyPtrSize()
+    End If
+    LowDimArrBytes = 1
+End Function
+
+Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, ty As Long, nm As *Byte, ByRef nbytes As Long, ByRef ti As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim bound As Long
+    Dim tt As *TypeTable
+    Dim tsizes As *Long
+    LowDimFixedBytes = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    If ty = TY_BYTE Then
+        nbytes = 1
+    ElseIf ty = TY_DOUBLE Then
+        nbytes = 8
+    ElseIf ty = TY_SINGLE Then
+        nbytes = 4
+    ElseIf ty = TY_UDT_ARR Then
+        ti = nodes[dimIdx].extra
+        If ti < 0 Then
+            Print "error: Dim UDT[] missing type '" + MakeStr(nm) + "'"
+            Exit Function
+        End If
+        bound = LowBoundVal(ctx, nodes[dimIdx].left)
+        If bound < 0 Then Exit Function
+        tsizes = tt->typeSizes
+        nbytes = tsizes[ti]
+        If nbytes <= 0 Then
+            Print "error: Dim UDT[] size 0 '" + MakeStr(nm) + "'"
+            Exit Function
+        End If
+        nbytes = nbytes * (bound + 1)
+    ElseIf ty = TY_UDT Then
+        ti = nodes[dimIdx].extra
+        If ti < 0 Then
+            Print "error: Dim UDT missing type '" + MakeStr(nm) + "'"
+            Exit Function
+        End If
+        tsizes = tt->typeSizes
+        nbytes = tsizes[ti]
+        If nbytes <= 0 Then
+            Print "error: Dim UDT size 0 '" + MakeStr(nm) + "'"
+            Exit Function
+        End If
+    ElseIf ty = TY_PTR_UDT Then
+        ti = nodes[dimIdx].extra
+        If ti < 0 Then Exit Function
+        nbytes = TyPtrSize()
+    End If
+    LowDimFixedBytes = 1
+End Function
+
+' Register one AST_DIM (asGlob=1 -> module global, else local). Returns 0 on error.
+Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim nm(63) As Byte
+    Dim ty As Long
+    Dim nbytes As Long
+    Dim ti As Long
+
+    LowRegisterDimNode = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, dimIdx, VarPtr(nm))
+    ty = nodes[dimIdx].num
+    nbytes = 8
+    ti = -1
+    If LowDimArrBytes(ctx, dimIdx, ty, nbytes) = 0 Then Exit Function
+    If LowDimFixedBytes(ctx, dimIdx, ty, VarPtr(nm), nbytes, ti) = 0 Then Exit Function
+    If asGlob <> 0 Then
+        If LowAddGlob(ctx, VarPtr(nm), ty, nbytes, ti) < 0 Then
+            Print "error: register global '" + MakeStr(VarPtr(nm)) + "' ty=" + Str$(ty)
+            Exit Function
+        End If
+    Else
+        If LowAddSym(ctx, VarPtr(nm), ty, nbytes, ti, 0) < 0 Then
+            Print "error: register local '" + MakeStr(VarPtr(nm)) + "' ty=" + Str$(ty)
+            Exit Function
+        End If
+    End If
+    LowRegisterDimNode = 1
+End Function
+
+' Walk statement list (and nested If/While/For/Do bodies) to register Dims.
+Function LowCollectDimsInList(ctx As *LowerCtx, idx As Long, asGlob As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim cur As Long
+    Dim k As Long
+
+    LowCollectDimsInList = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    cur = idx
+    While cur >= 0
+        k = nodes[cur].kind
+        If k = AST_DIM Then
+            If LowRegisterDimNode(ctx, cur, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_IF Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+            If LowCollectDimsInList(ctx, nodes[cur].extra, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_WHILE Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_DO Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_FOR Then
+            If LowCollectDimsInList(ctx, nodes[cur].num, asGlob) = 0 Then Exit Function
+        ElseIf k = AST_WITH Then
+            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+        End If
+        cur = nodes[cur].nxt
+    Wend
+    LowCollectDimsInList = 1
+End Function

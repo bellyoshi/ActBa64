@@ -1,0 +1,246 @@
+' ParserAssignOp - 複合代入
+
+' 次が代入演算子か（= / += / ++ / Mod= 等）
+Function ParseIsAssignOpAhead(p As *Parser) As Long
+    Dim k(7) As Byte
+    Dim t As Long
+
+    ParseIsAssignOpAhead = 0
+    t = ParseTokKind(p)
+    If t = TK_EQ Then
+        ParseIsAssignOpAhead = 1
+        Exit Function
+    End If
+    If t = TK_PLUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_PLUS Or ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            ParseIsAssignOpAhead = 1
+        End If
+        Exit Function
+    End If
+    If t = TK_MINUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_MINUS Or ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            ParseIsAssignOpAhead = 1
+        End If
+        Exit Function
+    End If
+    If t = TK_STAR Or t = TK_SLASH Or t = TK_BACKSLASH Or t = TK_SHL Or t = TK_SHR Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            ParseIsAssignOpAhead = 1
+        End If
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "mod")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then ParseIsAssignOpAhead = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "and")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then ParseIsAssignOpAhead = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "or")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then ParseIsAssignOpAhead = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "xor")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then ParseIsAssignOpAhead = 1
+    End If
+End Function
+
+Function ParseMakeAssignBin(p As *Parser, left As Long, op As Long, right As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nBin As Long
+    Dim nAsg As Long
+
+    ParseMakeAssignBin = -1
+    If left < 0 Or right < 0 Then Exit Function
+    ast = p->ast
+    nBin = AstAddNode(ast, AST_BINOP)
+    If nBin < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nBin].num = op
+    nodes[nBin].left = left
+    nodes[nBin].right = right
+    nAsg = AstAddNode(ast, AST_ASSIGN)
+    If nAsg < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nAsg].left = left
+    nodes[nAsg].right = nBin
+    ParseMakeAssignBin = nAsg
+End Function
+
+' lvalue の後の = / += / ++ など
+Function ParseAssignIncDec(p As *Parser, left As Long) As Long
+    Dim nOne As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+
+    ParseAssignIncDec = -2
+    ast = p->ast
+    If ParseTokKind(p) = TK_PLUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_PLUS Then
+            p->pos = p->pos + 2
+            nOne = AstAddNode(ast, AST_NUM)
+            If nOne < 0 Then
+                ParseAssignIncDec = -1
+                Exit Function
+            End If
+            nodes = ast->nodes
+            nodes[nOne].num = 1
+            ParseAssignIncDec = ParseMakeAssignBin(p, left, BOP_ADD, nOne)
+            Exit Function
+        End If
+    End If
+    If ParseTokKind(p) = TK_MINUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_MINUS Then
+            p->pos = p->pos + 2
+            nOne = AstAddNode(ast, AST_NUM)
+            If nOne < 0 Then
+                ParseAssignIncDec = -1
+                Exit Function
+            End If
+            nodes = ast->nodes
+            nodes[nOne].num = 1
+            ParseAssignIncDec = ParseMakeAssignBin(p, left, BOP_SUB, nOne)
+        End If
+    End If
+End Function
+
+Function ParseCompoundTokOp(p As *Parser) As Long
+    Dim op As Long
+
+    ParseCompoundTokOp = 0
+    op = 0
+    If ParseTokKind(p) = TK_PLUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_ADD
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_MINUS Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_SUB
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_STAR Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_MUL
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_SLASH Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_DIV
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_BACKSLASH Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_IDIV
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_SHL Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_SHL
+            p->pos = p->pos + 2
+        End If
+    ElseIf ParseTokKind(p) = TK_SHR Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_SHR
+            p->pos = p->pos + 2
+        End If
+    Else
+        ParseCompoundTokOp = -2
+        Exit Function
+    End If
+    ParseCompoundTokOp = op
+End Function
+
+Function ParseCompoundKwOp(p As *Parser) As Long
+    Dim k(7) As Byte
+    Dim op As Long
+
+    ParseCompoundKwOp = 0
+    op = 0
+    lstrcpy(VarPtr(k), "mod")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+            op = BOP_MOD
+            p->pos = p->pos + 2
+        End If
+    End If
+    If op = 0 Then
+        lstrcpy(VarPtr(k), "and")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                op = BOP_AND
+                p->pos = p->pos + 2
+            End If
+        End If
+    End If
+    If op = 0 Then
+        lstrcpy(VarPtr(k), "or")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                op = BOP_OR
+                p->pos = p->pos + 2
+            End If
+        End If
+    End If
+    If op = 0 Then
+        lstrcpy(VarPtr(k), "xor")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            If ParseTokKindAt(p, p->pos + 1) = TK_EQ Then
+                op = BOP_XOR
+                p->pos = p->pos + 2
+            End If
+        End If
+    End If
+    ParseCompoundKwOp = op
+End Function
+
+Function ParseCompoundAssignOp(p As *Parser) As Long
+    Dim op As Long
+
+    ParseCompoundAssignOp = 0
+    op = ParseCompoundTokOp(p)
+    If op = -2 Then
+        op = ParseCompoundKwOp(p)
+    End If
+    ParseCompoundAssignOp = op
+End Function
+
+Function ParseAssignOpRhs(p As *Parser, left As Long) As Long
+    Dim e As Long
+    Dim op As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nAsg As Long
+    Dim nInc As Long
+
+    ParseAssignOpRhs = -1
+    If left < 0 Then Exit Function
+    ast = p->ast
+    nInc = ParseAssignIncDec(p, left)
+    If nInc <> -2 Then
+        ParseAssignOpRhs = nInc
+        Exit Function
+    End If
+    op = ParseCompoundAssignOp(p)
+    If op <> 0 Then
+        e = ParseExpr(p)
+        If e < 0 Then Exit Function
+        ParseAssignOpRhs = ParseMakeAssignBin(p, left, op, e)
+        Exit Function
+    End If
+    If ParseExpect(p, TK_EQ) = 0 Then Exit Function
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    nAsg = AstAddNode(ast, AST_ASSIGN)
+    If nAsg < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nAsg].left = left
+    nodes[nAsg].right = e
+    ParseAssignOpRhs = nAsg
+End Function

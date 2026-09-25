@@ -1,0 +1,222 @@
+' ParserClassMeth - メソッドと Inherits
+
+Function ParseClassMethRet(p As *Parser, isFun As Long, ByRef retTy As Long) As Long
+    Dim kAs(7) As Byte
+
+    ParseClassMethRet = 0
+    retTy = TY_LONG
+    If isFun <> 0 Then
+        lstrcpy(VarPtr(kAs), "as")
+        If ParseIdentIs(p, VarPtr(kAs)) <> 0 Then
+            p->pos = p->pos + 1
+            If ParseFuncRetType(p, retTy) = 0 Then Exit Function
+        End If
+    End If
+    ParseClassMethRet = 1
+End Function
+
+Function ParseClassMethBody(p As *Parser, isFun As Long, name As *Byte, mangled As *Byte, ByRef body As Long) As Long
+    Dim kSub(7) As Byte
+    Dim kFun(15) As Byte
+    Dim saveTi As Long
+
+    ParseClassMethBody = 0
+    lstrcpy(VarPtr(kSub), "sub")
+    lstrcpy(VarPtr(kFun), "function")
+    saveTi = p->classTi
+    g_clsMethShort[0] = 0
+    g_clsMethMangled[0] = 0
+    If isFun <> 0 Then
+        lstrcpy(VarPtr(g_clsMethShort), name)
+        lstrcpy(VarPtr(g_clsMethMangled), mangled)
+        body = ParseStmtListUntilEndPair(p, VarPtr(kFun))
+    Else
+        body = ParseStmtListUntilEndPair(p, VarPtr(kSub))
+    End If
+    g_clsMethShort[0] = 0
+    g_clsMethMangled[0] = 0
+    p->classTi = saveTi
+    If p->err <> 0 Then Exit Function
+    ParseClassMethBody = 1
+End Function
+
+Function ParseClassMethEnd(p As *Parser, isFun As Long) As Long
+    Dim kEnd(7) As Byte
+    Dim kSub(7) As Byte
+    Dim kFun(15) As Byte
+
+    ParseClassMethEnd = 0
+    lstrcpy(VarPtr(kEnd), "end")
+    lstrcpy(VarPtr(kSub), "sub")
+    lstrcpy(VarPtr(kFun), "function")
+    If ParseIdentIs(p, VarPtr(kEnd)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If isFun <> 0 Then
+        If ParseIdentIs(p, VarPtr(kFun)) = 0 Then
+            p->err = 1
+            Exit Function
+        End If
+    Else
+        If ParseIdentIs(p, VarPtr(kSub)) = 0 Then
+            p->err = 1
+            Exit Function
+        End If
+    End If
+    p->pos = p->pos + 1
+    ParseClassMethEnd = 1
+End Function
+
+Function ParseClassMethNode(ast As *Ast, mangled As *Byte, nFirst As Long, body As Long, isFun As Long, nParams As Long, retTy As Long) As Long
+    Dim nodes As *AstNode
+    Dim nFunc As Long
+
+    ParseClassMethNode = -1
+    nFunc = AstAddNode(ast, AST_FUNC)
+    If nFunc < 0 Then Exit Function
+    AstSetStr(ast, nFunc, mangled)
+    nodes = ast->nodes
+    nodes[nFunc].left = nFirst
+    nodes[nFunc].right = body
+    If isFun <> 0 Then
+        nodes[nFunc].num = nParams
+        nodes[nFunc].extra = retTy
+    Else
+        nodes[nFunc].num = nParams Or 256
+    End If
+    ParseClassMethNode = nFunc
+End Function
+
+' Class 内の Sub/Function（本体あり）
+Function ParseClassMethFinish(p As *Parser, isFun As Long, name As *Byte, mangled As *Byte, nFirst As Long, nParams As Long) As Long
+    Dim ast As *Ast
+    Dim body As Long
+    Dim retTy As Long
+
+    ParseClassMethFinish = -1
+    ast = p->ast
+    If ParseClassMethRet(p, isFun, retTy) = 0 Then Exit Function
+    nFirst = ParsePrependMeParam(p, nFirst, nParams)
+    If nFirst < 0 Then Exit Function
+    If ParseClassMethBody(p, isFun, name, mangled, body) = 0 Then Exit Function
+    If ParseClassMethEnd(p, isFun) = 0 Then Exit Function
+    ParseClassMethFinish = ParseClassMethNode(ast, mangled, nFirst, body, isFun, nParams, retTy)
+End Function
+
+Function ParseClassMethSig(p As *Parser, className As *Byte, name As *Byte, ByRef isFun As Long, ByRef isDtor As Long, ByRef outIsCtor As Long, ByRef outIsDtor As Long) As Long
+    Dim kSub(7) As Byte
+    Dim kFun(15) As Byte
+
+    ParseClassMethSig = 0
+    isFun = 0
+    isDtor = 0
+    outIsCtor = 0
+    outIsDtor = 0
+    lstrcpy(VarPtr(kSub), "sub")
+    lstrcpy(VarPtr(kFun), "function")
+    If ParseIdentIs(p, VarPtr(kFun)) <> 0 Then
+        isFun = 1
+        p->pos = p->pos + 1
+    ElseIf ParseIdentIs(p, VarPtr(kSub)) <> 0 Then
+        p->pos = p->pos + 1
+    Else
+        p->err = 1
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_TILDE Then
+        If isFun <> 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        p->pos = p->pos + 1
+        isDtor = 1
+        outIsDtor = 1
+    End If
+    If ParseCopyIdent(p, name) = 0 Then Exit Function
+    If isDtor = 0 Then
+        If TyNameEq(name, className) <> 0 Then
+            outIsCtor = 1
+        End If
+    End If
+    ParseClassMethSig = 1
+End Function
+
+Function ParseClassMethMangle(p As *Parser, className As *Byte, name As *Byte, mangled As *Byte, isDtor As Long, outIsCtor As Long) As Long
+    ParseClassMethMangle = 0
+    If isDtor <> 0 Then
+        If TyNameEq(name, className) = 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        lstrcpy(mangled, className)
+        lstrcat(mangled, "_Dtor")
+    ElseIf outIsCtor <> 0 Then
+        lstrcpy(mangled, className)
+        lstrcat(mangled, "_Ctor")
+    Else
+        ParseMangleClassMember(className, name, mangled)
+    End If
+    ParseClassMethMangle = 1
+End Function
+
+Function ParseClassMethod(p As *Parser, className As *Byte, ByRef outIsCtor As Long, ByRef outIsDtor As Long) As Long
+    Dim isFun As Long
+    Dim isDtor As Long
+    Dim name(63) As Byte
+    Dim mangled(127) As Byte
+    Dim nFirst As Long
+    Dim nParams As Long
+
+    ParseClassMethod = -1
+    If ParseClassMethSig(p, className, VarPtr(name), isFun, isDtor, outIsCtor, outIsDtor) = 0 Then Exit Function
+    If ParseClassMethMangle(p, className, VarPtr(name), VarPtr(mangled), isDtor, outIsCtor) = 0 Then Exit Function
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    If ParseTokKind(p) <> TK_RPAREN Then
+        If isDtor <> 0 Then
+            p->err = 1
+            Exit Function
+        End If
+    End If
+    If ParseParamList(p, nFirst, nParams, 0, 0) = 0 Then Exit Function
+    ParseClassMethod = ParseClassMethFinish(p, isFun, VarPtr(name), VarPtr(mangled), nFirst, nParams)
+End Function
+
+Function ParseClassInherits(p As *Parser, ti As Long, ByRef isIface As Long) As Long
+    Dim kInh(15) As Byte
+    Dim parent(63) As Byte
+    Dim parentTi As Long
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseClassInherits = 0
+    ast = p->ast
+    types = ast->types
+    isIface = 0
+    lstrcpy(VarPtr(kInh), "inherits")
+    If ParseIdentIs(p, VarPtr(kInh)) = 0 Then
+        ParseClassInherits = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(parent)) = 0 Then Exit Function
+    parentTi = TyFind(types, VarPtr(parent))
+    If parentTi < 0 Then
+        Print "error: Inherits parent not found: " + MakeStr(VarPtr(parent))
+        p->err = 1
+        Exit Function
+    End If
+    If TyIsClass(types, parentTi) = 0 Then
+        Print "error: Inherits parent is not a Class"
+        p->err = 1
+        Exit Function
+    End If
+    If TyCopyVirts(types, ti, parentTi) = 0 Then
+        Print "error: Inherits Virtual copy failed"
+        p->err = 1
+        Exit Function
+    End If
+    isIface = 1
+    ParseClassInherits = 1
+End Function

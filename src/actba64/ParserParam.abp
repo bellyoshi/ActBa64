@@ -1,0 +1,297 @@
+' ParserParam - 仮引数と戻り値の型
+
+Function ParseParamStarType(p As *Parser, ByRef pty As Long, ByRef pti As Long, ByRef isByRef As Long, allowDblStar As Long) As Long
+    Dim k(15) As Byte
+    Dim typeName(63) As Byte
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseParamStarType = 0
+    ast = p->ast
+    types = ast->types
+    p->pos = p->pos + 1
+    If allowDblStar <> 0 Then
+        If ParseTokKind(p) = TK_STAR Then
+            p->pos = p->pos + 1
+            isByRef = 1
+        End If
+    End If
+    lstrcpy(VarPtr(k), "byte")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        pty = TY_PTR_BYTE
+        ParseParamStarType = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        pty = TY_PTR_LONG
+        ParseParamStarType = 1
+        Exit Function
+    End If
+    If ParseEatLongAlias(p) <> 0 Then
+        pty = TY_PTR_LONG
+        ParseParamStarType = 1
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+    pti = TyFind(types, VarPtr(typeName))
+    If pti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    pty = TY_PTR_UDT
+    ParseParamStarType = 1
+End Function
+
+Function ParseParamPrimType(p As *Parser, ByRef pty As Long, allowDouble As Long) As Long
+    Dim k(15) As Byte
+    Dim typeName(63) As Byte
+
+    ParseParamPrimType = -2
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        pty = TY_LONG
+        ParseParamPrimType = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "string")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        pty = TY_STRING
+        ParseParamPrimType = 1
+        Exit Function
+    End If
+    If allowDouble <> 0 Then
+        lstrcpy(VarPtr(typeName), "double")
+        If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+            p->pos = p->pos + 1
+            pty = TY_DOUBLE
+            ParseParamPrimType = 1
+            Exit Function
+        End If
+    End If
+End Function
+
+Function ParseParamAliasUdt(p As *Parser, ByRef pty As Long, ByRef pti As Long) As Long
+    Dim typeName(63) As Byte
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseParamAliasUdt = 0
+    ast = p->ast
+    types = ast->types
+    If ParseEatBytePtrAlias(p) <> 0 Then
+        pty = TY_PTR_BYTE
+        ParseParamAliasUdt = 1
+        Exit Function
+    End If
+    If ParseEatLongAlias(p) <> 0 Then
+        pty = TY_LONG
+        ParseParamAliasUdt = 1
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    pti = TyFind(types, VarPtr(typeName))
+    If pti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    pty = TY_UDT
+    ParseParamAliasUdt = 1
+End Function
+
+Function ParseParamPlainType(p As *Parser, ByRef pty As Long, ByRef pti As Long, allowDouble As Long) As Long
+    Dim r As Long
+
+    ParseParamPlainType = 0
+    r = ParseParamPrimType(p, pty, allowDouble)
+    If r <> -2 Then
+        ParseParamPlainType = r
+        Exit Function
+    End If
+    ParseParamPlainType = ParseParamAliasUdt(p, pty, pti)
+End Function
+
+Function ParseParamType(p As *Parser, ByRef pty As Long, ByRef pti As Long, ByRef isByRef As Long, allowDblStar As Long, allowDouble As Long) As Long
+    ParseParamType = 0
+    pty = TY_LONG
+    pti = -1
+    If ParseTokKind(p) = TK_STAR Then
+        ParseParamType = ParseParamStarType(p, pty, pti, isByRef, allowDblStar)
+        Exit Function
+    End If
+    ParseParamType = ParseParamPlainType(p, pty, pti, allowDouble)
+End Function
+
+Function ParseParamOne(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As Long
+    Dim nodes As *AstNode
+    Dim k(15) As Byte
+    Dim pname(63) As Byte
+    Dim nParam As Long
+    Dim isByRef As Long
+    Dim pty As Long
+    Dim pti As Long
+
+    ParseParamOne = 0
+    isByRef = 0
+    lstrcpy(VarPtr(k), "byref")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        isByRef = 1
+    Else
+        lstrcpy(VarPtr(k), "byval")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            p->pos = p->pos + 1
+        End If
+    End If
+    If ParseCopyIdent(p, VarPtr(pname)) = 0 Then Exit Function
+    lstrcpy(VarPtr(k), "as")
+    If ParseIdentIs(p, VarPtr(k)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseParamType(p, pty, pti, isByRef, allowDblStar, allowDouble) = 0 Then Exit Function
+    nParam = AstAddNode(ast, AST_VAR)
+    If nParam < 0 Then Exit Function
+    AstSetStr(ast, nParam, VarPtr(pname))
+    nodes = ast->nodes
+    nodes[nParam].num = isByRef
+    nodes[nParam].extra = pty
+    nodes[nParam].right = pti
+    If nFirst < 0 Then
+        nFirst = nParam
+    Else
+        nodes[nPrev].nxt = nParam
+    End If
+    nPrev = nParam
+    nParams = nParams + 1
+    ParseParamOne = 1
+End Function
+
+Function ParseParamList(p As *Parser, ByRef nFirst As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As Long
+    Dim ast As *Ast
+    Dim nPrev As Long
+
+    ParseParamList = 0
+    ast = p->ast
+    nFirst = -1
+    nPrev = -1
+    nParams = 0
+    If ParseTokKind(p) <> TK_RPAREN Then
+        Do
+            If ParseParamOne(p, ast, nFirst, nPrev, nParams, allowDblStar, allowDouble) = 0 Then Exit Function
+            If ParseTokKind(p) <> TK_COMMA Then Exit Do
+            p->pos = p->pos + 1
+        Loop
+    End If
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    ParseParamList = 1
+End Function
+
+Function ParseFuncRetLongStr(p As *Parser, ByRef retTy As Long) As Long
+    Dim k(15) As Byte
+
+    ParseFuncRetLongStr = -2
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        retTy = TY_LONG
+        ParseFuncRetLongStr = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "string")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        retTy = TY_STRING
+        ParseFuncRetLongStr = 1
+        Exit Function
+    End If
+End Function
+
+Function ParseFuncRetStar(p As *Parser, ByRef retTy As Long) As Long
+    Dim k(15) As Byte
+    Dim typeName(63) As Byte
+    Dim pti As Long
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseFuncRetStar = 0
+    ast = p->ast
+    types = ast->types
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(k), "byte")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        retTy = TY_PTR_BYTE
+        ParseFuncRetStar = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        retTy = TY_PTR_LONG
+        ParseFuncRetStar = 1
+        Exit Function
+    End If
+    If ParseEatLongAlias(p) <> 0 Then
+        retTy = TY_PTR_LONG
+        ParseFuncRetStar = 1
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+    pti = TyFind(types, VarPtr(typeName))
+    If pti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    retTy = TY_PTR_UDT
+    ParseFuncRetStar = 1
+End Function
+
+Function ParseFuncRetTail(p As *Parser, ByRef retTy As Long) As Long
+    Dim typeName(63) As Byte
+
+    ParseFuncRetTail = 0
+    lstrcpy(VarPtr(typeName), "double")
+    If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+        p->pos = p->pos + 1
+        retTy = TY_DOUBLE
+        ParseFuncRetTail = 1
+        Exit Function
+    End If
+    If ParseEatBytePtrAlias(p) <> 0 Then
+        retTy = TY_PTR_BYTE
+        ParseFuncRetTail = 1
+        Exit Function
+    End If
+    If ParseEatLongAlias(p) <> 0 Then
+        retTy = TY_LONG
+        ParseFuncRetTail = 1
+        Exit Function
+    End If
+    p->err = 1
+End Function
+
+Function ParseFuncRetType(p As *Parser, ByRef retTy As Long) As Long
+    Dim r As Long
+
+    ParseFuncRetType = 0
+    retTy = TY_LONG
+    r = ParseFuncRetLongStr(p, retTy)
+    If r <> -2 Then
+        ParseFuncRetType = r
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_STAR Then
+        ParseFuncRetType = ParseFuncRetStar(p, retTy)
+        Exit Function
+    End If
+    ParseFuncRetType = ParseFuncRetTail(p, retTy)
+End Function

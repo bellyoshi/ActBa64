@@ -1,0 +1,249 @@
+' LexerLit - 数値と文字列
+
+Function LexHexLit(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim n2 As Long
+    Dim c As Long
+    Dim n As Long
+    Dim v As Long
+    Dim idx As Long
+    Dim toks As *Tok
+    LexHexLit = 0
+    src = lx->src
+    n2 = src[lx->pos + 1]
+    If IsHexPrefix(n2) <> 0 Then
+        lx->pos = lx->pos + 2
+        n = 0
+        Do
+            c = src[lx->pos]
+            v = HexDigitValue(c)
+            If v < 0 Then Exit Do
+            n = n * LEX_RADIX_HEX + v
+            lx->pos = lx->pos + 1
+        Loop
+        idx = LexPush(lx, TK_NUMBER)
+        If idx < 0 Then Exit Function
+        toks = lx->toks
+        toks[idx].num = n
+    Else
+        LexPush(lx, TK_AMP)
+        lx->pos = lx->pos + 1
+    End If
+    LexHexLit = 1
+End Function
+
+Function LexNumber(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim start As Long
+    Dim n As Long
+    Dim i As Long
+    Dim idx As Long
+    Dim toks As *Tok
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+
+    LexNumber = 0
+    src = lx->src
+    start = lx->pos
+    n = 0
+    While IsDigit(src[lx->pos]) <> 0
+        n = n * LEX_RADIX_DEC + DigitValue(src[lx->pos])
+        lx->pos = lx->pos + 1
+    Wend
+    ' 1.5 / 1.12345 → TK_FLOAT（テキスト保持。IEEE 化は Parser）
+    If src[lx->pos] = CH_DOT Then
+        If IsDigit(src[lx->pos + 1]) <> 0 Then
+            lx->pos = lx->pos + 1
+            While IsDigit(src[lx->pos]) <> 0
+                lx->pos = lx->pos + 1
+            Wend
+            n = lx->pos - start
+            If n > LEX_TEXT_MAXIDX Then n = LEX_TEXT_MAXIDX
+            i = 0
+            While i < n
+                buf[i] = src[start + i]
+                i = i + 1
+            Wend
+            idx = LexPush(lx, TK_FLOAT)
+            If idx < 0 Then Exit Function
+            LexStoreText(lx, idx, VarPtr(buf), n)
+        Else
+            idx = LexPush(lx, TK_NUMBER)
+            If idx < 0 Then Exit Function
+            toks = lx->toks
+            toks[idx].num = n
+        End If
+    Else
+        idx = LexPush(lx, TK_NUMBER)
+        If idx < 0 Then Exit Function
+        toks = lx->toks
+        toks[idx].num = n
+    End If
+    LexNumber = 1
+End Function
+
+Function LexIdent(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim start As Long
+    Dim n As Long
+    Dim i As Long
+    Dim idx As Long
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+    LexIdent = 0
+    src = lx->src
+    start = lx->pos
+    While IsIdentCont(src[lx->pos]) <> 0
+        lx->pos = lx->pos + 1
+    Wend
+    If src[lx->pos] = CH_DOLLAR Then
+        lx->pos = lx->pos + 1
+    End If
+    n = lx->pos - start
+    i = 0
+    While i < n And i < LEX_TEXT_MAXIDX
+        buf[i] = src[start + i]
+        i = i + 1
+    Wend
+    buf[i] = CH_NUL
+    idx = LexPush(lx, TK_IDENT)
+    If idx < 0 Then Exit Function
+    LexStoreText(lx, idx, VarPtr(buf), i)
+    LexIdent = 1
+End Function
+
+Function LexString(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim i As Long
+    Dim idx As Long
+    Dim toks As *Tok
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+    LexString = 0
+    src = lx->src
+    lx->pos = lx->pos + 1
+    i = 0
+    Do
+        If src[lx->pos] = CH_NUL Then
+            lx->err = 1
+            Exit Function
+        End If
+        If src[lx->pos] = CH_DQUOTE Then
+            If src[lx->pos + 1] = CH_DQUOTE Then
+                If i < LEX_TEXT_MAXIDX Then
+                    buf[i] = CH_DQUOTE
+                    i = i + 1
+                End If
+                lx->pos = lx->pos + 2
+            Else
+                Exit Do
+            End If
+        Else
+            If i < LEX_TEXT_MAXIDX Then
+                buf[i] = src[lx->pos]
+                i = i + 1
+            End If
+            lx->pos = lx->pos + 1
+        End If
+    Loop
+    buf[i] = CH_NUL
+    lx->pos = lx->pos + 1
+    idx = LexPush(lx, TK_STRING)
+    If idx < 0 Then Exit Function
+    LexStoreText(lx, idx, VarPtr(buf), i)
+    toks = lx->toks
+    toks[idx].num = i
+    LexString = 1
+End Function
+
+Function LexEscapeChar(n2 As Long) As Long
+    If n2 = 110 Then
+        LexEscapeChar = CH_NL
+    ElseIf n2 = 114 Then
+        LexEscapeChar = CH_CR
+    ElseIf n2 = 116 Then
+        LexEscapeChar = CH_TAB
+    ElseIf n2 = 48 Then
+        LexEscapeChar = CH_NUL
+    ElseIf n2 = 92 Then
+        LexEscapeChar = CH_BSLASH
+    ElseIf n2 = 34 Then
+        LexEscapeChar = CH_DQUOTE
+    Else
+        LexEscapeChar = n2
+    End If
+End Function
+
+Function LexExString(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim i As Long
+    Dim idx As Long
+    Dim toks As *Tok
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+    Dim c As Long
+    LexExString = 0
+    src = lx->src
+    If src[lx->pos] <> CH_DQUOTE Then Exit Function
+    lx->pos = lx->pos + 1
+    i = 0
+    Do
+        If src[lx->pos] = CH_NUL Then
+            lx->err = 1
+            Exit Function
+        End If
+        If src[lx->pos] = CH_DQUOTE Then
+            Exit Do
+        End If
+        If src[lx->pos] = CH_BSLASH Then
+            lx->pos = lx->pos + 1
+            If src[lx->pos] = CH_NUL Then
+                lx->err = 1
+                Exit Function
+            End If
+            c = LexEscapeChar(src[lx->pos])
+            lx->pos = lx->pos + 1
+        Else
+            c = src[lx->pos]
+            lx->pos = lx->pos + 1
+        End If
+        If i < LEX_TEXT_MAXIDX Then
+            buf[i] = c As Byte
+            i = i + 1
+        End If
+    Loop
+    buf[i] = CH_NUL
+    lx->pos = lx->pos + 1
+    idx = LexPush(lx, TK_STRING)
+    If idx < 0 Then Exit Function
+    LexStoreText(lx, idx, VarPtr(buf), i)
+    toks = lx->toks
+    toks[idx].num = i
+    LexExString = 1
+End Function
+
+Function LexTryExStringAfterIdent(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim last As Long
+    Dim toks As *Tok
+    Dim texts As *Byte
+    Dim off As Long
+    Dim c0 As Long
+    Dim c1 As Long
+    LexTryExStringAfterIdent = 0
+    If lx->count <= 0 Then Exit Function
+    last = lx->count - 1
+    toks = lx->toks
+    If toks[last].kind <> TK_IDENT Then Exit Function
+    texts = lx->texts
+    off = toks[last].textOff * LEX_TEXT_LEN
+    c0 = texts[off]
+    c1 = texts[off + 1]
+    If texts[off + 2] <> CH_NUL Then Exit Function
+    If c0 >= Asc("A") And c0 <= Asc("Z") Then c0 = c0 + 32
+    If c1 >= Asc("A") And c1 <= Asc("Z") Then c1 = c1 + 32
+    If c0 <> Asc("e") Or c1 <> Asc("x") Then Exit Function
+    src = lx->src
+    While IsHSpace(src[lx->pos]) <> 0
+        lx->pos = lx->pos + 1
+    Wend
+    If src[lx->pos] <> CH_DQUOTE Then Exit Function
+    lx->count = last
+    LexTryExStringAfterIdent = LexExString(lx)
+End Function

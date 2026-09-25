@@ -1,0 +1,197 @@
+' ParserDeclare - Declare と InsertMenu
+
+' Declare Function|Sub Name Lib "dll" [Alias "api"] (params) [As Type]
+Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte, ByRef isSub As Long) As Long
+    Dim k(15) As Byte
+
+    ParseDeclareHdr = 0
+    isSub = 0
+    lstrcpy(VarPtr(k), "function")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+    Else
+        lstrcpy(VarPtr(k), "sub")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            p->pos = p->pos + 1
+            isSub = 1
+        Else
+            p->err = 1
+            Exit Function
+        End If
+    End If
+    If ParseCopyIdent(p, name) = 0 Then Exit Function
+    lstrcpy(VarPtr(k), "lib")
+    If ParseIdentIs(p, VarPtr(k)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    If ParseStringArg(p, libName) = 0 Then Exit Function
+    lstrcpy(VarPtr(k), "alias")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        If ParseStringArg(p, apiName) = 0 Then Exit Function
+    Else
+        lstrcpy(apiName, name)
+    End If
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    ParseDeclareHdr = 1
+End Function
+
+Function ParseDeclareRetSkip(p As *Parser) As Long
+    Dim k(15) As Byte
+    Dim typeName(63) As Byte
+
+    ParseDeclareRetSkip = 0
+    lstrcpy(VarPtr(k), "as")
+    If ParseIdentIs(p, VarPtr(k)) = 0 Then
+        ParseDeclareRetSkip = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseDeclareRetSkip = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "string")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseDeclareRetSkip = 1
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_STAR Then
+        p->pos = p->pos + 1
+        If ParseTokKind(p) = TK_STAR Then
+            p->pos = p->pos + 1
+        End If
+        lstrcpy(VarPtr(k), "byte")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+            p->pos = p->pos + 1
+        Else
+            If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+        End If
+        ParseDeclareRetSkip = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(typeName), "double")
+    If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseDeclareRetSkip = 1
+        Exit Function
+    End If
+    If ParseEatLongAlias(p) <> 0 Then
+        ParseDeclareRetSkip = 1
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+    ParseDeclareRetSkip = 1
+End Function
+
+Function ParseDeclareStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nDecl As Long
+    Dim nDll As Long
+    Dim nApi As Long
+    Dim nFirst As Long
+    Dim nParams As Long
+    Dim name(63) As Byte
+    Dim libName(63) As Byte
+    Dim apiName(63) As Byte
+    Dim isSub As Long
+
+    ParseDeclareStmt = -1
+    p->pos = p->pos + 1
+    ast = p->ast
+    If ParseDeclareHdr(p, VarPtr(name), VarPtr(libName), VarPtr(apiName), isSub) = 0 Then Exit Function
+    If ParseParamList(p, nFirst, nParams, 1, 1) = 0 Then Exit Function
+    If isSub = 0 Then
+        If ParseDeclareRetSkip(p) = 0 Then Exit Function
+    End If
+    nDll = AstAddNode(ast, AST_STRING)
+    If nDll < 0 Then Exit Function
+    AstSetStr(ast, nDll, VarPtr(libName))
+    nApi = AstAddNode(ast, AST_STRING)
+    If nApi < 0 Then Exit Function
+    AstSetStr(ast, nApi, VarPtr(apiName))
+    nDecl = AstAddNode(ast, AST_DECLARE)
+    If nDecl < 0 Then Exit Function
+    AstSetStr(ast, nDecl, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nDecl].left = nFirst
+    nodes[nDecl].right = nDll
+    nodes[nDecl].extra = nApi
+    nodes[nDecl].num = nParams
+    ParseDeclareStmt = nDecl
+End Function
+
+Function ParseInsMenuArg(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    Dim nodes As *AstNode
+    Dim nArg As Long
+    Dim e As Long
+    Dim kEx(7) As Byte
+    Dim s(255) As Byte
+
+    ParseInsMenuArg = 0
+    e = -1
+    lstrcpy(VarPtr(kEx), "ex")
+    If ParseIdentIs(p, VarPtr(kEx)) <> 0 Then
+        If ParseTokKindAt(p, p->pos + 1) = TK_STRING Then
+            p->pos = p->pos + 1
+            If ParseStringArg(p, VarPtr(s)) = 0 Then Exit Function
+            e = AstAddNode(ast, AST_STRING)
+            If e < 0 Then Exit Function
+            AstSetStr(ast, e, VarPtr(s))
+        End If
+    End If
+    If e < 0 Then
+        e = ParseExpr(p)
+        If e < 0 Then Exit Function
+    End If
+    nArg = AstAddNode(ast, AST_ARG)
+    If nArg < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nArg].left = e
+    If nFirst < 0 Then
+        nFirst = nArg
+    Else
+        nodes[nPrev].nxt = nArg
+    End If
+    nPrev = nArg
+    nArgs = nArgs + 1
+    ParseInsMenuArg = 1
+End Function
+
+' InsMenu hMenu, pos, flags [, caption [, id [, hSubMenu [, ignored]]]]
+Function ParseInsMenuStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nIns As Long
+    Dim nFirst As Long
+    Dim nPrev As Long
+    Dim nArgs As Long
+
+    ParseInsMenuStmt = -1
+    p->pos = p->pos + 1
+    ast = p->ast
+    nFirst = -1
+    nPrev = -1
+    nArgs = 0
+    Do
+        If ParseInsMenuArg(p, ast, nFirst, nPrev, nArgs) = 0 Then Exit Function
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p->pos = p->pos + 1
+    Loop
+    If nArgs < 3 Then
+        p->err = 1
+        Exit Function
+    End If
+    nIns = AstAddNode(ast, AST_INSMENU)
+    If nIns < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nIns].left = nFirst
+    nodes[nIns].num = nArgs
+    ParseInsMenuStmt = nIns
+End Function

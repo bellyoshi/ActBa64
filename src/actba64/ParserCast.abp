@@ -1,0 +1,168 @@
+' ParserCast - キャスト
+
+Function ParseCastMaskNarrow(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseCastMaskNarrow = -3
+    lstrcpy(VarPtr(k), "string")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        ParseCastMaskNarrow = -2
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "byte")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskNarrow = 255
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "char")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskNarrow = 255
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "word")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskNarrow = 65535
+        Exit Function
+    End If
+End Function
+
+Function ParseCastMaskInt(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseCastMaskInt = -3
+    lstrcpy(VarPtr(k), "long")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskInt = 0
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "dword")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskInt = 0
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "integer")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskInt = 0
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "int64")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskInt = 0
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "qword")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskInt = 0
+        Exit Function
+    End If
+End Function
+
+Function ParseCastMaskFloat(p As *Parser) As Long
+    Dim k(31) As Byte
+
+    ParseCastMaskFloat = -3
+    lstrcpy(VarPtr(k), "single")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskFloat = 0
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "double")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseCastMaskFloat = 0
+        Exit Function
+    End If
+End Function
+
+Function ParseCastMaskTail(p As *Parser) As Long
+    Dim name(63) As Byte
+
+    ParseCastMaskTail = -1
+    ' ハンドル・ポインタ別名は幅変換なし
+    If ParseEatLongAlias(p) <> 0 Then
+        ParseCastMaskTail = 0
+        Exit Function
+    End If
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    ParseCastMaskTail = 0
+End Function
+
+' As キャスト: mask（0=変換なし）。-1=失敗、-2=String 禁止
+Function ParseCastMask(p As *Parser) As Long
+    Dim m As Long
+
+    ParseCastMask = -1
+    m = ParseCastMaskNarrow(p)
+    If m <> -3 Then
+        ParseCastMask = m
+        Exit Function
+    End If
+    m = ParseCastMaskInt(p)
+    If m <> -3 Then
+        ParseCastMask = m
+        Exit Function
+    End If
+    m = ParseCastMaskFloat(p)
+    If m <> -3 Then
+        ParseCastMask = m
+        Exit Function
+    End If
+    ParseCastMask = ParseCastMaskTail(p)
+End Function
+
+' expression As type（失敗時 -1）
+Function ParseApplyAs(p As *Parser, e As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim mask As Long
+    Dim sawStar As Long
+    Dim k(7) As Byte
+
+    ParseApplyAs = e
+    If e < 0 Then
+        ParseApplyAs = -1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "as")
+    If ParseIdentIs(p, VarPtr(k)) = 0 Then Exit Function
+    p->pos = p->pos + 1
+    sawStar = 0
+    If ParseTokKind(p) = TK_STAR Then
+        p->pos = p->pos + 1
+        sawStar = 1
+    End If
+    mask = ParseCastMask(p)
+    If mask = -2 Then
+        Print "error: cannot cast to/from String"
+        p->err = 1
+        ParseApplyAs = -1
+        Exit Function
+    End If
+    If mask < 0 Then
+        p->err = 1
+        ParseApplyAs = -1
+        Exit Function
+    End If
+    ' *Byte などはポインタ再解釈。Byte の 255 マスクを掛けない
+    If sawStar <> 0 Then mask = 0
+    ast = p->ast
+    n = AstAddNode(ast, AST_CAST)
+    If n < 0 Then
+        ParseApplyAs = -1
+        Exit Function
+    End If
+    nodes = ast->nodes
+    nodes[n].left = e
+    nodes[n].num = mask
+    ParseApplyAs = n
+End Function

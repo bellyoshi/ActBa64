@@ -1,0 +1,306 @@
+' AstLowerDecl - 宣言の登録と関数の入口
+
+Function AstToIrDeclByRefBits(nodes As *AstNode, stmt As Long) As Long
+    Dim param As Long
+    Dim byRefBits As Long
+    Dim bit As Long
+    byRefBits = 0
+    bit = 1
+    param = nodes[stmt].left
+    While param >= 0
+        If nodes[param].num <> 0 Then
+            byRefBits = byRefBits + bit
+        End If
+        bit = bit * 2
+        param = nodes[param].nxt
+    Wend
+    AstToIrDeclByRefBits = byRefBits
+End Function
+
+Function AstToIrRegDecls(ctx As *LowerCtx, prog As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim stmt As Long
+    Dim nm(63) As Byte
+    Dim apiBuf(63) As Byte
+    Dim libBuf(63) As Byte
+    Dim dllKind As Long
+    Dim byRefBits As Long
+
+    AstToIrRegDecls = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_DECLARE Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            libBuf[0] = 0
+            apiBuf[0] = 0
+            If nodes[stmt].right >= 0 Then
+                AstCopyStr(ast, nodes[stmt].right, VarPtr(libBuf))
+            End If
+            If nodes[stmt].extra >= 0 Then
+                AstCopyStr(ast, nodes[stmt].extra, VarPtr(apiBuf))
+            End If
+            If apiBuf[0] = 0 Then
+                AstCopyStr(ast, stmt, VarPtr(apiBuf))
+            End If
+            dllKind = LowDllKindFromLib(VarPtr(libBuf))
+            If dllKind = 0 Then
+                Print "error: unknown Declare Lib '" + MakeStr(VarPtr(libBuf)) + "' for '" + MakeStr(VarPtr(nm)) + "'"
+                Exit Function
+            End If
+            byRefBits = AstToIrDeclByRefBits(nodes, stmt)
+            If LowAddDecl(ctx, VarPtr(nm), VarPtr(apiBuf), dllKind, byRefBits) = 0 Then Exit Function
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+    AstToIrRegDecls = 1
+End Function
+
+Function AstToIrRegEnum(ctx As *LowerCtx, enumIdx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim mem As Long
+    Dim nm(63) As Byte
+    Dim v As Long
+    Dim last As Long
+    Dim hasLast As Long
+
+    AstToIrRegEnum = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    mem = nodes[enumIdx].left
+    last = 0
+    hasLast = 0
+    While mem >= 0
+        If nodes[mem].kind <> AST_ENUMMEM Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If nodes[mem].left >= 0 Then
+            v = LowBoundVal(ctx, nodes[mem].left)
+            If v < 0 Then
+                AstCopyStr(ast, mem, VarPtr(nm))
+                Print "error: invalid enum value for '" + MakeStr(VarPtr(nm)) + "'"
+                ctx->err = 1
+                Exit Function
+            End If
+        Else
+            If hasLast = 0 Then
+                v = 1
+            Else
+                v = last + 1
+            End If
+        End If
+        AstCopyStr(ast, mem, VarPtr(nm))
+        If LowAddConst(ctx, VarPtr(nm), v) = 0 Then Exit Function
+        last = v
+        hasLast = 1
+        mem = nodes[mem].nxt
+    Wend
+    AstToIrRegEnum = 1
+End Function
+
+Function AstToIrRegConsts(ctx As *LowerCtx, prog As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim stmt As Long
+    Dim nm(63) As Byte
+    Dim sConst(255) As Byte
+
+    AstToIrRegConsts = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowAddBuiltinConsts(ctx)
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_CONST Then
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            If nodes[stmt].extra <> 0 Then
+                sConst[0] = 0
+                If nodes[stmt].left >= 0 Then
+                    AstCopyStr(ast, nodes[stmt].left, VarPtr(sConst))
+                End If
+                If LowAddStrConst(ctx, VarPtr(nm), VarPtr(sConst)) = 0 Then Exit Function
+            Else
+                If LowAddConst(ctx, VarPtr(nm), nodes[stmt].num) = 0 Then Exit Function
+            End If
+        ElseIf nodes[stmt].kind = AST_ENUM Then
+            If AstToIrRegEnum(ctx, stmt) = 0 Then Exit Function
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+    AstToIrRegConsts = 1
+End Function
+
+Function AstToIrRegFuncs(ctx As *LowerCtx, prog As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim stmt As Long
+    Dim param As Long
+    Dim nm(63) As Byte
+    Dim labFn As Long
+    Dim byRefBits As Long
+    Dim bit As Long
+
+    AstToIrRegFuncs = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    stmt = nodes[prog].left
+    While stmt >= 0
+        If nodes[stmt].kind = AST_FUNC Then
+            labFn = LowNewLab(ctx)
+            AstCopyStr(ast, stmt, VarPtr(nm))
+            byRefBits = 0
+            bit = 1
+            param = nodes[stmt].left
+            While param >= 0
+                If nodes[param].num <> 0 Then
+                    byRefBits = byRefBits + bit
+                End If
+                bit = bit * 2
+                param = nodes[param].nxt
+            Wend
+            If LowAddFunc(ctx, VarPtr(nm), labFn, byRefBits) = 0 Then Exit Function
+            ' extra は Parser が書いた戻り型のまま残す（lab は funcLabs）。
+            ' extra を lab で上書きすると TY_STRING/TY_DOUBLE と衝突し、
+            ' String 戻りが Double 変換されたり GC ルートから外れる。
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+    AstToIrRegFuncs = 1
+End Function
+
+Function AstToIrCaptureParams(ctx As *LowerCtx, stmt As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim param As Long
+    Dim offs As *Long
+    Dim pi As Long
+    Dim j As Long
+
+    list = ctx->list
+    ast = ctx->ast
+    nodes = ast->nodes
+    offs = ctx->offs
+    pi = 0
+    param = nodes[stmt].left
+    While param >= 0
+        If TyIs32() <> 0 Then
+            offs[pi] = 8 + pi * 4
+        ElseIf pi = 0 Then
+            IrEmit(list, OP_STORE_LOCAL_ECX, offs[pi], 0)
+        ElseIf pi = 1 Then
+            IrEmit(list, OP_STORE_LOCAL_EDX, offs[pi], 0)
+        ElseIf pi = 2 Then
+            IrEmit(list, OP_STORE_LOCAL_R8, offs[pi], 0)
+        ElseIf pi = 3 Then
+            IrEmit(list, OP_STORE_LOCAL_R9, offs[pi], 0)
+        Else
+            ' stack arg already at [rbp+0x30+(pi-4)*8]
+            ' LowAddSym が付けた precise root を実オフセットへ付け替える
+            LowRetargetFnPreciseRoot(offs[pi], 48 + (pi - 4) * 8)
+            offs[pi] = 48 + (pi - 4) * 8
+        End If
+        ' Long 引数をここで ZX してはいけない。BytePtr / HWND / VoidPtr
+        ' は ParseEatLongAlias で TY_LONG になっており、ヒープの StrPtr
+        ' を 32bit に切ると D3DCompile 等が AV する。添字は LowAddr 側で ZX。
+        pi = pi + 1
+        param = nodes[param].nxt
+    Wend
+    ' 非引数ローカル（戻り値スロット含む）を 0 初期化。
+    ' String を未初期化のまま StoreString→StrFree するとスタックゴミを
+    ' HeapFree して AV するため必須。
+    j = pi
+    While j < ctx->symCount
+        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+        IrEmit(list, OP_STORE_LOCAL, offs[j], 0)
+        j = j + 1
+    Wend
+    AstToIrCaptureParams = pi
+End Function
+
+Function AstToIrBindFuncSyms(ctx As *LowerCtx, stmt As Long, retBuf As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim param As Long
+    Dim nm(63) As Byte
+    Dim nFlags As Long
+    Dim ty As Long
+    Dim nbytes As Long
+    Dim ti As Long
+    Dim isByRef As Long
+
+    AstToIrBindFuncSyms = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    nFlags = nodes[stmt].num
+    If nFlags >= 256 Then
+        retBuf[0] = 0
+    Else
+        AstCopyStr(ast, stmt, retBuf)
+    End If
+    param = nodes[stmt].left
+    While param >= 0
+        AstCopyStr(ast, param, VarPtr(nm))
+        isByRef = nodes[param].num
+        ty = nodes[param].extra
+        If ty < 0 Then ty = TY_LONG
+        ti = nodes[param].right
+        nbytes = TyPtrSize()
+        If LowAddSym(ctx, VarPtr(nm), ty, nbytes, ti, isByRef) < 0 Then Exit Function
+        param = nodes[param].nxt
+    Wend
+    If retBuf[0] <> 0 Then
+        ty = nodes[stmt].extra
+        If ty <> TY_STRING And ty <> TY_DOUBLE And ty <> TY_SINGLE Then
+            If ty <> TY_PTR_BYTE And ty <> TY_PTR_LONG And ty <> TY_PTR_UDT Then
+                ty = TY_LONG
+            End If
+        End If
+        If LowAddSym(ctx, retBuf, ty, 8, -1, 0) < 0 Then Exit Function
+    End If
+    ' locals: all Dims in body including nested If/Select/loops
+    If LowCollectDimsInList(ctx, nodes[stmt].right, 0) = 0 Then Exit Function
+    AstToIrBindFuncSyms = 1
+End Function
+
+Function AstToIrEmitFuncSetup(ctx As *LowerCtx, stmt As Long, retBuf As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim nm(63) As Byte
+    Dim labFn As Long
+    Dim frame As Long
+
+    AstToIrEmitFuncSetup = -1
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    ctx->symCount = 0
+    ctx->frameUsed = 0
+    ctx->inFunc = 1
+    g_doEndLab = -1
+    g_doTopLab = -1
+    g_whileEndLab = -1
+    g_whileTopLab = -1
+    g_forEndLab = -1
+    g_forContLab = -1
+    g_funcEndLab = -1
+    LowResetFnPreciseRoots()
+    If AstToIrBindFuncSyms(ctx, stmt, retBuf) = 0 Then Exit Function
+    frame = LowAlign16(ctx->frameUsed + &H28 + &H2000)
+    If frame < &H28 Then frame = &H28
+    g_funcEndLab = LowNewLab(ctx)
+    AstCopyStr(ast, stmt, VarPtr(nm))
+    labFn = LowFindFunc(ctx, VarPtr(nm))
+    If labFn < 0 Then
+        Print "error: missing function label '" + MakeStr(VarPtr(nm)) + "'"
+        Exit Function
+    End If
+    IrEmit(list, OP_LABEL, labFn, 0)
+    IrEmit(list, OP_ENTER, frame, 0)
+    AstToIrEmitFuncSetup = AstToIrCaptureParams(ctx, stmt)
+End Function

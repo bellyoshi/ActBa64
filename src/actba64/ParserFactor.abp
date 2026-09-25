@@ -1,0 +1,391 @@
+' ParserFactor - 因子
+
+Function ParseFactorBiStr(p As *Parser) As Long
+    Dim k(15) As Byte
+    Dim bi As Long
+
+    ParseFactorBiStr = 0
+    bi = 0
+    lstrcpy(VarPtr(k), "str$")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_STR
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "makestr")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_MAKESTR
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "chr$")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_CHR
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "chr")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_CHR
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "right$")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_RIGHT
+    End If
+    ParseFactorBiStr = bi
+End Function
+
+Function ParseFactorBiMem(p As *Parser) As Long
+    Dim k(15) As Byte
+    Dim bi As Long
+
+    ParseFactorBiMem = 0
+    bi = 0
+    lstrcpy(VarPtr(k), "memcpy")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_MEMCPY
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "fillmemory")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_FILLMEMORY
+    End If
+    ParseFactorBiMem = bi
+End Function
+
+Function ParseFactorBiWord(p As *Parser) As Long
+    Dim k(15) As Byte
+    Dim bi As Long
+
+    ParseFactorBiWord = 0
+    bi = 0
+    lstrcpy(VarPtr(k), "loword")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_LOWORD
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "hiword")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_HIWORD
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "lobyte")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_LOBYTE
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "hibyte")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_HIBYTE
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "makelong")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_MAKELONG
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "makeword")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_MAKEWORD
+    End If
+    ParseFactorBiWord = bi
+End Function
+
+Function ParseFactorBiMisc(p As *Parser) As Long
+    Dim k(15) As Byte
+    Dim bi As Long
+
+    ParseFactorBiMisc = 0
+    bi = 0
+    lstrcpy(VarPtr(k), "rgb")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BIK_RGB
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "elm")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_ELM
+    End If
+    If bi = 0 Then
+        lstrcpy(VarPtr(k), "makeintresource")
+        If ParseIdentIs(p, VarPtr(k)) <> 0 Then bi = BI_MAKEINTRESOURCE
+    End If
+    ParseFactorBiMisc = bi
+End Function
+
+Function ParseFactorBuiltinB(p As *Parser) As Long
+    Dim bi As Long
+
+    ParseFactorBuiltinB = 0
+    bi = ParseFactorBiStr(p)
+    If bi = 0 Then bi = ParseFactorBiMem(p)
+    If bi = 0 Then bi = ParseFactorBiWord(p)
+    If bi = 0 Then bi = ParseFactorBiMisc(p)
+    ParseFactorBuiltinB = bi
+End Function
+
+Function ParseFactorSizeof(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim name(63) As Byte
+    Dim arg0 As Long
+
+    ParseFactorSizeof = -1
+    ast = p->ast
+    p->pos = p->pos + 1
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_VAR)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, VarPtr(name))
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    arg0 = n
+    n = AstAddNode(ast, AST_BUILTIN)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = BI_SIZEOF
+    nodes[n].left = arg0
+    ParseFactorSizeof = n
+End Function
+
+Function ParseFactorAddressOf(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim name(63) As Byte
+
+    ParseFactorAddressOf = -1
+    ast = p->ast
+    p->pos = p->pos + 1
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_BUILTIN)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, VarPtr(name))
+    nodes = ast->nodes
+    nodes[n].num = BI_ADDRESSOF
+    ParseFactorAddressOf = n
+End Function
+
+Function ParseVarPtrMem(p As *Parser, ast As *Ast, ByRef arg0 As Long, numFlag As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim name(63) As Byte
+
+    ParseVarPtrMem = 0
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_MEMBER)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, VarPtr(name))
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].num = numFlag
+    arg0 = n
+    ParseVarPtrMem = 1
+End Function
+
+Function ParseVarPtrIndex(p As *Parser, ast As *Ast, ByRef arg0 As Long, numFlag As Long, closeKind As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim e As Long
+
+    ParseVarPtrIndex = 0
+    p->pos = p->pos + 1
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    If ParseExpect(p, closeKind) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_INDEX)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].right = e
+    nodes[n].num = numFlag
+    arg0 = n
+    ParseVarPtrIndex = 1
+End Function
+
+Function ParseFactorVarPtr(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim name(63) As Byte
+    Dim arg0 As Long
+
+    ParseFactorVarPtr = -1
+    ast = p->ast
+    p->pos = p->pos + 1
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_VAR)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, VarPtr(name))
+    arg0 = n
+    Do
+        If ParseTokKind(p) = TK_DOT Then
+            If ParseVarPtrMem(p, ast, arg0, 0) = 0 Then Exit Function
+        ElseIf ParseTokKind(p) = TK_ARROW Then
+            If ParseVarPtrMem(p, ast, arg0, 1) = 0 Then Exit Function
+        ElseIf ParseTokKind(p) = TK_LPAREN Then
+            If ParseVarPtrIndex(p, ast, arg0, 0, TK_RPAREN) = 0 Then Exit Function
+        ElseIf ParseTokKind(p) = TK_LBRACK Then
+            If ParseVarPtrIndex(p, ast, arg0, 1, TK_RBRACK) = 0 Then Exit Function
+        Else
+            Exit Do
+        End If
+    Loop
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_BUILTIN)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = BI_VARPTR
+    nodes[n].left = arg0
+    ParseFactorVarPtr = n
+End Function
+
+Function ParseFactorBuiltinCall(p As *Parser, bi As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim arg0 As Long
+    Dim arg1 As Long
+    Dim arg2 As Long
+
+    ParseFactorBuiltinCall = -1
+    ast = p->ast
+    p->pos = p->pos + 1
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    arg0 = ParseExpr(p)
+    If arg0 < 0 Then Exit Function
+    arg1 = -1
+    arg2 = -1
+    If ParseTokKind(p) = TK_COMMA Then
+        p->pos = p->pos + 1
+        arg1 = ParseExpr(p)
+        If arg1 < 0 Then Exit Function
+        If ParseTokKind(p) = TK_COMMA Then
+            p->pos = p->pos + 1
+            arg2 = ParseExpr(p)
+            If arg2 < 0 Then Exit Function
+        End If
+    End If
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_BUILTIN)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = bi
+    nodes[n].left = arg0
+    nodes[n].right = arg1
+    nodes[n].extra = arg2
+    ParseFactorBuiltinCall = n
+End Function
+
+Function ParseFactorIdentIndex(p As *Parser, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim e As Long
+    Dim arg0 As Long
+
+    ParseFactorIdentIndex = -1
+    ast = p->ast
+    p->pos = p->pos + 1
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
+    arg0 = AstAddNode(ast, AST_VAR)
+    If arg0 < 0 Then Exit Function
+    AstSetStr(ast, arg0, name)
+    n = AstAddNode(ast, AST_INDEX)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].right = e
+    nodes[n].num = 1
+    ParseFactorIdentIndex = ParsePostfixMemIdx(p, n)
+End Function
+
+Function ParseFactorIdentCall(p As *Parser, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim arg0 As Long
+    Dim nArgs As Long
+
+    ParseFactorIdentCall = -1
+    ast = p->ast
+    p->pos = p->pos + 1
+    If ParseArgList(p, arg0, nArgs) = 0 Then Exit Function
+    n = AstAddNode(ast, AST_CALL)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, name)
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].right = -1
+    nodes[n].extra = -1
+    nodes[n].num = nArgs
+    ParseFactorIdentCall = n
+End Function
+
+Function ParseFactorIdent(p As *Parser) As Long
+    Dim n As Long
+    Dim name(63) As Byte
+    Dim bi As Long
+    Dim idLine As Long
+
+    ParseFactorIdent = -1
+    bi = ParseFactorBuiltinA(p)
+    If bi = 0 Then bi = ParseFactorBuiltinB(p)
+    If bi = BI_SIZEOF Then
+        ParseFactorIdent = ParseFactorSizeof(p)
+        Exit Function
+    End If
+    If bi = BI_ADDRESSOF Then
+        ParseFactorIdent = ParseFactorAddressOf(p)
+        Exit Function
+    End If
+    If bi = BI_VARPTR Then
+        ParseFactorIdent = ParseFactorVarPtr(p)
+        Exit Function
+    End If
+    If bi <> 0 Then
+        ParseFactorIdent = ParseFactorBuiltinCall(p, bi)
+        Exit Function
+    End If
+    idLine = ParseTokLine(p)
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseTokKind(p) = TK_LBRACK Then
+        n = ParseFactorIdentIndex(p, VarPtr(name))
+        If n >= 0 Then AstSetSrcLine(p->ast, n, idLine)
+        ParseFactorIdent = n
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_LPAREN Then
+        n = ParseFactorIdentCall(p, VarPtr(name))
+        If n >= 0 Then AstSetSrcLine(p->ast, n, idLine)
+        ParseFactorIdent = n
+        Exit Function
+    End If
+    n = ParseClassIdentExpr(p, VarPtr(name))
+    If n < 0 Then Exit Function
+    AstSetSrcLine(p->ast, n, idLine)
+    n = ParsePostfixMemIdx(p, n)
+    If n < 0 Then Exit Function
+    ParseFactorIdent = ParseMemberCall(p, n)
+End Function
+
+' ---- expressions ----
+
+Function ParseFactor(p As *Parser) As Long
+    ParseFactor = -1
+    If ParseTokKind(p) = TK_NUMBER Then
+        ParseFactor = ParseFactorNum(p)
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_FLOAT Then
+        ParseFactor = ParseFactorFloat(p)
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_STRING Then
+        ParseFactor = ParseFactorString(p)
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_LPAREN Then
+        ParseFactor = ParseFactorParen(p)
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_DOT Then
+        If p->withBase < 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        ParseFactor = ParseWithLval(p)
+        Exit Function
+    End If
+    If ParseTokKind(p) = TK_IDENT Then
+        ParseFactor = ParseFactorIdent(p)
+        Exit Function
+    End If
+    p->err = 1
+End Function

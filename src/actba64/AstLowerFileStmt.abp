@@ -1,0 +1,247 @@
+' AstLowerFileStmt - Field、Get、Put、Write
+
+' ===================================================
+'  AstLowerStmtCtrl - Field/Get/Put / loops / Heavy / reg
+' ===================================================
+
+Function LowEmitToStringRax(ctx As *LowerCtx, exprIdx As Long) As Long
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim ety As Long
+
+    LowEmitToStringRax = 0
+    If LowIsStringExpr(ctx, exprIdx) <> 0 Then
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+        LowEmitToStringRax = 1
+        Exit Function
+    End If
+    ety = LowExprType(ctx, exprIdx)
+    If ety = TY_DOUBLE And TyIs32() = 0 Then
+        lstrcpy(VarPtr(name), "StrD$")
+        lab = LowFindFunc(ctx, VarPtr(name))
+        If lab < 0 Then
+            Print "error: missing 'StrD$'"
+            ctx->err = 1
+            Exit Function
+        End If
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
+    Else
+        lab = LowEnsureRtStr(ctx)
+        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+        LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    End If
+    LowEmitToStringRax = 1
+End Function
+
+Function LowStmtField(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim list As *IrList
+
+    LowStmtField = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    lstrcpy(VarPtr(name), "BaFileField")
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        Print "error: missing 'BaFileField'"
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    LowEmitCallLab2(list, lab)
+    LowStmtField = 1
+End Function
+
+Function LowStmtGetCall(ctx As *LowerCtx, idx As Long, lab As Long, vOff As Long, vByRef As Long, vGlob As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    LowStmtGetCall = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    LowEmitCallLab2(list, lab)
+    If vByRef <> 0 Then
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        LowEmitLoadOff(list, vOff, vGlob)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+        IrEmit(list, OP_STORE_QWORD_RAX_RCX, 0, 0)
+    Else
+        LowEmitStoreString(ctx, vOff, vGlob)
+    End If
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtGetCall = 1
+End Function
+
+Function LowStmtGet(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim list As *IrList
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    Dim varIdx As Long
+
+    LowStmtGet = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    lstrcpy(VarPtr(name), "BaFileGet$")
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        Print "error: missing 'BaFileGet$'"
+        ctx->err = 1
+        Exit Function
+    End If
+    varIdx = nodes[idx].extra
+    If varIdx < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    AstCopyStr(ast, varIdx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If vTy <> TY_STRING Then
+        Print "error: Get # needs String variable"
+        ctx->err = 1
+        Exit Function
+    End If
+    LowStmtGet = LowStmtGetCall(ctx, idx, lab, vOff, vByRef, vGlob)
+End Function
+
+Function LowStmtPut(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim lab As Long
+    Dim list As *IrList
+
+    LowStmtPut = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    lstrcpy(VarPtr(name), "BaFilePut")
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        Print "error: missing 'BaFilePut'"
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowEmitToStringRax(ctx, nodes[idx].extra) = 0 Then Exit Function
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_POP_RDX, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+    Else
+        IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+        IrEmit(list, OP_POP_RAX, 0, 0)
+        IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+        IrEmit(list, OP_POP_RCX, 0, 0)
+    End If
+    LowEmitCallLab3(list, lab)
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtPut = 1
+End Function
+
+Function LowStmtWriteItem(ctx As *LowerCtx, idx As Long, cur As Long, labItem As Long, labComma As Long, ByRef first As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    LowStmtWriteItem = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    If first = 0 Then
+        If nodes[idx].left < 0 Then
+            IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+        Else
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        End If
+        LowEmitCall1Rax(list, 0, 0, 0, labComma)
+    End If
+    first = 0
+    If LowEmitToStringRax(ctx, nodes[cur].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If nodes[idx].left < 0 Then
+        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+    Else
+        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    End If
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    LowEmitCallLab2(list, labItem)
+    LowStmtWriteItem = 1
+End Function
+
+Function LowStmtWrite(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(2047) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim labItem As Long
+    Dim labComma As Long
+    Dim labNl As Long
+    Dim list As *IrList
+    Dim cur As Long
+    Dim first As Long
+
+    LowStmtWrite = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    lstrcpy(VarPtr(name), "BaFileWriteItem")
+    labItem = LowFindFunc(ctx, VarPtr(name))
+    lstrcpy(VarPtr(name), "BaFileWriteComma")
+    labComma = LowFindFunc(ctx, VarPtr(name))
+    lstrcpy(VarPtr(name), "BaFileWriteNl")
+    labNl = LowFindFunc(ctx, VarPtr(name))
+    If labItem < 0 Or labComma < 0 Or labNl < 0 Then
+        Print "error: missing BaFileWrite*"
+        ctx->err = 1
+        Exit Function
+    End If
+
+    first = 1
+    cur = nodes[idx].right
+    While cur >= 0
+        If LowStmtWriteItem(ctx, idx, cur, labItem, labComma, first) = 0 Then Exit Function
+        cur = nodes[cur].nxt
+    Wend
+    If nodes[idx].num = 0 Then
+        If nodes[idx].left < 0 Then
+            IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+        Else
+            If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+        End If
+        LowEmitCall1Rax(list, 0, 0, 0, labNl)
+    End If
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtWrite = 1
+End Function

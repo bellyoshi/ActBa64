@@ -1,0 +1,150 @@
+' ParserTypeEnum - Type と Enum
+
+Function ParseTypeAlign(p As *Parser, types As *TypeTable, ti As Long) As Long
+    Dim kAlign(15) As Byte
+    Dim alignN As Long
+
+    ParseTypeAlign = 0
+    lstrcpy(VarPtr(kAlign), "align")
+    If ParseIdentIs(p, VarPtr(kAlign)) <> 0 Then
+        p->pos = p->pos + 1
+        If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+        If ParseTokKind(p) <> TK_NUMBER Then
+            p->err = 1
+            Exit Function
+        End If
+        alignN = ParseTokNum(p)
+        p->pos = p->pos + 1
+        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+        If TySetExplicitAlign(types, ti, alignN) = 0 Then
+            p->err = 1
+            Exit Function
+        End If
+    End If
+    ParseTypeAlign = 1
+End Function
+
+Function ParseTypeStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim name(63) As Byte
+    Dim kEnd(7) As Byte
+    Dim kType(7) As Byte
+    Dim ti As Long
+    Dim nType As Long
+
+    ParseTypeStmt = -1
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    ast = p->ast
+    types = ast->types
+    ti = TyAdd(types, VarPtr(name))
+    If ti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    If ParseTypeAlign(p, types, ti) = 0 Then Exit Function
+    lstrcpy(VarPtr(kEnd), "end")
+    lstrcpy(VarPtr(kType), "type")
+    Do
+        If ParseIdentIs(p, VarPtr(kEnd)) <> 0 Then
+            p->pos = p->pos + 1
+            If ParseIdentIs(p, VarPtr(kType)) = 0 Then
+                p->err = 1
+                Exit Function
+            End If
+            p->pos = p->pos + 1
+            Exit Do
+        End If
+        If ParseClassField(p, ti) = 0 Then Exit Function
+    Loop
+    TyFinalizeType(types, ti)
+    nType = AstAddNode(ast, AST_TYPE)
+    If nType < 0 Then Exit Function
+    AstSetStr(ast, nType, VarPtr(name))
+    ParseTypeStmt = nType
+End Function
+
+Function ParseEnumMem(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+    Dim nodes As *AstNode
+    Dim mname(63) As Byte
+    Dim nMem As Long
+    Dim e As Long
+
+    ParseEnumMem = 0
+    If ParseCopyIdent(p, VarPtr(mname)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    e = -1
+    If ParseTokKind(p) = TK_EQ Then
+        p->pos = p->pos + 1
+        e = ParseExpr(p)
+        If e < 0 Or p->err <> 0 Then Exit Function
+    End If
+    nMem = AstAddNode(ast, AST_ENUMMEM)
+    If nMem < 0 Then Exit Function
+    AstSetStr(ast, nMem, VarPtr(mname))
+    nodes = ast->nodes
+    nodes[nMem].left = e
+    nodes[nMem].right = -1
+    nodes[nMem].nxt = -1
+    If nFirst < 0 Then
+        nFirst = nMem
+    Else
+        nodes[nPrev].nxt = nMem
+    End If
+    nPrev = nMem
+    ParseEnumMem = 1
+End Function
+
+Function ParseEnumStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim kEnd(7) As Byte
+    Dim kEnum(7) As Byte
+    Dim ti As Long
+    Dim sizes As *Long
+    Dim nEnum As Long
+    Dim nFirst As Long
+    Dim nPrev As Long
+
+    ParseEnumStmt = -1
+    p->pos = p->pos + 1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    ast = p->ast
+    types = ast->types
+    ti = TyAdd(types, VarPtr(name))
+    If ti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    sizes = types->typeSizes
+    sizes[ti] = 4
+    TyFinalizeType(types, ti)
+    lstrcpy(VarPtr(kEnd), "end")
+    lstrcpy(VarPtr(kEnum), "enum")
+    nFirst = -1
+    nPrev = -1
+    Do
+        If ParseIdentIs(p, VarPtr(kEnd)) <> 0 Then
+            p->pos = p->pos + 1
+            If ParseIdentIs(p, VarPtr(kEnum)) = 0 Then
+                p->err = 1
+                Exit Function
+            End If
+            p->pos = p->pos + 1
+            Exit Do
+        End If
+        If ParseEnumMem(p, ast, nFirst, nPrev) = 0 Then Exit Function
+    Loop
+    nEnum = AstAddNode(ast, AST_ENUM)
+    If nEnum < 0 Then Exit Function
+    AstSetStr(ast, nEnum, VarPtr(name))
+    nodes = ast->nodes
+    nodes[nEnum].left = nFirst
+    nodes[nEnum].num = ti
+    ParseEnumStmt = nEnum
+End Function

@@ -1,0 +1,175 @@
+' LexerOp - 演算子とトークン走査
+
+Sub LexTwoCharOp(lx As *Lexer, c As Long)
+    Dim src As *Byte
+    Dim n2 As Long
+    src = lx->src
+    n2 = src[lx->pos + 1]
+    If c = CH_MINUS Then
+        If n2 = CH_GREATER Then
+            LexPush(lx, TK_ARROW)
+            lx->pos = lx->pos + 2
+        Else
+            LexPush(lx, TK_MINUS)
+            lx->pos = lx->pos + 1
+        End If
+    ElseIf c = CH_LESS Then
+        If n2 = CH_EQ Then
+            LexPush(lx, TK_LE)
+            lx->pos = lx->pos + 2
+        ElseIf n2 = CH_GREATER Then
+            LexPush(lx, TK_NE)
+            lx->pos = lx->pos + 2
+        ElseIf n2 = CH_LESS Then
+            LexPush(lx, TK_SHL)
+            lx->pos = lx->pos + 2
+        Else
+            LexPush(lx, TK_LT)
+            lx->pos = lx->pos + 1
+        End If
+    ElseIf c = CH_GREATER Then
+        If n2 = CH_EQ Then
+            LexPush(lx, TK_GE)
+            lx->pos = lx->pos + 2
+        ElseIf n2 = CH_LESS Then
+            ' >< は <> と同じ（等しくない）
+            LexPush(lx, TK_NE)
+            lx->pos = lx->pos + 2
+        ElseIf n2 = CH_GREATER Then
+            LexPush(lx, TK_SHR)
+            lx->pos = lx->pos + 2
+        Else
+            LexPush(lx, TK_GT)
+            lx->pos = lx->pos + 1
+        End If
+    End If
+End Sub
+
+Sub LexSimpleOp(lx As *Lexer, kind As Long)
+    LexPush(lx, kind)
+    lx->pos = lx->pos + 1
+End Sub
+
+' 単一文字で確定する演算子。該当しなければ -1
+Function LexSimpleOpKind(c As Long) As Long
+    LexSimpleOpKind = -1
+    If c = CH_LPAREN Then
+        LexSimpleOpKind = TK_LPAREN
+    ElseIf c = CH_RPAREN Then
+        LexSimpleOpKind = TK_RPAREN
+    ElseIf c = CH_SEMI Then
+        LexSimpleOpKind = TK_SEMI
+    ElseIf c = CH_COLON Then
+        LexSimpleOpKind = TK_COLON
+    ElseIf c = CH_COMMA Then
+        LexSimpleOpKind = TK_COMMA
+    ElseIf c = CH_LBRACK Then
+        LexSimpleOpKind = TK_LBRACK
+    ElseIf c = CH_RBRACK Then
+        LexSimpleOpKind = TK_RBRACK
+    ElseIf c = CH_DOT Then
+        LexSimpleOpKind = TK_DOT
+    ElseIf c = CH_PLUS Then
+        LexSimpleOpKind = TK_PLUS
+    ElseIf c = CH_STAR Then
+        LexSimpleOpKind = TK_STAR
+    ElseIf c = CH_CARET Then
+        LexSimpleOpKind = TK_CARET
+    ElseIf c = CH_TILDE Then
+        LexSimpleOpKind = TK_TILDE
+    ElseIf c = CH_EQ Then
+        LexSimpleOpKind = TK_EQ
+    End If
+End Function
+
+' 改行を消費したら 1
+Function LexAdvanceNewline(lx As *Lexer, c As Long) As Long
+    Dim src As *Byte
+    LexAdvanceNewline = 0
+    src = lx->src
+    If c = CH_CR Then
+        lx->srcLine = lx->srcLine + 1
+        lx->pos = lx->pos + 1
+        If src[lx->pos] = CH_NL Then
+            lx->pos = lx->pos + 1
+        End If
+        LexAdvanceNewline = 1
+    ElseIf c = CH_NL Then
+        lx->srcLine = lx->srcLine + 1
+        lx->pos = lx->pos + 1
+        LexAdvanceNewline = 1
+    End If
+End Function
+
+Function LexIdentOrExString(lx As *Lexer) As Long
+    LexIdentOrExString = 0
+    If LexIdent(lx) = 0 Then Exit Function
+    If LexTryExStringAfterIdent(lx) = 0 Then
+        If lx->err <> 0 Then Exit Function
+    End If
+    LexIdentOrExString = 1
+End Function
+
+Function LexTokenOne(lx As *Lexer, c As Long) As Long
+    Dim kind As Long
+    LexTokenOne = 1
+    If IsHSpace(c) <> 0 Then
+        lx->pos = lx->pos + 1
+    ElseIf c = CH_SQUOTE Then
+        LexSkipEol(lx)
+    ElseIf c = CH_SLASH Then
+        LexTokenOne = LexSkipComment(lx)
+    ElseIf c = CH_HASH Then
+        If LexHashIsDirective(lx) <> 0 Then
+            LexSkipEol(lx)
+        Else
+            LexSimpleOp(lx, TK_HASH)
+        End If
+    ElseIf c = CH_AMP Then
+        LexTokenOne = LexHexLit(lx)
+    ElseIf c = CH_BSLASH Then
+        LexSimpleOp(lx, TK_BACKSLASH)
+    ElseIf IsDigit(c) <> 0 Then
+        LexTokenOne = LexNumber(lx)
+    ElseIf c = CH_UNDER Then
+        If LexLineContHere(lx) = 0 Then
+            LexTokenOne = LexIdent(lx)
+        End If
+    ElseIf IsIdentChar(c) <> 0 Then
+        LexTokenOne = LexIdentOrExString(lx)
+    ElseIf c = CH_DQUOTE Then
+        LexTokenOne = LexString(lx)
+    ElseIf c = CH_MINUS Or c = CH_LESS Or c = CH_GREATER Then
+        LexTwoCharOp(lx, c)
+    Else
+        kind = LexSimpleOpKind(c)
+        If kind < 0 Then
+            lx->err = 1
+            LexTokenOne = 0
+        Else
+            LexSimpleOp(lx, kind)
+        End If
+    End If
+End Function
+
+Function LexTokenize(lx As *Lexer, src As *Byte) As Long
+    Dim c As Long
+
+    LexTokenize = 0
+    lx->src = src
+    lx->pos = 0
+    lx->count = 0
+    lx->err = 0
+    lx->srcLine = 1
+
+    While src[lx->pos] <> CH_NUL
+        c = src[lx->pos]
+        If LexAdvanceNewline(lx, c) = 0 Then
+            If LexTokenOne(lx, c) = 0 Then Exit Function
+        End If
+    Wend
+
+    LexPush(lx, TK_EOF)
+    If lx->err <> 0 Then Exit Function
+    LexTokenize = 1
+End Function

@@ -1,0 +1,171 @@
+' ParserWith - With とクラスメンバ式
+
+' クラスメソッド内の識別子: 戻り値名 / メンバ変数 → Me.field / 通常 VAR
+Function ParseClassIdentExpr(p As *Parser, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim types As *TypeTable
+    Dim n As Long
+    Dim nMe As Long
+    Dim foff As Long
+    Dim fsz As Long
+    Dim fcnt As Long
+    Dim kMe(7) As Byte
+
+    ParseClassIdentExpr = -1
+    ast = p->ast
+    types = ast->types
+    If g_clsMethShort[0] <> 0 Then
+        If TyNameEq(name, VarPtr(g_clsMethShort)) <> 0 Then
+            n = AstAddNode(ast, AST_VAR)
+            If n < 0 Then Exit Function
+            AstSetStr(ast, n, VarPtr(g_clsMethMangled))
+            ParseClassIdentExpr = n
+            Exit Function
+        End If
+    End If
+    If p->classTi >= 0 Then
+        If TyFindField(types, p->classTi, name, foff, fsz, fcnt) <> 0 Then
+            lstrcpy(VarPtr(kMe), "Me")
+            nMe = AstAddNode(ast, AST_VAR)
+            If nMe < 0 Then Exit Function
+            AstSetStr(ast, nMe, VarPtr(kMe))
+            n = AstAddNode(ast, AST_MEMBER)
+            If n < 0 Then Exit Function
+            AstSetStr(ast, n, name)
+            nodes = ast->nodes
+            nodes[n].left = nMe
+            nodes[n].num = 1
+            ParseClassIdentExpr = n
+            Exit Function
+        End If
+    End If
+    n = AstAddNode(ast, AST_VAR)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, name)
+    ParseClassIdentExpr = n
+End Function
+
+Function ParseWithChain(p As *Parser, ast As *Ast, ByRef cur As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim e As Long
+    Dim arg0 As Long
+
+    ParseWithChain = 0
+    Do
+        If ParseTokKind(p) = TK_DOT Then
+            p->pos = p->pos + 1
+            If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+            arg0 = AstAddNode(ast, AST_MEMBER)
+            If arg0 < 0 Then Exit Function
+            AstSetStr(ast, arg0, VarPtr(name))
+            nodes = ast->nodes
+            nodes[arg0].left = cur
+            nodes[arg0].num = 0
+            cur = arg0
+        ElseIf ParseTokKind(p) = TK_LBRACK Then
+            p->pos = p->pos + 1
+            e = ParseExpr(p)
+            If e < 0 Then Exit Function
+            If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
+            arg0 = AstAddNode(ast, AST_INDEX)
+            If arg0 < 0 Then Exit Function
+            nodes = ast->nodes
+            nodes[arg0].left = cur
+            nodes[arg0].right = e
+            nodes[arg0].num = 1
+            cur = arg0
+        Else
+            Exit Do
+        End If
+    Loop
+    ParseWithChain = 1
+End Function
+
+Function ParseWithCallArgs(p As *Parser, ast As *Ast, ByRef arg0 As Long, ByRef nArgs As Long) As Long
+    Dim nodes As *AstNode
+    Dim e As Long
+    Dim arg1 As Long
+    Dim nPrev As Long
+
+    ParseWithCallArgs = 0
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If ParseTokKind(p) <> TK_RPAREN Then
+        Do
+            e = ParseArgExpr(p)
+            If e < 0 Then Exit Function
+            arg1 = AstAddNode(ast, AST_ARG)
+            If arg1 < 0 Then Exit Function
+            nodes = ast->nodes
+            nodes[arg1].left = e
+            nodes[arg1].num = g_parseArgByVal
+            If arg0 < 0 Then
+                arg0 = arg1
+            Else
+                nodes[nPrev].nxt = arg1
+            End If
+            nPrev = arg1
+            nArgs = nArgs + 1
+            If ParseTokKind(p) <> TK_COMMA Then Exit Do
+            p->pos = p->pos + 1
+        Loop
+    End If
+    ParseWithCallArgs = 1
+End Function
+
+Function ParseWithCall(p As *Parser, ast As *Ast, ByRef cur As Long) As Long
+    Dim nodes As *AstNode
+    Dim name(63) As Byte
+    Dim arg0 As Long
+    Dim arg2 As Long
+    Dim nArgs As Long
+
+    ParseWithCall = 0
+    If ParseTokKind(p) <> TK_LPAREN Then
+        ParseWithCall = 1
+        Exit Function
+    End If
+    nodes = ast->nodes
+    If nodes[cur].kind <> AST_MEMBER Then
+        ParseWithCall = 1
+        Exit Function
+    End If
+    AstCopyStr(ast, cur, VarPtr(name))
+    arg2 = nodes[cur].left
+    p->pos = p->pos + 1
+    If ParseWithCallArgs(p, ast, arg0, nArgs) = 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    cur = AstAddNode(ast, AST_CALL)
+    If cur < 0 Then Exit Function
+    AstSetStr(ast, cur, VarPtr(name))
+    nodes = ast->nodes
+    nodes[cur].left = arg0
+    nodes[cur].right = arg2
+    nodes[cur].extra = -3
+    nodes[cur].num = nArgs
+    ParseWithCall = 1
+End Function
+
+' With ブロック内の .field / .Method(...) — g_withBase を起点にメンバ鎖を構築
+Function ParseWithLval(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim cur As Long
+
+    ParseWithLval = -1
+    If p->withBase < 0 Then
+        ParseFail(p, "'.' member access outside With block")
+        Exit Function
+    End If
+    If ParseTokKind(p) <> TK_DOT Then
+        ParseFail(p, "expected '.'")
+        Exit Function
+    End If
+    ast = p->ast
+    cur = p->withBase
+    If ParseWithChain(p, ast, cur) = 0 Then Exit Function
+    If ParseWithCall(p, ast, cur) = 0 Then Exit Function
+    ParseWithLval = cur
+End Function

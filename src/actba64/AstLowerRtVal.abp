@@ -1,0 +1,265 @@
+' AstLowerRtVal - 実行時の Val / MakeStr / StrCmp / StrFree
+
+' ===================================================
+'  AstLowerAddr - RtVal bodies / address lowering
+' ===================================================
+
+' ValDouble(s) ― 符号付き十進文字列 → rax に IEEE Double ビット列
+Sub LowEmitRtValDoubleBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labSpace As Long
+    Dim labSign As Long
+    Dim labPlus As Long
+    Dim labDigit As Long
+    Dim labDot As Long
+    Dim labFrac As Long
+    Dim labEnd As Long
+    Dim labDone As Long
+
+    If g_rtValDoubleLab < 0 Then Exit Sub
+    list = ctx->list
+    labSpace = LowNewLab(ctx)
+    labSign = LowNewLab(ctx)
+    labPlus = LowNewLab(ctx)
+    labDigit = LowNewLab(ctx)
+    labDot = LowNewLab(ctx)
+    labFrac = LowNewLab(ctx)
+    labEnd = LowNewLab(ctx)
+    labDone = LowNewLab(ctx)
+
+    ' locals: -8 ptr, -16 neg, -24 acc (double), -32 frac scale (double)
+    IrEmit(list, OP_LABEL, g_rtValDoubleLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    LowEmitCaptureArg0(list, -8)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_MOV_RAX_IMM64, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_MOV_RAX_IMM64, &H9999999A, &H3FB99999)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+
+    LowEmitRtValSkipLeading(list, labSpace, labSign)
+    LowEmitRtValParseSign(list, labSign, labPlus, labDigit)
+    LowEmitRtValDoubleParseDigits(list, labDigit, labDot)
+    LowEmitRtValDoubleFraction(list, labDot, labFrac, labEnd)
+    LowEmitRtValDoubleApplySign(list, labEnd, labDone)
+
+    IrEmit(list, OP_LABEL, labDone, 0)
+    LowEmitLeaveN(list, 1)
+End Sub
+
+' MakeStr(p) ― NUL 終端 BytePtr → 長さ付き String（複製）
+Sub LowEmitRtMakeStrBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim sApi(15) As Byte
+    Dim empty(1) As Byte
+    Dim labOk As Long
+    Dim labCopy As Long
+    Dim labNul As Long
+
+    If g_rtMakeStrLab < 0 Then Exit Sub
+    list = ctx->list
+    empty[0] = 0
+    labOk = LowNewLab(ctx)
+    labCopy = LowNewLab(ctx)
+    labNul = LowNewLab(ctx)
+
+    ' rcx = p; locals: -8 src, -16 len, -24 base, -32 dst
+    IrEmit(list, OP_LABEL, g_rtMakeStrLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    LowEmitCaptureArg0(list, -8)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JNZ, labOk, 0)
+    IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(empty))
+    LowEmitLeaveN(list, 1)
+
+    IrEmit(list, OP_LABEL, labOk, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    lstrcpy(VarPtr(sApi), "lstrlenA")
+    LowEmitCall1Rax(list, 1, IR_DLL_KERNEL32, VarPtr(sApi), 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 5, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    LowEmitCallStrHeapAlloc(ctx)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+
+    LowEmitRtMakeStrHdr(list)
+    LowEmitRtMakeStrCopy(list, labCopy, labNul)
+    LowEmitLeaveN(list, 1)
+End Sub
+
+' 長さヘッダ（最上位ビット = ヒープ印）を書き、-32 にコピー先を置く
+Sub LowEmitRtMakeStrHdr(list As *IrList)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_OR_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+End Sub
+
+Sub LowEmitRtMakeStrCopy(list As *IrList, labCopy As Long, labNul As Long)
+    IrEmit(list, OP_LABEL, labCopy, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labNul, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_JMP, labCopy, 0)
+
+    IrEmit(list, OP_LABEL, labNul, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_MOV_ECX, 0, 0)
+    IrEmit(list, OP_STORE_BYTE_RAX_CL, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 4, 0)
+End Sub
+
+' StrCmp(rcx=a, rdx=b) → eax（長さ付き辞書順）
+Sub LowEmitRtStrCmpBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labMinB As Long
+    Dim labLoop As Long
+    Dim labByteDiff As Long
+    Dim labByLen As Long
+
+    If g_rtStrCmpLab < 0 Then Exit Sub
+    list = ctx->list
+    labMinB = LowNewLab(ctx)
+    labLoop = LowNewLab(ctx)
+    labByteDiff = LowNewLab(ctx)
+    labByLen = LowNewLab(ctx)
+
+    IrEmit(list, OP_LABEL, g_rtStrCmpLab, 0)
+    IrEmit(list, OP_ENTER, 64, 0)
+    LowEmitCaptureArg0(list, -8)
+    LowEmitCaptureArg1(list, -16)
+
+    LowEmitRtStrCmpLens(list, labMinB, labLoop)
+    LowEmitRtStrCmpLoop(list, labLoop, labByteDiff, labByLen)
+    LowEmitRtStrCmpTail(list, labByteDiff, labByLen)
+End Sub
+
+' -24 = Len(a), -32 = Len(b), -40 = Min(Len(a), Len(b))
+Sub LowEmitRtStrCmpLens(list As *IrList, labMinB As Long, labLoop As Long)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
+    IrEmit(list, OP_STORE_LOCAL, -32, 0)
+
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JLE, labMinB, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labLoop, 0)
+    IrEmit(list, OP_LABEL, labMinB, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+End Sub
+
+Sub LowEmitRtStrCmpLoop(list As *IrList, labLoop As Long, labByteDiff As Long, labByLen As Long)
+    IrEmit(list, OP_LABEL, labLoop, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labByLen, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, labByteDiff, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+    IrEmit(list, OP_JMP, labLoop, 0)
+End Sub
+
+Sub LowEmitRtStrCmpTail(list As *IrList, labByteDiff As Long, labByLen As Long)
+    IrEmit(list, OP_LABEL, labByteDiff, 0)
+    IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+    IrEmit(list, OP_NEG_EAX, 0, 0)
+    LowEmitLeaveN(list, 2)
+
+    IrEmit(list, OP_LABEL, labByLen, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -32, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_SUB_EAX_ECX, 0, 0)
+    IrEmit(list, OP_NEG_EAX, 0, 0)
+    LowEmitLeaveN(list, 2)
+End Sub
+
+' StrFree(rcx=p): ヒープ印付きなら HeapFree(p-4)
+Sub LowEmitRtStrFreeBody(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim sApi(15) As Byte
+    Dim labDone As Long
+    Dim labSkip As Long
+
+    If g_rtStrFreeLab < 0 Then Exit Sub
+    list = ctx->list
+    labDone = LowNewLab(ctx)
+    labSkip = LowNewLab(ctx)
+    IrEmit(list, OP_LABEL, g_rtStrFreeLab, 0)
+    IrEmit(list, OP_ENTER, 32, 0)
+    LowEmitCaptureArg0(list, -8)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_STORE_LOCAL, -16, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    LowEmitHeapFreeRax(list)
+    IrEmit(list, OP_LABEL, labDone, 0)
+    LowEmitLeaveN(list, 1)
+End Sub

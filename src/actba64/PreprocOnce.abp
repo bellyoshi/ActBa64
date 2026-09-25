@@ -1,0 +1,205 @@
+' PreprocOnce - include の重複防止とパス
+
+Function PpIsN88Basic() As Long
+    PpIsN88Basic = g_ppN88Basic
+End Function
+
+Function PpToLower(c As Long) As Long
+    If c >= 65 And c <= 90 Then
+        PpToLower = c + 32
+    Else
+        PpToLower = c
+    End If
+End Function
+
+Function PpStateInit() As Long
+    Dim buf As *Byte
+    PpStateInit = 0
+    g_ppOnceCap = DYN_INIT
+    buf = calloc(BytesN(g_ppOnceCap, PP_ONCE_PATH))
+    If buf = NULL Then Exit Function
+    g_ppOnce = buf
+    g_ppOnceCount = 0
+    g_ppUseWindow = 0
+    g_ppN88Basic = 0
+    PpStateInit = 1
+End Function
+
+Sub PpStateFree()
+    If g_ppOnce <> NULL Then free(g_ppOnce)
+    g_ppOnce = NULL
+    g_ppOnceCount = 0
+    g_ppOnceCap = 0
+End Sub
+
+Sub PpOnceReset()
+    g_ppOnceCount = 0
+End Sub
+
+Function PpPathEq(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    PpPathEq = 0
+    i = 0
+    While a[i] <> 0 And b[i] <> 0
+        If PpToLower(a[i]) <> PpToLower(b[i]) Then Exit Function
+        i = i + 1
+    Wend
+    If a[i] <> b[i] Then Exit Function
+    PpPathEq = 1
+End Function
+
+Function PpOnceHas(path As *Byte) As Long
+    Dim i As Long
+    Dim off As Long
+    Dim buf As *Byte
+    PpOnceHas = 0
+    buf = g_ppOnce
+    If buf = NULL Then Exit Function
+    i = 0
+    While i < g_ppOnceCount
+        off = i * PP_ONCE_PATH
+        If PpPathEq(VarPtr(buf[off]), path) <> 0 Then
+            PpOnceHas = 1
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Sub PpOnceAdd(path As *Byte)
+    Dim buf As *Byte
+    Dim dst As *Byte
+    Dim off As Long
+    Dim j As Long
+    Dim newCap As Long
+    Dim p As *Byte
+    buf = g_ppOnce
+    If buf = NULL Then Exit Sub
+    If g_ppOnceCount >= g_ppOnceCap Then
+        newCap = g_ppOnceCap * 2
+        If newCap <= g_ppOnceCap Then Exit Sub
+        p = MemGrow(g_ppOnce, BytesN(g_ppOnceCap, PP_ONCE_PATH), BytesN(newCap, PP_ONCE_PATH))
+        If p = NULL Then Exit Sub
+        g_ppOnce = p
+        g_ppOnceCap = newCap
+        buf = g_ppOnce
+    End If
+    off = g_ppOnceCount * PP_ONCE_PATH
+    dst = VarPtr(buf[off])
+    j = 0
+    While path[j] <> 0 And j < PP_ONCE_PATH - 1
+        dst[j] = path[j]
+        j = j + 1
+    Wend
+    dst[j] = 0
+    g_ppOnceCount = g_ppOnceCount + 1
+End Sub
+
+Sub PpDirOf(path As *Byte, dst As *Byte)
+    Dim i As Long
+    Dim last As Long
+    Dim c As Long
+    last = -1
+    i = 0
+    While path[i] <> 0
+        c = path[i]
+        If c = 92 Or c = 47 Then last = i
+        i = i + 1
+    Wend
+    If last < 0 Then
+        dst[0] = 0
+        Exit Sub
+    End If
+    i = 0
+    While i <= last
+        dst[i] = path[i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Function PpIsIncludeLine(line As *Byte, n As Long) As Long
+    Dim i As Long
+    Dim k As Long
+    Dim c As Long
+    Dim word(15) As Byte
+    PpIsIncludeLine = 0
+    i = 0
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    If i >= n Then Exit Function
+    If line[i] <> 35 Then Exit Function
+    i = i + 1
+    While i < n
+        c = line[i]
+        If c <> 32 And c <> 9 Then Exit While
+        i = i + 1
+    Wend
+    lstrcpy(VarPtr(word), "include")
+    k = 0
+    While word[k] <> 0
+        If i + k >= n Then Exit Function
+        If PpToLower(line[i + k]) <> word[k] Then Exit Function
+        k = k + 1
+    Wend
+    PpIsIncludeLine = 1
+End Function
+
+Function PpIncFindOpen(line As *Byte, n As Long, ByRef closeCh As Long, ByRef isAngle As Long) As Long
+    Dim i As Long
+    PpIncFindOpen = -1
+    closeCh = 0
+    isAngle = 0
+    i = 0
+    While i < n
+        If line[i] = 34 Then
+            closeCh = 34
+            PpIncFindOpen = i
+            Exit Function
+        End If
+        If line[i] = 60 Then
+            closeCh = 62
+            isAngle = 1
+            PpIncFindOpen = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+End Function
+
+Function PpExtractInclude(line As *Byte, n As Long, dst As *Byte, ByRef isAngle As Long) As Long
+    Dim i As Long
+    Dim q1 As Long
+    Dim q2 As Long
+    Dim j As Long
+    Dim closeCh As Long
+    Dim ang As Long
+    PpExtractInclude = 0
+    isAngle = 0
+    dst[0] = 0
+    q2 = -1
+    q1 = PpIncFindOpen(line, n, closeCh, ang)
+    isAngle = ang
+    If q1 < 0 Then Exit Function
+    i = q1 + 1
+    While i < n
+        If line[i] = closeCh Then
+            q2 = i
+            Exit While
+        End If
+        i = i + 1
+    Wend
+    If q2 <= q1 Then Exit Function
+    j = 0
+    i = q1 + 1
+    While i < q2 And j < 250
+        dst[j] = line[i]
+        j = j + 1
+        i = i + 1
+    Wend
+    dst[j] = 0
+    PpExtractInclude = 1
+End Function

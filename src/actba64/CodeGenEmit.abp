@@ -1,0 +1,341 @@
+' CodeGenEmit - 命令グループ B/C/D
+
+Function CgTryEmitB1(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    CgTryEmitB1 = 0
+    opv = op->op
+    If opv = OP_SHL_ECX_2 Then
+        EmitByte(cb, &HC1)
+        EmitByte(cb, &HE1)
+        EmitByte(cb, 2)
+    ElseIf opv = OP_AND_EAX_ECX Then
+        EmitAndEaxEcx(cb)
+    ElseIf opv = OP_OR_EAX_ECX Then
+        EmitOrEaxEcx(cb)
+    ElseIf opv = OP_NEG_EAX Then
+        EmitNegEax(cb)
+    ElseIf opv = OP_SUB_EAX_ECX Then
+        EmitSubEaxEcx(cb)
+    ElseIf opv = OP_POP_RDX Then
+        EmitPopRdx(cb)
+    ElseIf opv = OP_XCHG_RAX_RCX Then
+        EmitXchgRaxRcx(cb)
+    ElseIf opv = OP_MOV_ECX Then
+        EmitMovEcxImm(cb, op->arg1)
+    ElseIf opv = OP_MOV_EAX_IMM Then
+        EmitMovEaxImm(cb, op->arg1)
+    ElseIf opv = OP_MOV_RAX_IMM64 Then
+        EmitMovRaxImm64(cb, op->arg1, op->arg2)
+    ElseIf opv = OP_LOAD_LOCAL Then
+        EmitLoadLocal(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL Then
+        EmitStoreLocal(cb, op->arg1)
+    Else
+        Exit Function
+    End If
+    CgTryEmitB1 = 1
+End Function
+
+Function CgTryEmitB2(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    CgTryEmitB2 = 0
+    opv = op->op
+    If opv = OP_PUSH_RAX Then
+        EmitPushRax(cb)
+    ElseIf opv = OP_POP_RCX Then
+        EmitPopRcx(cb)
+    ElseIf opv = OP_ADD_EAX_ECX Then
+        EmitAddEaxEcx(cb)
+    ElseIf opv = OP_IMUL_EAX_ECX Then
+        EmitImulEaxEcx(cb)
+    ElseIf opv = OP_MOV_ECX_EAX Then
+        EmitMovEcxEax(cb)
+    ElseIf opv = OP_CMP_ECX_EAX Then
+        EmitCmpEcxEax(cb)
+    ElseIf opv = OP_CMP_RCX_RAX Then
+        EmitCmpRcxRax(cb)
+    ElseIf opv = OP_TEST_EAX Then
+        EmitTestEax(cb)
+    ElseIf opv = OP_INC_LOCAL Then
+        EmitIncLocal(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL_ECX Then
+        EmitStoreLocalEcx(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL_EDX Then
+        EmitStoreLocalEdx(cb, op->arg1)
+    ElseIf opv = OP_MOV_EDX_IMM Then
+        EmitMovEdxImm(cb, op->arg1)
+    ElseIf opv = OP_MOV_EDX_EAX Then
+        EmitMovEdxEax(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitB2 = 1
+End Function
+
+Function CgTryEmitB3(cb As *CodeBuffer, op As *IrOp, dataRva As DWord) As Long
+    Dim opv As Long
+    Dim at As Long
+    Dim rel As Long
+    Dim nextRip As Long
+    Dim globOff As DWord
+    CgTryEmitB3 = 0
+    opv = op->op
+    If opv = OP_CALL_LAB Then
+        at = EmitCallRel32(cb)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_CALL_RAX Then
+        EmitCallRax(cb)
+    ElseIf opv = OP_LEA_RAX_LAB Then
+        at = EmitLeaRaxLabRel32(cb)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_LEA_RAX_GLOB Then
+        at = EmitLeaRaxLabRel32(cb)
+        globOff = op->arg1
+        nextRip = at + 4
+        rel = (dataRva + globOff) - (TEXT_RVA + nextRip)
+        If at >= 0 And at + 4 <= cb->capacity Then
+            PutDword(cb->buf, at, rel)
+        End If
+    Else
+        Exit Function
+    End If
+    CgTryEmitB3 = 1
+End Function
+
+Function CgTryEmitB(cb As *CodeBuffer, op As *IrOp, dataRva As DWord) As Long
+    CgTryEmitB = 0
+    If CgTryEmitB1(cb, op) <> 0 Then
+        CgTryEmitB = 1
+        Exit Function
+    End If
+    If CgTryEmitB2(cb, op) <> 0 Then
+        CgTryEmitB = 1
+        Exit Function
+    End If
+    If CgTryEmitB3(cb, op, dataRva) <> 0 Then
+        CgTryEmitB = 1
+    End If
+End Function
+
+' x64 / i386 でエンコードが同じ OP（算術）
+Function CgTryEmitSharedC1(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    CgTryEmitSharedC1 = 0
+    opv = op->op
+    If opv = OP_SHL_ECX_3 Then
+        EmitShlEcx3(cb)
+    ElseIf opv = OP_POP_RAX Then
+        EmitPopRax(cb)
+    ElseIf opv = OP_XOR_EDX Then
+        EmitXorEdx(cb)
+    ElseIf opv = OP_DIV_ECX Then
+        EmitDivEcx(cb)
+    ElseIf opv = OP_MOV_EAX_EDX Then
+        EmitMovEaxEdx(cb)
+    ElseIf opv = OP_XOR_EAX_ECX Then
+        EmitXorEaxEcx(cb)
+    ElseIf opv = OP_NOT_EAX Then
+        EmitNotEax(cb)
+    ElseIf opv = OP_SHL_EAX_CL Then
+        EmitShlEaxCl(cb)
+    ElseIf opv = OP_SAR_EAX_CL Then
+        EmitSarEaxCl(cb)
+    ElseIf opv = OP_IMUL_EAX_EDX Then
+        EmitImulEaxEdx(cb)
+    ElseIf opv = OP_DEC_ECX Then
+        EmitDecEcx(cb)
+    ElseIf opv = OP_TEST_ECX Then
+        EmitTestEcx(cb)
+    ElseIf opv = OP_AND_EAX_IMM Then
+        EmitAndEaxImm(cb, op->arg1)
+    Else
+        Exit Function
+    End If
+    CgTryEmitSharedC1 = 1
+End Function
+
+' x64 / i386 でエンコードが同じ OP（SSE）
+Function CgTryEmitSharedC2(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    CgTryEmitSharedC2 = 0
+    opv = op->op
+    If opv = OP_CVT_I32_TO_SS Then
+        EmitCvtI32ToSs(cb)
+    ElseIf opv = OP_CVT_I32_TO_SD Then
+        EmitCvtI32ToSd(cb)
+    ElseIf opv = OP_CVT_SS_TO_SD Then
+        EmitCvtSsToSd(cb)
+    ElseIf opv = OP_CVT_SD_TO_SS Then
+        EmitCvtSdToSs(cb)
+    ElseIf opv = OP_ADD_SD Then
+        EmitAddSd(cb)
+    ElseIf opv = OP_SUB_SD Then
+        EmitSubSd(cb)
+    ElseIf opv = OP_MUL_SD Then
+        EmitMulSd(cb)
+    ElseIf opv = OP_DIV_SD Then
+        EmitDivSd(cb)
+    ElseIf opv = OP_UCOMISD Then
+        EmitUcomisd(cb)
+    ElseIf opv = OP_NEG_SD Then
+        EmitNegSd(cb)
+    ElseIf opv = OP_CVT_SD_TO_I32 Then
+        EmitCvtSdToI32(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitSharedC2 = 1
+End Function
+
+Function CgTryEmitSharedC(cb As *CodeBuffer, op As *IrOp) As Long
+    CgTryEmitSharedC = 0
+    If CgTryEmitSharedC1(cb, op) <> 0 Then
+        CgTryEmitSharedC = 1
+        Exit Function
+    End If
+    If CgTryEmitSharedC2(cb, op) <> 0 Then
+        CgTryEmitSharedC = 1
+    End If
+End Function
+
+' 条件分岐（x64・i386 共通）
+Function CgTryEmitJcc(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    Dim cc As Byte
+    Dim at As Long
+    CgTryEmitJcc = 0
+    opv = op->op
+    If opv = OP_JZ Or opv = OP_JE Then
+        cc = &H84
+    ElseIf opv = OP_JNZ Or opv = OP_JNE Then
+        cc = &H85
+    ElseIf opv = OP_JL Then
+        cc = &H8C
+    ElseIf opv = OP_JLE Then
+        cc = &H8E
+    ElseIf opv = OP_JG Then
+        cc = &H8F
+    ElseIf opv = OP_JGE Then
+        cc = &H8D
+    ElseIf opv = OP_JB Then
+        cc = &H82
+    ElseIf opv = OP_JAE Then
+        cc = &H83
+    ElseIf opv = OP_JBE Then
+        cc = &H86
+    ElseIf opv = OP_JA Then
+        cc = &H87
+    Else
+        Exit Function
+    End If
+    at = EmitJccRel32(cb, cc)
+    CgPushFix(at, op->arg1, IR_FIX_REL32)
+    CgTryEmitJcc = 1
+End Function
+
+' LABEL / 分岐 / RET（x64・i386 共通）
+Function CgTryEmitSharedCtrl(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    Dim li As Long
+    Dim at As Long
+    CgTryEmitSharedCtrl = 0
+    opv = op->op
+    If opv = OP_LABEL Then
+        li = op->arg1
+        If CgEnsureLabIdx(li) <> 0 Then
+            g_cgLabOff[li] = cb->size
+        End If
+    ElseIf opv = OP_JMP Then
+        at = EmitJmpRel32(cb)
+        CgPushFix(at, op->arg1, IR_FIX_REL32)
+    ElseIf opv = OP_RET Then
+        EmitRet(cb)
+    Else
+        If CgTryEmitJcc(cb, op) = 0 Then Exit Function
+    End If
+    CgTryEmitSharedCtrl = 1
+End Function
+
+Function CgTryEmitC(cb As *CodeBuffer, op As *IrOp) As Long
+    Dim opv As Long
+    CgTryEmitC = 0
+    If CgTryEmitSharedC(cb, op) <> 0 Then
+        CgTryEmitC = 1
+        Exit Function
+    End If
+    opv = op->op
+    If opv = OP_POP_R8 Then
+        EmitPopR8(cb)
+    ElseIf opv = OP_MOV_RAX_R8 Then
+        EmitMovRaxR8(cb)
+    ElseIf opv = OP_SUB_RSP Then
+        EmitSubRsp(cb, op->arg1 As Byte)
+    ElseIf opv = OP_ADD_RSP Then
+        EmitAddRsp(cb, op->arg1 As Byte)
+    ElseIf opv = OP_STORE_RSP_RAX Then
+        EmitStoreRspRax(cb, op->arg1)
+    ElseIf opv = OP_LOAD_RSP_RAX Then
+        EmitLoadRspRax(cb, op->arg1)
+    ElseIf opv = OP_MOV_R9_RAX Then
+        EmitMovR9Rax(cb)
+    ElseIf opv = OP_STORE_LOCAL_R8 Then
+        EmitStoreLocalR8(cb, op->arg1)
+    ElseIf opv = OP_STORE_LOCAL_R9 Then
+        EmitStoreLocalR9(cb, op->arg1)
+    Else
+        Exit Function
+    End If
+    CgTryEmitC = 1
+End Function
+
+Function CgTryEmitD(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, i As Long) As Long
+    Dim ops As *IrOp
+    Dim op As *IrOp
+    Dim opv As Long
+    Dim tmp(255) As Byte
+    Dim dll(31) As Byte
+    Dim iatRva As DWord
+    CgTryEmitD = 0
+    ops = list->ops
+    op = VarPtr(ops[i])
+    If CgTryEmitSharedCtrl(cb, op) <> 0 Then
+        CgTryEmitD = 1
+        Exit Function
+    End If
+    opv = op->op
+    If opv = OP_MOV_RAX_GS8 Then
+        EmitMovRaxGs8(cb)
+    ElseIf opv = OP_MOV_R8_RSP Then
+        EmitMovR8Rsp(cb)
+    ElseIf opv = OP_CMP_R8_RAX Then
+        EmitCmpR8Rax(cb)
+    ElseIf opv = OP_ADD_R8_IMM Then
+        EmitAddR8Imm8(cb, op->arg1 As Byte)
+    ElseIf opv = OP_CALL_API Then
+        IrDllNameOf(op->arg1, VarPtr(dll))
+        IrCopyStrAt(list, i, VarPtr(tmp))
+        iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(tmp))
+        EmitCallRip(cb, iatRva, TEXT_RVA)
+    Else
+        Exit Function
+    End If
+    CgTryEmitD = 1
+End Function
+
+Sub IrEmitCode(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord)
+    Dim i As Long
+    Dim n As Long
+    Dim ops As *IrOp
+
+    If CgInitFixups() = 0 Then Exit Sub
+    ops = list->ops
+    n = list->count
+    For i = 0 To n - 1
+        If CgTryEmitA(cb, VarPtr(ops[i]), builder) <> 0 Then
+        ElseIf CgTryEmitB(cb, VarPtr(ops[i]), dataRva) <> 0 Then
+        ElseIf CgTryEmitC(cb, VarPtr(ops[i])) <> 0 Then
+        ElseIf CgTryEmitD(list, cb, builder, i) <> 0 Then
+        End If
+    Next
+    CgApplyFixups(cb)
+End Sub

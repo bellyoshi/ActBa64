@@ -1,0 +1,103 @@
+' ParserStmtEnd - Exit、End、数値ノード
+
+Function ParseExitStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nExit As Long
+    Dim e As Long
+
+    ParseExitStmt = -1
+    p->pos = p->pos + 1
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+    ast = p->ast
+    nExit = AstAddNode(ast, AST_EXIT)
+    If nExit < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nExit].left = e
+    ParseExitStmt = nExit
+End Function
+
+Function ParseEndStmt(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nEnd As Long
+    Dim nCall As Long
+    Dim kType(7) As Byte
+    Dim name(15) As Byte
+
+    ParseEndStmt = -1
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(kType), "type")
+    If ParseIdentIs(p, VarPtr(kType)) <> 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    ast = p->ast
+    If p->n88Mode <> 0 Then
+        ' End → N88_End()（窓を表示して閉じるまで待つ）
+        lstrcpy(VarPtr(name), "N88_End")
+        nCall = AstAddNode(ast, AST_CALL)
+        If nCall < 0 Then Exit Function
+        AstSetStr(ast, nCall, VarPtr(name))
+        nodes = ast->nodes
+        nodes[nCall].left = -1
+        nodes[nCall].right = -1
+        nodes[nCall].num = 0
+        ParseEndStmt = nCall
+        Exit Function
+    End If
+    nEnd = AstAddNode(ast, AST_END)
+    If nEnd < 0 Then Exit Function
+    ParseEndStmt = nEnd
+End Function
+
+' 引数ノードを1つ追加してリスト末尾へつなぐ
+Function ParseLinkArg(ast As *Ast, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long, e As Long) As Long
+    Dim nodes As *AstNode
+    Dim arg1 As Long
+    ParseLinkArg = 0
+    arg1 = AstAddNode(ast, AST_ARG)
+    If arg1 < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[arg1].left = e
+    nodes[arg1].nxt = -1
+    If arg0 < 0 Then
+        arg0 = arg1
+    Else
+        nodes[nPrev].nxt = arg1
+    End If
+    nPrev = arg1
+    nArgs = nArgs + 1
+    ParseLinkArg = 1
+End Function
+
+Function ParseMakeNum(ast As *Ast, v As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    ParseMakeNum = -1
+    n = AstAddNode(ast, AST_NUM)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = v
+    ParseMakeNum = n
+End Function
+
+' Double → AST_NUM（extra=F64, num=lo, left=hi）
+Function ParseMakeF64FromDouble(ast As *Ast, d As Double) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim bits(1) As Long
+
+    ParseMakeF64FromDouble = -1
+    memcpy(VarPtr(bits), VarPtr(d), 8)
+    n = AstAddNode(ast, AST_NUM)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = bits[0]
+    nodes[n].left = bits[1]
+    nodes[n].extra = AST_NUM_EXTRA_F64
+    ParseMakeF64FromDouble = n
+End Function
