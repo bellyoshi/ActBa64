@@ -38,6 +38,7 @@
 - **`Single` IEEE 演算**（格納・変換中心。汎用 SSE は未。`Double` / `Math.abp` は済）
 
 - **`Double` @ `-actba32`**
+- **`InsertMenu`（`AstLowerInsMenu`）@ `-actba32`** — `callBytes` は `LowCallBytes(5)` 済み。emit 列は x64 専用（第5引数を `rsp+32`、他は RCX/RDX/R8/R9）。32bit は stdcall どおり全引数を `esp+0..16` に並べる分岐が必要
 - **符号無し演算**の AB 4.20 ルール完全化
 - **BASIC 命令**: `Window` / `MsgBox` / `Inkey$` 等（API 代替で足りるなら Include のみ）
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
