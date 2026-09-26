@@ -8,7 +8,7 @@
 #
 # 使い方:
 #   .\build.ps1
-#   .\build.ps1 -SkipCopy       # Include を stage0 へコピーしない
+#   .\build.ps1 -SkipCopy       # Include を stage0/1/2 へコピーしない
 #   .\build.ps1 -Stage1Only
 #   .\build.ps1 -SkipStage1
 #   .\build.ps1 -SkipCompare
@@ -28,6 +28,7 @@ $IncludeSrc = Join-Path $Root "..\Include"
 $Stage0 = Join-Path $Root "bin\stage0"
 $Pj = "actba64.pj"
 $ExeName = "actba64.exe"
+$IncludeStages = @("stage0", "stage1", "stage2")
 
 function Get-StageDir([string]$stage) {
     return Join-Path $Root "bin\$stage"
@@ -36,6 +37,25 @@ function Get-StageDir([string]$stage) {
 function Ensure-Dir([string]$dir) {
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir | Out-Null
+    }
+}
+
+# 正本 src\Include を各 stage の exe 隣へ置く（検索の最優先パス）
+function Copy-IncludeToStages {
+    if (-not (Test-Path -LiteralPath $IncludeSrc)) {
+        Write-Error "Include not found: $IncludeSrc"
+        exit 2
+    }
+    $src = (Resolve-Path -LiteralPath $IncludeSrc).Path
+    foreach ($stage in $IncludeStages) {
+        $stageDir = Get-StageDir $stage
+        Ensure-Dir $stageDir
+        $incDst = Join-Path $stageDir "Include"
+        if (Test-Path -LiteralPath $incDst) {
+            Remove-Item -LiteralPath $incDst -Recurse -Force
+        }
+        Write-Host "=== copy Include -> bin\$stage\Include ==="
+        Copy-Item -LiteralPath $src -Destination $incDst -Recurse
     }
 }
 
@@ -227,6 +247,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root $Pj))) {
     exit 2
 }
 
+if (-not $SkipCopy) {
+    Copy-IncludeToStages
+}
+
 if ($SkipStage1) {
     $stage1Exe = Join-Path (Get-StageDir "stage1") $ExeName
     if (-not (Test-Path -LiteralPath $stage1Exe)) {
@@ -236,20 +260,6 @@ if ($SkipStage1) {
     Write-Host "=== skip stage1 (reuse $stage1Exe) ==="
 } else {
     Ensure-CapableStage0
-
-    if (-not $SkipCopy) {
-        if (-not (Test-Path -LiteralPath $IncludeSrc)) {
-            Write-Error "Include not found: $IncludeSrc"
-            exit 2
-        }
-        $incDst = Join-Path $Stage0 "Include"
-        if (Test-Path -LiteralPath $incDst) {
-            Remove-Item -LiteralPath $incDst -Recurse -Force
-        }
-        Write-Host "=== copy Include -> bin\stage0\Include ==="
-        Copy-Item -LiteralPath $IncludeSrc -Destination $incDst -Recurse
-    }
-
     Invoke-Actba64Build -driverStage "stage0" -outStage "stage1"
 }
 
