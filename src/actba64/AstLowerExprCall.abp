@@ -8,22 +8,22 @@
 Function LowCountCallArgs(ctx As *LowerCtx, idx As Long, base As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim argi As Long
+    Dim argIdx As Long
     Dim argNode As Long
 
     ast = ctx->ast
     nodes = ast->nodes
-    argi = base
+    argIdx = base
     argNode = nodes[idx].left
     While argNode >= 0
-        If argi >= 16 Then
+        If argIdx >= 16 Then
             LowCountCallArgs = -1
             Exit Function
         End If
-        argi = argi + 1
+        argIdx = argIdx + 1
         argNode = nodes[argNode].nxt
     Wend
-    LowCountCallArgs = argi
+    LowCountCallArgs = argIdx
 End Function
 
 ' メソッド呼び出しのユーザー引数を rsp+8.. のホーム領域へ
@@ -31,7 +31,7 @@ Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
-    Dim argi As Long
+    Dim argIdx As Long
     Dim argNode As Long
     Dim useAddr As Long
 
@@ -39,17 +39,17 @@ Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
-    argi = 1
+    argIdx = 1
     argNode = nodes[idx].left
-    While argi < nArgs
+    While argIdx < nArgs
         useAddr = LowCallArgNeedsAddr(ctx, argNode, 0, 0, 1)
         If useAddr <> 0 Then
             If LowAddr(ctx, nodes[argNode].left) = 0 Then Exit Function
         Else
             If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
         End If
-        IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
-        argi = argi + 1
+        IrEmit(list, OP_STORE_RSP_RAX, argIdx * TyPtrSize(), 0)
+        argIdx = argIdx + 1
         argNode = nodes[argNode].nxt
     Wend
     LowEmitMethodArgs = 1
@@ -100,20 +100,20 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     Dim name(63) As Byte
     Dim list As *IrList
     Dim nArgs As Long
-    Dim tt As *TypeTable
-    Dim ti As Long
-    Dim argi As Long
+    Dim typeTable As *TypeTable
+    Dim typeIdx As Long
+    Dim argIdx As Long
     Dim callBytes As Long
 
     LowExprCallMethod = 0
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
-    tt = ast->types
+    typeTable = ast->types
     AstCopyStr(ast, idx, VarPtr(name))
     ' obj.Method(...) / p->Method(...) — right=receiver, left=user args, str=short name
-    ti = LowRecvClassTi(ctx, nodes[idx].right)
-    If ti < 0 Then
+    typeIdx = LowRecvClassTi(ctx, nodes[idx].right)
+    If typeIdx < 0 Then
         Print "error: method call on non-class"
         ctx->err = 1
         Exit Function
@@ -123,8 +123,8 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
         ctx->err = 1
         Exit Function
     End If
-    argi = LowCountCallArgs(ctx, idx, 1)
-    If argi < 0 Or argi <> nArgs Then
+    argIdx = LowCountCallArgs(ctx, idx, 1)
+    If argIdx < 0 Or argIdx <> nArgs Then
         ctx->err = 1
         Exit Function
     End If
@@ -134,7 +134,7 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     If LowEmitMethodArgs(ctx, idx, nArgs) = 0 Then Exit Function
     LowEmitMethodRegArgs(list, nArgs)
     If LowEmitMethodThis(ctx, idx) = 0 Then Exit Function
-    If LowExprCallMethodInvoke(ctx, idx, ti, nArgs, callBytes) = 0 Then Exit Function
+    If LowExprCallMethodInvoke(ctx, idx, typeIdx, nArgs, callBytes) = 0 Then Exit Function
     LowExprCallMethod = 1
 End Function
 
@@ -146,15 +146,15 @@ Function LowEmitMemOp3(ctx As *LowerCtx, idx As Long, api As *Byte) As Long
     Dim a0 As Long
     Dim a1 As Long
     Dim a2 As Long
-    Dim argi As Long
+    Dim argIdx As Long
     Dim callBytes As Long
 
     LowEmitMemOp3 = -1
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
-    argi = LowCountCallArgs(ctx, idx, 0)
-    If argi < 0 Or argi <> 3 Then
+    argIdx = LowCountCallArgs(ctx, idx, 0)
+    If argIdx < 0 Or argIdx <> 3 Then
         ctx->err = 1
         Exit Function
     End If
@@ -347,13 +347,13 @@ End Function
 
 
 
-Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArgs As Long, callBytes As Long) As Long
+Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, typeIdx As Long, nArgs As Long, callBytes As Long) As Long
     Dim name(63) As Byte
     Dim buf(255) As Byte
     Dim list As *IrList
     Dim lab As Long
     Dim vals As *Long
-    Dim tt As *TypeTable
+    Dim typeTable As *TypeTable
     Dim j As Long
     Dim names As *Byte
     Dim ast As *Ast
@@ -361,14 +361,14 @@ Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArg
     LowExprCallMethodInvoke = 0
     ast = ctx->ast
     list = ctx->list
-    tt = ast->types
+    typeTable = ast->types
     AstCopyStr(ast, idx, VarPtr(name))
-    j = ti * 48
-    names = tt->typeNames
+    j = typeIdx * 48
+    names = typeTable->typeNames
     lab = -1
-    vals = tt->typeVirtCount
-    If vals[ti] > 0 Then
-        lab = TyFindVirt(tt, ti, VarPtr(name))
+    vals = typeTable->typeVirtCount
+    If vals[typeIdx] > 0 Then
+        lab = TyFindVirt(typeTable, typeIdx, VarPtr(name))
     End If
     If lab >= 0 Then
         ' COM / Virtual: call [ [*this] + slot*8 ]
