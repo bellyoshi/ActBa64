@@ -109,6 +109,9 @@ Remove-Item -LiteralPath $tmpEditor -Force
 Copy-Item -LiteralPath $Actba64Exe -Destination (Join-Path $ReleaseDir "actba64.exe") -Force
 Copy-Item -LiteralPath $IncludeSrc -Destination (Join-Path $ReleaseDir "Include") -Recurse -Force
 Copy-Item -LiteralPath $HelpSrc -Destination (Join-Path $ReleaseDir "help") -Recurse -Force
+Get-ChildItem -LiteralPath $EditorDir -Filter "ProjectEditor_lang_*.csv" | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $ReleaseDir $_.Name) -Force
+}
 
 Write-Host ""
 Write-Host "release ready: $ReleaseDir"

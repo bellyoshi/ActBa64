@@ -27,7 +27,7 @@
 ### P1 — 言語・相互運用
 
 - **D3D11**: `dx_SetProjection` / `dx_SetCamera` 相当 — `dxxform` 以上のカメラ・射影の共通化
-- **ProjectEditor**: スクロールバー / 日本語メニュー / コンソール実行後に閉じない — 済（残: RAD 全面など）
+- **ProjectEditor**: 多言語（英語デフォルト + `ProjectEditor_lang_*.csv`）。スクロールバー / コンソール実行後に閉じない — 済
 
 ### P2 — OOP・メディア・規模
 
@@ -125,5 +125,5 @@
 ## ProjectEditor
 
 - [x] スクロールバー（`WS_VSCROLL` + `SetScrollInfo` / `WM_VSCROLL`）
-- [x] 日本語メニュー（`ModifyMenuW` / `AppendMenuW`）
+- [x] 多言語 UI（英語組み込み。`editor.lang` + `ProjectEditor_lang_<code>.csv`）
 - [x] コンソールプログラム。実行後コンソール閉じないように（`#console` 時は `cmd /k`）
