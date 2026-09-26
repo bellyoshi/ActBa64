@@ -3,9 +3,15 @@
 Const LOW_MAX_ARGS = 16
 ' HeapAlloc dwFlags（AB4.20 組込 HEAP_ZERO_MEMORY と名前衝突するため別名）
 Const LOW_HEAP_ZERO = 8
+' Microsoft x64: 先頭4引数の shadow / スロット幅 / スタック整列
+Const ABI_SHADOW = 32
+Const ABI_SLOT = 8
+Const ABI_ALIGN = 16
+' 第5引数以降の [rbp+…]（shadow の次）
+Const ABI_STACK_ARG0 = 48
 
 Function LowAlign16(n As Long) As Long
-    LowAlign16 = (n + 15) And (0 - 16)
+    LowAlign16 = (n + ABI_ALIGN - 1) And (0 - ABI_ALIGN)
 End Function
 
 Function LowCallBytes(nArgs As Long) As Long
@@ -14,27 +20,27 @@ Function LowCallBytes(nArgs As Long) As Long
         LowCallBytes = nArgs * 4
         Exit Function
     End If
-    callBytes = 32
+    callBytes = ABI_SHADOW
     If nArgs > 4 Then
-        callBytes = callBytes + (nArgs - 4) * 8
+        callBytes = callBytes + (nArgs - 4) * ABI_SLOT
     End If
-    LowCallBytes = (callBytes + 15) And (0 - 16)
+    LowCallBytes = (callBytes + ABI_ALIGN - 1) And (0 - ABI_ALIGN)
 End Function
 
 Sub LowEmitLoadRegArgs(list As *IrList, nArgs As Long)
     Dim ps As Long
     If TyIs32() <> 0 Then Exit Sub
-    ps = 8
+    ps = ABI_SLOT
     If nArgs >= 4 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 24, 0)
+        IrEmit(list, OP_LOAD_RSP_RAX, 3 * ps, 0)
         IrEmit(list, OP_MOV_R9_RAX, 0, 0)
     End If
     If nArgs >= 3 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 16, 0)
+        IrEmit(list, OP_LOAD_RSP_RAX, 2 * ps, 0)
         IrEmit(list, OP_MOV_R8_RAX, 0, 0)
     End If
     If nArgs >= 2 Then
-        IrEmit(list, OP_LOAD_RSP_RAX, 8, 0)
+        IrEmit(list, OP_LOAD_RSP_RAX, 1 * ps, 0)
         IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
     End If
     If nArgs >= 1 Then
