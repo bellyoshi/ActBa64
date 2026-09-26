@@ -251,11 +251,13 @@ CALL StrCollect
 
 | 地点 | 理由 |
 |---|---|
-| `For` / `While` / `Do` のループ先頭 | **MAIN** では毎回。関数内は本体または条件が Cat / `Mid$` / `Chr$` 等を含むときだけ。`GetLinePrefix$` のような関数呼び出しでは出さない（描画 While で行末の String を落とすため） |
+| `For` / `While` / `Do` のループ先頭（**MAIN のみ**） | メッセージループ等で回収。関数内は出さない（下記） |
 | `Print` / `Input` のあと | 一時 String を回収 |
 | モジュール MAIN 終了直前 | プロセス終了前の掃除（その後すぐ `ExitProcess`） |
 
-関数エピローグでは Collect しない。`Mid$` や `Hl_Lower$` のような入れ子の終了時に、呼び出し元の `String` が conservative 走査から漏れて `HeapFree` されるのを避けるため。GUI ではメッセージループ（MAIN の `Do`）の先頭で回収する。関数内の一時値は、その関数自身が Cat / `Mid$` を含むループを持つか、MAIN に戻ったあとで回収する。
+関数エピローグでは Collect しない。`Mid$` や `Hl_Lower$` のような入れ子の終了時に、呼び出し元の `String` が conservative 走査から漏れて `HeapFree` されるのを避けるため。GUI ではメッセージループ（MAIN の `Do`）の先頭で回収する。関数内の一時値は、MAIN に戻ったあとで回収する。
+
+**関数内ループでも Collect しない**（2026-09 修正）。`TrimCode$(Mid$(s, 10))` のように ByVal String 引数へ渡した `Mid$` 一時値が、関数内 `While`/`For` の Collect で unmarked のまま掃き出され、`"ja"` → `"a"` / `"j"` のように壊れる事例があった。呼び出し元のホーム領域や precise ルートがあっても再現するため、関数内セーフポイントは出さず MAIN に任せる。
 
 ---
 
@@ -324,6 +326,8 @@ IR は通常の `OP_ENTER` / `OP_CALL_LAB` / `OP_CALL_API` で、専用の GC �
 | `t_str_gc.abp` | `For` 内の大量 Cat のあと、先に入れたグローバル `keep` が残る |
 | `t_gc_while.abp` | `While` 内 Cat でも同様 |
 | `t_gc_nested.abp` | `While`+`Mid$` の内側で確保しない `For` が走っても元の行が残る |
+| `t_gc_trim_mid.abp` | `TrimCode$(Mid$(t, 10))` + `Chr$` 圧力でも `"ja"` が残る |
+| `t_gc_param.abp` | ByVal String 引数が callee 内ループ後も残る |
 | `t_str_ret.abp` | String 戻りが、先行する Cat で有効になった Collect に潰されない |
 | `t_malloc_makestr.abp` | UDT の `*Byte` + `malloc` + `MakeStr`。ヒープが高位でも複製が残る |
 

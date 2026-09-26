@@ -27,7 +27,6 @@ Sub LowEmitPreciseLocalMarks(ctx As *LowerCtx)
     Dim i As Long
     Dim lab As Long
     If g_fnPreciseRootCount <= 0 Then Exit Sub
-    LowEnsureRtStrCollect(ctx)
     lab = g_rtStrGcPreciseLab
     If lab < 0 Then Exit Sub
     i = 0
@@ -36,6 +35,12 @@ Sub LowEmitPreciseLocalMarks(ctx As *LowerCtx)
         LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
         i = i + 1
     Wend
+End Sub
+
+Sub LowEmitStrCollectSafepoint(ctx As *LowerCtx)
+    If g_rtStrCollectLab < 0 Then Exit Sub
+    LowEmitPreciseLocalMarks(ctx)
+    IrEmit(ctx->list, OP_CALL_LAB, g_rtStrCollectLab, 0)
 End Sub
 
 Sub LowEmitGcPreciseRootsInit(ctx As *LowerCtx)
@@ -64,17 +69,6 @@ Sub LowEmitGcPreciseRootsInit(ctx As *LowerCtx)
     IrEmit(ctx->list, OP_LEA_RAX_GLOB, g_gcBaseOff + GC_HDR_PRECISE_COUNT, 0)
     IrEmit(ctx->list, OP_POP_RCX, 0, 0)
     IrEmit(ctx->list, OP_STORE_PTR, 0, 0)
-End Sub
-
-Sub LowEmitStrCollectSafepoint(ctx As *LowerCtx)
-    ' Mid$ / Left$ / Right$ だけの関数では、ループ頭のセーフポイントが
-    ' 本体の Chr$ / Cat より先に発行され、Collect ラベル未確保のまま
-    ' 黙って省略されていた。その結果、後続ループだけ Collect が有効になり、
-    ' 引数 String が unmarked のまま掃き出されることがあった。
-    LowEnsureRtStrCollect(ctx)
-    If g_rtStrCollectLab < 0 Then Exit Sub
-    LowEmitPreciseLocalMarks(ctx)
-    IrEmit(ctx->list, OP_CALL_LAB, g_rtStrCollectLab, 0)
 End Sub
 
 ' 部分木が String を新たに確保しうるか。
@@ -200,23 +194,13 @@ Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' ループ条件・本体（必要なら第3引数）が確保するときだけセーフポイントを出す。
-' MAIN（メッセージループ等）は毎回集める。描画中の入れ子では集めない。
+' MAIN（メッセージループ等）は毎回集める。
+' 関数内では集めない: ByVal String 引数＋入れ子 Mid$ が、関数内 Collect で
+' unmarked 掃き出しされる既知の穴がある（precise ルートが生きていても
+' 再現する）。エピローグと同様、呼び出し元に戻ってから MAIN で回収する。
 Sub LowMaybeLoopStrCollect(ctx As *LowerCtx, condIdx As Long, bodyIdx As Long, extraIdx As Long)
-    If ctx->inFunc = 0 Then
-        LowEmitStrCollectSafepoint(ctx)
-        Exit Sub
-    End If
-    If LowAstNeedsStrGc(ctx, condIdx) <> 0 Then
-        LowEmitStrCollectSafepoint(ctx)
-        Exit Sub
-    End If
-    If LowAstNeedsStrGc(ctx, bodyIdx) <> 0 Then
-        LowEmitStrCollectSafepoint(ctx)
-        Exit Sub
-    End If
-    If LowAstNeedsStrGc(ctx, extraIdx) <> 0 Then
-        LowEmitStrCollectSafepoint(ctx)
-    End If
+    If ctx->inFunc <> 0 Then Exit Sub
+    LowEmitStrCollectSafepoint(ctx)
 End Sub
 
 ' eax 書き込みで rax 上位を 0 にする（Long 添字をポインタ加算する前）
