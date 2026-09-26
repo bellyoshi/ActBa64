@@ -26,8 +26,6 @@
 
 ### P1 — 言語・相互運用
 
-- **`#resource` / `.rc`**: GUI アイコン・メニュー ID の本格運用
-- **関数ポインタ型**: `CreateThread` / コールバックで型安全に（`AddressOf` は済。`*Function` / `TypeDef` は未）
 - **D3D11**: `dx_SetProjection` / `dx_SetCamera` 相当 — `dxxform` 以上のカメラ・射影の共通化
 - **ProjectEditor**: スクロールバー、コンソール実行後にウィンドウを閉じない、日本語メニュー
 
@@ -66,13 +64,13 @@
 | `GoTo` / `GoSub` / `Return`（`*ラベル`） | 行番号は非対応方針。ラベル付き分岐・復帰も未 |
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
-| `#resource` | `*.rc` 取り込み（4.20）。`#RESOURCE` 埋め込みと同系 |
+| `#resource` の `.rc` / ICON・MENU | ファイル→RCDATA(1) 埋め込みは済。`rc.exe` 連携・型付きリソースは未 |
 | `ReDim` | 動的配列サイズ変更（4.20） |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
 | `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章）。整数・文字列リテラルのみ対応 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
-| 関数ポインタ型 | `Dim As *Function(...)` / `*Sub(...)`、`TypeDef` で別名（4.20）。`AddressOf` のみ実用 |
 | `Print Using "fmt"` | 書式付き出力（4.20 関数ポインタサンプル等） |
+| 関数ポインタの厳密シグネチャ照合 | `*Function` / `*Sub` 自体は済。引数型の照合は未 |
 | `Char` / `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は `Byte`/`Long`/`DWord` 中心 |
 
 ## 数値・型
@@ -106,7 +104,7 @@
 | Project Editor / RAD | 4.20: `.pj`・ウィンドウ RAD・`MainWnd.sbp` 雛形（エディタ本体は有。RAD 全面は未） |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
-| `#RESOURCE` / `#resource` / `.rc` | リソース埋め込み |
+| ICON / MENU 等の型付きリソース | `#resource` で RCDATA 埋め込みは済。LoadIcon/LoadMenu 向けは未 |
 
 ### DirectX（4.20 は D3D9 + `dx_*.sbp` → ActBa64 は D3D11 で段階的に）
 

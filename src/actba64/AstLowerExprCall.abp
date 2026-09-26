@@ -257,6 +257,40 @@ Function LowExprCallIntrin(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 
+Function LowExprCallFnPtrEmit(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Long, nArgs As Long) As Long
+    Dim name(63) As Byte
+    Dim list As *IrList
+    Dim stk As Long
+
+    LowExprCallFnPtrEmit = 0
+    list = ctx->list
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    stk = LowCallStk(nArgs)
+    If stk > 0 Then IrEmit(list, OP_SUB_RSP, stk, 0)
+    If LowEmitCallArgsHome(ctx, idx, nArgs, 0, 0, VarPtr(name)) = 0 Then Exit Function
+    LowEmitLoadRegArgs(list, nArgs)
+    LowEmitLoadOff(list, vOff, vGlob)
+    IrEmit(list, OP_CALL_RAX, 0, 0)
+    LowEmitCallFinish(list, stk)
+    LowExprCallFnPtrEmit = 1
+End Function
+
+Function LowExprCallFnPtr(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nArgs As Long
+
+    LowExprCallFnPtr = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    nArgs = nodes[idx].num
+    If nArgs > 16 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    LowExprCallFnPtr = LowExprCallFnPtrEmit(ctx, idx, vOff, vGlob, nArgs)
+End Function
+
 Function LowExprCallArr(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(2047) As Byte
     Dim vOff As Long
@@ -274,37 +308,39 @@ Function LowExprCallArr(ctx As *LowerCtx, idx As Long) As Long
     list = ctx->list
     nodes = ast->nodes
     AstCopyStr(ast, idx, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-        If vTy = TY_BYTE_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
-            LowExprCallArr = 1
-            Exit Function
-        End If
-        If vTy = TY_LONG_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
-            LowExprCallArr = 1
-            Exit Function
-        End If
-        If vTy = TY_DOUBLE_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
-            LowExprCallArr = 1
-            Exit Function
-        End If
-        If vTy = TY_SINGLE_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
-            LowExprCallArr = 1
-            Exit Function
-        End If
-        If vTy = TY_STRING_ARR And nodes[idx].num = 1 Then
-            If LowAddr(ctx, idx) = 0 Then Exit Function
-            IrEmit(list, OP_LOAD_PTR, 0, 0)
-            LowExprCallArr = 1
-            Exit Function
-        End If
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If vTy = TY_PTR_FUNC Then
+        LowExprCallArr = LowExprCallFnPtr(ctx, idx, vOff, vGlob)
+        Exit Function
+    End If
+    If vTy = TY_BYTE_ARR And nodes[idx].num = 1 Then
+        If LowAddr(ctx, idx) = 0 Then Exit Function
+        IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
+        LowExprCallArr = 1
+        Exit Function
+    End If
+    If vTy = TY_LONG_ARR And nodes[idx].num = 1 Then
+        If LowAddr(ctx, idx) = 0 Then Exit Function
+        IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+        LowExprCallArr = 1
+        Exit Function
+    End If
+    If vTy = TY_DOUBLE_ARR And nodes[idx].num = 1 Then
+        If LowAddr(ctx, idx) = 0 Then Exit Function
+        IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+        LowExprCallArr = 1
+        Exit Function
+    End If
+    If vTy = TY_SINGLE_ARR And nodes[idx].num = 1 Then
+        If LowAddr(ctx, idx) = 0 Then Exit Function
+        IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+        LowExprCallArr = 1
+        Exit Function
+    End If
+    If vTy = TY_STRING_ARR And nodes[idx].num = 1 Then
+        If LowAddr(ctx, idx) = 0 Then Exit Function
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+        LowExprCallArr = 1
     End If
 End Function
 
@@ -350,7 +386,8 @@ Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArg
             Exit Function
         End If
         IrEmit(list, OP_CALL_LAB, lab, 0)
-    End If    LowEmitCallFinish(list, stk)
+    End If
+    LowEmitCallFinish(list, stk)
 
     LowExprCallMethodInvoke = 1
 End Function

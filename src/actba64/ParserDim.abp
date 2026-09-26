@@ -32,35 +32,38 @@ Function ParseDimStringSuffix(name As *Byte, bound As Long, ByRef ty As Long, By
     End If
 End Function
 
-Function ParseAsPtrType(p As *Parser, ByRef ty As Long, ByRef ti As Long) As Long
-    Dim typeName(63) As Byte
+Function ParseAsPtrByteLong(p As *Parser, ByRef ty As Long) As Long
     Dim k(15) As Byte
-    Dim types As *TypeTable
-    Dim ast As *Ast
 
-    ParseAsPtrType = 0
-    ast = p->ast
-    types = ast->types
-    p->pos = p->pos + 1
+    ParseAsPtrByteLong = 0
     lstrcpy(VarPtr(k), "byte")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
         ty = TY_PTR_BYTE
-        ParseAsPtrType = 1
+        ParseAsPtrByteLong = 1
         Exit Function
     End If
     lstrcpy(VarPtr(k), "long")
     If ParseIdentIs(p, VarPtr(k)) <> 0 Then
         p->pos = p->pos + 1
         ty = TY_PTR_LONG
-        ParseAsPtrType = 1
+        ParseAsPtrByteLong = 1
         Exit Function
     End If
     If ParseEatLongAlias(p) <> 0 Then
         ty = TY_PTR_LONG
-        ParseAsPtrType = 1
-        Exit Function
+        ParseAsPtrByteLong = 1
     End If
+End Function
+
+Function ParseAsPtrUdt(p As *Parser, ByRef ty As Long, ByRef ti As Long) As Long
+    Dim typeName(63) As Byte
+    Dim types As *TypeTable
+    Dim ast As *Ast
+
+    ParseAsPtrUdt = 0
+    ast = p->ast
+    types = ast->types
     If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
         p->err = 1
         Exit Function
@@ -71,7 +74,30 @@ Function ParseAsPtrType(p As *Parser, ByRef ty As Long, ByRef ti As Long) As Lon
         Exit Function
     End If
     ty = TY_PTR_UDT
-    ParseAsPtrType = 1
+    ParseAsPtrUdt = 1
+End Function
+
+Function ParseAsPtrDataType(p As *Parser, ByRef ty As Long, ByRef ti As Long) As Long
+    ParseAsPtrDataType = 0
+    If ParseAsPtrByteLong(p, ty) <> 0 Then
+        ParseAsPtrDataType = 1
+        Exit Function
+    End If
+    ParseAsPtrDataType = ParseAsPtrUdt(p, ty, ti)
+End Function
+
+' ti: UDT 型番号、または TY_PTR_FUNC のとき戻り型（Sub は -1）
+' params: TY_PTR_FUNC の仮引数鎖（それ以外は -1）
+Function ParseAsPtrType(p As *Parser, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
+    ParseAsPtrType = 0
+    params = -1
+    p->pos = p->pos + 1
+    If ParseFnPtrTry(p, ty, ti, params) <> 0 Then
+        ParseAsPtrType = 1
+        Exit Function
+    End If
+    If p->err <> 0 Then Exit Function
+    ParseAsPtrType = ParseAsPtrDataType(p, ty, ti)
 End Function
 
 Sub ParseAsLongTy(bound As Long, ByRef ty As Long)
@@ -206,12 +232,13 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
     ParseAsPrimType = ParseAsAliasOrUdt(p, bound, ty, ti)
 End Function
 
-Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As Long
+Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
     Dim kAs(7) As Byte
 
     ParseDimAsType = 0
     ty = -1
     ti = -1
+    params = -1
     lstrcpy(VarPtr(kAs), "as")
     If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
         If ParseDimStringSuffix(name, bound, ty, ti) = 0 Then
@@ -223,11 +250,32 @@ Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As 
     End If
     p->pos = p->pos + 1
     If ParseTokKind(p) = TK_STAR Then
-        If ParseAsPtrType(p, ty, ti) = 0 Then Exit Function
+        If ParseAsPtrType(p, ty, ti, params) = 0 Then Exit Function
     Else
         If ParseAsPrimType(p, bound, ty, ti) = 0 Then Exit Function
     End If
     ParseDimAsType = 1
+End Function
+
+Function ParseDimResolveFnPtrAlias(p As *Parser, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim retTy As Long
+    Dim firsts As *Long
+    Dim rets As *Long
+
+    ParseDimResolveFnPtrAlias = 1
+    If ty <> TY_UDT Then Exit Function
+    If ti < 0 Then Exit Function
+    ast = p->ast
+    types = ast->types
+    If TyIsFnPtr(types, ti) = 0 Then Exit Function
+    firsts = types->typeFirst
+    rets = types->typeVirtCount
+    params = firsts[ti]
+    retTy = rets[ti]
+    ty = TY_PTR_FUNC
+    ti = retTy
 End Function
 
 Function ParseDimClassCtor(p As *Parser, ty As Long, ti As Long, ByRef initE As Long) As Long
@@ -277,23 +325,37 @@ Function ParseDimMakeNode(p As *Parser, name As *Byte, ty As Long, bound As Long
     ParseDimMakeNode = nDim
 End Function
 
-Function ParseDimOne(p As *Parser) As Long
-    Dim name(63) As Byte
-    Dim ty As Long
-    Dim bound As Long
-    Dim ti As Long
-    Dim initE As Long
-
-    ParseDimOne = -1
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-    If ParseDimBound(p, bound) = 0 Then Exit Function
+Function ParseDimOneInit(p As *Parser, ByRef initE As Long) As Long
+    ParseDimOneInit = 0
     initE = -1
     If ParseTokKind(p) = TK_EQ Then
         p->pos = p->pos + 1
         initE = ParseExprNoAs(p)
         If initE < 0 Then Exit Function
     End If
-    If ParseDimAsType(p, VarPtr(name), bound, ty, ti) = 0 Then Exit Function
+    ParseDimOneInit = 1
+End Function
+
+Function ParseDimOneTail(p As *Parser, ByRef initE As Long) As Long
+    ParseDimOneTail = 0
+    If ParseTokKind(p) = TK_EQ Then
+        If initE >= 0 Then
+            p->err = 1
+            Exit Function
+        End If
+        p->pos = p->pos + 1
+        initE = ParseExprNoAs(p)
+        If initE < 0 Then Exit Function
+    End If
+    ParseDimOneTail = 1
+End Function
+
+Function ParseDimOneTyped(p As *Parser, name As *Byte, ByRef ty As Long, ByRef bound As Long, ByRef ti As Long, ByRef initE As Long) As Long
+    Dim params As Long
+
+    ParseDimOneTyped = 0
+    If ParseDimAsType(p, name, bound, ty, ti, params) = 0 Then Exit Function
+    If ParseDimResolveFnPtrAlias(p, ty, ti, params) = 0 Then Exit Function
     If ty < 0 Then
         p->err = 1
         Exit Function
@@ -304,16 +366,23 @@ Function ParseDimOne(p As *Parser) As Long
             Exit Function
         End If
     End If
+    If ty = TY_PTR_FUNC Then bound = params
     If ParseDimClassCtor(p, ty, ti, initE) = 0 Then Exit Function
-    If ParseTokKind(p) = TK_EQ Then
-        If initE >= 0 Then
-            p->err = 1
-            Exit Function
-        End If
-        p->pos = p->pos + 1
-        initE = ParseExprNoAs(p)
-        If initE < 0 Then Exit Function
-    End If
+    ParseDimOneTyped = ParseDimOneTail(p, initE)
+End Function
+
+Function ParseDimOne(p As *Parser) As Long
+    Dim name(63) As Byte
+    Dim ty As Long
+    Dim bound As Long
+    Dim ti As Long
+    Dim initE As Long
+
+    ParseDimOne = -1
+    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If ParseDimBound(p, bound) = 0 Then Exit Function
+    If ParseDimOneInit(p, initE) = 0 Then Exit Function
+    If ParseDimOneTyped(p, VarPtr(name), ty, bound, ti, initE) = 0 Then Exit Function
     ParseDimOne = ParseDimMakeNode(p, VarPtr(name), ty, bound, initE, ti)
 End Function
 

@@ -1,0 +1,96 @@
+' PreprocRes - #resource "path"
+
+Function PpResPathGet() As *Byte
+    PpResPathGet = VarPtr(g_ppResPath)
+End Function
+
+Function PpResHas() As Long
+    PpResHas = 0
+    If g_ppResPath[0] <> 0 Then PpResHas = 1
+End Function
+
+Sub PpResClear()
+    g_ppResPath[0] = 0
+End Sub
+
+Function PpResExtractQuoted(line As *Byte, n As Long, from As Long, dst As *Byte) As Long
+    Dim i As Long
+    Dim j As Long
+
+    PpResExtractQuoted = 0
+    i = from
+    While i < n And (line[i] = 32 Or line[i] = 9)
+        i = i + 1
+    Wend
+    If i >= n Or line[i] <> 34 Then Exit Function
+    i = i + 1
+    j = 0
+    While i < n And line[i] <> 34 And j < 259
+        dst[j] = line[i]
+        i = i + 1
+        j = j + 1
+    Wend
+    If i >= n Or line[i] <> 34 Then Exit Function
+    dst[j] = 0
+    PpResExtractQuoted = 1
+End Function
+
+Function PpResResolve(rel As *Byte, curFile As *Byte, full As *Byte) As Long
+    Dim dir(259) As Byte
+    Dim i As Long
+    Dim slash As Long
+
+    PpResResolve = 0
+    If rel[0] = 0 Then Exit Function
+    If rel[1] = 58 Then
+        lstrcpy(full, rel)
+        PpResResolve = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(dir), curFile)
+    slash = -1
+    i = 0
+    While dir[i] <> 0
+        If dir[i] = 92 Or dir[i] = 47 Then slash = i
+        i = i + 1
+    Wend
+    If slash < 0 Then
+        lstrcpy(full, rel)
+    Else
+        dir[slash + 1] = 0
+        lstrcpy(full, VarPtr(dir))
+        lstrcat(full, rel)
+    End If
+    PpResResolve = 1
+End Function
+
+Function PpResSkipKeyword(line As *Byte, n As Long, off As Long) As Long
+    Dim i As Long
+
+    i = off + 1
+    While i < n
+        If line[i] = 32 Or line[i] = 9 Then
+            PpResSkipKeyword = i
+            Exit Function
+        End If
+        i = i + 1
+    Wend
+    PpResSkipKeyword = i
+End Function
+
+' #resource "path" → パス保存。行は出力しない（1）。非該当は 0。
+Function PpTryResourceLine(line As *Byte, n As Long, curFile As *Byte) As Long
+    Dim k(15) As Byte
+    Dim rel(259) As Byte
+    Dim off As Long
+    Dim i As Long
+
+    PpTryResourceLine = 0
+    lstrcpy(VarPtr(k), "resource")
+    If PpLineIsHashDir(line, n, VarPtr(k)) = 0 Then Exit Function
+    off = PpLineTrimOff(line, n)
+    i = PpResSkipKeyword(line, n, off)
+    If PpResExtractQuoted(line, n, i, VarPtr(rel)) = 0 Then Exit Function
+    If PpResResolve(VarPtr(rel), curFile, VarPtr(g_ppResPath)) = 0 Then Exit Function
+    PpTryResourceLine = 1
+End Function
