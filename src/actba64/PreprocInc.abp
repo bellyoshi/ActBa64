@@ -114,7 +114,7 @@ Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) 
     Dim start As Long
     Dim n As Long
     Dim cur As Long
-    Dim sp As Long
+    Dim nestSp As Long
     Dim off As Long
     Dim name(259) As Byte
     Dim names(4159) As Byte
@@ -126,33 +126,33 @@ Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) 
     If combLine <= 0 Then combLine = 1
     i = 0
     cur = 1
-    sp = 0
+    nestSp = 0
     While src[i] <> 0
         start = i
         i = PpLineEndAt(src, i)
         n = i - start
         If PpLineIsFileMark(VarPtr(src[start]), n, VarPtr(name), 260) <> 0 Then
             If PpNameIsEnd(VarPtr(name)) <> 0 Then
-                If sp > 0 Then sp = sp - 1
+                If nestSp > 0 Then nestSp = nestSp - 1
             Else
-                If sp < 16 Then
-                    off = sp * 260
+                If nestSp < 16 Then
+                    off = nestSp * 260
                     PpCopyMarkName(VarPtr(names[off]), VarPtr(name))
-                    locs[sp] = 0
-                    sp = sp + 1
+                    locs[nestSp] = 0
+                    nestSp = nestSp + 1
                 End If
             End If
         Else
-            If sp > 0 Then locs[sp - 1] = locs[sp - 1] + 1
+            If nestSp > 0 Then locs[nestSp - 1] = locs[nestSp - 1] + 1
         End If
         If cur >= combLine Then Exit While
         If src[i] = 13 Then i = i + 1
         If src[i] = 10 Then i = i + 1
         cur = cur + 1
     Wend
-    If sp > 0 Then
-        off = (sp - 1) * 260
-        localLine = locs[sp - 1]
+    If nestSp > 0 Then
+        off = (nestSp - 1) * 260
+        localLine = locs[nestSp - 1]
         If localLine < 1 Then localLine = 1
         PpMapSrcName$ = MakeStr(VarPtr(names[off]))
     End If
@@ -225,13 +225,19 @@ Function PpExpandIncludeLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long,
 End Function
 
 Function PpExpandNormalLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long) As Long
-    Dim wOut(511) As Byte
+    Dim wOut(1023) As Byte
     Dim wN As Long
     Dim wSt As Long
     PpExpandNormalLine = 0
     wN = 0
     wSt = PpRewriteWithLine(line, n, VarPtr(wOut), wN)
-    If wSt = 0 Then Exit Function
+    If wSt = 0 Then
+        If g_ppDidPrintErr = 0 Then
+            Print "error: too long line after With rewrite (>" + Str$(PP_LINE_MAX) + ")"
+            g_ppDidPrintErr = 1
+        End If
+        Exit Function
+    End If
     If wSt = 2 Then
         ' With / End With 行は出力しない
         PpExpandNormalLine = 1
@@ -250,14 +256,16 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
     Dim start As Long
     Dim n As Long
     Dim c As Long
-    Dim line(511) As Byte
+    Dim line(1023) As Byte
     Dim j As Long
+    Dim lineNo As Long
 
     PpExpandInto = 0
     If depth >= PP_MAX_DEPTH Then Exit Function
     If depth = 0 Then PpWithReset()
     If PpEmitFileMark(dst, dstLen, dstCap, curFile) = 0 Then Exit Function
     i = 0
+    lineNo = 1
     While i < srcSize
         start = i
         While i < srcSize
@@ -266,7 +274,10 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
             i = i + 1
         Wend
         n = i - start
-        If n >= PP_LINE_MAX Then n = PP_LINE_MAX - 1
+        If n >= PP_LINE_MAX Then
+            PpErrorTooLongLine(curFile, lineNo, n)
+            Exit Function
+        End If
         j = 0
         While j < n
             line[j] = src[start + j]
@@ -282,6 +293,7 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
         End If
         If i < srcSize And src[i] = 13 Then i = i + 1
         If i < srcSize And src[i] = 10 Then i = i + 1
+        lineNo = lineNo + 1
     Wend
     If PpEmitFileEnd(dst, dstLen, dstCap) = 0 Then Exit Function
     PpExpandInto = 1

@@ -4,17 +4,17 @@ Function LowAlign16(n As Long) As Long
     LowAlign16 = (n + 15) And (0 - 16)
 End Function
 
-Function LowCallStk(nArgs As Long) As Long
-    Dim stk As Long
+Function LowCallBytes(nArgs As Long) As Long
+    Dim callBytes As Long
     If TyIs32() <> 0 Then
-        LowCallStk = nArgs * 4
+        LowCallBytes = nArgs * 4
         Exit Function
     End If
-    stk = 32
+    callBytes = 32
     If nArgs > 4 Then
-        stk = stk + (nArgs - 4) * 8
+        callBytes = callBytes + (nArgs - 4) * 8
     End If
-    LowCallStk = (stk + 15) And (0 - 16)
+    LowCallBytes = (callBytes + 15) And (0 - 16)
 End Function
 
 Sub LowEmitLoadRegArgs(list As *IrList, nArgs As Long)
@@ -39,18 +39,18 @@ Sub LowEmitLoadRegArgs(list As *IrList, nArgs As Long)
     End If
 End Sub
 
-Sub LowEmitCallFinish(list As *IrList, stk As Long)
+Sub LowEmitCallFinish(list As *IrList, callBytes As Long)
     If TyIs32() <> 0 Then Exit Sub
-    If stk <= 0 Then Exit Sub
-    IrEmit(list, OP_ADD_RSP, stk, 0)
+    If callBytes <= 0 Then Exit Sub
+    IrEmit(list, OP_ADD_RSP, callBytes, 0)
 End Sub
 
 ' rax already holds arg0
 Sub LowEmitCall1Rax(list As *IrList, isApi As Long, dllKind As Long, apiName As *Byte, lab As Long)
-    Dim stk As Long
-    stk = LowCallStk(1)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    Dim callBytes As Long
+    callBytes = LowCallBytes(1)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
     LowEmitLoadRegArgs(list, 1)
@@ -59,12 +59,12 @@ Sub LowEmitCall1Rax(list As *IrList, isApi As Long, dllKind As Long, apiName As 
     Else
         IrEmit(list, OP_CALL_LAB, lab, 0)
     End If
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
 End Sub
 
 ' 32bit stdcall: ecx=arg0, edx=arg1 をスタックへ積んで呼ぶ。64bit は既に rcx/rdx。
 Sub LowEmitCallLab2(list As *IrList, lab As Long)
-    Dim stk As Long
+    Dim callBytes As Long
     If TyIs32() <> 0 Then
         IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
         IrEmit(list, OP_PUSH_RAX, 0, 0)
@@ -73,17 +73,17 @@ Sub LowEmitCallLab2(list As *IrList, lab As Long)
         IrEmit(list, OP_CALL_LAB, lab, 0)
         Exit Sub
     End If
-    stk = LowCallStk(2)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(2)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     IrEmit(list, OP_CALL_LAB, lab, 0)
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
 End Sub
 
 ' 32bit stdcall: ecx=arg0, edx=arg1, eax=arg2。64bit は rcx/rdx/r8。
 Sub LowEmitCallLab3(list As *IrList, lab As Long)
-    Dim stk As Long
+    Dim callBytes As Long
     If TyIs32() <> 0 Then
         IrEmit(list, OP_PUSH_RAX, 0, 0)
         IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
@@ -93,25 +93,25 @@ Sub LowEmitCallLab3(list As *IrList, lab As Long)
         IrEmit(list, OP_CALL_LAB, lab, 0)
         Exit Sub
     End If
-    stk = LowCallStk(3)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(3)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     IrEmit(list, OP_CALL_LAB, lab, 0)
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
 End Sub
 
 Sub LowEmitApiImm1(list As *IrList, dllKind As Long, apiName As *Byte, imm As DWord)
-    Dim stk As Long
-    stk = LowCallStk(1)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    Dim callBytes As Long
+    callBytes = LowCallBytes(1)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     IrEmit(list, OP_MOV_EAX_IMM, imm, 0)
     IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
     LowEmitLoadRegArgs(list, 1)
     IrEmitStr(list, OP_CALL_API, dllKind, apiName)
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
 End Sub
 
 Sub LowEmitCaptureArg0(list As *IrList, disp As Long)
@@ -174,61 +174,61 @@ End Sub
 
 ' Nested API call. 64-bit allocates shadow space; 32-bit stdcall uses regs already set via stack in emit32.
 Sub LowEmitApiCallShadow(list As *IrList, dllKind As Long, apiName As *Byte)
-    Dim stk As Long
-    stk = LowCallStk(0)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    Dim callBytes As Long
+    callBytes = LowCallBytes(0)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     IrEmitStr(list, OP_CALL_API, dllKind, apiName)
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
 End Sub
 
 ' rax = byte count; HeapAlloc(GetProcessHeap(), flags, rax)
 Sub LowEmitHeapAllocRax(list As *IrList, flags As DWord)
-    Dim stk As Long
+    Dim callBytes As Long
     Dim sApi(15) As Byte
     Dim ps As Long
     ps = TyPtrSize()
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     lstrcpy(VarPtr(sApi), "GetProcessHeap")
     LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
-    stk = LowCallStk(3)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(3)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
     IrEmit(list, OP_MOV_EAX_IMM, flags, 0)
     IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
-    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, callBytes, 0)
     IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
     LowEmitLoadRegArgs(list, 3)
     lstrcpy(VarPtr(sApi), "HeapAlloc")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
     IrEmit(list, OP_POP_RCX, 0, 0)
 End Sub
 
 ' rax = block; HeapFree(GetProcessHeap(), 0, rax)
 Sub LowEmitHeapFreeRax(list As *IrList)
-    Dim stk As Long
+    Dim callBytes As Long
     Dim sApi(15) As Byte
     Dim ps As Long
     ps = TyPtrSize()
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     lstrcpy(VarPtr(sApi), "GetProcessHeap")
     LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(sApi))
-    stk = LowCallStk(3)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(3)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
     IrEmit(list, OP_XOR_EAX, 0, 0)
     IrEmit(list, OP_STORE_RSP_RAX, ps, 0)
-    IrEmit(list, OP_LOAD_RSP_RAX, stk, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, callBytes, 0)
     IrEmit(list, OP_STORE_RSP_RAX, ps + ps, 0)
     LowEmitLoadRegArgs(list, 3)
     lstrcpy(VarPtr(sApi), "HeapFree")
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(sApi))
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
     IrEmit(list, OP_POP_RCX, 0, 0)
 End Sub

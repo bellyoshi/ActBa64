@@ -9,19 +9,19 @@ Function LowCountCallArgs(ctx As *LowerCtx, idx As Long, base As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim argi As Long
-    Dim argn As Long
+    Dim argNode As Long
 
     ast = ctx->ast
     nodes = ast->nodes
     argi = base
-    argn = nodes[idx].left
-    While argn >= 0
+    argNode = nodes[idx].left
+    While argNode >= 0
         If argi >= 16 Then
             LowCountCallArgs = -1
             Exit Function
         End If
         argi = argi + 1
-        argn = nodes[argn].nxt
+        argNode = nodes[argNode].nxt
     Wend
     LowCountCallArgs = argi
 End Function
@@ -32,7 +32,7 @@ Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
     Dim ast As *Ast
     Dim list As *IrList
     Dim argi As Long
-    Dim argn As Long
+    Dim argNode As Long
     Dim useAddr As Long
 
     LowEmitMethodArgs = 0
@@ -40,17 +40,17 @@ Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
     list = ctx->list
     nodes = ast->nodes
     argi = 1
-    argn = nodes[idx].left
+    argNode = nodes[idx].left
     While argi < nArgs
-        useAddr = LowCallUseAddr(ctx, argn, 0, 0, 1)
+        useAddr = LowCallUseAddr(ctx, argNode, 0, 0, 1)
         If useAddr <> 0 Then
-            If LowAddr(ctx, nodes[argn].left) = 0 Then Exit Function
+            If LowAddr(ctx, nodes[argNode].left) = 0 Then Exit Function
         Else
-            If LowExprArg(ctx, nodes[argn].left) = 0 Then Exit Function
+            If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
         End If
         IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
         argi = argi + 1
-        argn = nodes[argn].nxt
+        argNode = nodes[argNode].nxt
     Wend
     LowEmitMethodArgs = 1
 End Function
@@ -103,7 +103,7 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     Dim tt As *TypeTable
     Dim ti As Long
     Dim argi As Long
-    Dim stk As Long
+    Dim callBytes As Long
 
     LowExprCallMethod = 0
     ast = ctx->ast
@@ -128,13 +128,13 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
         ctx->err = 1
         Exit Function
     End If
-    stk = LowCallStk(nArgs)
-    IrEmit(list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(nArgs)
+    IrEmit(list, OP_SUB_RSP, callBytes, 0)
     ' user args 1..n-1 into home/stack; this (rcx) set last
     If LowEmitMethodArgs(ctx, idx, nArgs) = 0 Then Exit Function
     LowEmitMethodRegArgs(list, nArgs)
     If LowEmitMethodThis(ctx, idx) = 0 Then Exit Function
-    If LowExprCallMethodInvoke(ctx, idx, ti, nArgs, stk) = 0 Then Exit Function
+    If LowExprCallMethodInvoke(ctx, idx, ti, nArgs, callBytes) = 0 Then Exit Function
     LowExprCallMethod = 1
 End Function
 
@@ -147,7 +147,7 @@ Function LowEmitMemOp3(ctx As *LowerCtx, idx As Long, api As *Byte) As Long
     Dim a1 As Long
     Dim a2 As Long
     Dim argi As Long
-    Dim stk As Long
+    Dim callBytes As Long
 
     LowEmitMemOp3 = -1
     ast = ctx->ast
@@ -161,9 +161,9 @@ Function LowEmitMemOp3(ctx As *LowerCtx, idx As Long, api As *Byte) As Long
     a0 = nodes[idx].left
     a1 = nodes[a0].nxt
     a2 = nodes[a1].nxt
-    stk = LowCallStk(3)
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(3)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     If LowExpr(ctx, nodes[a0].left) = 0 Then Exit Function
     IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
@@ -173,7 +173,7 @@ Function LowEmitMemOp3(ctx As *LowerCtx, idx As Long, api As *Byte) As Long
     IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize() + TyPtrSize(), 0)
     LowEmitLoadRegArgs(list, 3)
     IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, api)
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
     LowEmitMemOp3 = 1
 End Function
 
@@ -204,15 +204,15 @@ End Function
 Function LowExprIntrinArg1(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim argn As Long
+    Dim argNode As Long
 
     ast = ctx->ast
     nodes = ast->nodes
-    argn = nodes[idx].left
-    If argn >= 0 Then
-        If nodes[argn].kind = AST_ARG Then argn = nodes[argn].left
+    argNode = nodes[idx].left
+    If argNode >= 0 Then
+        If nodes[argNode].kind = AST_ARG Then argNode = nodes[argNode].left
     End If
-    LowExprIntrinArg1 = LowExpr(ctx, argn)
+    LowExprIntrinArg1 = LowExpr(ctx, argNode)
 End Function
 
 Function LowExprCallIntrin(ctx As *LowerCtx, idx As Long) As Long
@@ -260,18 +260,18 @@ End Function
 Function LowExprCallFnPtrEmit(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Long, nArgs As Long) As Long
     Dim name(63) As Byte
     Dim list As *IrList
-    Dim stk As Long
+    Dim callBytes As Long
 
     LowExprCallFnPtrEmit = 0
     list = ctx->list
     AstCopyStr(ctx->ast, idx, VarPtr(name))
-    stk = LowCallStk(nArgs)
-    If stk > 0 Then IrEmit(list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(nArgs)
+    If callBytes > 0 Then IrEmit(list, OP_SUB_RSP, callBytes, 0)
     If LowEmitCallArgsHome(ctx, idx, nArgs, 0, 0, VarPtr(name)) = 0 Then Exit Function
     LowEmitLoadRegArgs(list, nArgs)
     LowEmitLoadOff(list, vOff, vGlob)
     IrEmit(list, OP_CALL_RAX, 0, 0)
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
     LowExprCallFnPtrEmit = 1
 End Function
 
@@ -347,7 +347,7 @@ End Function
 
 
 
-Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArgs As Long, stk As Long) As Long
+Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArgs As Long, callBytes As Long) As Long
     Dim name(63) As Byte
     Dim buf(255) As Byte
     Dim list As *IrList
@@ -388,7 +388,7 @@ Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, ti As Long, nArg
         End If
         IrEmit(list, OP_CALL_LAB, lab, 0)
     End If
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
 
     LowExprCallMethodInvoke = 1
 End Function

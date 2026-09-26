@@ -103,7 +103,7 @@ Sub PpCondCopyIdentFromLine(line As *Byte, n As Long, ByRef i As Long, dst As *B
 End Sub
 
 Function PpCondDirectiveKeyword(line As *Byte, n As Long, ByRef i As Long, word As *Byte) As Long
-    Dim k(15) As Byte
+    Dim kw(15) As Byte
     Dim j As Long
     PpCondDirectiveKeyword = 0
     word[0] = 0
@@ -122,13 +122,13 @@ Function PpCondDirectiveKeyword(line As *Byte, n As Long, ByRef i As Long, word 
     While i < n
         If IsIdentCont(line[i]) = 0 Then Exit While
         If j < 15 Then
-            k[j] = line[i]
+            kw[j] = line[i]
             j = j + 1
         End If
         i = i + 1
     Wend
-    k[j] = 0
-    lstrcpy(word, VarPtr(k))
+    kw[j] = 0
+    lstrcpy(word, VarPtr(kw))
     PpCondDirectiveKeyword = 1
 End Function
 
@@ -229,7 +229,7 @@ End Sub
 Function PpCondCopyLine(line As *Byte, src As *Byte, lineStart As Long, cnt As Long) As Long
     Dim ln As Long
     ln = cnt
-    If ln > 511 Then ln = 511
+    If ln >= PP_LINE_MAX Then ln = PP_LINE_MAX - 1
     If ln > 0 Then
         memcpy(line, src + lineStart, ln)
     End If
@@ -243,9 +243,11 @@ Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
     Dim dstCap As Long
     Dim i As Long
     Dim lineStart As Long
-    Dim line(511) As Byte
+    Dim line(1023) As Byte
     Dim ln As Long
     Dim c As Long
+    Dim lineNo As Long
+    Dim rawLen As Long
 
     PpApplyConditionals = NULL
     PpCondReset()
@@ -260,22 +262,36 @@ Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
 
     i = 0
     lineStart = 0
+    lineNo = 1
     While i < srcSize
         c = src[i]
         If c = 10 Or c = 13 Then
-            ln = PpCondCopyLine(VarPtr(line), src, lineStart, i - lineStart)
+            rawLen = i - lineStart
+            If rawLen >= PP_LINE_MAX Then
+                PpErrorTooLongLine(NULL, lineNo, rawLen)
+                free(dst)
+                Exit Function
+            End If
+            ln = PpCondCopyLine(VarPtr(line), src, lineStart, rawLen)
             PpCondHandleLine(VarPtr(line), ln, dst, dstLen, dstCap)
             If c = 13 And i + 1 < srcSize And src[i + 1] = 10 Then
                 i = i + 1
             End If
             i = i + 1
             lineStart = i
+            lineNo = lineNo + 1
         Else
             i = i + 1
         End If
     Wend
     If lineStart < srcSize Then
-        ln = PpCondCopyLine(VarPtr(line), src, lineStart, srcSize - lineStart)
+        rawLen = srcSize - lineStart
+        If rawLen >= PP_LINE_MAX Then
+            PpErrorTooLongLine(NULL, lineNo, rawLen)
+            free(dst)
+            Exit Function
+        End If
+        ln = PpCondCopyLine(VarPtr(line), src, lineStart, rawLen)
         PpCondHandleLine(VarPtr(line), ln, dst, dstLen, dstCap)
     End If
     dst[dstLen] = 0

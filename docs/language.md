@@ -55,6 +55,8 @@ Print a +_
 | `#include "path"` | ファイル挿入（深さ上限あり） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
+ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
+
 `Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
@@ -471,7 +473,18 @@ memcpy(dst, src, n)
 
 ## 7. プリプロセスと標準ヘッダ
 
-### 7.1 `#include`
+### 7.1 行長上限
+
+| 項目 | 値 |
+|---|---|
+| 定数 | `PP_LINE_MAX`（`Preproc.abp`） |
+| 上限 | **1024 バイト / 行**（終端 NUL・改行は含まない） |
+| 超過時 | コンパイル失敗。`error: …: too long line (実長 > 1024)` |
+
+`#include` 展開・条件付きプリプロセス・`With` 書き換え後の行にも同じ上限がかかる。  
+長い条件式は `_` 継続や括弧内改行で分割する（[§1.2](#12-行継続)）。
+
+### 7.2 `#include`
 
 ```
 #include "Utils.abp"
@@ -479,7 +492,7 @@ memcpy(dst, src, n)
 
 パスはソース相対（または実装が解決するパス）。循環・深さ超過はエラー。
 
-### 7.2 自動 Include
+### 7.3 自動 Include
 
 `Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
 `UnicodeApi.sbp`（Unicode 版 API の `Declare Lib`）は Preproc が別途挿入する。  
@@ -492,7 +505,7 @@ memcpy(dst, src, n)
 
 **`Declare Lib` 群は載せない**（IAT 解決）。
 
-### 7.3 Math（IEEE Double）
+### 7.4 Math（IEEE Double）
 
 角度はラジアン（`Double`）。`Sin` / `Cos` はマクローリン展開。円周率は `MathPi()`、ネイピア数は `MathE()`（`Const` は整数のみのため Function）。
 
@@ -521,7 +534,7 @@ Print Log(MathE())    ' ≒ 1
 
 サンプル: `src/actba64/samples/math_test.abp` / テスト: `test/t_math_*.abp` / `test/t_double_lit*.abp` / `test/t_dbl_func.abp`
 
-### 7.4 ファイル I/O（`BasicFile.abp`）
+### 7.5 ファイル I/O（`BasicFile.abp`）
 
 番号は **1..16**。実体は [`src/Include/default/BasicFile.abp`](../src/Include/default/BasicFile.abp)（`default.idx` で常時挿入）。
 
