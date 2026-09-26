@@ -96,7 +96,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `HIBYTE` / `HIWORD` / `MAKELONG` 等 | ビット分解・合成マクロ | **組込** |
 | `Int64` / `QWord` / `Char` | 基本型として定義 | **`Char` / `Int64` / `QWord` 型なし**（`Byte` / `Long` / `DWord` 等） |
 | ソース拡張子 | `.sbp` 推奨 | **`.abp`**（`.pj` で結合） |
-| Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`default.idx` + `api.idx`（Declare）+ `UnicodeApi.sbp` を自動挿入**。未登録 API は `Declare Lib` またはコンパイルエラー |
+| Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`default.idx` + `api.idx` + `UnicodeApi.sbp` 自動挿入**。任意 `Declare Lib "dll"` 可。未登録呼び出しはエラー |
 | DirectX | DirectX 9 + `dx_*.sbp` | **DirectX 11**（[改良点](#directx-11)）。高レベル `dx_*` 一式はサンプルのみ |
 | 64bit | ver 4.20 はバグで実質困難 | **64bit PE32+ を正式サポート**（ポインタ・`String`・`HANDLE` = 8、`Long` = 4） |
 | コンパイル | GUI IDE が主 | **CLI** `actba64 src -o out.exe` |

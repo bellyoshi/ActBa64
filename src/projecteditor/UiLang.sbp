@@ -10,7 +10,6 @@ Const UI_PACK_MAX = 4095
 
 Dim g_uiPackBuf(4095) As Byte
 Dim g_uiPackLen As Long
-Dim g_uiParseId As Long
 
 Sub UiLang_ClearOverrides()
     g_uiPackLen = 0
@@ -66,28 +65,42 @@ Function UiLang_ReadFile$(path As String) As String
 End Function
 
 Function UiLang_TrimCode$(s As String) As String
-    Dim t As String
-    Dim c As String
-    t = s
-    While Len(t) > 0
-        c = Left$(t, 1)
-        If c <> " " And c <> Chr$(9) And c <> Chr$(13) And c <> Chr$(10) Then Exit While
-        t = Mid$(t, 2)
+    Dim p As *Byte
+    Dim n As Long
+    Dim lo As Long
+    Dim hi As Long
+    Dim a As Long
+
+    UiLang_TrimCode$ = ""
+    n = Len(s)
+    If n <= 0 Then Exit Function
+    p = StrPtr(s)
+    If p = 0 Then Exit Function
+    lo = 0
+    hi = n
+    While lo < hi
+        a = p[lo] And &HFF
+        If a <> 32 And a <> 9 And a <> 13 And a <> 10 Then Exit While
+        lo = lo + 1
     Wend
-    While Len(t) > 0
-        c = Right$(t, 1)
-        If c <> " " And c <> Chr$(9) And c <> Chr$(13) And c <> Chr$(10) Then Exit While
-        t = Left$(t, Len(t) - 1)
+    While hi > lo
+        a = p[hi - 1] And &HFF
+        If a <> 32 And a <> 9 And a <> 13 And a <> 10 Then Exit While
+        hi = hi - 1
     Wend
-    UiLang_TrimCode$ = t
+    If hi <= lo Then Exit Function
+    UiLang_TrimCode$ = Enc_DupCStr$(VarPtr(p[lo]), hi - lo)
 End Function
 
 Function UiLang_IsCommentOrSection(line As String) As Long
+    Dim p As *Byte
     Dim a As Long
 
     UiLang_IsCommentOrSection = 0
     If Len(line) = 0 Then Exit Function
-    a = Asc(Left$(line, 1))
+    p = StrPtr(line)
+    If p = 0 Then Exit Function
+    a = p[0] And &HFF
     If a = 35 Then
         UiLang_IsCommentOrSection = 1
     ElseIf a = 59 Then
@@ -98,6 +111,7 @@ Function UiLang_IsCommentOrSection(line As String) As Long
 End Function
 
 Function UiLang_IsValidCode(code As String) As Long
+    Dim p As *Byte
     Dim i As Long
     Dim n As Long
     Dim a As Long
@@ -107,8 +121,10 @@ Function UiLang_IsValidCode(code As String) As Long
     n = Len(code)
     If n < 1 Then Exit Function
     If n > 16 Then Exit Function
-    For i = 1 To n
-        a = Asc(Mid$(code, i, 1))
+    p = StrPtr(code)
+    If p = 0 Then Exit Function
+    For i = 0 To n - 1
+        a = p[i] And &HFF
         ok = 0
         If a >= 65 Then
             If a <= 90 Then ok = 1
@@ -118,121 +134,130 @@ Function UiLang_IsValidCode(code As String) As Long
         End If
         If a >= 48 Then
             If a <= 57 Then
-                If i > 1 Then ok = 1
+                If i > 0 Then ok = 1
             End If
         End If
         If a = 95 Then
-            If i > 1 Then ok = 1
+            If i > 0 Then ok = 1
         End If
         If ok = 0 Then Exit Function
     Next
     UiLang_IsValidCode = 1
 End Function
 
-Function UiLang_IsLanguageKey(line As String) As Long
-    Dim kw As String
+Function UiLang_MatchLanguageKey(ByVal p As *Byte, ByVal lineStart As Long, ByVal lineEnd As Long) As Long
     Dim i As Long
     Dim a As Long
-    Dim b As Long
     Dim key As String
+    Dim kp As *Byte
 
-    UiLang_IsLanguageKey = 0
-    If Len(line) < 9 Then Exit Function
+    UiLang_MatchLanguageKey = 0
+    If lineEnd - lineStart < 10 Then Exit Function
     key = "language"
-    kw = Left$(line, 8)
-    For i = 1 To 8
-        a = Asc(Mid$(kw, i, 1))
-        b = Asc(Mid$(key, i, 1))
+    kp = StrPtr(key)
+    If kp = 0 Then Exit Function
+    For i = 0 To 7
+        a = p[lineStart + i] And &HFF
         If a >= 65 And a <= 90 Then a = a + 32
-        If a <> b Then Exit Function
+        If a <> (kp[i] And &HFF) Then Exit Function
     Next
-    If Mid$(line, 9, 1) <> "=" Then Exit Function
-    UiLang_IsLanguageKey = 1
+    If (p[lineStart + 8] And &HFF) <> 61 Then Exit Function
+    UiLang_MatchLanguageKey = 1
 End Function
 
-Function UiLang_CodeFromIniLine$(line As String) As String
-    Dim t As String
-    Dim code As String
+Function UiLang_CodeFromBytes$(ByVal p As *Byte, ByVal off As Long, ByVal ln As Long) As String
+    Dim i As Long
+    Dim a As Long
+    Dim ok As Long
+    Dim buf(16) As Byte
 
-    UiLang_CodeFromIniLine$ = ""
-    t = UiLang_TrimCode$(line)
-    If Len(t) = 0 Then Exit Function
-    If UiLang_IsCommentOrSection(t) <> 0 Then Exit Function
-    If UiLang_IsLanguageKey(t) = 0 Then Exit Function
-    code = UiLang_TrimCode$(Mid$(t, 10))
-    If UiLang_IsValidCode(code) = 0 Then Exit Function
-    UiLang_CodeFromIniLine$ = Mid$(code, 1, Len(code))
+    UiLang_CodeFromBytes$ = ""
+    If p = 0 Then Exit Function
+    If ln < 1 Then Exit Function
+    If ln > 16 Then Exit Function
+    For i = 0 To ln - 1
+        a = p[off + i] And &HFF
+        ok = 0
+        If a >= 65 Then
+            If a <= 90 Then ok = 1
+        End If
+        If a >= 97 Then
+            If a <= 122 Then ok = 1
+        End If
+        If a >= 48 Then
+            If a <= 57 Then
+                If i > 0 Then ok = 1
+            End If
+        End If
+        If a = 95 Then
+            If i > 0 Then ok = 1
+        End If
+        If ok = 0 Then Exit Function
+        buf[i] = a
+    Next
+    buf[ln] = 0
+    UiLang_CodeFromBytes$ = Enc_DupCStr$(VarPtr(buf[0]), ln)
 End Function
 
 Function UiLang_ReadCode$() As String
     Dim raw As String
-    Dim line As String
-    Dim code As String
-    Dim start As Long
-    Dim nl As Long
+    Dim p As *Byte
     Dim n As Long
+    Dim i As Long
+    Dim lineStart As Long
+    Dim lineEnd As Long
+    Dim a As Long
+    Dim codeOff As Long
+    Dim codeLen As Long
+    Dim code As String
 
     UiLang_ReadCode$ = ""
     raw = UiLang_ReadFile$(UiLang_ConfigPath$())
     n = Len(raw)
     If n = 0 Then Exit Function
-    start = 1
-    While start <= n
-        nl = InStr(start, raw, Chr$(10))
-        If nl = 0 Then
-            line = Mid$(raw, start, n - start + 1)
-            start = n + 1
+    p = StrPtr(raw)
+    If p = 0 Then Exit Function
+    lineStart = 0
+    i = 0
+    While i <= n
+        If i = n Then
+            a = 10
         Else
-            line = Mid$(raw, start, nl - start)
-            start = nl + 1
+            a = p[i] And &HFF
         End If
-        If Len(line) > 0 Then
-            If Asc(Right$(line, 1)) = 13 Then line = Left$(line, Len(line) - 1)
+        If a = 10 Then
+            lineEnd = i
+            If lineEnd > lineStart Then
+                If (p[lineEnd - 1] And &HFF) = 13 Then lineEnd = lineEnd - 1
+            End If
+            If lineEnd > lineStart Then
+                a = p[lineStart] And &HFF
+                If a <> 35 And a <> 59 And a <> 91 Then
+                    If UiLang_MatchLanguageKey(p, lineStart, lineEnd) <> 0 Then
+                        codeOff = lineStart + 9
+                        While codeOff < lineEnd
+                            a = p[codeOff] And &HFF
+                            If a <> 32 And a <> 9 Then Exit While
+                            codeOff = codeOff + 1
+                        Wend
+                        codeLen = lineEnd - codeOff
+                        While codeLen > 0
+                            a = p[codeOff + codeLen - 1] And &HFF
+                            If a <> 32 And a <> 9 Then Exit While
+                            codeLen = codeLen - 1
+                        Wend
+                        code = UiLang_CodeFromBytes$(p, codeOff, codeLen)
+                        If Len(code) > 0 Then
+                            If Len(raw) = n Then UiLang_ReadCode$ = code
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+            lineStart = i + 1
         End If
-        code = UiLang_CodeFromIniLine$(line)
-        If Len(code) > 0 Then
-            UiLang_ReadCode$ = code
-            Exit Function
-        End If
+        i = i + 1
     Wend
-End Function
-
-Function UiLang_Unquote$(s As String) As String
-    Dim t As String
-    Dim n As Long
-    t = s
-    n = Len(t)
-    If n >= 2 Then
-        If Left$(t, 1) = Chr$(34) And Right$(t, 1) = Chr$(34) Then
-            t = Mid$(t, 2, n - 2)
-        End If
-    End If
-    UiLang_Unquote$ = t
-End Function
-
-Function UiLang_ParseCsvLine$(line As String) As String
-    Dim t As String
-    Dim comma As Long
-    Dim i As Long
-    Dim n As Long
-
-    UiLang_ParseCsvLine$ = ""
-    g_uiParseId = -1
-    t = UiLang_TrimCode$(line)
-    If Len(t) = 0 Then Exit Function
-    If UiLang_IsCommentOrSection(t) <> 0 Then Exit Function
-    If Left$(t, 2) = "id" Then Exit Function
-    n = Len(t)
-    comma = 0
-    For i = 1 To n
-        If Mid$(t, i, 1) = "," Then
-            comma = i
-            Exit For
-        End If
-    Next
-    If comma <= 1 Then Exit Function
-    g_uiParseId = Val(Left$(t, comma - 1))
-    UiLang_ParseCsvLine$ = UiLang_Unquote$(Mid$(t, comma + 1))
 End Function
 
 Function UiLang_Slice$(ByVal off As Long, ByVal ln As Long) As String
@@ -250,48 +275,84 @@ Function UiLang_Slice$(ByVal off As Long, ByVal ln As Long) As String
     free(tmp)
 End Function
 
+Function UiLang_UnquoteBytes$(ByVal off As Long, ByVal ln As Long) As String
+    Dim a0 As Long
+    Dim a1 As Long
+
+    UiLang_UnquoteBytes$ = ""
+    If ln <= 0 Then Exit Function
+    If off < 0 Then Exit Function
+    If off + ln > g_uiPackLen Then Exit Function
+    If ln >= 2 Then
+        a0 = g_uiPackBuf[off] And &HFF
+        a1 = g_uiPackBuf[off + ln - 1] And &HFF
+        If a0 = 34 And a1 = 34 Then
+            UiLang_UnquoteBytes$ = UiLang_Slice$(off + 1, ln - 2)
+            Exit Function
+        End If
+    End If
+    UiLang_UnquoteBytes$ = UiLang_Slice$(off, ln)
+End Function
+
 Function UiLang_Lookup$(ByVal id As Long) As String
     Dim i As Long
     Dim lineStart As Long
-    Dim lineLen As Long
-    Dim line As String
-    Dim text As String
-    Dim c As Long
+    Dim lineEnd As Long
+    Dim comma As Long
+    Dim num As Long
+    Dim a As Long
+    Dim pos As Long
+    Dim digit As Long
 
     UiLang_Lookup$ = ""
     If g_uiPackLen <= 0 Then Exit Function
     lineStart = 0
     i = 0
-    While i < g_uiPackLen
-        c = g_uiPackBuf[i] And &HFF
-        If c = 10 Then
-            lineLen = i - lineStart
-            If lineLen > 0 Then
-                c = g_uiPackBuf[i - 1] And &HFF
-                If c = 13 Then lineLen = lineLen - 1
+    While i <= g_uiPackLen
+        If i = g_uiPackLen Then
+            a = 10
+        Else
+            a = g_uiPackBuf[i] And &HFF
+        End If
+        If a = 10 Then
+            lineEnd = i
+            If lineEnd > lineStart Then
+                If (g_uiPackBuf[lineEnd - 1] And &HFF) = 13 Then lineEnd = lineEnd - 1
             End If
-            line = UiLang_Slice$(lineStart, lineLen)
-            text = UiLang_ParseCsvLine$(line)
-            If g_uiParseId = id Then
-                If Len(text) > 0 Then UiLang_Lookup$ = text
-                Exit Function
+            If lineEnd > lineStart Then
+                a = g_uiPackBuf[lineStart] And &HFF
+                If a >= 48 And a <= 57 Then
+                    comma = -1
+                    num = 0
+                    digit = 0
+                    For pos = lineStart To lineEnd - 1
+                        a = g_uiPackBuf[pos] And &HFF
+                        If a = 44 Then
+                            comma = pos
+                            Exit For
+                        End If
+                        If a >= 48 And a <= 57 Then
+                            num = num * 10 + (a - 48)
+                            digit = 1
+                        Else
+                            digit = 0
+                            Exit For
+                        End If
+                    Next
+                    If digit <> 0 And comma > lineStart Then
+                        If num = id Then
+                            If comma + 1 < lineEnd Then
+                                UiLang_Lookup$ = UiLang_UnquoteBytes$(comma + 1, lineEnd - comma - 1)
+                            End If
+                            Exit Function
+                        End If
+                    End If
+                End If
             End If
             lineStart = i + 1
         End If
         i = i + 1
     Wend
-    If lineStart < g_uiPackLen Then
-        lineLen = g_uiPackLen - lineStart
-        If lineLen > 0 Then
-            c = g_uiPackBuf[g_uiPackLen - 1] And &HFF
-            If c = 13 Then lineLen = lineLen - 1
-        End If
-        line = UiLang_Slice$(lineStart, lineLen)
-        text = UiLang_ParseCsvLine$(line)
-        If g_uiParseId = id Then
-            If Len(text) > 0 Then UiLang_Lookup$ = text
-        End If
-    End If
 End Function
 
 Sub UiLang_LoadPack(code As String)

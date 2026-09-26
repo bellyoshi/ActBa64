@@ -35,11 +35,11 @@ Sub PpCondDefineName(name As *Byte)
     If PpCondIsDefined(name) <> 0 Then Exit Sub
     off = g_ppDefCount * PP_DEF_NAME
     i = 0
-    While name[i] <> 0 And i < PP_DEF_NAME - 1
+    While name[i] <> CH_NUL And i < PP_DEF_NAME - 1
         g_ppDef[off + i] = name[i]
         i = i + 1
     Wend
-    g_ppDef[off + i] = 0
+    g_ppDef[off + i] = CH_NUL
     g_ppDefCount = g_ppDefCount + 1
 End Sub
 
@@ -52,14 +52,14 @@ Function PpCondIsDefined(name As *Byte) As Long
     While d < g_ppDefCount
         off = d * PP_DEF_NAME
         i = 0
-        While name[i] <> 0 And g_ppDef[off + i] <> 0
-            If PpToLower(name[i]) <> PpToLower(g_ppDef[off + i]) Then
+        While name[i] <> CH_NUL And g_ppDef[off + i] <> CH_NUL
+            If ToLowerChar(name[i]) <> ToLowerChar(g_ppDef[off + i]) Then
                 i = -1
                 Exit While
             End If
             i = i + 1
         Wend
-        If i >= 0 And name[i] = 0 And g_ppDef[off + i] = 0 Then
+        If i >= 0 And name[i] = CH_NUL And g_ppDef[off + i] = CH_NUL Then
             PpCondIsDefined = 1
             Exit Function
         End If
@@ -83,10 +83,10 @@ End Function
 Sub PpCondCopyIdentFromLine(line As *Byte, n As Long, ByRef i As Long, dst As *Byte)
     Dim c As Long
     Dim j As Long
-    dst[0] = 0
+    dst[0] = CH_NUL
     While i < n
         c = line[i]
-        If c <> 32 And c <> 9 Then Exit While
+        If c <> CH_SP And c <> CH_TAB Then Exit While
         i = i + 1
     Wend
     j = 0
@@ -99,23 +99,23 @@ Sub PpCondCopyIdentFromLine(line As *Byte, n As Long, ByRef i As Long, dst As *B
         End If
         i = i + 1
     Wend
-    dst[j] = 0
+    dst[j] = CH_NUL
 End Sub
 
 Function PpCondDirectiveKeyword(line As *Byte, n As Long, ByRef i As Long, word As *Byte) As Long
     Dim kw(15) As Byte
     Dim j As Long
     PpCondDirectiveKeyword = 0
-    word[0] = 0
+    word[0] = CH_NUL
     While i < n
-        If line[i] <> 32 And line[i] <> 9 Then Exit While
+        If line[i] <> CH_SP And line[i] <> CH_TAB Then Exit While
         i = i + 1
     Wend
     If i >= n Then Exit Function
-    If line[i] <> 35 Then Exit Function
+    If line[i] <> CH_HASH Then Exit Function
     i = i + 1
     While i < n
-        If line[i] <> 32 And line[i] <> 9 Then Exit While
+        If line[i] <> CH_SP And line[i] <> CH_TAB Then Exit While
         i = i + 1
     Wend
     j = 0
@@ -127,7 +127,7 @@ Function PpCondDirectiveKeyword(line As *Byte, n As Long, ByRef i As Long, word 
         End If
         i = i + 1
     Wend
-    kw[j] = 0
+    kw[j] = CH_NUL
     lstrcpy(word, VarPtr(kw))
     PpCondDirectiveKeyword = 1
 End Function
@@ -136,7 +136,7 @@ Sub PpCondEmitLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *
     Dim nl(1) As Byte
     If PpCondEmitActive() = 0 Then Exit Sub
     If PpAppend(dst, dstLen, dstCap, line, n) = 0 Then Exit Sub
-    nl[0] = 10
+    nl[0] = CH_NL
     If PpAppend(dst, dstLen, dstCap, VarPtr(nl), 1) = 0 Then Exit Sub
 End Sub
 
@@ -194,7 +194,7 @@ Sub PpCondHandleLine(line As *Byte, n As Long, dst As *Byte, ByRef dstLen As Lon
     If PpStrEqCI(VarPtr(word), "define") <> 0 Then
         If PpCondEmitActive() <> 0 Then
             PpCondCopyIdentFromLine(line, n, i, VarPtr(id))
-            If id[0] <> 0 Then PpCondDefineName(VarPtr(id))
+            If id[0] <> CH_NUL Then PpCondDefineName(VarPtr(id))
         End If
         Exit Sub
     End If
@@ -233,7 +233,7 @@ Function PpCondCopyLine(line As *Byte, src As *Byte, lineStart As Long, cnt As L
     If ln > 0 Then
         memcpy(line, src + lineStart, ln)
     End If
-    line[ln] = 0
+    line[ln] = CH_NUL
     PpCondCopyLine = ln
 End Function
 
@@ -258,14 +258,14 @@ Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
     dst = malloc(dstCap + 1)
     If dst = NULL Then Exit Function
     dstLen = 0
-    dst[0] = 0
+    dst[0] = CH_NUL
 
     i = 0
     lineStart = 0
     lineNo = 1
     While i < srcSize
         c = src[i]
-        If c = 10 Or c = 13 Then
+        If c = CH_NL Or c = CH_CR Then
             rawLen = i - lineStart
             If rawLen >= PP_LINE_MAX Then
                 PpErrorTooLongLine(NULL, lineNo, rawLen)
@@ -274,7 +274,7 @@ Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
             End If
             ln = PpCondCopyLine(VarPtr(line), src, lineStart, rawLen)
             PpCondHandleLine(VarPtr(line), ln, dst, dstLen, dstCap)
-            If c = 13 And i + 1 < srcSize And src[i + 1] = 10 Then
+            If c = CH_CR And i + 1 < srcSize And src[i + 1] = CH_NL Then
                 i = i + 1
             End If
             i = i + 1
@@ -294,6 +294,6 @@ Function PpApplyConditionals(src As *Byte, srcSize As Long) As *Byte
         ln = PpCondCopyLine(VarPtr(line), src, lineStart, rawLen)
         PpCondHandleLine(VarPtr(line), ln, dst, dstLen, dstCap)
     End If
-    dst[dstLen] = 0
+    dst[dstLen] = CH_NUL
     PpApplyConditionals = dst
 End Function

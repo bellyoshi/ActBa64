@@ -98,13 +98,49 @@ Function IrDllNameOf(dllKind As DWord, dst As *Byte) As Long
     End If
 End Function
 
+' arg1<>0: enum + str=api / arg1=0: str="dll|api"
+Function IrResolveApiNames(list As *IrList, i As Long, dllOut As *Byte, apiOut As *Byte) As Long
+    Dim ops As *IrOp
+    Dim packed(255) As Byte
+    Dim j As Long
+    Dim k As Long
+
+    IrResolveApiNames = 0
+    ops = list->ops
+    If ops[i].arg1 <> 0 Then
+        If IrDllNameOf(ops[i].arg1, dllOut) = 0 Then Exit Function
+        IrCopyStrAt(list, i, apiOut)
+        IrResolveApiNames = 1
+        Exit Function
+    End If
+    IrCopyStrAt(list, i, VarPtr(packed))
+    j = 0
+    While packed[j] <> 0 And packed[j] <> 124 And j < 63
+        dllOut[j] = packed[j]
+        j = j + 1
+    Wend
+    If packed[j] <> 124 Then Exit Function
+    dllOut[j] = 0
+    j = j + 1
+    k = 0
+    While packed[j] <> 0 And k < 63
+        apiOut[k] = packed[j]
+        j = j + 1
+        k = k + 1
+    Wend
+    apiOut[k] = 0
+    If dllOut[0] = 0 Or apiOut[0] = 0 Then Exit Function
+    IrResolveApiNames = 1
+End Function
+
 Sub IrCollect(list As *IrList, builder As *ImportBuilder)
     Dim i As Long
     Dim n As Long
     Dim opv As Long
     Dim ops As *IrOp
     Dim tmp(255) As Byte
-    Dim dll(31) As Byte
+    Dim dll(63) As Byte
+    Dim api(63) As Byte
     Dim sid As Long
 
     ops = list->ops
@@ -112,9 +148,8 @@ Sub IrCollect(list As *IrList, builder As *ImportBuilder)
     For i = 0 To n - 1
         opv = ops[i].op
         If opv = OP_CALL_API Then
-            If IrDllNameOf(ops[i].arg1, VarPtr(dll)) <> 0 Then
-                IrCopyStrAt(list, i, VarPtr(tmp))
-                IbAddImport(builder, VarPtr(dll), VarPtr(tmp))
+            If IrResolveApiNames(list, i, VarPtr(dll), VarPtr(api)) <> 0 Then
+                IbAddImport(builder, VarPtr(dll), VarPtr(api))
             End If
         ElseIf opv = OP_LEA_RDX_STR Or opv = OP_LEA_R8_STR Or opv = OP_LEA_RAX_STR Then
             IrCopyStrAt(list, i, VarPtr(tmp))

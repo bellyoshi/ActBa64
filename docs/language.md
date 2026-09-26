@@ -247,7 +247,7 @@ End Sub
 - 戻り値は `Function名 = 式`
 - `Exit Sub` / `Exit Function`
 - ネストした `Sub`/`Function` は不可
-- `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT に載せる）
+- `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT に載せる。`Lib` は任意 DLL 名。拡張子省略時は `.dll` を付与）
 
 ### 3.3 Class
 
@@ -609,7 +609,8 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 
 ## 8. WinAPI / IAT
 
-`api.idx` / `UnicodeApi.sbp` の `Declare`（およびソース側 Declare）で認識した API はインポートテーブルに載る。
+`api.idx` / `UnicodeApi.sbp` の `Declare`（およびソース側 Declare）で認識した API はインポートテーブルに載る。  
+`Lib` は任意の DLL 名を受け付ける（`Lib "mydll"` → `mydll.dll`）。不足分はソース側で `Declare Lib`。
 
 ### 8.1 共通でよく使うもの（kernel32）
 
@@ -623,7 +624,7 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 user32（`MessageBoxA` 等）、gdi32（`CreatePen` / `Ellipse` / `BitBlt` 等）、  
 `PeekMessageA` / `MsgWaitForMultipleObjects` などは `api.idx` の Declare で解決する。
 
-不足 API はソース側で `Declare Lib`。未登録かつ未 `Declare` の呼び出しはコンパイルエラーです。
+不足 API はソース側で `Declare Lib`（任意 DLL 可）。未登録かつ未 `Declare` の呼び出しはコンパイルエラーです。
 
 ---
 
