@@ -144,6 +144,7 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 | `release\actba64.exe` | コンパイラ（既定 64bit、`-actba32` で 32bit） |
 | `release\Include\` | `src\Include` のコピー |
 | `release\help\` | エディタ向け HTML ヘルプ |
+| `release\ProjectEditor_lang_*.csv` | UI 言語パック（既定は英語組み込み。`editor.lang` に `ja` 等） |
 
 `Include` の正本は [`src/Include`](../src/Include) のみ。`VoidPtr` は `*Byte`（ポインタ幅は **コンパイル対象** に従う: 既定 8、`-actba32` で 4）。
 
