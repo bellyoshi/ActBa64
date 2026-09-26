@@ -59,6 +59,44 @@ Function LowExprTypeOp(ctx As *LowerCtx, idx As Long, k As Long) As Long
     End If
 End Function
 
+Function LowExprTypeCall(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+
+    LowExprTypeCall = TY_LONG
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+        If vTy = TY_PTR_FUNC Then
+            If vTypeIdx >= 0 Then
+                LowExprTypeCall = vTypeIdx
+            Else
+                LowExprTypeCall = TY_LONG
+            End If
+            Exit Function
+        End If
+        If nodes[idx].num = 1 Then
+            If vTy = TY_DOUBLE_ARR Then
+                LowExprTypeCall = TY_DOUBLE
+                Exit Function
+            End If
+            If vTy = TY_SINGLE_ARR Then
+                LowExprTypeCall = TY_SINGLE
+                Exit Function
+            End If
+            Exit Function
+        End If
+    End If
+    LowExprTypeCall = LowFindFuncRetTy(ctx, VarPtr(name))
+End Function
+
 Function LowExprTypeRef(ctx As *LowerCtx, idx As Long, k As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -74,29 +112,7 @@ Function LowExprTypeRef(ctx As *LowerCtx, idx As Long, k As Long) As Long
     ast = ctx->ast
     nodes = ast->nodes
     If k = AST_CALL Then
-        AstCopyStr(ast, idx, VarPtr(name))
-        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-            If vTy = TY_PTR_FUNC Then
-                If vTypeIdx >= 0 Then
-                    LowExprTypeRef = vTypeIdx
-                Else
-                    LowExprTypeRef = TY_LONG
-                End If
-                Exit Function
-            End If
-            If nodes[idx].num = 1 Then
-                If vTy = TY_DOUBLE_ARR Then
-                    LowExprTypeRef = TY_DOUBLE
-                    Exit Function
-                End If
-                If vTy = TY_SINGLE_ARR Then
-                    LowExprTypeRef = TY_SINGLE
-                    Exit Function
-                End If
-                Exit Function
-            End If
-        End If
-        LowExprTypeRef = LowFindFuncRetTy(ctx, VarPtr(name))
+        LowExprTypeRef = LowExprTypeCall(ctx, idx)
         Exit Function
     End If
     base = nodes[idx].left
@@ -215,6 +231,33 @@ Function LowExprIsDoubleBits(ctx As *LowerCtx, idx As Long) As Long
     If LowExprIsDoubleBitsTail(ctx, idx, k) <> 0 Then LowExprIsDoubleBits = 1
 End Function
 
+Function LowExprIsSingleBitsCall(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(63) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+
+    LowExprIsSingleBitsCall = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+        If vTy = TY_PTR_FUNC Then
+            If vTypeIdx = TY_SINGLE Then LowExprIsSingleBitsCall = 1
+            Exit Function
+        End If
+        If nodes[idx].num = 1 Then
+            If vTy = TY_SINGLE_ARR Then LowExprIsSingleBitsCall = 1
+            Exit Function
+        End If
+    End If
+    If LowFindFuncRetTy(ctx, VarPtr(name)) = TY_SINGLE Then LowExprIsSingleBitsCall = 1
+End Function
+
 Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -244,18 +287,7 @@ Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     If k = AST_CALL Then
-        AstCopyStr(ast, idx, VarPtr(name))
-        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
-            If vTy = TY_PTR_FUNC Then
-                If vTypeIdx = TY_SINGLE Then LowExprIsSingleBits = 1
-                Exit Function
-            End If
-            If nodes[idx].num = 1 Then
-                If vTy = TY_SINGLE_ARR Then LowExprIsSingleBits = 1
-                Exit Function
-            End If
-        End If
-        If LowFindFuncRetTy(ctx, VarPtr(name)) = TY_SINGLE Then LowExprIsSingleBits = 1
+        LowExprIsSingleBits = LowExprIsSingleBitsCall(ctx, idx)
         Exit Function
     End If
     If k = AST_INDEX Then

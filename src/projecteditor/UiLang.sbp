@@ -1,7 +1,11 @@
 ' Language pack loader.
-' editor.lang (next to exe): language code, e.g. "ja" (default = English / no pack)
+' setting.ini (next to exe): Language=ja (omit file / blank / en = English built-in)
 ' ProjectEditor_lang_<code>.csv: UTF-8 lines "id,text" (# comments / blank skipped)
 ' Overrides are kept as the raw CSV text (no String arrays — host-safe).
+
+Const UI_MB_YESNO = &H4
+Const UI_MB_ICONQUESTION = &H20
+Const UI_IDYES = 6
 
 Dim g_uiCsv As String
 
@@ -13,9 +17,9 @@ Function UiLang_ConfigPath$() As String
     Dim dir As String
     dir = EditorBuild_ExeDir$()
     If Len(dir) = 0 Then
-        UiLang_ConfigPath$ = "editor.lang"
+        UiLang_ConfigPath$ = "setting.ini"
     Else
-        UiLang_ConfigPath$ = dir + "editor.lang"
+        UiLang_ConfigPath$ = dir + "setting.ini"
     End If
 End Function
 
@@ -75,9 +79,44 @@ Function UiLang_TrimCode$(s As String) As String
     UiLang_TrimCode$ = t
 End Function
 
+Function UiLang_IsLanguageKey(line As String) As Long
+    Dim k As String
+    Dim i As Long
+    Dim a As Long
+    Dim b As Long
+    Dim key As String
+
+    UiLang_IsLanguageKey = 0
+    If Len(line) < 9 Then Exit Function
+    key = "language"
+    k = Left$(line, 8)
+    For i = 1 To 8
+        a = Asc(Mid$(k, i, 1))
+        b = Asc(Mid$(key, i, 1))
+        If a >= 65 And a <= 90 Then a = a + 32
+        If a <> b Then Exit Function
+    Next
+    If Mid$(line, 9, 1) <> "=" Then Exit Function
+    UiLang_IsLanguageKey = 1
+End Function
+
+Function UiLang_CodeFromIniLine$(line As String) As String
+    Dim t As String
+
+    UiLang_CodeFromIniLine$ = ""
+    t = UiLang_TrimCode$(line)
+    If Len(t) = 0 Then Exit Function
+    If Left$(t, 1) = "#" Then Exit Function
+    If Left$(t, 1) = ";" Then Exit Function
+    If Left$(t, 1) = "[" Then Exit Function
+    If UiLang_IsLanguageKey(t) = 0 Then Exit Function
+    UiLang_CodeFromIniLine$ = UiLang_TrimCode$(Mid$(t, 10))
+End Function
+
 Function UiLang_ReadCode$() As String
     Dim raw As String
     Dim line As String
+    Dim code As String
     Dim i As Long
     Dim n As Long
     Dim c As Long
@@ -89,13 +128,19 @@ Function UiLang_ReadCode$() As String
     line = ""
     For i = 1 To n
         c = Asc(Mid$(raw, i, 1))
-        If c = 10 Or c = 13 Then
-            If Len(line) > 0 Then Exit For
-        Else
+        If c = 10 Then
+            code = UiLang_CodeFromIniLine$(line)
+            If Len(code) > 0 Then
+                UiLang_ReadCode$ = code
+                Exit Function
+            End If
+            line = ""
+        ElseIf c <> 13 Then
             line = line + Mid$(raw, i, 1)
         End If
     Next
-    UiLang_ReadCode$ = UiLang_TrimCode$(line)
+    code = UiLang_CodeFromIniLine$(line)
+    If Len(code) > 0 Then UiLang_ReadCode$ = code
 End Function
 
 Function UiLang_Unquote$(s As String) As String
@@ -189,6 +234,31 @@ Sub UiLang_Init()
     UiLang_LoadPack(code)
 End Sub
 
+Function UiLang_WriteCode(code As String) As Long
+    Dim path As String
+    Dim text As String
+    Dim hFile As HANDLE
+    Dim nWritten As DWord
+    Dim n As Long
+    Dim t As String
+
+    UiLang_WriteCode = 0
+    t = UiLang_TrimCode$(code)
+    If Len(t) = 0 Then t = "en"
+    path = UiLang_ConfigPath$()
+    text = "# ProjectEditor settings (UTF-8)" + Chr$(13) + Chr$(10)
+    text = text + "# Without this file (or Language=en), UI is English (built-in)." + Chr$(13) + Chr$(10)
+    text = text + "# Language=ja loads ProjectEditor_lang_ja.csv next to the exe." + Chr$(13) + Chr$(10)
+    text = text + "Language=" + t + Chr$(13) + Chr$(10)
+    n = Len(text)
+    hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    If hFile = INVALID_HANDLE_VALUE Then Exit Function
+    nWritten = 0
+    If n > 0 Then WriteFile(hFile, StrPtr(text), n, VarPtr(nWritten), ByVal NULL)
+    CloseHandle(hFile)
+    If nWritten = n Then UiLang_WriteCode = 1
+End Function
+
 Function UiText$(ByVal id As Long) As String
     Dim o As String
     o = UiLang_Lookup$(id)
@@ -217,3 +287,26 @@ Sub UiMsgBox(hWnd As HWND, msg As String, title As String)
     free(wMsg)
     free(wTitle)
 End Sub
+
+Function UiMsgBoxYesNo(hWnd As HWND, msg As String, title As String) As Long
+    Dim wMsg As *Byte
+    Dim wTitle As *Byte
+    Dim nMsg As Long
+    Dim nTitle As Long
+    Dim r As Long
+
+    UiMsgBoxYesNo = 0
+    wMsg = Enc_Utf8ToWide(msg, nMsg)
+    wTitle = Enc_Utf8ToWide(title, nTitle)
+    If wMsg = 0 Or wTitle = 0 Then
+        If wMsg <> 0 Then free(wMsg)
+        If wTitle <> 0 Then free(wTitle)
+        r = MessageBox(hWnd, msg, title, UI_MB_YESNO Or UI_MB_ICONQUESTION)
+        If r = UI_IDYES Then UiMsgBoxYesNo = 1
+        Exit Function
+    End If
+    r = MessageBoxW(hWnd, wMsg, wTitle, UI_MB_YESNO Or UI_MB_ICONQUESTION)
+    free(wMsg)
+    free(wTitle)
+    If r = UI_IDYES Then UiMsgBoxYesNo = 1
+End Function

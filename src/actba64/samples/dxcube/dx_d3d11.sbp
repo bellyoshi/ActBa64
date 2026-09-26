@@ -6,6 +6,10 @@ Dim g_pVB As *ID3D11Buffer
 Dim g_pIB As *ID3D11Buffer
 Dim g_pLayout As *ID3D11InputLayout
 
+Dim g_buildRaw[55] As Single
+Dim g_buildV[55] As Single
+Dim g_buildIdx[35] As DWord
+
 
 Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, pTarget As BytePtr, ByRef ppBlob As *ID3DBlob) As DWord
 	Dim pErr As *ID3DBlob
@@ -55,9 +59,7 @@ Sub dx_ReleaseAll()
 	End If
 End Sub
 
-Function dx_CreateCube() As Long
-	' 8 頂点の立方体。VS で回転 + 簡易パースペクティブ（奥行き）
-	' HLSL の _ は AB 行継続と衝突しうるため Chr$(95) で組み立てる
+Function dx_CubeHlsl$() As String
 	Dim u As String
 	Dim hlsl As String
 	u = Chr$(95)
@@ -65,29 +67,26 @@ Function dx_CreateCube() As Long
 	hlsl = hlsl + "struct VS" + u + "OUT{float4 pos:SV" + u + "POSITION;float4 col:COLOR;};"
 	hlsl = hlsl + "VS" + u + "OUT VS(VS" + u + "IN i){VS" + u + "OUT o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
 	hlsl = hlsl + "float4 PS(VS" + u + "OUT i):SV" + u + "Target{return i.col;}"
+	dx_CubeHlsl$ = hlsl
+End Function
 
-	Dim pVSBlob As *ID3DBlob
+Function dx_CreateCubeShaders(ByRef pVSBlob As *ID3DBlob, ByRef vsCode As VoidPtr, ByRef vsLen As DWord) As Long
+	Dim hlsl As String
 	Dim pPSBlob As *ID3DBlob
 	Dim srcLen As DWord
+	Dim hr As DWord
+	Dim psCode As VoidPtr
+	Dim psLen As DWord
+	dx_CreateCubeShaders = 0
+	hlsl = dx_CubeHlsl$()
 	pVSBlob = 0
 	pPSBlob = 0
 	srcLen = Len(hlsl)
-
-	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then
-		dx_CreateCube = 0
-		Exit Function
-	End If
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then Exit Function
 	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("PS"), StrPtr("ps_4_0"), pPSBlob) Then
 		If pVSBlob Then pVSBlob->Release()
-		dx_CreateCube = 0
 		Exit Function
 	End If
-
-	Dim hr As DWord
-	Dim vsCode As VoidPtr
-	Dim vsLen As DWord
-	Dim psCode As VoidPtr
-	Dim psLen As DWord
 	vsCode = pVSBlob->GetBufferPointer()
 	vsLen = pVSBlob->GetBufferSize()
 	hr = g_pDevice->CreateVertexShader(vsCode, vsLen, 0, VarPtr(g_pVS))
@@ -95,10 +94,8 @@ Function dx_CreateCube() As Long
 		dx_FailStep("CreateVertexShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateCube = 0
 		Exit Function
 	End If
-
 	psCode = pPSBlob->GetBufferPointer()
 	psLen = pPSBlob->GetBufferSize()
 	hr = g_pDevice->CreatePixelShader(psCode, psLen, 0, VarPtr(g_pPS))
@@ -106,22 +103,24 @@ Function dx_CreateCube() As Long
 		dx_FailStep("CreatePixelShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateCube = 0
 		Exit Function
 	End If
 	pPSBlob->Release()
+	dx_CreateCubeShaders = 1
+End Function
 
+Function dx_CreateCubeLayout(vsCode As VoidPtr, vsLen As DWord, pVSBlob As *ID3DBlob) As Long
 	Dim namePos As String
 	Dim nameCol As String
-	namePos = "POSITION"
-	nameCol = "COLOR"
-
 	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
 	Dim tmpDesc As D3D11_INPUT_ELEMENT_DESC
 	Dim descSz As DWord
+	Dim hr As DWord
+	dx_CreateCubeLayout = 0
+	namePos = "POSITION"
+	nameCol = "COLOR"
 	descSz = Len(tmpDesc)
 	ZeroMemory(VarPtr(layout[0]), descSz * 2)
-
 	layout[0].SemanticName = StrPtr(namePos)
 	layout[0].SemanticIndex = 0
 	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
@@ -129,7 +128,6 @@ Function dx_CreateCube() As Long
 	layout[0].AlignedByteOffset = 0
 	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
 	layout[0].InstanceDataStepRate = 0
-
 	layout[1].SemanticName = StrPtr(nameCol)
 	layout[1].SemanticIndex = 0
 	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
@@ -137,177 +135,174 @@ Function dx_CreateCube() As Long
 	layout[1].AlignedByteOffset = 12
 	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
 	layout[1].InstanceDataStepRate = 0
-
 	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, vsCode, vsLen, VarPtr(g_pLayout))
 	If hr Then
 		dx_FailStep("CreateInputLayout", hr)
 		pVSBlob->Release()
-		dx_CreateCube = 0
 		Exit Function
 	End If
 	pVSBlob->Release()
+	dx_CreateCubeLayout = 1
+End Function
 
-	' 8 頂点（モデル座標 ±0.5）を斜めから見たクリップ座標へ事前変換
-	' 回転 + 簡易パースペクティブで「奥行き」を表現
-	Dim vdata[55] As Single
-	ZeroMemory(VarPtr(vdata[0]), 224)
+Sub dx_FillCubeRawA()
+	g_buildRaw[0] = -0.5
+	g_buildRaw[1] = -0.5
+	g_buildRaw[2] = 0.5
+	g_buildRaw[3] = 1.0
+	g_buildRaw[4] = 0.0
+	g_buildRaw[5] = 0.0
+	g_buildRaw[6] = 1.0
+	g_buildRaw[7] = 0.5
+	g_buildRaw[8] = -0.5
+	g_buildRaw[9] = 0.5
+	g_buildRaw[10] = 1.0
+	g_buildRaw[11] = 1.0
+	g_buildRaw[12] = 0.0
+	g_buildRaw[13] = 1.0
+	g_buildRaw[14] = 0.5
+	g_buildRaw[15] = 0.5
+	g_buildRaw[16] = 0.5
+	g_buildRaw[17] = 0.0
+	g_buildRaw[18] = 1.0
+	g_buildRaw[19] = 0.0
+	g_buildRaw[20] = 1.0
+	g_buildRaw[21] = -0.5
+	g_buildRaw[22] = 0.5
+	g_buildRaw[23] = 0.5
+	g_buildRaw[24] = 0.0
+	g_buildRaw[25] = 1.0
+	g_buildRaw[26] = 1.0
+	g_buildRaw[27] = 1.0
+End Sub
 
-	' 生の角座標と色を一時配列に（x,y,z,r,g,b,a）× 8
-	Dim raw[55] As Single
-	ZeroMemory(VarPtr(raw[0]), 224)
-	raw[0] = -0.5
-	raw[1] = -0.5
-	raw[2] = 0.5
-	raw[3] = 1.0
-	raw[4] = 0.0
-	raw[5] = 0.0
-	raw[6] = 1.0
-	raw[7] = 0.5
-	raw[8] = -0.5
-	raw[9] = 0.5
-	raw[10] = 1.0
-	raw[11] = 1.0
-	raw[12] = 0.0
-	raw[13] = 1.0
-	raw[14] = 0.5
-	raw[15] = 0.5
-	raw[16] = 0.5
-	raw[17] = 0.0
-	raw[18] = 1.0
-	raw[19] = 0.0
-	raw[20] = 1.0
-	raw[21] = -0.5
-	raw[22] = 0.5
-	raw[23] = 0.5
-	raw[24] = 0.0
-	raw[25] = 1.0
-	raw[26] = 1.0
-	raw[27] = 1.0
-	raw[28] = -0.5
-	raw[29] = -0.5
-	raw[30] = -0.5
-	raw[31] = 1.0
-	raw[32] = 0.0
-	raw[33] = 1.0
-	raw[34] = 1.0
-	raw[35] = 0.5
-	raw[36] = -0.5
-	raw[37] = -0.5
-	raw[38] = 1.0
-	raw[39] = 0.5
-	raw[40] = 0.0
-	raw[41] = 1.0
-	raw[42] = 0.5
-	raw[43] = 0.5
-	raw[44] = -0.5
-	raw[45] = 0.0
-	raw[46] = 0.0
-	raw[47] = 1.0
-	raw[48] = 1.0
-	raw[49] = -0.5
-	raw[50] = 0.5
-	raw[51] = -0.5
-	raw[52] = 1.0
-	raw[53] = 1.0
-	raw[54] = 1.0
-	raw[55] = 1.0
+Sub dx_FillCubeRawB()
+	g_buildRaw[28] = -0.5
+	g_buildRaw[29] = -0.5
+	g_buildRaw[30] = -0.5
+	g_buildRaw[31] = 1.0
+	g_buildRaw[32] = 0.0
+	g_buildRaw[33] = 1.0
+	g_buildRaw[34] = 1.0
+	g_buildRaw[35] = 0.5
+	g_buildRaw[36] = -0.5
+	g_buildRaw[37] = -0.5
+	g_buildRaw[38] = 1.0
+	g_buildRaw[39] = 0.5
+	g_buildRaw[40] = 0.0
+	g_buildRaw[41] = 1.0
+	g_buildRaw[42] = 0.5
+	g_buildRaw[43] = 0.5
+	g_buildRaw[44] = -0.5
+	g_buildRaw[45] = 0.0
+	g_buildRaw[46] = 0.0
+	g_buildRaw[47] = 1.0
+	g_buildRaw[48] = 1.0
+	g_buildRaw[49] = -0.5
+	g_buildRaw[50] = 0.5
+	g_buildRaw[51] = -0.5
+	g_buildRaw[52] = 1.0
+	g_buildRaw[53] = 1.0
+	g_buildRaw[54] = 1.0
+	g_buildRaw[55] = 1.0
+End Sub
 
-	' 等角投影っぽい写像: x' = (x-z)*0.5, y' = y*0.6+(x+z)*0.25, z' は奥行き用
+Sub dx_ProjectCubeVerts()
 	Dim vi As Long
 	Dim x As Single
 	Dim y As Single
 	Dim z As Single
 	vi = 0
 	While vi < 8
-		x = raw[vi * 7 + 0]
-		y = raw[vi * 7 + 1]
-		z = raw[vi * 7 + 2]
-		vdata[vi * 7 + 0] = (x - z) * 0.45
-		vdata[vi * 7 + 1] = y * 0.55 + (x + z) * 0.2
-		vdata[vi * 7 + 2] = (z + 1.0) * 0.25
-		vdata[vi * 7 + 3] = raw[vi * 7 + 3]
-		vdata[vi * 7 + 4] = raw[vi * 7 + 4]
-		vdata[vi * 7 + 5] = raw[vi * 7 + 5]
-		vdata[vi * 7 + 6] = raw[vi * 7 + 6]
+		x = g_buildRaw[vi * 7 + 0]
+		y = g_buildRaw[vi * 7 + 1]
+		z = g_buildRaw[vi * 7 + 2]
+		g_buildV[vi * 7 + 0] = (x - z) * 0.45
+		g_buildV[vi * 7 + 1] = y * 0.55 + (x + z) * 0.2
+		g_buildV[vi * 7 + 2] = (z + 1.0) * 0.25
+		g_buildV[vi * 7 + 3] = g_buildRaw[vi * 7 + 3]
+		g_buildV[vi * 7 + 4] = g_buildRaw[vi * 7 + 4]
+		g_buildV[vi * 7 + 5] = g_buildRaw[vi * 7 + 5]
+		g_buildV[vi * 7 + 6] = g_buildRaw[vi * 7 + 6]
 		vi = vi + 1
 	Wend
+End Sub
 
+Function dx_CreateCubeVB() As Long
 	Dim bd As D3D11_BUFFER_DESC
 	Dim initData As D3D11_SUBRESOURCE_DATA
+	Dim hr As DWord
+	dx_CreateCubeVB = 0
+	ZeroMemory(VarPtr(g_buildRaw[0]), 224)
+	ZeroMemory(VarPtr(g_buildV[0]), 224)
+	dx_FillCubeRawA()
+	dx_FillCubeRawB()
+	dx_ProjectCubeVerts()
 	ZeroMemory(VarPtr(bd), Len(bd))
 	ZeroMemory(VarPtr(initData), Len(initData))
 	bd.ByteWidth = 224
 	bd.Usage = D3D11_USAGE_DEFAULT
 	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
-	initData.pSysMem = VarPtr(vdata[0])
-
+	initData.pSysMem = VarPtr(g_buildV[0])
 	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
 	If hr Then
 		dx_FailStep("CreateBuffer VB", hr)
-		dx_CreateCube = 0
 		Exit Function
 	End If
+	dx_CreateCubeVB = 1
+End Function
 
-	' インデックスは DWord（Word 配列を避ける）
-	Dim idx[35] As DWord
-	ZeroMemory(VarPtr(idx[0]), 144)
-	' +Z
-	idx[0] = 0
-	idx[1] = 3
-	idx[2] = 2
-	idx[3] = 0
-	idx[4] = 2
-	idx[5] = 1
-	' +X
-	idx[6] = 1
-	idx[7] = 2
-	idx[8] = 6
-	idx[9] = 1
-	idx[10] = 6
-	idx[11] = 5
-	' -Z
-	idx[12] = 5
-	idx[13] = 6
-	idx[14] = 7
-	idx[15] = 5
-	idx[16] = 7
-	idx[17] = 4
-	' -X
-	idx[18] = 4
-	idx[19] = 7
-	idx[20] = 3
-	idx[21] = 4
-	idx[22] = 3
-	idx[23] = 0
-	' +Y
-	idx[24] = 3
-	idx[25] = 7
-	idx[26] = 6
-	idx[27] = 3
-	idx[28] = 6
-	idx[29] = 2
-	' -Y
-	idx[30] = 0
-	idx[31] = 1
-	idx[32] = 5
-	idx[33] = 0
-	idx[34] = 5
-	idx[35] = 4
+Sub dx_PutTri(base As Long, a As DWord, b As DWord, c As DWord)
+	g_buildIdx[base] = a
+	g_buildIdx[base + 1] = b
+	g_buildIdx[base + 2] = c
+End Sub
 
+Sub dx_FillCubeIdx()
+	ZeroMemory(VarPtr(g_buildIdx[0]), 144)
+	dx_PutTri(0, 0, 3, 2)
+	dx_PutTri(3, 0, 2, 1)
+	dx_PutTri(6, 1, 2, 6)
+	dx_PutTri(9, 1, 6, 5)
+	dx_PutTri(12, 5, 6, 7)
+	dx_PutTri(15, 5, 7, 4)
+	dx_PutTri(18, 4, 7, 3)
+	dx_PutTri(21, 4, 3, 0)
+	dx_PutTri(24, 3, 7, 6)
+	dx_PutTri(27, 3, 6, 2)
+	dx_PutTri(30, 0, 1, 5)
+	dx_PutTri(33, 0, 5, 4)
+End Sub
+
+Function dx_CreateCubeIB() As Long
+	Dim bd As D3D11_BUFFER_DESC
+	Dim initData As D3D11_SUBRESOURCE_DATA
+	Dim hr As DWord
+	dx_CreateCubeIB = 0
+	dx_FillCubeIdx()
 	ZeroMemory(VarPtr(bd), Len(bd))
 	ZeroMemory(VarPtr(initData), Len(initData))
 	bd.ByteWidth = 144
 	bd.Usage = D3D11_USAGE_DEFAULT
 	bd.BindFlags = D3D11_BIND_INDEX_BUFFER
-	initData.pSysMem = VarPtr(idx[0])
-
+	initData.pSysMem = VarPtr(g_buildIdx[0])
 	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pIB))
 	If hr Then
 		dx_FailStep("CreateBuffer IB", hr)
-		dx_CreateCube = 0
 		Exit Function
 	End If
+	dx_CreateCubeIB = 1
+End Function
 
+Function dx_CreateCube() As Long
+	Dim pVSBlob As *ID3DBlob
+	Dim vsCode As VoidPtr
+	Dim vsLen As DWord
+	dx_CreateCube = 0
+	If dx_CreateCubeShaders(pVSBlob, vsCode, vsLen) = 0 Then Exit Function
+	If dx_CreateCubeLayout(vsCode, vsLen, pVSBlob) = 0 Then Exit Function
+	If dx_CreateCubeVB() = 0 Then Exit Function
+	If dx_CreateCubeIB() = 0 Then Exit Function
 	dx_CreateCube = 1
 End Function
 

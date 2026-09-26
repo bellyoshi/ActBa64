@@ -49,9 +49,7 @@ Sub dx_ReleaseAll()
 	End If
 End Sub
 
-Function dx_CreateTriangle() As Long
-	' Vertex Buffer + InputLayout + 頂点色（A赤 B緑 C青 → GPU 補間で虹色）
-	' 注意: AB の行継続は _ なので、HLSL 文字列内の _ は Chr$(95) で入れる
+Function dx_PosColorHlsl$() As String
 	Dim u As String
 	Dim hlsl As String
 	u = Chr$(95)
@@ -59,29 +57,26 @@ Function dx_CreateTriangle() As Long
 	hlsl = hlsl + "struct VS" + u + "OUT{float4 pos:SV" + u + "POSITION;float4 col:COLOR;};"
 	hlsl = hlsl + "VS" + u + "OUT VS(VS" + u + "IN i){VS" + u + "OUT o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
 	hlsl = hlsl + "float4 PS(VS" + u + "OUT i):SV" + u + "Target{return i.col;}"
+	dx_PosColorHlsl$ = hlsl
+End Function
 
-	Dim pVSBlob As *ID3DBlob
+Function dx_CreatePosColorShaders(ByRef pVSBlob As *ID3DBlob, ByRef vsCode As VoidPtr, ByRef vsLen As DWord) As Long
+	Dim hlsl As String
 	Dim pPSBlob As *ID3DBlob
 	Dim srcLen As DWord
+	Dim hr As DWord
+	Dim psCode As VoidPtr
+	Dim psLen As DWord
+	dx_CreatePosColorShaders = 0
+	hlsl = dx_PosColorHlsl$()
 	pVSBlob = 0
 	pPSBlob = 0
 	srcLen = Len(hlsl)
-
-	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then
-		dx_CreateTriangle = 0
-		Exit Function
-	End If
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then Exit Function
 	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("PS"), StrPtr("ps_4_0"), pPSBlob) Then
 		If pVSBlob Then pVSBlob->Release()
-		dx_CreateTriangle = 0
 		Exit Function
 	End If
-
-	Dim hr As DWord
-	Dim vsCode As VoidPtr
-	Dim vsLen As DWord
-	Dim psCode As VoidPtr
-	Dim psLen As DWord
 	vsCode = pVSBlob->GetBufferPointer()
 	vsLen = pVSBlob->GetBufferSize()
 	hr = g_pDevice->CreateVertexShader(vsCode, vsLen, 0, VarPtr(g_pVS))
@@ -89,10 +84,8 @@ Function dx_CreateTriangle() As Long
 		dx_FailStep("CreateVertexShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateTriangle = 0
 		Exit Function
 	End If
-
 	psCode = pPSBlob->GetBufferPointer()
 	psLen = pPSBlob->GetBufferSize()
 	hr = g_pDevice->CreatePixelShader(psCode, psLen, 0, VarPtr(g_pPS))
@@ -100,22 +93,24 @@ Function dx_CreateTriangle() As Long
 		dx_FailStep("CreatePixelShader", hr)
 		pVSBlob->Release()
 		pPSBlob->Release()
-		dx_CreateTriangle = 0
 		Exit Function
 	End If
 	pPSBlob->Release()
+	dx_CreatePosColorShaders = 1
+End Function
 
+Function dx_CreatePosColorLayout(vsCode As VoidPtr, vsLen As DWord, pVSBlob As *ID3DBlob) As Long
 	Dim namePos As String
 	Dim nameCol As String
+	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
+	Dim tmpDesc As D3D11_INPUT_ELEMENT_DESC
+	Dim descSz As DWord
+	Dim hr As DWord
+	dx_CreatePosColorLayout = 0
 	namePos = "POSITION"
 	nameCol = "COLOR"
-
-	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
-	Dim descSz As DWord
-	Dim tmpDesc As D3D11_INPUT_ELEMENT_DESC
 	descSz = Len(tmpDesc)
 	ZeroMemory(VarPtr(layout[0]), descSz * 2)
-
 	layout[0].SemanticName = StrPtr(namePos)
 	layout[0].SemanticIndex = 0
 	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
@@ -123,7 +118,6 @@ Function dx_CreateTriangle() As Long
 	layout[0].AlignedByteOffset = 0
 	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
 	layout[0].InstanceDataStepRate = 0
-
 	layout[1].SemanticName = StrPtr(nameCol)
 	layout[1].SemanticIndex = 0
 	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
@@ -131,18 +125,22 @@ Function dx_CreateTriangle() As Long
 	layout[1].AlignedByteOffset = 12
 	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
 	layout[1].InstanceDataStepRate = 0
-
 	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, vsCode, vsLen, VarPtr(g_pLayout))
 	If hr Then
 		dx_FailStep("CreateInputLayout", hr)
 		pVSBlob->Release()
-		dx_CreateTriangle = 0
 		Exit Function
 	End If
 	pVSBlob->Release()
+	dx_CreatePosColorLayout = 1
+End Function
 
-	' A赤 / B緑 / C青（28*3=84。Len(配列) は使わない）
+Function dx_CreateTriangleVB() As Long
 	Dim vdata[20] As Single
+	Dim bd As D3D11_BUFFER_DESC
+	Dim initData As D3D11_SUBRESOURCE_DATA
+	Dim hr As DWord
+	dx_CreateTriangleVB = 0
 	ZeroMemory(VarPtr(vdata[0]), 84)
 	vdata[0] = 0.0
 	vdata[1] = 0.5
@@ -165,23 +163,28 @@ Function dx_CreateTriangle() As Long
 	vdata[18] = 0.0
 	vdata[19] = 1.0
 	vdata[20] = 1.0
-
-	Dim bd As D3D11_BUFFER_DESC
-	Dim initData As D3D11_SUBRESOURCE_DATA
 	ZeroMemory(VarPtr(bd), Len(bd))
 	ZeroMemory(VarPtr(initData), Len(initData))
 	bd.ByteWidth = 84
 	bd.Usage = D3D11_USAGE_DEFAULT
 	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER
 	initData.pSysMem = VarPtr(vdata[0])
-
 	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(g_pVB))
 	If hr Then
 		dx_FailStep("CreateBuffer", hr)
-		dx_CreateTriangle = 0
 		Exit Function
 	End If
+	dx_CreateTriangleVB = 1
+End Function
 
+Function dx_CreateTriangle() As Long
+	Dim pVSBlob As *ID3DBlob
+	Dim vsCode As VoidPtr
+	Dim vsLen As DWord
+	dx_CreateTriangle = 0
+	If dx_CreatePosColorShaders(pVSBlob, vsCode, vsLen) = 0 Then Exit Function
+	If dx_CreatePosColorLayout(vsCode, vsLen, pVSBlob) = 0 Then Exit Function
+	If dx_CreateTriangleVB() = 0 Then Exit Function
 	dx_CreateTriangle = 1
 End Function
 

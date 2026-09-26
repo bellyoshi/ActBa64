@@ -90,8 +90,8 @@ GC は **String ヒープだけ** を見る。`malloc` したバッファは対�
 モジュール `Dim` をグローバルへ割り当てたあと、その末尾に固定サイズの領域を足す。
 
 ```
-g_gcBaseOff = g_gSize
-g_gSize     = g_gSize + GC_REGION_SIZE   ' 38928
+g_gcBaseOff = g_globDataSize
+g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 38928
 ```
 
 オフセットは `AstLower.abp` 先頭の定数。塊ポインタ枠は **32/64 どちらも 8 バイト刻み**（`SHL_ECX_3`）。32bit では下位 4 バイトだけ使う。
