@@ -118,34 +118,34 @@ Function LowAddStrConst(ctx As *LowerCtx, name As *Byte, s As *Byte) As Long
     LowAddStrConst = 1
 End Function
 
-Function LowBoundValArithOps(op As Long, lv As Long, rv As Long) As Long
-    LowBoundValArithOps = -1
+Function LowConstEvalArithOps(op As Long, lv As Long, rv As Long) As Long
+    LowConstEvalArithOps = -1
     If op = BOP_ADD Then
-        LowBoundValArithOps = lv + rv
+        LowConstEvalArithOps = lv + rv
     ElseIf op = BOP_SUB Then
-        LowBoundValArithOps = lv - rv
+        LowConstEvalArithOps = lv - rv
     ElseIf op = BOP_MUL Then
-        LowBoundValArithOps = lv * rv
+        LowConstEvalArithOps = lv * rv
     ElseIf op = BOP_OR Then
-        LowBoundValArithOps = lv Or rv
+        LowConstEvalArithOps = lv Or rv
     ElseIf op = BOP_AND Then
-        LowBoundValArithOps = lv And rv
+        LowConstEvalArithOps = lv And rv
     ElseIf op = BOP_IDIV Or op = BOP_DIV Then
         If rv <> 0 Then
-            LowBoundValArithOps = lv \ rv
+            LowConstEvalArithOps = lv \ rv
         End If
     ElseIf op = BOP_MOD Then
         If rv <> 0 Then
-            LowBoundValArithOps = lv - (lv \ rv) * rv
+            LowConstEvalArithOps = lv - (lv \ rv) * rv
         End If
     ElseIf op = BOP_XOR Then
-        LowBoundValArithOps = (lv Or rv) - (lv And rv)
+        LowConstEvalArithOps = (lv Or rv) - (lv And rv)
     End If
 End Function
 
-Function LowBoundValShiftPow(op As Long, lv As Long, rv As Long) As Long
+Function LowConstEvalShiftPow(op As Long, lv As Long, rv As Long) As Long
     Dim acc As Long
-    LowBoundValShiftPow = -1
+    LowConstEvalShiftPow = -1
     If op = BOP_SHL Then
         If rv >= 0 And rv < 32 Then
             acc = lv
@@ -153,7 +153,7 @@ Function LowBoundValShiftPow(op As Long, lv As Long, rv As Long) As Long
                 acc = acc * 2
                 rv = rv - 1
             Wend
-            LowBoundValShiftPow = acc
+            LowConstEvalShiftPow = acc
         End If
     ElseIf op = BOP_SHR Then
         If rv >= 0 And rv < 32 Then
@@ -162,7 +162,7 @@ Function LowBoundValShiftPow(op As Long, lv As Long, rv As Long) As Long
                 acc = acc \ 2
                 rv = rv - 1
             Wend
-            LowBoundValShiftPow = acc
+            LowConstEvalShiftPow = acc
         End If
     ElseIf op = BOP_POW Then
         If rv >= 0 Then
@@ -171,12 +171,12 @@ Function LowBoundValShiftPow(op As Long, lv As Long, rv As Long) As Long
                 acc = acc * lv
                 rv = rv - 1
             Wend
-            LowBoundValShiftPow = acc
+            LowConstEvalShiftPow = acc
         End If
     End If
 End Function
 
-Function LowBoundValBin(ctx As *LowerCtx, idx As Long) As Long
+Function LowConstEvalBin(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim lv As Long
@@ -185,25 +185,25 @@ Function LowBoundValBin(ctx As *LowerCtx, idx As Long) As Long
     Dim leftIdx As Long
     Dim rightIdx As Long
 
-    LowBoundValBin = -1
+    LowConstEvalBin = -1
     ast = ctx->ast
     nodes = ast->nodes
     op = nodes[idx].num
     leftIdx = nodes[idx].left
     rightIdx = nodes[idx].right
     If leftIdx < 0 Or rightIdx < 0 Then Exit Function
-    lv = LowBoundVal(ctx, leftIdx)
+    lv = LowConstEval(ctx, leftIdx)
     If lv < 0 Then Exit Function
-    rv = LowBoundVal(ctx, rightIdx)
+    rv = LowConstEval(ctx, rightIdx)
     If rv < 0 Then Exit Function
     If op = BOP_SHL Or op = BOP_SHR Or op = BOP_POW Then
-        LowBoundValBin = LowBoundValShiftPow(op, lv, rv)
+        LowConstEvalBin = LowConstEvalShiftPow(op, lv, rv)
     Else
-        LowBoundValBin = LowBoundValArithOps(op, lv, rv)
+        LowConstEvalBin = LowConstEvalArithOps(op, lv, rv)
     End If
 End Function
 
-Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
+Function LowConstEval(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(63) As Byte
@@ -211,54 +211,54 @@ Function LowBoundVal(ctx As *LowerCtx, idx As Long) As Long
     Dim vals As *Long
     Dim lv As Long
 
-    LowBoundVal = -1
+    LowConstEval = -1
     If idx < 0 Then Exit Function
     ast = ctx->ast
     nodes = ast->nodes
     If nodes[idx].kind = AST_NUM Then
-        LowBoundVal = nodes[idx].num
+        LowConstEval = nodes[idx].num
     ElseIf nodes[idx].kind = AST_VAR Then
         AstCopyStr(ast, idx, VarPtr(name))
         ci = LowFindConst(ctx, VarPtr(name))
         If ci < 0 Then Exit Function
         vals = ctx->constVals
-        LowBoundVal = vals[ci]
+        LowConstEval = vals[ci]
     ElseIf nodes[idx].kind = AST_BINOP Then
-        LowBoundVal = LowBoundValBin(ctx, idx)
+        LowConstEval = LowConstEvalBin(ctx, idx)
     ElseIf nodes[idx].kind = AST_BUILTIN Then
         If nodes[idx].num = BI_ELM Then
-            lv = LowBoundVal(ctx, nodes[idx].left)
+            lv = LowConstEval(ctx, nodes[idx].left)
             If lv >= 0 Then
-                LowBoundVal = lv + 1
+                LowConstEval = lv + 1
             End If
         End If
     End If
 End Function
 
-Function LowNewLab(ctx As *LowerCtx) As Long
+Function LowNewLabel(ctx As *LowerCtx) As Long
     Dim id As Long
     id = ctx->nextLab
     ctx->nextLab = id + 1
-    LowNewLab = id
+    LowNewLabel = id
 End Function
 
 ' 既知 kernel32 API 名へ正規化（小文字比較）。成功時 apiOut に正式名を書く
-Function LowKernelApiHit(name As *Byte, key As *Byte, exp As *Byte, apiOut As *Byte) As Long
-    LowKernelApiHit = 0
+Function LowKernelApiMatch(name As *Byte, key As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiMatch = 0
     If LowNameEq(name, key) = 0 Then Exit Function
     lstrcpy(apiOut, exp)
-    LowKernelApiHit = 1
+    LowKernelApiMatch = 1
 End Function
 
-Function LowKernelApiHit2(name As *Byte, key1 As *Byte, key2 As *Byte, exp As *Byte, apiOut As *Byte) As Long
-    LowKernelApiHit2 = 0
+Function LowKernelApiMatch2(name As *Byte, key1 As *Byte, key2 As *Byte, exp As *Byte, apiOut As *Byte) As Long
+    LowKernelApiMatch2 = 0
     If LowNameEq(name, key1) <> 0 Then
         lstrcpy(apiOut, exp)
-        LowKernelApiHit2 = 1
+        LowKernelApiMatch2 = 1
         Exit Function
     End If
     If LowNameEq(name, key2) <> 0 Then
         lstrcpy(apiOut, exp)
-        LowKernelApiHit2 = 1
+        LowKernelApiMatch2 = 1
     End If
 End Function

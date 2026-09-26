@@ -83,9 +83,9 @@ if ($Linker -eq "") {
 
 if (-not (Test-Path -LiteralPath $Linker)) {
     if ($Stage -eq "stage0") {
-        Write-Error "linker not found: $Linker (AB4.20 で actba64.pj を bin\stage0\ にビルドしてください)"
+        Write-Error "compiler not found: $Linker (build actba64.pj into bin\stage0\ with AB4.20)"
     } else {
-        Write-Error "linker not found: $Linker (run .\build.ps1 first)"
+        Write-Error "compiler not found: $Linker (run .\build.ps1 first)"
     }
     exit 2
 }
@@ -300,7 +300,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
 if (-not $Quiet) {
     Write-Host ""
     Write-Host "=== actba64 $Stage ==="
-    Write-Host "linker: $Linker"
+    Write-Host "compiler: $Linker"
     Write-Host "tests:  $TestDir"
 }
 

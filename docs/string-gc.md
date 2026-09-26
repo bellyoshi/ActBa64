@@ -10,7 +10,7 @@
 | GC 定数・`LowerCtx` | [`src/actba64/AstLower.abp`](../src/actba64/AstLower.abp) |
 | precise ルート登録 | [`src/actba64/AstLowerApi.abp`](../src/actba64/AstLowerApi.abp) |
 | セーフポイント・Collect 呼出 | [`src/actba64/AstLowerRt.abp`](../src/actba64/AstLowerRt.abp) |
-| `cmp rcx,rax` / `mov rax, gs:[8]` | [`src/actba64/IR.abp`](../src/actba64/IR.abp) / [`Emiter.abp`](../src/actba64/Emiter.abp) / [`CodeGen.abp`](../src/actba64/CodeGen.abp) |
+| `cmp rcx,rax` / `mov rax, gs:[8]` | [`src/actba64/IR.abp`](../src/actba64/IR.abp) / [`Emitter.abp`](../src/actba64/Emitter.abp) / [`CodeGen.abp`](../src/actba64/CodeGen.abp) |
 
 C ランタイムや別 DLL は使わない。`HeapAlloc` / `HeapFree`（`kernel32`）だけを呼び、マーク表は PE の BSS（グローバル領域の末尾）に置く。
 
