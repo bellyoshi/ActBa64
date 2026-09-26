@@ -40,7 +40,7 @@ ActiveBasic 4.20 で `actba64.pj` をビルドし、`bin\stage0\actba64.exe` に
 
 ```powershell
 cd src\actba64
-.\build.ps1                 # Include を stage0 へコピー + 全段階 + 比較
+.\build.ps1                 # Include を stage0/1/2 へコピー + 全段階 + 比較
 .\build.ps1 -SkipCopy       # Include コピーをスキップ
 .\build.ps1 -Stage1Only     # stage1 まで
 .\build.ps1 -SkipStage1     # 既存 stage1 を使い stage2 のみ
@@ -48,6 +48,18 @@ cd src\actba64
 ```
 
 成功時の主成果物: `bin\stage2\actba64.exe`
+
+### Include の置き場所
+
+正本は常に [`src/Include`](../src/Include)。`build.ps1` は（`-SkipCopy` でなければ）**`bin\stage0` / `stage1` / `stage2` の各 `Include\` へ同じ内容をコピー**する。exe 隣が検索の最優先なので、回帰テストや自己ホストでパス解決に依存しない。
+
+コンパイラは `Include\...` を次の順で探す（`PreprocPj`）:
+
+1. exe と同じディレクトリ（例: `bin\stage1\Include\`）
+2. その親〜3 階層上（`bin\stageN\` からは `src\Include\` に到達）
+3. カレントディレクトリの `Include\`
+
+配布の `release\Include` も正本のコピー（ルート `build.ps1`）。
 
 ### コンパイラソースの分割
 
@@ -167,3 +179,6 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 | テストで `linker not found` | 先に `.\build.ps1`（または `-Rebuild`） |
 | `ProjectEditor RAD file missing` | `Callback.wbp` / `MakeWindow.wbp` を `src\projecteditor\` に置く |
 | `copy failed ... release\ProjectEditor.exe` | エディタを終了してから再実行 |
+| ほぼ全テストが `build failed (exit=1)`・コンパイラ出力が空 | `Include` が見えていない／読み込み中に異常終了。`.\build.ps1`（コピー込み）をやり直すか、`Test-Path bin\stage1\Include\default\default.idx` を確認 |
+| 途中まで PASS のあと大量に `build failed (exit=0)`、または PowerShell が `actba64.exe` を「認識できない」 | 実行中に `bin\<stage>\actba64.exe` が消えていることが多い（Windows Defender 等の隔離）。`Test-Path bin\stage1\actba64.exe` を確認し、リポジトリまたは `src\actba64\bin` を除外リストへ追加してから `.\build.ps1` → `.\run_test2.ps1` をやり直す |
+| `warning: not found: Include\default\default.idx` | 上記 Include 検索パスを確認。正本欠落か、カレントが想定外 |
