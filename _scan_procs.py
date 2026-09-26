@@ -1,41 +1,45 @@
-import re
-import pathlib
-
+import re, os
 files = [
-    r"src/actba64/samples/dxcube/dx_d3d11.sbp",
-    r"src/actba64/samples/dxvertexcolor/dx_d3d11.sbp",
-    r"src/actba64/samples/dxxform/dx_d3d11.sbp",
-    r"src/actba64/samples/dxcube2/dx_d3d11.sbp",
+r'src/actba64/samples/dxcube/dx_d3d11.sbp',
+r'src/actba64/samples/dxvertexcolor/dx_d3d11.sbp',
+r'src/actba64/samples/dxxform/dx_d3d11.sbp',
+r'src/actba64/samples/dxcube2/dx_d3d11.sbp',
+r'src/actba64/samples/MovingReversiMove.abp',
+r'src/actba64/test/_pe_gui_cmdarg.abp',
+r'src/actba64/test/t_cmdarg.abp',
+r'src/actba64/samples/MovingReversiBoard.abp',
+r'src/actba64/samples/reversi_gui_draw.abp',
+r'src/actba64/samples/dxsample/dx_d3d11.sbp',
 ]
-root = pathlib.Path(r"C:\Users\bellm\source\repos\bellyoshi\ActBa64")
-all_over = []
-for rel in files:
-    p = root / rel
-    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
-    print("===", rel, "===")
+root = r'C:\Users\bellm\source\repos\bellyoshi\ActBa64'
+pat = re.compile(r'^\s*((?:Public|Private|Static)\s+)?(Function|Sub)\s+(\w+)', re.I)
+end_pat = re.compile(r'^\s*End\s+(Function|Sub)\b', re.I)
+decl = re.compile(r'^\s*Declare\b', re.I)
+for f in files:
+    path = os.path.join(root, f)
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        lines = fh.readlines()
     i = 0
     procs = []
     while i < len(lines):
-        m = re.match(r"^\s*(Function|Sub)\s+([^\s(]+)", lines[i], re.I)
+        if decl.match(lines[i]):
+            i += 1
+            continue
+        m = pat.match(lines[i])
         if m:
-            kind, name = m.group(1), m.group(2)
+            kind, name = m.group(2), m.group(3)
             start = i
-            j = i + 1
-            while j < len(lines):
-                if re.match(r"^\s*End\s+(Function|Sub)\b", lines[j], re.I):
-                    end = j
-                    n = end - start + 1
-                    procs.append((name, kind, start + 1, end + 1, n))
-                    i = j
-                    break
-                j += 1
+            i += 1
+            while i < len(lines) and not end_pat.match(lines[i]):
+                i += 1
+            if i < len(lines):
+                end = i
+                count = end - start + 1
+                procs.append((name, kind, count))
+                i += 1
+            continue
         i += 1
-    for name, kind, s, e, n in procs:
-        flag = " *** OVER ***" if n > 50 else ""
-        print(f"  {kind} {name}: lines {s}-{e} = {n}{flag}")
-        if n > 50:
-            all_over.append((rel, name, n))
-    print()
-print("OVER COUNT:", len(all_over))
-for x in all_over:
-    print(" ", x)
+    print('### ' + f)
+    for name, kind, count in procs:
+        flag = ' *' if count > 50 else ''
+        print('  %s %s: %d%s' % (kind, name, count, flag))
