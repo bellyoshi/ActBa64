@@ -29,6 +29,7 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 | `Goto` / `GoSub` / `Return` | 行番号または `*ラベル` へ分岐・復帰 | 非対応（キーワードなし） |
 | `#define` | 条件コンパイル用識別子定義（`#ifdef` 専用） | ○ |
 | `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | ○（自動定義は **`_WIN64`（64bit 時）と `_AB_VER4` のみ**。`_DEBUG` は自動定義しない） |
+| `#include` の再取り込み | 同じパスを複数回 `#include` すると、都度展開される | **パス単位で一度だけ**（2 回目以降はスキップ。AB 4.20 の都度展開とは異なる） |
 | `ReDim` | 動的配列サイズ変更 | 非対応 |
 | `Continue` | ループ先頭へ制御移動（`For` / `While` / `Do`） | ○ |
 | `On Error` / `Resume` | エラートラップ | 非対応 |
@@ -193,7 +194,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `ByRef` / `ByVal` | 既定は値渡し。`ByRef p As Type` で参照渡し | **実装済み** |
 | `TypeDef` | `TypeDef newtype = basetype`（型エイリアス） | **実装済み**（`*Function` / `*Sub` 別名も可） |
 | `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（`Type Name Align(n)`、`Inherits` / `Virtual` は部分対応） |
-| `#include` | `"path"` / `<path>` で `.sbp` 取り込み | **`"path"`**（ソース相対）と **`<path>`**（`Include\` 検索）の両方可（拡張子は `.abp` / `.sbp` 可） |
+| `#include` | `"path"` / `<path>` で `.sbp` 取り込み（同一パスの再 `#include` は都度展開） | **`"path"`**（ソース相対）と **`<path>`**（`Include\` 検索）の両方可（拡張子は `.abp` / `.sbp` 可）。**同一パスは一度だけ**（[制御・プリプロセス](#制御プリプロセス)） |
 | 行継続 `_` | 行末 `_` で次行と連結 | **実装済み** |
 | `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **実装済み**（32/64 とも IAT。`Lib` は任意 DLL・自作 C/C++ 可。詳細は [language.md §8](./language.md#8-winapi--iat)） |
 | `Enum` | 列挙型 | **実装済み** |
