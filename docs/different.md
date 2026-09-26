@@ -7,7 +7,9 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 
 ---
 
-## 対応しないこと
+## 機能の対応状況（非対応・制限を含む）
+
+実装済みの一覧は後述 [実装済み](#実装済みactivebasic-互換の一部)。ここでは AB との差分が大きい項目を列挙する。
 
 ### 行番号
 
@@ -26,7 +28,7 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 |---|---|---|
 | `Goto` / `GoSub` / `Return` | 行番号または `*ラベル` へ分岐・復帰 | 非対応（キーワードなし） |
 | `#define` | 条件コンパイル用識別子定義（`#ifdef` 専用） | ○ |
-| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | ○（自動定義は一部） |
+| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | ○（自動定義は **`_WIN64`（64bit 時）と `_AB_VER4` のみ**。`_DEBUG` は自動定義しない） |
 | `ReDim` | 動的配列サイズ変更 | 非対応 |
 | `Continue` | ループ先頭へ制御移動（`For` / `While` / `Do`） | ○ |
 | `On Error` / `Resume` | エラートラップ | 非対応 |
@@ -35,7 +37,7 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `Enum` … `End Enum` | 列挙型（`DWord` 値、省略時は前値+1） | ○（初回省略時は 1、`Dim x As EnumName` は 4 バイト） |
+| `Enum` … `End Enum` | 列挙型（`DWord` 値、省略時は前値+1） | ○（初回省略時は **1**、`Dim x As EnumName` は 4 バイト） |
 | `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
 | `New` / `Delete` | `New [[num]] Class[(params)]`、`Delete pObj` | 非対応（`Dim As Class(args)` で ctor は呼べる） |
 | 関数ポインタ型 | `Dim As *Function(...)` / `*Sub(...)`、`TypeDef`、`AddressOf`、間接呼び出し | **対応**（引数型の厳密照合は未。詳細は [language.md §5.2.1](./language.md)） |
@@ -81,7 +83,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `Input` | `Input "prompt", variable` または `Input variable` | **両方対応**（`String` / `Long` / `Byte` / `Single` / `Double`） |
 | `Single` / `Double` | IEEE 浮動小数点演算 | **`Double`（64bit）**: 加減乗除・比較・`Function As Double` / Double 仮引数・小数リテラルは AST 上 IEEE ビット（千分率は不使用）。`Math.abp` も IEEE Double。**`Single`**: 格納と Input 変換が中心（汎用演算は未）。N88 `CIRCLE` 角度・aspect は `Double`。`-actba32` は SSE 未実装のため Double 演算テストをスキップ |
 | `Const` | `Const name = expr` および `Const name(arglist) = expr`（マクロ関数） | 整数・文字列リテラル中心。複雑な定数式・マクロ関数は制限あり |
-| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New`/`Delete` 演算子なし。`Protected` は受理するが **Public と同等**。メソッドはマングル名 + 暗黙 `Me` |
+| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New`/`Delete` / `Super` 演算子なし。`Private` / `Public` / `Protected` は**受理のみ**（アクセス制御なし）。メソッドはマングル名 + 暗黙 `Me` |
 | `For` … `Next` | `For c = start To end [Step step]`、`Exit For` | **Step / Exit For 対応**（[language.md §4](./language.md#4-文) 参照） |
 | `Do` … `Loop` | `Do [While/Until cond] ... [Loop [While/Until cond]]` | **While/Until 両対応** |
 | 関係演算の値 | 真 = `-1`、偽 = `0` | 同じ |
@@ -96,7 +98,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `HIBYTE` / `HIWORD` / `MAKELONG` 等 | ビット分解・合成マクロ | **組込** |
 | `Int64` / `QWord` / `Char` | 基本型として定義 | **`Char` / `Int64` / `QWord` 型なし**（`Byte` / `Long` / `DWord` 等） |
 | ソース拡張子 | `.sbp` 推奨 | **`.abp`**（`.pj` で結合） |
-| Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`default.idx` + `api.idx` + `UnicodeApi.sbp` 自動挿入**。任意 `Declare Lib "dll"` 可。未登録呼び出しはエラー |
+| Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`default.idx` + `api.idx` + `UnicodeApi.sbp` 自動挿入**。任意 `Declare Lib "dll"`（自作 DLL 含む）可。未登録呼び出しはエラー |
 | DirectX | DirectX 9 + `dx_*.sbp` | **DirectX 11**（[改良点](#directx-11)）。高レベル `dx_*` 一式はサンプルのみ |
 | 64bit | ver 4.20 はバグで実質困難 | **64bit PE32+ を正式サポート**（ポインタ・`String`・`HANDLE` = 8、`Long` = 4） |
 | コンパイル | GUI IDE が主 | **CLI** `actba64 src -o out.exe` |
@@ -191,9 +193,9 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `ByRef` / `ByVal` | 既定は値渡し。`ByRef p As Type` で参照渡し | **実装済み** |
 | `TypeDef` | `TypeDef newtype = basetype`（型エイリアス） | **実装済み**（`*Function` / `*Sub` 別名も可） |
 | `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（`Type Name Align(n)`、`Inherits` / `Virtual` は部分対応） |
-| `#include` | `"path"` / `<path>` で `.sbp` 取り込み | **`#include "path"`**（`.abp`） |
+| `#include` | `"path"` / `<path>` で `.sbp` 取り込み | **`"path"`**（ソース相対）と **`<path>`**（`Include\` 検索）の両方可（拡張子は `.abp` / `.sbp` 可） |
 | 行継続 `_` | 行末 `_` で次行と連結 | **実装済み** |
-| `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **実装済み**（32/64 とも IAT） |
+| `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **実装済み**（32/64 とも IAT。`Lib` は任意 DLL・自作 C/C++ 可。詳細は [language.md §8](./language.md#8-winapi--iat)） |
 | `Enum` | 列挙型 | **実装済み** |
 | Ex文字列 | `Ex"..."`（エスケープ付き） | **実装済み** |
 | `#strict` | 型不一致を警告 | **実装済み**（変数代入。詳細は [動作が異なるもの](#動作が異なるもの)） |
@@ -207,6 +209,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `Len` | 文字列長または UDT サイズ | 組込 |
 | `Asc` / `Chr$` | 文字コード変換 | 組込 |
 | `Left$` / `Mid$` / `Right$` / `Str$` | 部分文字列・数値文字列化 | 組込 |
+| `InStr` / `Hex$` / `Val` / `Trim$` | 検索・16 進・数値化・前後空白除去 | **`StrUtils.abp`**（`default.idx` 自動挿入） |
 | `VarPtr` / `StrPtr` / `MakeStr` | ポインタ取得・NUL 終端から String 生成 | 組込 |
 | `AddressOf` | 手続き先頭アドレス（関数ポインタ） | 組込（`*Function` / `*Sub` 変数へ代入して間接呼び出し可） |
 | `SizeOf` / `ELM` | 型サイズ / 添字上限→要素数 | **両方組込** |
@@ -233,7 +236,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 |---|---|---|
 | `GoSub` / `Return` | `*ラベル` 付きサブルーチン | 関数 `Return` とは別。方針上は非対応寄り |
 | `Let` | 明示代入（省略可） | 優先度低 |
-| `Class` 拡張 | `New`/`Delete`、`Super`、厳密 `Protected`、メンバ Class の自動 ctor/dtor | `Inherits`/`Virtual` は COM/vtable 向けに部分対応済 |
+| `Class` 拡張 | `New`/`Delete`、`Super`、厳密な `Private`/`Protected`、メンバ Class の自動 ctor/dtor | `Inherits`/`Virtual` は COM/vtable 向けに部分対応済。アクセス修飾子は受理のみ |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の一致検査 | `*Function` / 間接 call 自体は済 |
 
 ### ファイル I/O
@@ -268,16 +271,16 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `CDbl` / `CInt` / `CSng` | 型変換関数 | `As` キャストは可 |
 | `Oct$` | 8 進文字列 | |
 | `Date$` / `Time$` | 日付・時刻文字列 | |
-| `Hex$` / `Val` / `ZeroString` | 16 進文字列・数値化・ゼロ埋め | `StrUtils.abp` 等で一部 |
-| `SetDouble` / `GetDouble` / `GetSingle` 等 | メモリ読み書き | **`Memory.abp`**（浮動 Get/Set は未） |
-| `realloc` | C ヒープ | `calloc` は済。`realloc` 未 |
+| `ZeroString` | ゼロ埋め文字列 | 未（`Hex$` / `Val` / `Trim$` / `InStr` は `StrUtils.abp` で済） |
+| `SetDouble` / `GetDouble` / `GetSingle` 等 | メモリ読み書き | **`Memory.abp`** は Byte〜DWord まで。浮動 Get/Set は未 |
+| `realloc` | C ヒープ | `calloc`（→ `HeapAlloc` ゼロ埋め）は済。`realloc` 未 |
 
 ### GUI・Win32・マルチメディア
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Window` / `DelWindow` | BASIC ウィンドウ生成・破棄 | Win32 API で代替 |
-| Win32API 全量 | `api_*.sbp` 382 関数超 | 主要 API は `api.idx` Declare。不足分はソース側 `Declare` |
+| `Window` / `DelWnd` | BASIC ウィンドウ生成・破棄 | Win32 API で代替 |
+| Win32API 全量 | `api_*.sbp` 382 関数超 | 主要 API は `api.idx` Declare。不足分・自作 DLL はソース側 `Declare` |
 | DirectX | D3D9 + `dx_graphics.sbp` 等 | **D3D11 基盤はサンプルで動作**。`dx_input`・`dx_music` 等の D3D11 版は未整備 |
 | RAD | Project Editor | 機能拡充予定 |
 
