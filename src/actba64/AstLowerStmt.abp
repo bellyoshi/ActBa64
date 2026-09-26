@@ -144,7 +144,7 @@ End Function
 Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim k As Long
+    Dim kind As Long
 
     ' 薄いディスパッチ: 巨大フレームの LowStmtHeavy を入れ子にしない
     LowStmt = 0
@@ -154,16 +154,16 @@ Function LowStmt(ctx As *LowerCtx, idx As Long) As Long
     End If
     ast = ctx->ast
     nodes = ast->nodes
-    k = nodes[idx].kind
-    If k = AST_IF Then
+    kind = nodes[idx].kind
+    If kind = AST_IF Then
         LowStmt = LowStmtIf(ctx, idx)
         Exit Function
     End If
-    If k = AST_CALL Then
+    If kind = AST_CALL Then
         LowStmt = LowExpr(ctx, idx)
         Exit Function
     End If
-    If k = AST_EXITFUNC Then
+    If kind = AST_EXITFUNC Then
         If g_funcEndLab < 0 Then
             ctx->err = 1
             Exit Function
@@ -192,17 +192,17 @@ End Function
 Function LowCtorArgCount(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim argn As Long
+    Dim argNode As Long
     Dim nArgs As Long
 
     ast = ctx->ast
     nodes = ast->nodes
     nArgs = 1
-    argn = nodes[idx].right
-    While argn >= 0
-        If nodes[argn].kind <> AST_ARG Then Exit While
+    argNode = nodes[idx].right
+    While argNode >= 0
+        If nodes[argNode].kind <> AST_ARG Then Exit While
         nArgs = nArgs + 1
-        argn = nodes[argn].nxt
+        argNode = nodes[argNode].nxt
     Wend
     If nodes[idx].right >= 0 Then
         If nodes[nodes[idx].right].kind <> AST_ARG Then
@@ -217,24 +217,24 @@ Function LowEmitCtorArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim argi As Long
-    Dim argn As Long
+    Dim argNode As Long
 
     LowEmitCtorArgs = 0
     ast = ctx->ast
     nodes = ast->nodes
     argi = 1
-    argn = nodes[idx].right
+    argNode = nodes[idx].right
     While argi < nArgs
-        If LowExprArg(ctx, nodes[argn].left) = 0 Then Exit Function
+        If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
         IrEmit(ctx->list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
         argi = argi + 1
-        argn = nodes[argn].nxt
+        argNode = nodes[argNode].nxt
     Wend
     LowEmitCtorArgs = 1
 End Function
 
 ' this をホーム領域へ置いて Ctor を呼ぶ
-Function LowEmitCtorCall(ctx As *LowerCtx, idx As Long, lab As Long, nArgs As Long, stk As Long) As Long
+Function LowEmitCtorCall(ctx As *LowerCtx, idx As Long, lab As Long, nArgs As Long, callBytes As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -254,7 +254,7 @@ Function LowEmitCtorCall(ctx As *LowerCtx, idx As Long, lab As Long, nArgs As Lo
     IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
     LowEmitLoadRegArgs(ctx->list, nArgs)
     IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
-    LowEmitCallFinish(ctx->list, stk)
+    LowEmitCallFinish(ctx->list, callBytes)
     LowEmitCtorCall = 1
 End Function
 
@@ -267,7 +267,7 @@ Function LowStmtDimCtor(ctx As *LowerCtx, idx As Long) As Long
     Dim tt As *TypeTable
     Dim ti As Long
     Dim nArgs As Long
-    Dim stk As Long
+    Dim callBytes As Long
 
     LowStmtDimCtor = 0
     ast = ctx->ast
@@ -288,12 +288,12 @@ Function LowStmtDimCtor(ctx As *LowerCtx, idx As Long) As Long
     End If
     nArgs = LowCtorArgCount(ctx, idx)
     If nArgs <= 0 Then Exit Function
-    stk = LowCallStk(nArgs)
-    If stk > 0 Then
-        IrEmit(ctx->list, OP_SUB_RSP, stk, 0)
+    callBytes = LowCallBytes(nArgs)
+    If callBytes > 0 Then
+        IrEmit(ctx->list, OP_SUB_RSP, callBytes, 0)
     End If
     If LowEmitCtorArgs(ctx, idx, nArgs) = 0 Then Exit Function
-    If LowEmitCtorCall(ctx, idx, lab, nArgs, stk) = 0 Then Exit Function
+    If LowEmitCtorCall(ctx, idx, lab, nArgs, callBytes) = 0 Then Exit Function
     LowStmtDimCtor = 1
 End Function
 

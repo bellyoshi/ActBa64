@@ -73,68 +73,68 @@ End Sub
 
 ' 部分木が String を新たに確保しうるか。
 ' 再帰しない（関数フレームが ~8KB のため、ElseIf 連鎖や長い文リストでスタックを尽くす）。
-Function LowAstNeedsStrGcFor(nodes As *AstNode, cur As Long, stk As *Long, ByRef sp As Long) As Long
+Function LowAstNeedsStrGcFor(nodes As *AstNode, cur As Long, walkStk As *Long, ByRef walkSp As Long) As Long
     Dim n As Long
     LowAstNeedsStrGcFor = 0
     If nodes[cur].kind <> AST_FOR Then Exit Function
     n = nodes[cur].num
     If n >= 0 Then
-        If sp >= 255 Then
+        If walkSp >= 255 Then
             LowAstNeedsStrGcFor = 1
             Exit Function
         End If
-        stk[sp] = n
-        sp = sp + 1
+        walkStk[walkSp] = n
+        walkSp = walkSp + 1
     End If
     n = nodes[cur].strId
     If n >= 0 Then
-        If sp >= 255 Then
+        If walkSp >= 255 Then
             LowAstNeedsStrGcFor = 1
             Exit Function
         End If
-        stk[sp] = n
-        sp = sp + 1
+        walkStk[walkSp] = n
+        walkSp = walkSp + 1
     End If
 End Function
 
-Function LowAstNeedsStrGcEdges(nodes As *AstNode, cur As Long, stk As *Long, ByRef sp As Long) As Long
+Function LowAstNeedsStrGcEdges(nodes As *AstNode, cur As Long, walkStk As *Long, ByRef walkSp As Long) As Long
     Dim n As Long
     LowAstNeedsStrGcEdges = 0
     n = nodes[cur].left
     If n >= 0 Then
-        If sp >= 255 Then
+        If walkSp >= 255 Then
             LowAstNeedsStrGcEdges = 1
             Exit Function
         End If
-        stk[sp] = n
-        sp = sp + 1
+        walkStk[walkSp] = n
+        walkSp = walkSp + 1
     End If
     n = nodes[cur].right
     If n >= 0 Then
-        If sp >= 255 Then
+        If walkSp >= 255 Then
             LowAstNeedsStrGcEdges = 1
             Exit Function
         End If
-        stk[sp] = n
-        sp = sp + 1
+        walkStk[walkSp] = n
+        walkSp = walkSp + 1
     End If
     n = nodes[cur].extra
     If n >= 0 Then
-        If sp >= 255 Then
+        If walkSp >= 255 Then
             LowAstNeedsStrGcEdges = 1
             Exit Function
         End If
-        stk[sp] = n
-        sp = sp + 1
+        walkStk[walkSp] = n
+        walkSp = walkSp + 1
     End If
 End Function
 
 Function LowAstNeedsStrGcHit(nodes As *AstNode, cur As Long) As Long
-    Dim k As Long
+    Dim kind As Long
     Dim bi As Long
     LowAstNeedsStrGcHit = 0
-    k = nodes[cur].kind
-    If k = AST_PRINT Or k = AST_INPUT Or k = AST_FINPUT Or k = AST_OPEN Or k = AST_CLOSE Or k = AST_FIELD Or k = AST_GET Or k = AST_PUT Or k = AST_WRITE Then
+    kind = nodes[cur].kind
+    If kind = AST_PRINT Or kind = AST_INPUT Or kind = AST_FINPUT Or kind = AST_OPEN Or kind = AST_CLOSE Or kind = AST_FIELD Or kind = AST_GET Or kind = AST_PUT Or kind = AST_WRITE Then
         LowAstNeedsStrGcHit = 1
         Exit Function
     End If
@@ -142,13 +142,13 @@ Function LowAstNeedsStrGcHit(nodes As *AstNode, cur As Long) As Long
     ' callee 側にあり、ここで CALL を確保扱いすると描画 While が毎トークン
     ' Collect し、行末の String が conservative 漏れで欠ける。
     ' 引数式の Cat / Mid$ は left を辿って拾う。
-    If k = AST_BINOP Then
+    If kind = AST_BINOP Then
         If nodes[cur].num = BOP_CAT Then
             LowAstNeedsStrGcHit = 1
             Exit Function
         End If
     End If
-    If k = AST_BUILTIN Then
+    If kind = AST_BUILTIN Then
         bi = nodes[cur].num
         If bi = BI_LEFT Or bi = BI_MID Or bi = BI_STR Or bi = BI_MAKESTR Or bi = BI_CHR Or bi = BI_RIGHT Then
             LowAstNeedsStrGcHit = 1
@@ -160,31 +160,31 @@ Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim cur As Long
-    Dim sp As Long
-    Dim stk(255) As Long
-    Dim stkBase As *Long
+    Dim walkSp As Long
+    Dim walkStk(255) As Long
+    Dim walkStkBase As *Long
 
     LowAstNeedsStrGc = 0
     If idx < 0 Then Exit Function
     ast = ctx->ast
     If ast = NULL Then Exit Function
     nodes = ast->nodes
-    stk[0] = idx
-    sp = 1
-    stkBase = VarPtr(stk(0))
-    While sp > 0
-        sp = sp - 1
-        cur = stk[sp]
+    walkStk[0] = idx
+    walkSp = 1
+    walkStkBase = VarPtr(walkStk(0))
+    While walkSp > 0
+        walkSp = walkSp - 1
+        cur = walkStk[walkSp]
         While cur >= 0
             If LowAstNeedsStrGcHit(nodes, cur) <> 0 Then
                 LowAstNeedsStrGc = 1
                 Exit Function
             End If
-            If LowAstNeedsStrGcFor(nodes, cur, stkBase, sp) <> 0 Then
+            If LowAstNeedsStrGcFor(nodes, cur, walkStkBase, walkSp) <> 0 Then
                 LowAstNeedsStrGc = 1
                 Exit Function
             End If
-            If LowAstNeedsStrGcEdges(nodes, cur, stkBase, sp) <> 0 Then
+            If LowAstNeedsStrGcEdges(nodes, cur, walkStkBase, walkSp) <> 0 Then
                 LowAstNeedsStrGc = 1
                 Exit Function
             End If

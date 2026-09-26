@@ -241,7 +241,11 @@ Function PpNextPjLine(pj As *Byte, pjSize As Long, ByRef i As Long, line As *Byt
         i = i + 1
     Wend
     n = i - start
-    If n >= PP_LINE_MAX Then n = PP_LINE_MAX - 1
+    g_ppLastRawLen = n
+    If n >= PP_LINE_MAX Then
+        PpNextPjLine = -1
+        Exit Function
+    End If
     j = 0
     While j < n
         line[j] = pj[start + j]
@@ -268,13 +272,14 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
     Dim pjSize As Long
     Dim i As Long
     Dim n As Long
-    Dim line(511) As Byte
+    Dim line(1023) As Byte
     Dim dir(511) As Byte
     Dim inSource As Long
     Dim dst As *Byte
     Dim dstLen As Long
     Dim dstCap As Long
     Dim nSrc As Long
+    Dim lineNo As Long
 
     CombinePjSources = NULL
     PpOnceReset()
@@ -295,13 +300,21 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
     inSource = 0
     nSrc = 0
     i = 0
+    lineNo = 1
     While i < pjSize
         n = PpNextPjLine(pj, pjSize, i, VarPtr(line))
+        If n < 0 Then
+            PpErrorTooLongLine(pjPath, lineNo, g_ppLastRawLen)
+            free(pj)
+            free(dst)
+            Exit Function
+        End If
         If PpPjProcessLine(VarPtr(line), n, inSource, dst, dstLen, dstCap, VarPtr(dir), nSrc) = 0 Then
             free(pj)
             free(dst)
             Exit Function
         End If
+        lineNo = lineNo + 1
     Wend
     free(pj)
     If nSrc <= 0 Then

@@ -6,7 +6,7 @@ Function LowEmitCallArgsHome(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
     Dim ast As *Ast
     Dim list As *IrList
     Dim argi As Long
-    Dim argn As Long
+    Dim argNode As Long
     Dim j As Long
     Dim bbit As Long
     Dim useAddr As Long
@@ -16,7 +16,7 @@ Function LowEmitCallArgsHome(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
     list = ctx->list
     nodes = ast->nodes
     argi = 0
-    argn = nodes[idx].left
+    argNode = nodes[idx].left
     While argi < nArgs
         bbit = 1
         j = 0
@@ -24,22 +24,22 @@ Function LowEmitCallArgsHome(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
             bbit = bbit * 2
             j = j + 1
         Wend
-        useAddr = LowCallUseAddr(ctx, argn, byBits, bbit, isApi)
+        useAddr = LowCallUseAddr(ctx, argNode, byBits, bbit, isApi)
         If useAddr <> 0 Then
-            If LowAddr(ctx, nodes[argn].left) = 0 Then Exit Function
+            If LowAddr(ctx, nodes[argNode].left) = 0 Then Exit Function
         Else
-            If LowExprArg(ctx, nodes[argn].left) = 0 Then Exit Function
+            If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
             If isApi = 0 Then
                 If LowFindFuncParamTy(ctx, name, argi) = TY_DOUBLE Then
-                    LowEmitCvtToDoubleIfNeeded(ctx, nodes[argn].left)
+                    LowEmitCvtToDoubleIfNeeded(ctx, nodes[argNode].left)
                 ElseIf LowFindFuncParamTy(ctx, name, argi) = TY_SINGLE Then
-                    LowEmitCvtToSingleIfNeeded(ctx, nodes[argn].left)
+                    LowEmitCvtToSingleIfNeeded(ctx, nodes[argNode].left)
                 End If
             End If
         End If
         IrEmit(list, OP_STORE_RSP_RAX, argi * TyPtrSize(), 0)
         argi = argi + 1
-        argn = nodes[argn].nxt
+        argNode = nodes[argNode].nxt
     Wend
     LowEmitCallArgsHome = 1
 End Function
@@ -52,7 +52,7 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     Dim list As *IrList
     Dim nArgs As Long
     Dim argi As Long
-    Dim stk As Long
+    Dim callBytes As Long
 
     LowExprCallEmit = 0
     ast = ctx->ast
@@ -70,14 +70,14 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
         ctx->err = 1
         Exit Function
     End If
-    stk = LowCallStk(nArgs)
-    If stk > 120 Then
-        Print "error: call stack too large (" + Str$(stk) + ") '" + MakeStr(VarPtr(name)) + "'"
+    callBytes = LowCallBytes(nArgs)
+    If callBytes > 120 Then
+        Print "error: call stack too large (" + Str$(callBytes) + ") '" + MakeStr(VarPtr(name)) + "'"
         ctx->err = 1
         Exit Function
     End If
-    If stk > 0 Then
-        IrEmit(list, OP_SUB_RSP, stk, 0)
+    If callBytes > 0 Then
+        IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     If LowEmitCallArgsHome(ctx, idx, nArgs, byBits, isApi, VarPtr(name)) = 0 Then Exit Function
     LowEmitLoadRegArgs(list, nArgs)
@@ -86,7 +86,7 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     Else
         IrEmit(list, OP_CALL_LAB, lab, 0)
     End If
-    LowEmitCallFinish(list, stk)
+    LowEmitCallFinish(list, callBytes)
     LowExprCallEmit = 1
 End Function
 
