@@ -1,16 +1,19 @@
 ' Language pack loader.
 ' setting.ini (next to exe): Language=ja (omit file / blank / en = English built-in)
 ' ProjectEditor_lang_<code>.csv: UTF-8 lines "id,text" (# comments / blank skipped)
-' Overrides are kept as the raw CSV text (no String arrays — host-safe).
+' Pack bytes live in a BSS buffer (not String/malloc) so String GC cannot touch them.
 
 Const UI_MB_YESNO = &H4
 Const UI_MB_ICONQUESTION = &H20
 Const UI_IDYES = 6
+Const UI_PACK_MAX = 4095
 
-Dim g_uiCsv As String
+Dim g_uiPackBuf(4095) As Byte
+Dim g_uiPackLen As Long
+Dim g_uiParseId As Long
 
 Sub UiLang_ClearOverrides()
-    g_uiCsv = ""
+    g_uiPackLen = 0
 End Sub
 
 Function UiLang_ConfigPath$() As String
@@ -79,6 +82,53 @@ Function UiLang_TrimCode$(s As String) As String
     UiLang_TrimCode$ = t
 End Function
 
+Function UiLang_IsCommentOrSection(line As String) As Long
+    Dim a As Long
+
+    UiLang_IsCommentOrSection = 0
+    If Len(line) = 0 Then Exit Function
+    a = Asc(Left$(line, 1))
+    If a = 35 Then
+        UiLang_IsCommentOrSection = 1
+    ElseIf a = 59 Then
+        UiLang_IsCommentOrSection = 1
+    ElseIf a = 91 Then
+        UiLang_IsCommentOrSection = 1
+    End If
+End Function
+
+Function UiLang_IsValidCode(code As String) As Long
+    Dim i As Long
+    Dim n As Long
+    Dim a As Long
+    Dim ok As Long
+
+    UiLang_IsValidCode = 0
+    n = Len(code)
+    If n < 1 Then Exit Function
+    If n > 16 Then Exit Function
+    For i = 1 To n
+        a = Asc(Mid$(code, i, 1))
+        ok = 0
+        If a >= 65 Then
+            If a <= 90 Then ok = 1
+        End If
+        If a >= 97 Then
+            If a <= 122 Then ok = 1
+        End If
+        If a >= 48 Then
+            If a <= 57 Then
+                If i > 1 Then ok = 1
+            End If
+        End If
+        If a = 95 Then
+            If i > 1 Then ok = 1
+        End If
+        If ok = 0 Then Exit Function
+    Next
+    UiLang_IsValidCode = 1
+End Function
+
 Function UiLang_IsLanguageKey(line As String) As Long
     Dim kw As String
     Dim i As Long
@@ -102,45 +152,49 @@ End Function
 
 Function UiLang_CodeFromIniLine$(line As String) As String
     Dim t As String
+    Dim code As String
 
     UiLang_CodeFromIniLine$ = ""
     t = UiLang_TrimCode$(line)
     If Len(t) = 0 Then Exit Function
-    If Left$(t, 1) = "#" Then Exit Function
-    If Left$(t, 1) = ";" Then Exit Function
-    If Left$(t, 1) = "[" Then Exit Function
+    If UiLang_IsCommentOrSection(t) <> 0 Then Exit Function
     If UiLang_IsLanguageKey(t) = 0 Then Exit Function
-    UiLang_CodeFromIniLine$ = UiLang_TrimCode$(Mid$(t, 10))
+    code = UiLang_TrimCode$(Mid$(t, 10))
+    If UiLang_IsValidCode(code) = 0 Then Exit Function
+    UiLang_CodeFromIniLine$ = Mid$(code, 1, Len(code))
 End Function
 
 Function UiLang_ReadCode$() As String
     Dim raw As String
     Dim line As String
     Dim code As String
-    Dim i As Long
+    Dim start As Long
+    Dim nl As Long
     Dim n As Long
-    Dim c As Long
 
     UiLang_ReadCode$ = ""
     raw = UiLang_ReadFile$(UiLang_ConfigPath$())
-    If Len(raw) = 0 Then Exit Function
     n = Len(raw)
-    line = ""
-    For i = 1 To n
-        c = Asc(Mid$(raw, i, 1))
-        If c = 10 Then
-            code = UiLang_CodeFromIniLine$(line)
-            If Len(code) > 0 Then
-                UiLang_ReadCode$ = code
-                Exit Function
-            End If
-            line = ""
-        ElseIf c <> 13 Then
-            line = line + Mid$(raw, i, 1)
+    If n = 0 Then Exit Function
+    start = 1
+    While start <= n
+        nl = InStr(start, raw, Chr$(10))
+        If nl = 0 Then
+            line = Mid$(raw, start, n - start + 1)
+            start = n + 1
+        Else
+            line = Mid$(raw, start, nl - start)
+            start = nl + 1
         End If
-    Next
-    code = UiLang_CodeFromIniLine$(line)
-    If Len(code) > 0 Then UiLang_ReadCode$ = code
+        If Len(line) > 0 Then
+            If Asc(Right$(line, 1)) = 13 Then line = Left$(line, Len(line) - 1)
+        End If
+        code = UiLang_CodeFromIniLine$(line)
+        If Len(code) > 0 Then
+            UiLang_ReadCode$ = code
+            Exit Function
+        End If
+    Wend
 End Function
 
 Function UiLang_Unquote$(s As String) As String
@@ -156,17 +210,17 @@ Function UiLang_Unquote$(s As String) As String
     UiLang_Unquote$ = t
 End Function
 
-Function UiLang_LineId(line As String, ByRef textOut As String) As Long
+Function UiLang_ParseCsvLine$(line As String) As String
     Dim t As String
     Dim comma As Long
     Dim i As Long
     Dim n As Long
 
-    UiLang_LineId = -1
-    textOut = ""
+    UiLang_ParseCsvLine$ = ""
+    g_uiParseId = -1
     t = UiLang_TrimCode$(line)
     If Len(t) = 0 Then Exit Function
-    If Left$(t, 1) = "#" Then Exit Function
+    If UiLang_IsCommentOrSection(t) <> 0 Then Exit Function
     If Left$(t, 2) = "id" Then Exit Function
     n = Len(t)
     comma = 0
@@ -177,68 +231,103 @@ Function UiLang_LineId(line As String, ByRef textOut As String) As Long
         End If
     Next
     If comma <= 1 Then Exit Function
-    UiLang_LineId = Val(Left$(t, comma - 1))
-    textOut = UiLang_Unquote$(Mid$(t, comma + 1))
+    g_uiParseId = Val(Left$(t, comma - 1))
+    UiLang_ParseCsvLine$ = UiLang_Unquote$(Mid$(t, comma + 1))
+End Function
+
+Function UiLang_Slice$(ByVal off As Long, ByVal ln As Long) As String
+    Dim tmp As *Byte
+
+    UiLang_Slice$ = ""
+    If ln <= 0 Then Exit Function
+    If off < 0 Then Exit Function
+    If off + ln > g_uiPackLen Then Exit Function
+    tmp = malloc(ln + 1)
+    If tmp = 0 Then Exit Function
+    memcpy(tmp, VarPtr(g_uiPackBuf[off]), ln)
+    tmp[ln] = 0
+    UiLang_Slice$ = Enc_DupCStr$(tmp, ln)
+    free(tmp)
 End Function
 
 Function UiLang_Lookup$(ByVal id As Long) As String
     Dim i As Long
-    Dim n As Long
-    Dim c As Long
+    Dim lineStart As Long
+    Dim lineLen As Long
     Dim line As String
-    Dim lineId As Long
     Dim text As String
+    Dim c As Long
 
     UiLang_Lookup$ = ""
-    If Len(g_uiCsv) = 0 Then Exit Function
-    n = Len(g_uiCsv)
-    line = ""
-    For i = 1 To n
-        c = Asc(Mid$(g_uiCsv, i, 1))
+    If g_uiPackLen <= 0 Then Exit Function
+    lineStart = 0
+    i = 0
+    While i < g_uiPackLen
+        c = g_uiPackBuf[i] And &HFF
         If c = 10 Then
-            lineId = UiLang_LineId(line, text)
-            If lineId = id Then
-                UiLang_Lookup$ = text
+            lineLen = i - lineStart
+            If lineLen > 0 Then
+                c = g_uiPackBuf[i - 1] And &HFF
+                If c = 13 Then lineLen = lineLen - 1
+            End If
+            line = UiLang_Slice$(lineStart, lineLen)
+            text = UiLang_ParseCsvLine$(line)
+            If g_uiParseId = id Then
+                If Len(text) > 0 Then UiLang_Lookup$ = text
                 Exit Function
             End If
-            line = ""
-        ElseIf c <> 13 Then
-            line = line + Mid$(g_uiCsv, i, 1)
+            lineStart = i + 1
         End If
-    Next
-    If Len(line) > 0 Then
-        lineId = UiLang_LineId(line, text)
-        If lineId = id Then UiLang_Lookup$ = text
+        i = i + 1
+    Wend
+    If lineStart < g_uiPackLen Then
+        lineLen = g_uiPackLen - lineStart
+        If lineLen > 0 Then
+            c = g_uiPackBuf[g_uiPackLen - 1] And &HFF
+            If c = 13 Then lineLen = lineLen - 1
+        End If
+        line = UiLang_Slice$(lineStart, lineLen)
+        text = UiLang_ParseCsvLine$(line)
+        If g_uiParseId = id Then
+            If Len(text) > 0 Then UiLang_Lookup$ = text
+        End If
     End If
 End Function
 
 Sub UiLang_LoadPack(code As String)
     Dim path As String
     Dim raw As String
+    Dim n As Long
+    Dim src As *Byte
 
     If Len(code) = 0 Then Exit Sub
     If code = "en" Then Exit Sub
     path = UiLang_PackPath$(code)
     raw = UiLang_ReadFile$(path)
-    If Len(raw) = 0 Then Exit Sub
-    g_uiCsv = raw
+    n = Len(raw)
+    If n <= 0 Then Exit Sub
+    If n > UI_PACK_MAX Then n = UI_PACK_MAX
+    src = StrPtr(raw)
+    If src = 0 Then Exit Sub
+    memcpy(VarPtr(g_uiPackBuf[0]), src, n)
+    g_uiPackBuf[n] = 0
+    If Len(raw) < n Then
+        g_uiPackLen = 0
+        Exit Sub
+    End If
+    g_uiPackLen = n
 End Sub
 
 Sub UiLang_Init()
     Dim code As String
-    Dim raw As String
-    Dim msg As String
     UiLang_ClearOverrides()
     g_uiLangCode = "en"
-    raw = UiLang_ReadFile$(UiLang_ConfigPath$())
     code = UiLang_ReadCode$()
-    msg = "cfgLen=" + Str$(Len(raw)) + " code=[" + code + "] path=" + UiLang_ConfigPath$()
-    MessageBox(0, msg, "UiLang", MB_OK)
     If Len(code) = 0 Then Exit Sub
     g_uiLangCode = code
     UiLang_LoadPack(code)
-    MessageBox(0, "csvLen=" + Str$(Len(g_uiCsv)), "UiLang", MB_OK)
 End Sub
+
 Function UiLang_WriteCode(code As String) As Long
     Dim path As String
     Dim text As String
@@ -249,11 +338,11 @@ Function UiLang_WriteCode(code As String) As Long
 
     UiLang_WriteCode = 0
     t = UiLang_TrimCode$(code)
-    If Len(t) = 0 Then t = "en"
+    If UiLang_IsValidCode(t) = 0 Then t = "en"
     path = UiLang_ConfigPath$()
     text = "# ProjectEditor settings (UTF-8)" + Chr$(13) + Chr$(10)
-    text = text + "# Without this file (or Language=en), UI is English (built-in)." + Chr$(13) + Chr$(10)
-    text = text + "# Language=ja loads ProjectEditor_lang_ja.csv next to the exe." + Chr$(13) + Chr$(10)
+    text = text + "# Omit Language or use en for built-in English UI." + Chr$(13) + Chr$(10)
+    text = text + "# Example: ja loads ProjectEditor_lang_ja.csv next to the exe." + Chr$(13) + Chr$(10)
     text = text + "Language=" + t + Chr$(13) + Chr$(10)
     n = Len(text)
     hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
