@@ -51,6 +51,40 @@ function Test-Actba64Driver([string]$path) {
     return $true
 }
 
+# PE32+ で SizeOfImage が末尾セクションを覆うか（AB4.20 の 16bit 切り詰め検知）
+function Test-Pe64Runnable([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    try {
+        $b = [IO.File]::ReadAllBytes($path)
+        if ($b.Length -lt 0x200) { return $false }
+        if ([BitConverter]::ToUInt16($b, 0) -ne 0x5A4D) { return $false }
+        $pe = [BitConverter]::ToInt32($b, 0x3C)
+        if ($pe -lt 0 -or ($pe + 24 + 68) -gt $b.Length) { return $false }
+        if ([BitConverter]::ToUInt32($b, $pe) -ne 0x4550) { return $false }
+        $mach = [BitConverter]::ToUInt16($b, $pe + 4)
+        if ($mach -ne 0x8664) { return $true } # non-x64 host (stage0) — skip this check
+        $nSec = [BitConverter]::ToUInt16($b, $pe + 6)
+        $optSize = [BitConverter]::ToUInt16($b, $pe + 20)
+        $opt = $pe + 24
+        if ([BitConverter]::ToUInt16($b, $opt) -ne 0x20B) { return $false }
+        $soi = [BitConverter]::ToUInt32($b, $opt + 56)
+        if ($soi -lt 0x2000) { return $false }
+        $sec = $opt + $optSize
+        $end = [uint32]0
+        for ($i = 0; $i -lt $nSec; $i++) {
+            $o = $sec + $i * 40
+            if (($o + 40) -gt $b.Length) { return $false }
+            $va = [BitConverter]::ToUInt32($b, $o + 12)
+            $vs = [BitConverter]::ToUInt32($b, $o + 8)
+            $e = $va + [Math]::Max($vs, [uint32]1)
+            if ($e -gt $end) { $end = $e }
+        }
+        return ($soi -ge $end)
+    } catch {
+        return $false
+    }
+}
+
 function Invoke-Actba64Build([string]$driverStage, [string]$outStage) {
     $driver = Join-Path (Get-StageDir $driverStage) $ExeName
     $outDir = Get-StageDir $outStage
@@ -92,7 +126,7 @@ function Ensure-CapableStage0 {
     Ensure-Dir $Stage0
 
     function Get-FallbackDriver {
-        foreach ($cand in @("stage2", "stage1")) {
+        foreach ($cand in @("stage3", "stage2", "stage1", "stage2d")) {
             $p = Join-Path (Get-StageDir $cand) $ExeName
             if (-not (Test-Actba64Driver $p)) { continue }
             if ((Test-Path -LiteralPath $stage0Exe) -and ((Resolve-Path $p).Path -eq (Resolve-Path $stage0Exe).Path)) {
@@ -127,8 +161,17 @@ Rebuild actba64.pj with ActiveBasic 4.20 into bin\stage0\actba64.exe
     $probeLines = & $stage0Exe (Join-Path $Root $Pj) -o $probeRel 2>&1 | ForEach-Object { "$_" }
     $probeCode = [int]$LASTEXITCODE
     $probeOk = ($probeCode -eq 0) -and (Test-Path -LiteralPath $probeOut)
-    Remove-Item -LiteralPath $probeOut -Force -ErrorAction SilentlyContinue
+    $probePeOk = $false
     if ($probeOk) {
+        # AB4.20 旧 stage0 は SizeOfImage を 16bit 切り詰めし、無効な PE32+ を出すことがある
+        $probePeOk = Test-Pe64Runnable $probeOut
+        if (-not $probePeOk) {
+            Write-Host "=== stage0 probe PE is not a valid runnable x64 image (likely AB4.20 16-bit SizeOfImage) ==="
+            Write-Host "    Rebuild bin\stage0\actba64.exe with AB4.20 from current sources (AlignUp / PeCalcLayout DWord-safe)."
+        }
+    }
+    Remove-Item -LiteralPath $probeOut -Force -ErrorAction SilentlyContinue
+    if ($probeOk -and $probePeOk) {
         return
     }
 
@@ -136,13 +179,14 @@ Rebuild actba64.pj with ActiveBasic 4.20 into bin\stage0\actba64.exe
     $replacement = Get-FallbackDriver
     if ($null -eq $replacement) {
         Write-Error @"
-stage0 cannot compile current sources: $stage0Exe
+stage0 cannot produce a runnable compiler: $stage0Exe
 $joined
-Need a newer self-hosted binary in bin\stage1|stage2, or rebuild stage0 with AB4.20 after raising limits.
+Rebuild actba64.pj with ActiveBasic 4.20 into bin\stage0\actba64.exe (current tree),
+or place a working self-hosted binary in bin\stage3|stage2|stage1.
 "@
         exit 2
     }
-    Write-Host "=== stage0 cannot compile current sources; promoting $replacement -> stage0 ==="
+    Write-Host "=== stage0 unusable for bootstrap; promoting $replacement -> stage0 ==="
     if ($joined -match "too many functions") {
         Write-Host "    (old stage0 still has a fixed function limit; current sources need a dyn-capacity compiler)"
     }

@@ -21,6 +21,8 @@ ActiveBasic 4.20 で `actba64.pj` をビルドし、`bin\stage0\actba64.exe` に
 
 `#PLATFORM=32` は **AB4.20 が 32bit exe を出すため** だけ。コンパイル対象の切替には使わない（対象は CLI の `-actba32`）。
 
+**注意:** AB4.20 は加算を 16bit 化することがあり、古い stage0 だと出力 PE の `SizeOfImage` が壊れ OS が拒否する（`%1 is not a valid Win32 application`）。現行ソースは `AlignUp` / `PeCalcLayout` を DWord 段階演算に直してあるので、**stage0 を作り直すときはこのツリーで** AB4.20 ビルドすること。`build.ps1` は不正 PE を検知して stage3 等へフォールバックする。
+
 ---
 
 ## 2. actba64 自己ホスト
