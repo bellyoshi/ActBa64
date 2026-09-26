@@ -90,6 +90,30 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     LowExprCallEmit = 1
 End Function
 
+' Decl 呼び出し用: "dll|api" を packed に組み立てる
+Function LowPackApiCall(dllName As *Byte, apiName As *Byte, packed As *Byte) As Long
+    Dim i As Long
+    Dim j As Long
+    LowPackApiCall = 0
+    i = 0
+    While dllName[i] <> 0 And i < 120
+        packed[i] = dllName[i]
+        i = i + 1
+    Wend
+    If dllName[i] <> 0 Then Exit Function
+    packed[i] = 124
+    i = i + 1
+    j = 0
+    While apiName[j] <> 0 And i < 250
+        packed[i] = apiName[j]
+        i = i + 1
+        j = j + 1
+    Wend
+    If apiName[j] <> 0 Then Exit Function
+    packed[i] = 0
+    LowPackApiCall = 1
+End Function
+
 Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(2047) As Byte
     Dim ast As *Ast
@@ -97,10 +121,10 @@ Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
     Dim lab As Long
     Dim byBits As Long
     Dim apiName(63) As Byte
+    Dim dllName(63) As Byte
+    Dim packed(255) As Byte
     Dim isApi As Long
     Dim di As Long
-    Dim dllKind As Long
-    Dim dlls As *Long
     Dim bys As *Long
 
     LowExprCallNormal = 0
@@ -113,27 +137,29 @@ Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
     If ctx->err <> 0 Then Exit Function
     lab = LowFindFunc(ctx, VarPtr(name))
     isApi = 0
-    dllKind = 0
     byBits = 0
     If lab >= 0 Then
         byBits = LowFindFuncByRefs(ctx, VarPtr(name))
+        If LowExprCallEmit(ctx, idx, lab, 0, 0, byBits, VarPtr(apiName)) = 0 Then Exit Function
     Else
         di = LowFindDecl(ctx, VarPtr(name))
-        If di >= 0 Then
-            LowDeclApiName(ctx, di, VarPtr(apiName))
-            dlls = ctx->declDlls
-            bys = ctx->declByRefs
-            dllKind = dlls[di]
-            byBits = bys[di]
-            isApi = 1
-        Else
+        If di < 0 Then
             Print "error: unknown API/call '" + MakeStr(VarPtr(name)) + "'"
             ctx->err = 1
             Exit Function
         End If
+        LowDeclApiName(ctx, di, VarPtr(apiName))
+        LowDeclDllName(ctx, di, VarPtr(dllName))
+        bys = ctx->declByRefs
+        byBits = bys[di]
+        If LowPackApiCall(VarPtr(dllName), VarPtr(apiName), VarPtr(packed)) = 0 Then
+            Print "error: Declare name too long '" + MakeStr(VarPtr(name)) + "'"
+            ctx->err = 1
+            Exit Function
+        End If
+        isApi = 1
+        If LowExprCallEmit(ctx, idx, lab, isApi, 0, byBits, VarPtr(packed)) = 0 Then Exit Function
     End If
-    If isApi <> 0 And dllKind = 0 Then dllKind = IR_DLL_KERNEL32
-    If LowExprCallEmit(ctx, idx, lab, isApi, dllKind, byBits, VarPtr(apiName)) = 0 Then Exit Function
     LowExprCallNormal = 1
 End Function
 
