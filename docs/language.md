@@ -326,12 +326,15 @@ Do [While 式 | Until 式]
     ...
 Loop [While 式 | Until 式]
 
+Continue For | Continue While | Continue Do
+
 With 式
     .field = ...
 End With
 
 Print 式
 Print 式;
+Print #番号, [式 [, ...]] [;]  ' ファイルへ。項目間はカンマ。`;` で改行抑制
 Input 変数          ' String / Long / Byte / Single / Double。stdin から1行
 Input #番号, 変数 [, ...]  ' ファイルからフィールド読み取り
 Open パス [For Input|Output|Append] As [#]番号
@@ -354,7 +357,9 @@ ExitProcess(式)
 | `Do ... Loop` | ○（`While` / `Until` を先頭または末尾に可） |
 | `With ... End With` | ○（ネスト可） |
 | `Exit Do` / `Exit While` / `Exit For` | ○ |
+| `Continue For` / `Continue While` / `Continue Do` | ○（ループ先頭へ） |
 | `Print` | ○ |
+| `Print #` | ○（`BasicFile.abp`。項目間カンマ。`;` で改行抑制） |
 | `Input` | ○（プロンプト文字列可。数値は十進文字列 → IEEE。`Double`/`Single` は `ValDouble`、整数は `Val`） |
 | `Open` / `Close` / `Input #` | ○（`BasicFile.abp`。番号 1..16） |
 | `Field` / `Get #` / `Put #` | ○（ランダム。`Open ... As` + Field 長） |
@@ -572,22 +577,33 @@ Put #番号, レコード番号, 式           ' 短い文字列は空白パデ�
 
 `Open ... As`（`For` 省略）で開いたうえで `Field` する。オフセットは `(レコード - 1) * フィールド長`。
 
-#### Write
+#### Write / Print #
 
 ```
 Write [#番号,] [式 [, 式 ...]] [;]
+Print #番号, [式 [, 式 ...]] [;]
 ```
 
-- `#番号` なし → 標準出力
-- 値の区切りは **カンマ**（`Print` とは異なる）
+- `Write` で `#番号` なし → 標準出力。`Print #` は番号必須
+- 値の区切りは **カンマ**（画面 `Print` の空白区切りとは異なる）
 - 末尾 `;` なしなら CRLF を付ける
 - 数値は `Str$` / `StrD$` で文字列化してから出力
 
+#### Eof / Loc / Lof
+
+```
+Eof(番号)   ' 終端なら -1、それ以外 0
+Loc(番号)   ' Input バッファ位置、またはランダムのレコード番号
+Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコード数
+```
+
+`BasicFile.abp` の関数（番号 1..16）。
+
 #### 未対応
 
-`Print #`、`Eof` / `Loc` / `Lof`、`Field` の割り当て変数形式（BasicHelp の拡張形）は未実装。
+`Field` の割り当て変数形式（BasicHelp の拡張形）は未実装。
 
-回帰テスト例: `src/actba64/test/t_open_close.abp`、`t_input_hash*.abp`、`t_field_get_put.abp`、`t_write_file.abp`
+回帰テスト例: `src/actba64/test/t_open_close.abp`、`t_input_hash*.abp`、`t_field_get_put.abp`、`t_write_file.abp`、`t_print_file.abp`、`t_eof_loc_lof.abp`
 
 ---
 
