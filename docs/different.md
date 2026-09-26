@@ -38,7 +38,7 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 | `Enum` … `End Enum` | 列挙型（`DWord` 値、省略時は前値+1） | ○（初回省略時は 1、`Dim x As EnumName` は 4 バイト） |
 | `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
 | `New` / `Delete` | `New [[num]] Class[(params)]`、`Delete pObj` | 非対応（`Dim As Class(args)` で ctor は呼べる） |
-| 関数ポインタ型 | `AddressOf(Proc)` で取得し、`CreateThread` 等へ渡す | `AddressOf` は組み込み。型・呼び出し規約の一般サポートは限定的 |
+| 関数ポインタ型 | `Dim As *Function(...)` / `*Sub(...)`、`TypeDef`、`AddressOf`、間接呼び出し | **対応**（引数型の厳密照合は未。詳細は [language.md §5.2.1](./language.md)） |
 | Ex文字列 | エスケープ付き `Ex"..."` | ○ |
 
 ### ファイル I/O（言語命令）
@@ -55,7 +55,7 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 | `Get#` / `Put#` | `Get/Put #filenumber, recode, StrBuffer`（`Field` 必須） | ○ |
 | `Field` | `Field #filenumber, fieldbyte`（ランダムファイル） | ○ |
 | `Eof` / `Loc` / `Lof` | ファイル状態・位置 | ○ |
-| `rc` ファイル取り込み | リソース埋め込み | 未 |
+| `rc` ファイル取り込み | リソース埋め込み | **部分対応**（`#resource "file"` → RCDATA 1。`.rc`/ICON/MENU は未） |
 
 ### GUI・対話・マルチメディア命令
 
@@ -67,7 +67,7 @@ ActBa64 の実装状況は本書と [language.md](./language.md) を併せて確
 | `Cls` / `Beep` | コンソール制御 | 非対応 |
 | `Inkey$` | `Inkey$()` — 非同期 1 文字 | 非対応 |
 | `Input$(Length)` | 同期、指定長読み取り | 非対応 |
-| RAD / `#RESOURCE` | Project Editor・リソース | 未対応 |
+| RAD / `#RESOURCE` | Project Editor・リソース | `#resource` 埋め込みは部分対応。RAD / `.pj` `#RESOURCE=` は未 |
 
 ---
 
@@ -189,11 +189,16 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 |---|---|---|
 | `With` … `End With` | 構造体メンバを `.Member` で省略、ネスト可 | **実装済み** |
 | `ByRef` / `ByVal` | 既定は値渡し。`ByRef p As Type` で参照渡し | **実装済み** |
-| `TypeDef` | `TypeDef newtype = basetype`（型エイリアス） | **実装済み** |
+| `TypeDef` | `TypeDef newtype = basetype`（型エイリアス） | **実装済み**（`*Function` / `*Sub` 別名も可） |
 | `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（`Type Name Align(n)`、`Inherits` / `Virtual` は部分対応） |
 | `#include` | `"path"` / `<path>` で `.sbp` 取り込み | **`#include "path"`**（`.abp`） |
 | 行継続 `_` | 行末 `_` で次行と連結 | **実装済み** |
 | `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **実装済み**（32/64 とも IAT） |
+| `Enum` | 列挙型 | **実装済み** |
+| Ex文字列 | `Ex"..."`（エスケープ付き） | **実装済み** |
+| `#strict` | 型不一致を警告 | **実装済み**（変数代入。詳細は [動作が異なるもの](#動作が異なるもの)） |
+| `#define` / `#ifdef` | 条件コンパイル | **実装済み** |
+| 関数ポインタ | `*Function` / `*Sub` / `TypeDef` / `AddressOf` / 間接 call | **実装済み**（[language.md §5.2.1](./language.md)） |
 
 ### 入出力・文字列・メモリ（組み込み）
 
@@ -203,7 +208,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `Asc` / `Chr$` | 文字コード変換 | 組込 |
 | `Left$` / `Mid$` / `Right$` / `Str$` | 部分文字列・数値文字列化 | 組込 |
 | `VarPtr` / `StrPtr` / `MakeStr` | ポインタ取得・NUL 終端から String 生成 | 組込 |
-| `AddressOf` | 手続き先頭アドレス（関数ポインタ） | 組込 |
+| `AddressOf` | 手続き先頭アドレス（関数ポインタ） | 組込（`*Function` / `*Sub` 変数へ代入して間接呼び出し可） |
 | `SizeOf` / `ELM` | 型サイズ / 添字上限→要素数 | **両方組込** |
 | `malloc` / `free` | C ヒープ | 組込（`free` → `HeapFree`） |
 | `RGB` / `LOWORD` | 色・ワード分解 | 組込 |
@@ -226,32 +231,21 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| Ex文字列 | BasicHelp 未確認 | **済**（`Ex"..."`） |
-| 関数ポインタ | `AddressOf(Proc)` をスレッド等へ | `AddressOf` のみ。一般化は未 |
-| `#strict` | 型不一致を警告 | **実装済**（変数代入。詳細は [動作が異なるもの](#動作が異なるもの)） |
-| `#define` / `#ifdef` | 条件コンパイル | **済** |
-| `GoSub` / `Return` | `*ラベル` 付きサブルーチン | 関数 `Return` とは別 |
-| `Enum` | 列挙型定義 | **済** |
+| `GoSub` / `Return` | `*ラベル` 付きサブルーチン | 関数 `Return` とは別。方針上は非対応寄り |
 | `Let` | 明示代入（省略可） | 優先度低 |
 | `Class` 拡張 | `New`/`Delete`、`Super`、厳密 `Protected`、メンバ Class の自動 ctor/dtor | `Inherits`/`Virtual` は COM/vtable 向けに部分対応済 |
+| 関数ポインタの厳密シグネチャ照合 | 引数型の一致検査 | `*Function` / 間接 call 自体は済 |
 
 ### ファイル I/O
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Open` / `Close` | ファイル番号で入出力チャネル | ○（`BasicFile.abp`、1..16） |
-| `Input #` | ファイル番号付き入力 | ○ |
-| `Write` | カンマ区切り出力（画面／ファイル） | ○ |
-| `Field` / `Get #` / `Put #` | ランダムファイル | ○ |
-| `Print #` | ファイル番号付き Print | **済**（`BasicFile.abp`） |
-| `Eof` / `Loc` / `Lof` | ファイル状態 | **済** |
-| `rc` ファイル取り込み | リソース | |
+| `rc` / `#resource` | リソースファイル取り込み | ファイル→RCDATA(1) は済。`.rc` 直接 / ICON・MENU は未 |
 
 ### 入出力・対話
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Input` プロンプト付き | `Input "文字列", variable` | **済** |
 | `Cls` | 画面クリア | |
 | `MsgBox` | BASIC 命令 | `MessageBoxA` で代替 |
 | `Beep` | ビープ音 | |
@@ -271,25 +265,20 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Randomize` / `Rnd()` | 乱数 | **済**（`Math.abp`） |
 | `CDbl` / `CInt` / `CSng` | 型変換関数 | `As` キャストは可 |
 | `Oct$` | 8 進文字列 | |
 | `Date$` / `Time$` | 日付・時刻文字列 | |
 | `Hex$` / `Val` / `ZeroString` | 16 進文字列・数値化・ゼロ埋め | `StrUtils.abp` 等で一部 |
-| `InStr` | 部分文字列検索 | **済**（`StrUtils.abp` + `default.idx`） |
-| `HIBYTE` / `HIWORD` / `LOBYTE` / `LOWORD` / `MAKELONG` / `MAKEWORD` | ビット操作 | **組込**（`LOWORD` 含む） |
-| `SetDouble` / `SetWord` / `GetDouble` / `GetSingle` / `GetDWord` / `GetByte` 等 | メモリ読み書き | **`Memory.abp`**（浮動 Get/Set Double は未） |
-| `calloc` / `realloc` | C ヒープ | `calloc` は `HeapAlloc` マップ済。`realloc` 未 |
-| `ELM` | `ELM(n)` — 添字上限から要素数 | **済**（組込） |
+| `SetDouble` / `GetDouble` / `GetSingle` 等 | メモリ読み書き | **`Memory.abp`**（浮動 Get/Set は未） |
+| `realloc` | C ヒープ | `calloc` は済。`realloc` 未 |
 
 ### GUI・Win32・マルチメディア
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
 | `Window` / `DelWindow` | BASIC ウィンドウ生成・破棄 | Win32 API で代替 |
-| ハンドル型 | `HANDLE` / `HWND` 等 | WinTypes で定義済 |
-| Win32API | `api_*.sbp` 382 関数超 | 主要 API は IAT 登録済。不足分は `Declare` |
-| DirectX | D3D9 + `dx_graphics.sbp` 等 | **D3D11 基盤はサンプルで動作**。BasicHelp 相当の `dx_DrawText` 等・`dx_input`・`dx_music` の D3D11 版は未整備 |
+| Win32API 全量 | `api_*.sbp` 382 関数超 | 主要 API は IAT 登録済。不足分は `Declare` |
+| DirectX | D3D9 + `dx_graphics.sbp` 等 | **D3D11 基盤はサンプルで動作**。`dx_input`・`dx_music` 等の D3D11 版は未整備 |
 | RAD | Project Editor | 機能拡充予定 |
 
 ### 標準ライブラリ

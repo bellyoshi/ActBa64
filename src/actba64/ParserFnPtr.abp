@@ -1,0 +1,97 @@
+' ParserFnPtr - *Function / *Sub シグネチャ
+
+Function ParseFnPtrRetAs(p As *Parser, ByRef retTy As Long) As Long
+    Dim kAs(7) As Byte
+
+    ParseFnPtrRetAs = 0
+    lstrcpy(VarPtr(kAs), "as")
+    If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+    ParseFnPtrRetAs = ParseFuncRetType(p, retTy)
+End Function
+
+Function ParseFnPtrRet(p As *Parser, isSub As Long, ByRef retTy As Long) As Long
+    ParseFnPtrRet = 0
+    If isSub <> 0 Then
+        retTy = -1
+        ParseFnPtrRet = 1
+        Exit Function
+    End If
+    ParseFnPtrRet = ParseFnPtrRetAs(p, retTy)
+End Function
+
+Function ParseFnPtrBody(p As *Parser, isSub As Long, ByRef params As Long, ByRef retTy As Long) As Long
+    Dim nParams As Long
+
+    ParseFnPtrBody = 0
+    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
+    If ParseParamList(p, params, nParams, 0, 1) = 0 Then Exit Function
+    ParseFnPtrBody = ParseFnPtrRet(p, isSub, retTy)
+End Function
+
+Function ParseFnPtrIsSub(p As *Parser, ByRef isSub As Long) As Long
+    Dim k(15) As Byte
+
+    ParseFnPtrIsSub = 0
+    lstrcpy(VarPtr(k), "function")
+    If ParseIdentIs(p, VarPtr(k)) <> 0 Then
+        isSub = 0
+        ParseFnPtrIsSub = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(k), "sub")
+    If ParseIdentIs(p, VarPtr(k)) = 0 Then Exit Function
+    isSub = 1
+    ParseFnPtrIsSub = 1
+End Function
+
+' * 消費後。Function/Sub なら 1、それ以外は 0
+Function ParseFnPtrTry(p As *Parser, ByRef ty As Long, ByRef retTy As Long, ByRef params As Long) As Long
+    Dim isSub As Long
+
+    ParseFnPtrTry = 0
+    params = -1
+    retTy = -1
+    If ParseFnPtrIsSub(p, isSub) = 0 Then Exit Function
+    p->pos = p->pos + 1
+    If ParseFnPtrBody(p, isSub, params, retTy) = 0 Then Exit Function
+    ty = TY_PTR_FUNC
+    ParseFnPtrTry = 1
+End Function
+
+Function ParseTypeDefFnPtrAdd(p As *Parser, name As *Byte, params As Long, retTy As Long) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim ti As Long
+    Dim nType As Long
+
+    ParseTypeDefFnPtrAdd = -1
+    ast = p->ast
+    types = ast->types
+    ti = TyAdd(types, name)
+    If ti < 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    If TySetFnPtr(types, ti, params, retTy) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    nType = AstAddNode(ast, AST_TYPE)
+    If nType < 0 Then Exit Function
+    AstSetStr(ast, nType, name)
+    ParseTypeDefFnPtrAdd = nType
+End Function
+
+Function ParseTypeDefFnPtr(p As *Parser, name As *Byte) As Long
+    Dim params As Long
+    Dim retTy As Long
+    Dim ty As Long
+
+    ParseTypeDefFnPtr = -1
+    If ParseFnPtrTry(p, ty, retTy, params) = 0 Then Exit Function
+    ParseTypeDefFnPtr = ParseTypeDefFnPtrAdd(p, name, params, retTy)
+End Function

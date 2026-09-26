@@ -1,6 +1,5 @@
 ' ===================================================
-'  PeWriter - pack .text + .data + .idata into PE32+ EXE
-'  Layout: .text, .data (RW zero-filled), .idata
+'  PeWriter - .text + .data + .idata [+ .rsrc]
 ' ===================================================
 
 Type PeLayout
@@ -12,47 +11,80 @@ Type PeLayout
     idataRaw As DWord
     idataVirt As DWord
     idataRva As DWord
+    rsrcRaw As DWord
+    rsrcVirt As DWord
+    rsrcRva As DWord
+    rsrcOff As Long
     sizeImage As Long
     dataOff As Long
     idOff As Long
+    hdrSize As Long
+    nSect As Long
     outSize As Long
 End Type
 
-Sub PeCalcLayout(codeSize As Long, globSize As Long, idataSize As DWord, lay As *PeLayout)
+Function PeHdrSize(nSect As Long) As Long
+    Dim need As Long
+    need = E_LFANEW + 24 + SIZEOF_OPTIONAL_HEADER64
+    need = need + nSect * SIZEOF_SECTION_HEADER
+    If TyIs32() <> 0 Then
+        need = E_LFANEW + 24 + SIZEOF_OPTIONAL_HEADER32
+        need = need + nSect * SIZEOF_SECTION_HEADER
+    End If
+    PeHdrSize = AlignUp(need, FILE_ALIGN)
+End Function
+
+Sub PeCalcLayoutBase(codeSize As Long, globSize As Long, idataSize As DWord, lay As *PeLayout)
     lay->textVirt = AlignUp(codeSize, SECTION_ALIGN)
     lay->textRaw = AlignUp(codeSize, FILE_ALIGN)
     lay->dataVirt = AlignUp(globSize, SECTION_ALIGN)
     If lay->dataVirt < SECTION_ALIGN Then lay->dataVirt = SECTION_ALIGN
     lay->dataRaw = AlignUp(lay->dataVirt, FILE_ALIGN)
     If lay->dataRaw < FILE_ALIGN Then lay->dataRaw = FILE_ALIGN
-    lay->dataRva = TEXT_RVA
-    lay->dataRva = lay->dataRva + lay->textVirt
-    lay->idataRva = lay->dataRva
-    lay->idataRva = lay->idataRva + lay->dataVirt
+    lay->dataRva = TEXT_RVA + lay->textVirt
+    lay->idataRva = lay->dataRva + lay->dataVirt
     lay->idataVirt = AlignUp(idataSize, SECTION_ALIGN)
     If lay->idataVirt < SECTION_ALIGN Then lay->idataVirt = SECTION_ALIGN
     lay->idataRaw = AlignUp(idataSize, FILE_ALIGN)
     If lay->idataRaw < FILE_ALIGN Then lay->idataRaw = FILE_ALIGN
-    lay->sizeImage = TEXT_RVA
-    AddTo(lay->sizeImage, lay->textVirt)
-    AddTo(lay->sizeImage, lay->dataVirt)
-    AddTo(lay->sizeImage, lay->idataVirt)
-    lay->dataOff = SIZEOF_HEADERS
-    AddTo(lay->dataOff, lay->textRaw)
-    lay->idOff = lay->dataOff
-    AddTo(lay->idOff, lay->dataRaw)
-    lay->outSize = lay->idOff
-    AddTo(lay->outSize, lay->idataRaw)
 End Sub
 
-Sub PeWriteDosNt(outBuf As *Byte, machine As Word, optSize As Word, chars As Word)
-    ZeroMem(outBuf, SIZEOF_HEADERS)
+Sub PeCalcLayoutRsrc(rsrcSize As Long, lay As *PeLayout)
+    lay->rsrcRaw = 0
+    lay->rsrcVirt = 0
+    lay->rsrcRva = 0
+    lay->rsrcOff = 0
+    If rsrcSize <= 0 Then
+        lay->nSect = 3
+        Exit Sub
+    End If
+    lay->nSect = 4
+    lay->rsrcRva = lay->idataRva + lay->idataVirt
+    lay->rsrcVirt = AlignUp(rsrcSize, SECTION_ALIGN)
+    If lay->rsrcVirt < SECTION_ALIGN Then lay->rsrcVirt = SECTION_ALIGN
+    lay->rsrcRaw = AlignUp(rsrcSize, FILE_ALIGN)
+    If lay->rsrcRaw < FILE_ALIGN Then lay->rsrcRaw = FILE_ALIGN
+End Sub
+
+Sub PeCalcLayout(codeSize As Long, globSize As Long, idataSize As DWord, rsrcSize As Long, lay As *PeLayout)
+    PeCalcLayoutBase(codeSize, globSize, idataSize, lay)
+    PeCalcLayoutRsrc(rsrcSize, lay)
+    lay->hdrSize = PeHdrSize(lay->nSect)
+    lay->sizeImage = TEXT_RVA + lay->textVirt + lay->dataVirt + lay->idataVirt + lay->rsrcVirt
+    lay->dataOff = lay->hdrSize + lay->textRaw
+    lay->idOff = lay->dataOff + lay->dataRaw
+    lay->rsrcOff = lay->idOff + lay->idataRaw
+    lay->outSize = lay->idOff + lay->idataRaw + lay->rsrcRaw
+End Sub
+
+Sub PeWriteDosNt(outBuf As *Byte, machine As Word, optSize As Word, chars As Word, nSect As Long)
+    ZeroMem(outBuf, PeHdrSize(nSect))
     PutWord(outBuf, 0, IMAGE_DOS_SIGNATURE)
     PutDword(outBuf, 60, E_LFANEW)
     WriteDosStub(outBuf)
     PutDword(outBuf, E_LFANEW, IMAGE_NT_SIGNATURE)
     PutWord(outBuf, E_LFANEW + 4, machine)
-    PutWord(outBuf, E_LFANEW + 6, 3)
+    PutWord(outBuf, E_LFANEW + 6, nSect As Word)
     PutWord(outBuf, E_LFANEW + 20, optSize)
     PutWord(outBuf, E_LFANEW + 22, chars)
 End Sub
@@ -67,19 +99,36 @@ Sub PeWriteSect(outBuf As *Byte, ByRef sectOff As DWord, name As *Byte, vsize As
     sectOff = sectOff + 40
 End Sub
 
-Sub PeWriteThreeSects(outBuf As *Byte, sectOff As DWord, lay As *PeLayout, codeSize As Long, idataSize As DWord, builder As *ImportBuilder)
-    PeWriteSect(outBuf, sectOff, ".text", codeSize, TEXT_RVA, lay->textRaw, SIZEOF_HEADERS, IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ)
+Sub PeWriteSects(outBuf As *Byte, sectOff As DWord, lay As *PeLayout, codeSize As Long, idataSize As DWord, rsrcSize As Long, builder As *ImportBuilder)
+    PeWriteSect(outBuf, sectOff, ".text", codeSize, TEXT_RVA, lay->textRaw, lay->hdrSize, IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ)
     PeWriteSect(outBuf, sectOff, ".data", lay->dataVirt, lay->dataRva, lay->dataRaw, lay->dataOff, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
     PeWriteSect(outBuf, sectOff, ".idata", idataSize, builder->iatRva, lay->idataRaw, lay->idOff, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
+    If rsrcSize > 0 Then
+        PeWriteSect(outBuf, sectOff, ".rsrc", lay->rsrcVirt, lay->rsrcRva, lay->rsrcRaw, lay->rsrcOff, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ)
+    End If
 End Sub
 
-Sub PeCopyPayloads(outBuf As *Byte, lay As *PeLayout, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord)
-    MemCopyAt(outBuf, SIZEOF_HEADERS, codeBuf, codeSize)
+Sub PeCopyPayloads(outBuf As *Byte, lay As *PeLayout, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, rsrcBuf As *Byte, rsrcSize As Long)
+    MemCopyAt(outBuf, lay->hdrSize, codeBuf, codeSize)
     ZeroAt(outBuf, lay->dataOff, lay->dataRaw)
     MemCopyAt(outBuf, lay->idOff, idataBuf, idataSize)
+    If rsrcSize > 0 And rsrcBuf <> NULL Then
+        MemCopyAt(outBuf, lay->rsrcOff, rsrcBuf, rsrcSize)
+    End If
 End Sub
 
-Sub PeWriteOpt64(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, subsystem As Long)
+Sub PeWriteOptDirs64(outBuf As *Byte, optOff As DWord, builder As *ImportBuilder, lay As *PeLayout, rsrcSize As Long)
+    PutDword(outBuf, optOff + 120, builder->idtRva)
+    PutDword(outBuf, optOff + 124, builder->idtSize)
+    PutDword(outBuf, optOff + 208, builder->iatRva)
+    PutDword(outBuf, optOff + 212, builder->iatSize)
+    If rsrcSize > 0 Then
+        PutDword(outBuf, optOff + 128, lay->rsrcRva)
+        PutDword(outBuf, optOff + 132, rsrcSize)
+    End If
+End Sub
+
+Sub PeWriteOpt64(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, subsystem As Long, rsrcSize As Long)
     Dim optOff As DWord
     optOff = E_LFANEW + 24
     PutWord(outBuf, optOff + 0, IMAGE_NT_OPTIONAL_HDR64_MAGIC)
@@ -95,20 +144,28 @@ Sub PeWriteOpt64(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, s
     PutWord(outBuf, optOff + 48, 5)
     PutWord(outBuf, optOff + 50, 2)
     PutDword(outBuf, optOff + 56, lay->sizeImage)
-    PutDword(outBuf, optOff + 60, SIZEOF_HEADERS)
+    PutDword(outBuf, optOff + 60, lay->hdrSize)
     PutWord(outBuf, optOff + 68, subsystem As Word)
     PutDword(outBuf, optOff + 72, &H800000)
     PutDword(outBuf, optOff + 80, &H1000)
     PutDword(outBuf, optOff + 88, &H800000)
     PutDword(outBuf, optOff + 96, &H1000)
     PutDword(outBuf, optOff + 108, 16)
-    PutDword(outBuf, optOff + 120, builder->idtRva)
-    PutDword(outBuf, optOff + 124, builder->idtSize)
-    PutDword(outBuf, optOff + 208, builder->iatRva)
-    PutDword(outBuf, optOff + 212, builder->iatSize)
+    PeWriteOptDirs64(outBuf, optOff, builder, lay, rsrcSize)
 End Sub
 
-Sub PeWriteOpt32(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, subsystem As Long)
+Sub PeWriteOptDirs32(outBuf As *Byte, optOff As DWord, builder As *ImportBuilder, lay As *PeLayout, rsrcSize As Long)
+    PutDword(outBuf, optOff + 104, builder->idtRva)
+    PutDword(outBuf, optOff + 108, builder->idtSize)
+    PutDword(outBuf, optOff + 192, builder->iatRva)
+    PutDword(outBuf, optOff + 196, builder->iatSize)
+    If rsrcSize > 0 Then
+        PutDword(outBuf, optOff + 112, lay->rsrcRva)
+        PutDword(outBuf, optOff + 116, rsrcSize)
+    End If
+End Sub
+
+Sub PeWriteOpt32(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, subsystem As Long, rsrcSize As Long)
     Dim optOff As DWord
     optOff = E_LFANEW + 24
     PutWord(outBuf, optOff + 0, IMAGE_NT_OPTIONAL_HDR32_MAGIC)
@@ -124,21 +181,18 @@ Sub PeWriteOpt32(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, s
     PutWord(outBuf, optOff + 48, 5)
     PutWord(outBuf, optOff + 50, 2)
     PutDword(outBuf, optOff + 56, lay->sizeImage)
-    PutDword(outBuf, optOff + 60, SIZEOF_HEADERS)
+    PutDword(outBuf, optOff + 60, lay->hdrSize)
     PutWord(outBuf, optOff + 68, subsystem As Word)
     PutDword(outBuf, optOff + 72, &H100000)
     PutDword(outBuf, optOff + 76, &H1000)
     PutDword(outBuf, optOff + 80, &H100000)
     PutDword(outBuf, optOff + 84, &H1000)
     PutDword(outBuf, optOff + 92, 16)
-    PutDword(outBuf, optOff + 104, builder->idtRva)
-    PutDword(outBuf, optOff + 108, builder->idtSize)
-    PutDword(outBuf, optOff + 192, builder->iatRva)
-    PutDword(outBuf, optOff + 196, builder->iatSize)
+    PeWriteOptDirs32(outBuf, optOff, builder, lay, rsrcSize)
 End Sub
 
-Function PeFlush(outPath As *Byte, outBuf As *Byte, lay As *PeLayout, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord) As Long
-    PeCopyPayloads(outBuf, lay, codeBuf, codeSize, idataBuf, idataSize)
+Function PeFlush(outPath As *Byte, outBuf As *Byte, lay As *PeLayout, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, rsrcBuf As *Byte, rsrcSize As Long) As Long
+    PeCopyPayloads(outBuf, lay, codeBuf, codeSize, idataBuf, idataSize, rsrcBuf, rsrcSize)
     WriteAll(outPath, outBuf, lay->outSize)
     free(outBuf)
     PeFlush = 1
@@ -148,15 +202,21 @@ Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSiz
     Dim outBuf As *Byte
     Dim lay As PeLayout
     Dim sectOff As DWord
+    Dim rsz As Long
+    Dim rbuf As *Byte
+
     WritePe64 = 0
-    PeCalcLayout(codeSize, globSize, idataSize, VarPtr(lay))
+    rsz = ResSize()
+    rbuf = ResBuf()
+    PeCalcLayout(codeSize, globSize, idataSize, rsz, VarPtr(lay))
+    If rsz > 0 Then ResFixupRvas(lay.rsrcRva)
     outBuf = calloc(lay.outSize)
     If outBuf = NULL Then Exit Function
-    PeWriteDosNt(outBuf, IMAGE_FILE_MACHINE_AMD64, SIZEOF_OPTIONAL_HEADER64, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_LARGE_ADDRESS_AWARE)
-    PeWriteOpt64(outBuf, VarPtr(lay), builder, subsystem)
+    PeWriteDosNt(outBuf, IMAGE_FILE_MACHINE_AMD64, SIZEOF_OPTIONAL_HEADER64, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_LARGE_ADDRESS_AWARE, lay.nSect)
+    PeWriteOpt64(outBuf, VarPtr(lay), builder, subsystem, rsz)
     sectOff = E_LFANEW + 24 + SIZEOF_OPTIONAL_HEADER64
-    PeWriteThreeSects(outBuf, sectOff, VarPtr(lay), codeSize, idataSize, builder)
-    WritePe64 = PeFlush(outPath, outBuf, VarPtr(lay), codeBuf, codeSize, idataBuf, idataSize)
+    PeWriteSects(outBuf, sectOff, VarPtr(lay), codeSize, idataSize, rsz, builder)
+    WritePe64 = PeFlush(outPath, outBuf, VarPtr(lay), codeBuf, codeSize, idataBuf, idataSize, rbuf, rsz)
 End Function
 
 Function WritePe64Gui(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder) As Long
@@ -167,13 +227,19 @@ Function WritePe32(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSiz
     Dim outBuf As *Byte
     Dim lay As PeLayout
     Dim sectOff As DWord
+    Dim rsz As Long
+    Dim rbuf As *Byte
+
     WritePe32 = 0
-    PeCalcLayout(codeSize, globSize, idataSize, VarPtr(lay))
+    rsz = ResSize()
+    rbuf = ResBuf()
+    PeCalcLayout(codeSize, globSize, idataSize, rsz, VarPtr(lay))
+    If rsz > 0 Then ResFixupRvas(lay.rsrcRva)
     outBuf = calloc(lay.outSize)
     If outBuf = NULL Then Exit Function
-    PeWriteDosNt(outBuf, IMAGE_FILE_MACHINE_I386, SIZEOF_OPTIONAL_HEADER32, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_32BIT_MACHINE)
-    PeWriteOpt32(outBuf, VarPtr(lay), builder, subsystem)
+    PeWriteDosNt(outBuf, IMAGE_FILE_MACHINE_I386, SIZEOF_OPTIONAL_HEADER32, IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_32BIT_MACHINE, lay.nSect)
+    PeWriteOpt32(outBuf, VarPtr(lay), builder, subsystem, rsz)
     sectOff = E_LFANEW + 24 + SIZEOF_OPTIONAL_HEADER32
-    PeWriteThreeSects(outBuf, sectOff, VarPtr(lay), codeSize, idataSize, builder)
-    WritePe32 = PeFlush(outPath, outBuf, VarPtr(lay), codeBuf, codeSize, idataBuf, idataSize)
+    PeWriteSects(outBuf, sectOff, VarPtr(lay), codeSize, idataSize, rsz, builder)
+    WritePe32 = PeFlush(outPath, outBuf, VarPtr(lay), codeBuf, codeSize, idataBuf, idataSize, rbuf, rsz)
 End Function

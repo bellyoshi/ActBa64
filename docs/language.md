@@ -193,9 +193,11 @@ End Type
 
 TypeDef HWND = Long
 TypeDef PBYTE = *Byte
+TypeDef PADD = *Function(a As Long, b As Long) As Long
 ```
 
-メンバ参照: `x.field` / `p->field` / `a(i)` / `p[i]`（組み合わせ可）。
+メンバ参照: `x.field` / `p->field` / `a(i)` / `p[i]`（組み合わせ可）。  
+関数ポインタ型（`*Function` / `*Sub`）は [§5.2.1](#521-関数ポインタ型)。
 
 ---
 
@@ -406,6 +408,35 @@ LOWORD(n)
 MakeIntResource(id)
 ```
 
+### 5.2.1 関数ポインタ型
+
+```
+Dim p As *Function(a As Long, b As Long) As Long
+Dim s As *Sub(n As Long)
+TypeDef PADD = *Function(a As Long, b As Long) As Long
+Dim q As PADD
+
+p = AddressOf(Add)
+r = p(1, 2)          ' 間接呼び出し（OP_CALL_RAX）
+s = AddressOf(Show)
+s(r)
+```
+
+- `AddressOf` で手続きアドレスを取得し、`*Function` / `*Sub`（またはその `TypeDef`）へ代入
+- 呼び出しは通常の関数呼び出しと同じ構文。引数型の厳密照合は未（個数・ABI は通常の call と同じ）
+- 戻り型はシグネチャの `As`（`Sub` は戻り値なし）
+
+### 5.2.2 リソース埋め込み
+
+```
+#resource "assets\payload.bin"
+```
+
+- ソース相対パスのファイル全体を PE `.rsrc` に **RCDATA（型 10）ID=1** として埋め込む
+- 実行時: `FindResourceA(GetModuleHandleA(0), MAKEINTRESOURCE(1), MAKEINTRESOURCE(10))`
+- `.rc` はそのままでは不可（`rc.exe` で `.res` 等へ落としてから指定）。ICON/MENU 型リソースは未
+- `.pj` の `#RESOURCE=0` は当面無視
+
 ### 5.3 メモリ
 
 ```
@@ -593,7 +624,7 @@ N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBl
 - `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は **64bit IEEE Double**（`-actba32` は SSE 未実装）
 - `GoTo` / `GoSub` / `ReDim`
 - ネスト手続き
-- リソース（`#RESOURCE`）埋め込み
+- `#resource` の `.rc` 直接コンパイル、ICON/MENU など型付きリソース（ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化
 
 ---

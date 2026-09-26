@@ -1,0 +1,135 @@
+' ResEmbed - ファイルを PE .rsrc（RCDATA id=1）へ
+
+Const RT_RCDATA = 10
+Const RES_DATA_ENTRY_OFF = &H48
+Const RES_PAYLOAD_OFF = &H58
+
+Dim g_rsrcBuf As *Byte
+Dim g_rsrcSize As Long
+
+Sub ResClear()
+    If g_rsrcBuf <> NULL Then free(g_rsrcBuf)
+    g_rsrcBuf = NULL
+    g_rsrcSize = 0
+End Sub
+
+Function ResBuf() As *Byte
+    ResBuf = g_rsrcBuf
+End Function
+
+Function ResSize() As Long
+    ResSize = g_rsrcSize
+End Function
+
+Function ResAlign4(n As Long) As Long
+    ResAlign4 = (n + 3) And (0 - 4)
+End Function
+
+Sub ResPutDir(buf As *Byte, off As Long, nId As Long)
+    PutDword(buf, off + 0, 0)
+    PutDword(buf, off + 4, 0)
+    PutWord(buf, off + 8, 0)
+    PutWord(buf, off + 10, 0)
+    PutWord(buf, off + 12, 0)
+    PutWord(buf, off + 14, nId As Word)
+End Sub
+
+Sub ResPutIdEntry(buf As *Byte, off As Long, id As Long, childOff As Long, isDir As Long)
+    Dim o As DWord
+    PutDword(buf, off + 0, id)
+    o = childOff
+    If isDir <> 0 Then o = o Or &H80000000
+    PutDword(buf, off + 4, o)
+End Sub
+
+Sub ResPutTree(buf As *Byte, dataSize As Long)
+    ResPutDir(buf, 0, 1)
+    ResPutIdEntry(buf, &H10, RT_RCDATA, &H18, 1)
+    ResPutDir(buf, &H18, 1)
+    ResPutIdEntry(buf, &H28, 1, &H30, 1)
+    ResPutDir(buf, &H30, 1)
+    ResPutIdEntry(buf, &H40, 0, RES_DATA_ENTRY_OFF, 0)
+    PutDword(buf, RES_DATA_ENTRY_OFF + 0, RES_PAYLOAD_OFF)
+    PutDword(buf, RES_DATA_ENTRY_OFF + 4, dataSize)
+End Sub
+
+Function ResBuildRcdata(data As *Byte, dataSize As Long) As *Byte
+    Dim buf As *Byte
+    Dim total As Long
+    Dim i As Long
+
+    ResBuildRcdata = NULL
+    total = RES_PAYLOAD_OFF + ResAlign4(dataSize)
+    buf = calloc(total)
+    If buf = NULL Then Exit Function
+    ResPutTree(buf, dataSize)
+    i = 0
+    While i < dataSize
+        buf[RES_PAYLOAD_OFF + i] = data[i]
+        i = i + 1
+    Wend
+    g_rsrcSize = total
+    ResBuildRcdata = buf
+End Function
+
+Sub ResFixupRvas(rsrcRva As DWord)
+    If g_rsrcBuf = NULL Then Exit Sub
+    If g_rsrcSize < RES_DATA_ENTRY_OFF + 4 Then Exit Sub
+    PutDword(g_rsrcBuf, RES_DATA_ENTRY_OFF, rsrcRva + RES_PAYLOAD_OFF)
+End Sub
+
+Function ResPathIsRc(path As *Byte) As Long
+    Dim i As Long
+    Dim n As Long
+
+    ResPathIsRc = 0
+    n = 0
+    While path[n] <> 0
+        n = n + 1
+    Wend
+    If n < 3 Then Exit Function
+    i = n - 3
+    If PpToLower(path[i]) <> 46 Then Exit Function
+    If PpToLower(path[i + 1]) <> 114 Then Exit Function
+    If PpToLower(path[i + 2]) <> 99 Then Exit Function
+    ResPathIsRc = 1
+End Function
+
+Function ResLoadFileAsRcdata(path As *Byte) As Long
+    Dim data As *Byte
+    Dim sz As Long
+
+    ResLoadFileAsRcdata = 0
+    data = LoadFile(path, sz)
+    If data = NULL Then
+        Print "error: #resource cannot open: " + MakeStr(path)
+        Exit Function
+    End If
+    If sz <= 0 Then
+        Print "error: #resource empty: " + MakeStr(path)
+        free(data)
+        Exit Function
+    End If
+    g_rsrcBuf = ResBuildRcdata(data, sz)
+    free(data)
+    If g_rsrcBuf = NULL Then
+        Print "error: #resource out of memory"
+        Exit Function
+    End If
+    ResLoadFileAsRcdata = 1
+End Function
+
+Function ResPrepareFromPp() As Long
+    Dim path As *Byte
+
+    ResPrepareFromPp = 1
+    ResClear()
+    If PpResHas() = 0 Then Exit Function
+    path = PpResPathGet()
+    If ResPathIsRc(path) <> 0 Then
+        Print "error: #resource .rc: compile with rc.exe to .res, then #resource ""file.res"" (file bytes → RCDATA 1)"
+        ResPrepareFromPp = 0
+        Exit Function
+    End If
+    ResPrepareFromPp = ResLoadFileAsRcdata(path)
+End Function
