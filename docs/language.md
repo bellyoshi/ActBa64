@@ -500,7 +500,7 @@ memcpy(dst, src, n)
 ### 7.3 自動 Include
 
 `Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
-`UnicodeApi.sbp`（Unicode 版 API の `Declare Lib`）は Preproc が別途挿入する。  
+続けて Preproc が `api.idx`（主要 Win32 の `Declare Lib`）と `UnicodeApi.sbp`（Unicode 版 API）を挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
 | ディレクティブ | 挿入される idx |
@@ -508,7 +508,7 @@ memcpy(dst, src, n)
 | `#console` | `Include\console\console.idx` |
 | `#n88basic` / `#prompt` | `Include\N88BASIC\n88basic.idx` |
 
-**`Declare Lib` 群は載せない**（IAT 解決）。
+`default.idx` 自体には **`Declare Lib` を載せない**（型・定数・ヘルパのみ。Declare は `api.idx` / `UnicodeApi.sbp`）。不足 API はソース側で `Declare Lib`。
 
 ### 7.4 Math（IEEE Double）
 
@@ -609,7 +609,7 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 
 ## 8. WinAPI / IAT
 
-コンパイラが名前を認識した API はインポートテーブルに載る。
+`api.idx` / `UnicodeApi.sbp` の `Declare`（およびソース側 Declare）で認識した API はインポートテーブルに載る。
 
 ### 8.1 共通でよく使うもの（kernel32）
 
@@ -617,14 +617,13 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 `CreateFileA`, `ReadFile`, `WriteFile`, `CloseHandle`, `GetFileSize`, `SetFilePointer`,  
 `GetFileAttributesA`, `GetProcessHeap`, `HeapAlloc`, `HeapFree`, `GetStdHandle`
 
-### 8.2 `Declare` やマップで足しやすいもの
+### 8.2 `api.idx` に既にあるもの / ソースで足すもの
 
-`GetModuleFileNameA`, `DeleteFileA`, `CreateProcessA`, `WaitForSingleObject`, `GetTickCount`,  
-一部 user32（`MessageBoxA` 等）
+`GetModuleFileNameA`, `CreateProcessA`, `WaitForSingleObject`, `GetTickCount`,  
+user32（`MessageBoxA` 等）、gdi32（`CreatePen` / `Ellipse` / `BitBlt` 等）、  
+`PeekMessageA` / `MsgWaitForMultipleObjects` などは `api.idx` の Declare で解決する。
 
-未登録かつ未 `Declare` の呼び出しはコンパイルエラーです。
-
-N88 / `Sleep` 向けに gdi32（`CreatePen` / `Ellipse` / `Arc` / `Pie` / `BitBlt` 等）と `PeekMessageA` / `MsgWaitForMultipleObjects` もマップされる。
+不足 API はソース側で `Declare Lib`。未登録かつ未 `Declare` の呼び出しはコンパイルエラーです。
 
 ---
 

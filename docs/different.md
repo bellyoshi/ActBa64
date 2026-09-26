@@ -96,7 +96,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `HIBYTE` / `HIWORD` / `MAKELONG` 等 | ビット分解・合成マクロ | **組込** |
 | `Int64` / `QWord` / `Char` | 基本型として定義 | **`Char` / `Int64` / `QWord` 型なし**（`Byte` / `Long` / `DWord` 等） |
 | ソース拡張子 | `.sbp` 推奨 | **`.abp`**（`.pj` で結合） |
-| Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`Include\default\default.idx` を自動挿入**。未登録 API は `Declare Lib` またはコンパイルエラー |
+| Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`default.idx` + `api.idx`（Declare）+ `UnicodeApi.sbp` を自動挿入**。未登録 API は `Declare Lib` またはコンパイルエラー |
 | DirectX | DirectX 9 + `dx_*.sbp` | **DirectX 11**（[改良点](#directx-11)）。高レベル `dx_*` 一式はサンプルのみ |
 | 64bit | ver 4.20 はバグで実質困難 | **64bit PE32+ を正式サポート**（ポインタ・`String`・`HANDLE` = 8、`Long` = 4） |
 | コンパイル | GUI IDE が主 | **CLI** `actba64 src -o out.exe` |
@@ -136,7 +136,7 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 
 ### 識別子の大小区別（AB 4.20 同様）
 
-**定数・変数・Sub/Function・Declare 名・Type/Class 名**は定義どおりの綴りで参照する（`TRUE` ≠ `true`、`Foo` ≠ `foo`）。**言語キーワード**、**組み込みランタイム**（`FillMemory` / `memcpy` / `malloc` 等）、**Win32 API 名の正規化**（`LowMapKernelApi` 等）だけ大小無視。
+**定数・変数・Sub/Function・Declare 名・Type/Class 名**は定義どおりの綴りで参照する（`TRUE` ≠ `true`、`Foo` ≠ `foo`）。**言語キーワード**、**組み込みランタイム**（`FillMemory` / `memcpy` / `malloc` 等）だけ大小無視。Win32 API は `api.idx` の Declare 名（および Alias の裸名）と一致させる。
 
 ---
 
@@ -277,7 +277,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
 | `Window` / `DelWindow` | BASIC ウィンドウ生成・破棄 | Win32 API で代替 |
-| Win32API 全量 | `api_*.sbp` 382 関数超 | 主要 API は IAT 登録済。不足分は `Declare` |
+| Win32API 全量 | `api_*.sbp` 382 関数超 | 主要 API は `api.idx` Declare。不足分はソース側 `Declare` |
 | DirectX | D3D9 + `dx_graphics.sbp` 等 | **D3D11 基盤はサンプルで動作**。`dx_input`・`dx_music` 等の D3D11 版は未整備 |
 | RAD | Project Editor | 機能拡充予定 |
 
