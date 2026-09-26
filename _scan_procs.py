@@ -1,54 +1,41 @@
 import re
-from pathlib import Path
+import pathlib
 
 files = [
-    Path("src/actba64/AstLower.abp"),
-    Path("src/actba64/AstLowerAddr.abp"),
-    Path("src/actba64/AstLowerRt.abp"),
-    Path("src/actba64/AstLowerApi.abp"),
-    Path("src/actba64/AstLowerDriver.abp"),
-    Path("src/actba64/StrGcRt.abp"),
+    r"src/actba64/samples/dxcube/dx_d3d11.sbp",
+    r"src/actba64/samples/dxvertexcolor/dx_d3d11.sbp",
+    r"src/actba64/samples/dxxform/dx_d3d11.sbp",
+    r"src/actba64/samples/dxcube2/dx_d3d11.sbp",
 ]
-
-pat = re.compile(r"^(Function|Sub)\s+(\w+)", re.I)
-end_pat = re.compile(r"^End\s+(Function|Sub)\s*$", re.I)
-
-
-def scan_file(path: Path):
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    procs = []
+root = pathlib.Path(r"C:\Users\bellm\source\repos\bellyoshi\ActBa64")
+all_over = []
+for rel in files:
+    p = root / rel
+    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+    print("===", rel, "===")
     i = 0
+    procs = []
     while i < len(lines):
-        m = pat.match(lines[i].strip())
-        if not m:
-            i += 1
-            continue
-        name = m.group(2)
-        start = i
-        j = i + 1
-        depth = 0
-        while j < len(lines):
-            s = lines[j].strip()
-            if pat.match(s):
-                depth += 1
-            if end_pat.match(s):
-                if depth == 0:
-                    length = j - start + 1
-                    procs.append((name, start + 1, j + 1, length))
+        m = re.match(r"^\s*(Function|Sub)\s+([^\s(]+)", lines[i], re.I)
+        if m:
+            kind, name = m.group(1), m.group(2)
+            start = i
+            j = i + 1
+            while j < len(lines):
+                if re.match(r"^\s*End\s+(Function|Sub)\b", lines[j], re.I):
+                    end = j
+                    n = end - start + 1
+                    procs.append((name, kind, start + 1, end + 1, n))
                     i = j
                     break
-                depth -= 1
-            j += 1
+                j += 1
         i += 1
-    return procs
-
-
-over = []
-for fp in files:
-    for name, start, end, length in scan_file(fp):
-        if length > 50:
-            over.append((fp.name, name, start, end, length))
-
-print(f"Total >50: {len(over)}")
-for row in sorted(over, key=lambda x: -x[4]):
-    print(f"{row[0]}:{row[2]}-{row[3]} {row[1]} = {row[4]} lines")
+    for name, kind, s, e, n in procs:
+        flag = " *** OVER ***" if n > 50 else ""
+        print(f"  {kind} {name}: lines {s}-{e} = {n}{flag}")
+        if n > 50:
+            all_over.append((rel, name, n))
+    print()
+print("OVER COUNT:", len(all_over))
+for x in all_over:
+    print(" ", x)

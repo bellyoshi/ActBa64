@@ -52,12 +52,12 @@ Print a +_
 | `#n88basic` / `#N88BASIC` / `#prompt` | N88BASIC 互換モード（[§1.6](#16-n88basic-モード)）。`#prompt` は完全別名 |
 | `#USEWINDOW=0\|1` | 0=CUI / 1=GUI。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
 | `#strict` | 変数代入の型不一致を warning（`As` で抑制） |
-| `#include "path"` | ファイル挿入（深さ上限あり） |
+| `#include "path"` / `#include <path>` | ファイル挿入（深さ上限あり）。`"..."` はソース相対（絶対パス可）、`<...>` は `Include\` 配下を検索 |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
 ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`・`StrUtils.abp`・`Memory.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -247,7 +247,7 @@ End Sub
 - 戻り値は `Function名 = 式`
 - `Exit Sub` / `Exit Function`
 - ネストした `Sub`/`Function` は不可
-- `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT に載せる。`Lib` は任意 DLL 名。拡張子省略時は `.dll` を付与）
+- `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT。任意 DLL・自作可。拡張子省略時は `.dll`。詳細は [§8](#8-winapi--iat)）
 
 ### 3.3 Class
 
@@ -493,13 +493,17 @@ memcpy(dst, src, n)
 
 ```
 #include "Utils.abp"
+#include <default/Windows.sbp>
 ```
 
-パスはソース相対（または実装が解決するパス）。循環・深さ超過はエラー。
+- `"path"` … ソースファイル相対。ドライブ付き／先頭 `\` `/` の絶対パスはそのまま。
+- `<path>` … `Include\` 配下を検索（見つからなければ `path` そのもので再検索）。
+
+循環・深さ超過はエラー。
 
 ### 7.3 自動 Include
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
+`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`・`StrUtils.abp`・`Memory.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
 続けて Preproc が `api.idx`（主要 Win32 の `Declare Lib`）と `UnicodeApi.sbp`（Unicode 版 API）を挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
@@ -609,22 +613,37 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 
 ## 8. WinAPI / IAT
 
-`api.idx` / `UnicodeApi.sbp` の `Declare`（およびソース側 Declare）で認識した API はインポートテーブルに載る。  
-`Lib` は任意の DLL 名を受け付ける（`Lib "mydll"` → `mydll.dll`）。不足分はソース側で `Declare Lib`。
+`api.idx` / `UnicodeApi.sbp` の `Declare`（およびソース側 Declare）で認識した API はインポートテーブル（IAT）に載る。  
+`Lib` は **任意の DLL 名**（システム DLL に限らない。自作・C/C++ 製も可）。拡張子省略時は `.dll` を付与（`Lib "mydll"` → `mydll.dll`）。
 
-### 8.1 共通でよく使うもの（kernel32）
+解決は **起動時の IAT**（静的インポート）。`LoadLibrary` / `GetProcAddress` による実行時ロードは別途 API を `Declare` して自分で呼ぶ。
+
+### 8.1 自作 DLL（C/C++）
+
+```basic
+Declare Function MyAdd Lib "mydll" Alias "MyAdd" (ByVal a As Long, ByVal b As Long) As Long
+```
+
+| 注意 | 内容 |
+|---|---|
+| 呼び出し規約 | 既定（64bit）は Microsoft x64、`-actba32` は stdcall。DLL 側も合わせる |
+| C++ 名前 | `extern "C"` でエクスポートするか、マングル名を `Alias` に書く |
+| 配置 | 実行時に OS の DLL 検索パスで見つかること（通常は exe と同ディレクトリ） |
+| 回帰 | `t_decl_any_lib.abp`（任意 Lib 登録）、`t_decl_lib_norm.abp`（拡張子正規化） |
+
+### 8.2 共通でよく使うもの（kernel32）
 
 `ExitProcess`, `GetCommandLineA`, `lstrlenA`, `lstrcpyA`, `lstrcatA`,  
 `CreateFileA`, `ReadFile`, `WriteFile`, `CloseHandle`, `GetFileSize`, `SetFilePointer`,  
 `GetFileAttributesA`, `GetProcessHeap`, `HeapAlloc`, `HeapFree`, `GetStdHandle`
 
-### 8.2 `api.idx` に既にあるもの / ソースで足すもの
+### 8.3 `api.idx` に既にあるもの / ソースで足すもの
 
 `GetModuleFileNameA`, `CreateProcessA`, `WaitForSingleObject`, `GetTickCount`,  
 user32（`MessageBoxA` 等）、gdi32（`CreatePen` / `Ellipse` / `BitBlt` 等）、  
 `PeekMessageA` / `MsgWaitForMultipleObjects` などは `api.idx` の Declare で解決する。
 
-不足 API はソース側で `Declare Lib`（任意 DLL 可）。未登録かつ未 `Declare` の呼び出しはコンパイルエラーです。
+不足 API・自作 DLL はソース側で `Declare Lib`。未登録かつ未 `Declare` の呼び出しはコンパイルエラーです。
 
 ---
 
