@@ -177,7 +177,7 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 |---|---|
 | `stage0 missing: ...\actba64.exe` | AB4.20 で `actba64.pj` を `bin\stage0\` にビルドする |
 | stage1 vs stage2 が DIFF | ソース変更直後など。`-SkipCompare` で継続し原因を調査 |
-| テストで `linker not found` | 先に `.\build.ps1`（または `-Rebuild`） |
+| テストで `compiler not found` | 先に `.\build.ps1`（または `-Rebuild`） |
 | `ProjectEditor RAD file missing` | `Callback.wbp` / `MakeWindow.wbp` を `src\projecteditor\` に置く |
 | `copy failed ... release\ProjectEditor.exe` | エディタを終了してから再実行 |
 | ほぼ全テストが `build failed (exit=1)`・コンパイラ出力が空 | `Include` が見えていない／読み込み中に異常終了。`.\build.ps1`（コピー込み）をやり直すか、`Test-Path bin\stage1\Include\default\default.idx` を確認 |

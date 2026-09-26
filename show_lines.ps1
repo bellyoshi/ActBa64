@@ -11,7 +11,7 @@ $targets = @(
   @('src/actba64/Types.abp', 616),
   @('src/actba64/Types.abp', 664),
   @('src/actba64/Types.abp', 694),
-  @('src/actba64/Emiter.abp', 5),
+  @('src/actba64/Emitter.abp', 5),
   @('src/actba64/Ast.abp', 5)
 )
 foreach ($t in $targets) {
