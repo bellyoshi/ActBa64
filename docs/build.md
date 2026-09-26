@@ -67,11 +67,11 @@ cd src\actba64
 
 `actba64.pj` の `#SOURCE`（および単体ホスト用 `actba64.idx`）で複数 `.abp` を結合する。
 
-| 接頭辞 | 役割 | 主なファイル |
+| 接頭辞 | 役割 | 主なファイル（例。正本は `actba64.pj` の `#SOURCE`） |
 |---|---|---|
-| `Parser*` | トークン → AST | `Parser` / `ParserExpr` / `ParserStmtIO` / `ParserN88` / `ParserDim` / `ParserClass` / `ParserCtrl` / `ParserDriver` |
-| `AstLower*` | AST → IR（`AstToIr`） | `AstLower` / `AstLowerApi` / `AstLowerRt` / `AstLowerAddr` / `AstLowerExpr` / `AstLowerExprOps` / `AstLowerStmt` / `AstLowerStmtCtrl` / `AstLowerDriver` |
-| `Preproc*` | `#include` / `.pj` 結合 | `Preproc` / `PreprocPj` |
+| `Parser*` | トークン → AST | `Parser` / `ParserExpr` / `ParserFactor` / `ParserStmtIO` / `ParserFileStmt` / `ParserN88*` / `ParserDim` / `ParserClass*` / `ParserCtrl` / `ParserSelect` / `ParserProc` / `ParserDriver` ほか |
+| `AstLower*` | AST → IR（`AstToIr`） | `AstLower` / `AstLowerApi` / `AstLowerRt*` / `AstLowerAddr` / `AstLowerExpr*` / `AstLowerPrint` / `AstLowerStmt*` / `AstLowerFileStmt` / `AstLowerDriver` ほか |
+| `Preproc*` | `#include` / `.pj` 結合 | `Preproc` / `PreprocInc` / `PreprocCond` / `PreprocPj` / `PreprocPjSrc` / `PreprocRes` ほか |
 
 `#SOURCE` の順序どおりに連結されるため、分割ファイル間で共有の `Type` / `Dim` / 手続きを参照できる。
 使い方:

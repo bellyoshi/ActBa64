@@ -52,9 +52,8 @@ Sub LowStoreSized(list As *IrList, sz As Long)
     End If
 End Sub
 
-' Address of lvalue -> rax
-' AST_MEMBER ノードが指すフィールドの UDT 型インデックス（ネスト解決用）
-Function LowMemberFieldType(ctx As *LowerCtx, idx As Long) As Long
+' AST_MEMBER のフィールド解決（ネスト / INDEX 基底対応）。成功時 1。
+Function LowResolveMemberField(ctx As *LowerCtx, idx As Long, ByRef fieldOff As Long, ByRef fieldSize As Long, ByRef fieldCount As Long, ByRef fieldTy As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -67,53 +66,12 @@ Function LowMemberFieldType(ctx As *LowerCtx, idx As Long) As Long
     Dim name(63) As Byte
     Dim fname(63) As Byte
     Dim typeIdx As Long
-    Dim fieldOff As Long
-    Dim fieldSize As Long
-    Dim fieldCount As Long
-    Dim fieldTy As Long
 
-    LowMemberFieldType = -1
-    If idx < 0 Then Exit Function
-    ast = ctx->ast
-    nodes = ast->nodes
-    If nodes[idx].kind <> AST_MEMBER Then Exit Function
-    typeTable = ast->types
-    base = nodes[idx].left
-    AstCopyStr(ast, idx, VarPtr(fname))
-    If nodes[base].kind = AST_MEMBER Then
-        typeIdx = LowMemberFieldType(ctx, base)
-    ElseIf nodes[base].kind = AST_VAR Then
-        AstCopyStr(ast, base, VarPtr(name))
-        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
-        typeIdx = vTypeIdx
-    Else
-        Exit Function
-    End If
-    If typeIdx < 0 Then Exit Function
-    If TyFindFieldEx(typeTable, typeIdx, VarPtr(fname), fieldOff, fieldSize, fieldCount, fieldTy) = 0 Then Exit Function
-    LowMemberFieldType = fieldTy
-End Function
-
-' Byte size of the field addressed by an AST_MEMBER (supports nesting).
-Function LowMemberFieldSize(ctx As *LowerCtx, idx As Long) As Long
-    Dim vOff As Long
-    Dim vTy As Long
-    Dim vTypeIdx As Long
-    Dim vByRef As Long
-    Dim vGlob As Long
-    Dim nodes As *AstNode
-    Dim ast As *Ast
-    Dim typeTable As *TypeTable
-    Dim base As Long
-    Dim name(63) As Byte
-    Dim fname(63) As Byte
-    Dim typeIdx As Long
-    Dim fieldOff As Long
-    Dim fieldSize As Long
-    Dim fieldCount As Long
-    Dim fieldTy As Long
-
-    LowMemberFieldSize = 0
+    LowResolveMemberField = 0
+    fieldOff = 0
+    fieldSize = 0
+    fieldCount = 0
+    fieldTy = -1
     If idx < 0 Then Exit Function
     ast = ctx->ast
     nodes = ast->nodes
@@ -136,5 +94,29 @@ Function LowMemberFieldSize(ctx As *LowerCtx, idx As Long) As Long
     End If
     If typeIdx < 0 Then Exit Function
     If TyFindFieldEx(typeTable, typeIdx, VarPtr(fname), fieldOff, fieldSize, fieldCount, fieldTy) = 0 Then Exit Function
+    LowResolveMemberField = 1
+End Function
+
+' AST_MEMBER ノードが指すフィールドの UDT 型インデックス（ネスト解決用）
+Function LowMemberFieldType(ctx As *LowerCtx, idx As Long) As Long
+    Dim fieldOff As Long
+    Dim fieldSize As Long
+    Dim fieldCount As Long
+    Dim fieldTy As Long
+
+    LowMemberFieldType = -1
+    If LowResolveMemberField(ctx, idx, fieldOff, fieldSize, fieldCount, fieldTy) = 0 Then Exit Function
+    LowMemberFieldType = fieldTy
+End Function
+
+' Byte size of the field addressed by an AST_MEMBER (supports nesting).
+Function LowMemberFieldSize(ctx As *LowerCtx, idx As Long) As Long
+    Dim fieldOff As Long
+    Dim fieldSize As Long
+    Dim fieldCount As Long
+    Dim fieldTy As Long
+
+    LowMemberFieldSize = 0
+    If LowResolveMemberField(ctx, idx, fieldOff, fieldSize, fieldCount, fieldTy) = 0 Then Exit Function
     LowMemberFieldSize = fieldSize
 End Function
