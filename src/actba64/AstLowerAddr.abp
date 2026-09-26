@@ -90,58 +90,58 @@ Function LowAddrMember(ctx As *LowerCtx, idx As Long) As Long
     Dim list As *IrList
     Dim fname(63) As Byte
     Dim base As Long
-    Dim tt As *TypeTable
-    Dim foff As Long
-    Dim fsz As Long
-    Dim fcnt As Long
-    Dim ti As Long
+    Dim typeTable As *TypeTable
+    Dim fieldOff As Long
+    Dim fieldSize As Long
+    Dim fieldCount As Long
+    Dim typeIdx As Long
 
     LowAddrMember = 0
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
-    tt = ast->types
+    typeTable = ast->types
     base = nodes[idx].left
     AstCopyStr(ast, idx, VarPtr(fname))
     If nodes[base].kind = AST_MEMBER Then
         ' nested: a.b.c — address of a.b then + offset(c)
         If LowAddr(ctx, base) = 0 Then Exit Function
-        ti = LowMemberFieldType(ctx, base)
-        If ti < 0 Then
+        typeIdx = LowMemberFieldType(ctx, base)
+        If typeIdx < 0 Then
             ctx->err = 1
             Exit Function
         End If
     ElseIf nodes[base].kind = AST_INDEX Then
-        If LowAddrMemberIdxBase(ctx, base, ti) = 0 Then Exit Function
+        If LowAddrMemberIdxBase(ctx, base, typeIdx) = 0 Then Exit Function
     ElseIf nodes[base].kind = AST_VAR Then
-        If LowAddrMemberVarBase(ctx, idx, base, ti) = 0 Then Exit Function
+        If LowAddrMemberVarBase(ctx, idx, base, typeIdx) = 0 Then Exit Function
     Else
         ctx->err = 1
         Exit Function
     End If
-    If TyFindField(tt, ti, VarPtr(fname), foff, fsz, fcnt) = 0 Then
+    If TyFindField(typeTable, typeIdx, VarPtr(fname), fieldOff, fieldSize, fieldCount) = 0 Then
         ' With 対象が UDT でないとき .x は基底のまま（p.x → p）
         LowAddrMember = 1
         Exit Function
     End If
-    If foff <> 0 Then
-        IrEmit(list, OP_ADD_RAX_IMM, foff, 0)
+    If fieldOff <> 0 Then
+        IrEmit(list, OP_ADD_RAX_IMM, fieldOff, 0)
     End If
     LowAddrMember = 1
 End Function
 
-Function LowIsArrTy(ty As Long) As Long
+Function LowIsArrTy(typeKind As Long) As Long
     LowIsArrTy = 0
-    If ty = TY_BYTE_ARR Or ty = TY_LONG_ARR Or ty = TY_STRING_ARR Then
+    If typeKind = TY_BYTE_ARR Or typeKind = TY_LONG_ARR Or typeKind = TY_STRING_ARR Then
         LowIsArrTy = 1
-    ElseIf ty = TY_DOUBLE_ARR Or ty = TY_SINGLE_ARR Or ty = TY_UDT_ARR Then
+    ElseIf typeKind = TY_DOUBLE_ARR Or typeKind = TY_SINGLE_ARR Or typeKind = TY_UDT_ARR Then
         LowIsArrTy = 1
     End If
 End Function
 
 ' rax = 配列先頭, rcx = 添字 → rax = 要素アドレス
-Function LowAddrArrayCallScale(ctx As *LowerCtx, list As *IrList, tt As *TypeTable, vTy As Long, vTypeIdx As Long) As Long
-    Dim ti As Long
+Function LowAddrArrayCallScale(ctx As *LowerCtx, list As *IrList, typeTable As *TypeTable, vTy As Long, vTypeIdx As Long) As Long
+    Dim typeIdx As Long
     Dim esz As Long
     Dim tsizes As *Long
 
@@ -161,9 +161,9 @@ Function LowAddrArrayCallScale(ctx As *LowerCtx, list As *IrList, tt As *TypeTab
         IrEmit(list, OP_POP_RCX, 0, 0)
         IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
     ElseIf vTy = TY_UDT_ARR Then
-        ti = vTypeIdx
-        tsizes = tt->typeSizes
-        esz = tsizes[ti]
+        typeIdx = vTypeIdx
+        tsizes = typeTable->typeSizes
+        esz = tsizes[typeIdx]
         If esz <= 0 Then
             ctx->err = 1
             Exit Function
@@ -195,14 +195,14 @@ Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
     Dim list As *IrList
     Dim name(63) As Byte
     Dim nArgs As Long
-    Dim tt As *TypeTable
+    Dim typeTable As *TypeTable
     Dim ix As Long
 
     LowAddrArrayCall = 0
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
-    tt = ast->types
+    typeTable = ast->types
     nArgs = nodes[idx].num
     If nArgs <> 1 Then
         ctx->err = 1
@@ -226,5 +226,5 @@ Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     LowEmitLeaOff(list, vOff, vGlob)
     IrEmit(list, OP_POP_RCX, 0, 0)
-    LowAddrArrayCall = LowAddrArrayCallScale(ctx, list, tt, vTy, vTypeIdx)
+    LowAddrArrayCall = LowAddrArrayCallScale(ctx, list, typeTable, vTy, vTypeIdx)
 End Function
