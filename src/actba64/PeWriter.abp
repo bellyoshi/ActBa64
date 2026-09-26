@@ -35,14 +35,19 @@ Function PeHdrSize(nSect As Long) As Long
 End Function
 
 Sub PeCalcLayoutBase(codeSize As Long, globSize As Long, idataSize As DWord, lay As *PeLayout)
+    Dim t As DWord
     lay->textVirt = AlignUp(codeSize, SECTION_ALIGN)
     lay->textRaw = AlignUp(codeSize, FILE_ALIGN)
     lay->dataVirt = AlignUp(globSize, SECTION_ALIGN)
     If lay->dataVirt < SECTION_ALIGN Then lay->dataVirt = SECTION_ALIGN
     lay->dataRaw = AlignUp(lay->dataVirt, FILE_ALIGN)
     If lay->dataRaw < FILE_ALIGN Then lay->dataRaw = FILE_ALIGN
-    lay->dataRva = TEXT_RVA + lay->textVirt
-    lay->idataRva = lay->dataRva + lay->dataVirt
+    t = TEXT_RVA
+    t = t + lay->textVirt
+    lay->dataRva = t
+    t = lay->dataRva
+    t = t + lay->dataVirt
+    lay->idataRva = t
     lay->idataVirt = AlignUp(idataSize, SECTION_ALIGN)
     If lay->idataVirt < SECTION_ALIGN Then lay->idataVirt = SECTION_ALIGN
     lay->idataRaw = AlignUp(idataSize, FILE_ALIGN)
@@ -67,10 +72,17 @@ Sub PeCalcLayoutRsrc(rsrcSize As Long, lay As *PeLayout)
 End Sub
 
 Sub PeCalcLayout(codeSize As Long, globSize As Long, idataSize As DWord, rsrcSize As Long, lay As *PeLayout)
+    Dim img As DWord
     PeCalcLayoutBase(codeSize, globSize, idataSize, lay)
     PeCalcLayoutRsrc(rsrcSize, lay)
     lay->hdrSize = PeHdrSize(lay->nSect)
-    lay->sizeImage = TEXT_RVA + lay->textVirt + lay->dataVirt + lay->idataVirt + lay->rsrcVirt
+    ' AB4.20 は連鎖加算を 16bit 化することがある（0x15000 → 0x5000 で無効 PE になる）
+    img = TEXT_RVA
+    img = img + lay->textVirt
+    img = img + lay->dataVirt
+    img = img + lay->idataVirt
+    img = img + lay->rsrcVirt
+    lay->sizeImage = img
     lay->dataOff = lay->hdrSize + lay->textRaw
     lay->idOff = lay->dataOff + lay->dataRaw
     lay->rsrcOff = lay->idOff + lay->idataRaw

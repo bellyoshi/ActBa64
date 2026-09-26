@@ -18,6 +18,24 @@ Function VirtualScroll_VisibleRows(hWnd As HWND) As Long
     VirtualScroll_VisibleRows = rows
 End Function
 
+Sub VirtualScroll_UpdateBar(hWnd As HWND)
+    Dim si As SCROLLINFO
+    Dim lineCount As Long
+    Dim visibleRows As Long
+
+    lineCount = TextBuf_LineCount()
+    visibleRows = VirtualScroll_VisibleRows(hWnd)
+    FillMemory(VarPtr(si), Len(si), 0)
+    si.cbSize = Len(si)
+    si.fMask = SIF_RANGE Or SIF_PAGE Or SIF_POS Or SIF_DISABLENOSCROLL
+    si.nMin = 1
+    si.nMax = lineCount
+    If si.nMax < 1 Then si.nMax = 1
+    si.nPage = visibleRows
+    si.nPos = g_viewTopLine
+    SetScrollInfo(hWnd, SB_VERT, si, TRUE)
+End Sub
+
 Sub VirtualScroll_Clamp(hWnd As HWND)
     Dim lineCount As Long
     Dim visibleRows As Long
@@ -30,6 +48,7 @@ Sub VirtualScroll_Clamp(hWnd As HWND)
 
     If g_viewTopLine < 1 Then g_viewTopLine = 1
     If g_viewTopLine > maxTop Then g_viewTopLine = maxTop
+    VirtualScroll_UpdateBar(hWnd)
 End Sub
 
 Sub VirtualScroll_By(hWnd As HWND, ByVal deltaLines As Long)
@@ -53,4 +72,45 @@ Sub VirtualScroll_EnsureCursorVisible(hWnd As HWND)
     End If
 
     VirtualScroll_Clamp(hWnd)
+End Sub
+
+Sub VirtualScroll_Thumb(hWnd As HWND, ByVal wParam As WPARAM)
+    Dim si As SCROLLINFO
+    Dim pos As Long
+
+    FillMemory(VarPtr(si), Len(si), 0)
+    si.cbSize = Len(si)
+    si.fMask = SIF_TRACKPOS Or SIF_POS
+    GetScrollInfo(hWnd, SB_VERT, si)
+    pos = si.nTrackPos
+    If pos < 1 Then pos = HIWORD(wParam)
+    If pos < 1 Then pos = 1
+    g_viewTopLine = pos
+    VirtualScroll_Clamp(hWnd)
+End Sub
+
+Sub VirtualScroll_OnVScroll(hWnd As HWND, ByVal wParam As WPARAM)
+    Dim code As Long
+
+    code = LOWORD(wParam)
+    If code = SB_LINEUP Then
+        VirtualScroll_By(hWnd, -1)
+    ElseIf code = SB_LINEDOWN Then
+        VirtualScroll_By(hWnd, 1)
+    ElseIf code = SB_PAGEUP Then
+        VirtualScroll_By(hWnd, 0 - VirtualScroll_VisibleRows(hWnd))
+    ElseIf code = SB_PAGEDOWN Then
+        VirtualScroll_By(hWnd, VirtualScroll_VisibleRows(hWnd))
+    ElseIf code = SB_TOP Then
+        g_viewTopLine = 1
+        VirtualScroll_Clamp(hWnd)
+    ElseIf code = SB_BOTTOM Then
+        g_viewTopLine = TextBuf_LineCount()
+        VirtualScroll_Clamp(hWnd)
+    ElseIf code = SB_THUMBPOSITION Then
+        VirtualScroll_Thumb(hWnd, wParam)
+    ElseIf code = SB_THUMBTRACK Then
+        VirtualScroll_Thumb(hWnd, wParam)
+    End If
+    InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
