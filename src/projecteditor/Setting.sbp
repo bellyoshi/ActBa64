@@ -1,0 +1,171 @@
+' Setting dialog: language selection and restart prompt.
+
+Const CB_RESETCONTENT = &H014B
+Const CB_ADDSTRING = &H0143
+Const CB_SETCURSEL = &H014E
+Const CB_GETCURSEL = &H0147
+
+Declare Function Setting_SendMessageW Lib "user32.dll" Alias "SendMessageW" (ByVal hWnd As HWND, ByVal Msg As DWord, ByVal wParam As WPARAM, ByVal lParam As *Byte) As LRESULT
+Declare Function Setting_SetWindowTextW Lib "user32.dll" Alias "SetWindowTextW" (ByVal hWnd As HWND, ByVal lpString As *Byte) As Long
+
+Sub Setting_SetUtf8Text(hCtrl As HWND, text As String)
+    Dim wide As *Byte
+    Dim chars As Long
+
+    If hCtrl = 0 Then Exit Sub
+    wide = Enc_Utf8ToWide(text, chars)
+    If wide = 0 Then Exit Sub
+    Setting_SetWindowTextW(hCtrl, wide)
+    free(wide)
+End Sub
+
+Sub Setting_ComboAdd(hCmb As HWND, text As String)
+    Dim wide As *Byte
+    Dim chars As Long
+
+    If hCmb = 0 Then Exit Sub
+    wide = Enc_Utf8ToWide(text, chars)
+    If wide = 0 Then Exit Sub
+    Setting_SendMessageW(hCmb, CB_ADDSTRING, 0, wide)
+    free(wide)
+End Sub
+
+Function Setting_CodeFromSel(ByVal sel As Long) As String
+    If sel = 1 Then
+        Setting_CodeFromSel = "ja"
+    Else
+        Setting_CodeFromSel = "en"
+    End If
+End Function
+
+Function Setting_SelFromCode(code As String) As Long
+    Dim t As String
+    t = UiLang_TrimCode$(code)
+    If t = "ja" Then
+        Setting_SelFromCode = 1
+    Else
+        Setting_SelFromCode = 0
+    End If
+End Function
+
+Sub Setting_ApplyLabels(hWnd As HWND)
+    Dim hCmb As HWND
+    Dim hStatic As HWND
+    Dim hOk As HWND
+    Dim code As String
+    Dim sel As Long
+
+    Setting_SetUtf8Text(hWnd, UiText$(UI_SETTING_TITLE))
+    hStatic = GetDlgItem(hWnd, Static1)
+    Setting_SetUtf8Text(hStatic, UiText$(UI_SETTING_LANG))
+    hOk = GetDlgItem(hWnd, OkButton)
+    Setting_SetUtf8Text(hOk, UiText$(UI_SETTING_OK))
+
+    hCmb = GetDlgItem(hWnd, LangCmb)
+    If hCmb = 0 Then Exit Sub
+    SendMessage(hCmb, CB_RESETCONTENT, 0, 0)
+    Setting_ComboAdd(hCmb, UiText$(UI_LANG_EN))
+    Setting_ComboAdd(hCmb, UiText$(UI_LANG_JA))
+    code = g_uiLangCode
+    If Len(code) = 0 Then code = UiLang_ReadCode$()
+    sel = Setting_SelFromCode(code)
+    SendMessage(hCmb, CB_SETCURSEL, sel, 0)
+End Sub
+
+Function Setting_SelectedCode$(hWnd As HWND) As String
+    Dim hCmb As HWND
+    Dim sel As Long
+
+    Setting_SelectedCode$ = "en"
+    hCmb = GetDlgItem(hWnd, LangCmb)
+    If hCmb = 0 Then Exit Function
+    sel = SendMessage(hCmb, CB_GETCURSEL, 0, 0)
+    If sel < 0 Then Exit Function
+    Setting_SelectedCode$ = Setting_CodeFromSel(sel)
+End Function
+
+Function Setting_ExePath$() As String
+    Dim buf As *Byte
+    Dim n As Long
+
+    Setting_ExePath$ = ""
+    buf = malloc(260)
+    If buf = 0 Then Exit Function
+    n = GetModuleFileName(NULL, buf, 260)
+    If n <= 0 Then
+        free(buf)
+        Exit Function
+    End If
+    Setting_ExePath$ = Enc_DupCStr$(buf, n)
+    free(buf)
+End Function
+
+Function Setting_RestartSelf() As Long
+    Dim path As String
+    Dim cmd As String
+    Dim pCmd As *Byte
+    Dim si As STARTUPINFO
+    Dim pi As PROCESS_INFORMATION
+
+    Setting_RestartSelf = 0
+    path = Setting_ExePath$()
+    If Len(path) = 0 Then Exit Function
+    cmd = Chr$(34) + path + Chr$(34)
+    pCmd = StrPtr(cmd)
+    FillMemory(VarPtr(si), Len(si), 0)
+    FillMemory(VarPtr(pi), Len(pi), 0)
+    si.cb = Len(si)
+    If EditorBuild_CreateProcess(0, pCmd, 0, 0, 0, 0, 0, 0, si, pi) = 0 Then Exit Function
+    CloseHandle(pi.hThread)
+    CloseHandle(pi.hProcess)
+    Setting_RestartSelf = 1
+End Function
+
+Sub Setting_OnOk(hWnd As HWND)
+    Dim code As String
+    Dim cur As String
+    Dim doRestart As Long
+
+    code = Setting_SelectedCode$(hWnd)
+    cur = g_uiLangCode
+    If Len(cur) = 0 Then cur = "en"
+    If Len(code) = 0 Then code = "en"
+
+    If code <> cur Then
+        If UiLang_WriteCode(code) = 0 Then
+            UiMsgBox(hWnd, UiText$(UI_SAVE_FAILED), UiText$(UI_SETTING_TITLE))
+            Exit Sub
+        End If
+        g_uiLangCode = code
+        doRestart = UiMsgBoxYesNo(hWnd, UiText$(UI_SETTING_RESTART), UiText$(UI_SETTING_RESTART_TITLE))
+        EndDialog(hWnd, 1)
+        If doRestart <> 0 Then
+            If Setting_RestartSelf() <> 0 Then
+                DestroyWindow(hMainWnd)
+            End If
+        End If
+        Exit Sub
+    End If
+    EndDialog(hWnd, 0)
+End Sub
+
+Function SettingProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
+    Select Case dwMsg
+        Case WM_INITDIALOG
+            SettingProc = EventCall_Setting(hWnd, dwMsg, wParam, lParam)
+            Setting_ApplyLabels(hWnd)
+            Exit Function
+        Case WM_COMMAND
+            If LOWORD(wParam) = OkButton Then
+                If HIWORD(wParam) = BN_CLICKED Then
+                    Setting_OnOk(hWnd)
+                    SettingProc = 0
+                    Exit Function
+                End If
+            End If
+        Case WM_DESTROY
+            If hWnd = hSetting Then hSetting = 0
+    End Select
+
+    SettingProc = EventCall_Setting(hWnd, dwMsg, wParam, lParam)
+End Function

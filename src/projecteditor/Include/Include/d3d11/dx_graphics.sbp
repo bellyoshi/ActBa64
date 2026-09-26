@@ -41,14 +41,11 @@ Function dx_D3dColorToGdi(c As DWord) As DWord
 	dx_D3dColorToGdi = r Or (g * &H100) Or (b * &H10000)
 End Function
 
-Function dx_Init(hWnd As DWord, ScreenX As Long, ScreenY As Long, bWindowMode As Long) As Long
-	CoInitialize(NULL)
-	g_dxHwnd = hWnd
-
+Function dx_InitViewport(hWnd As DWord, ScreenX As Long, ScreenY As Long) As Long
 	Dim rc As RECT
-	GetClientRect(hWnd, rc)
 	Dim w As Long
 	Dim h As Long
+	GetClientRect(hWnd, rc)
 	w = rc.right - rc.left
 	h = rc.bottom - rc.top
 	If ScreenX > 0 Then w = ScreenX
@@ -57,11 +54,13 @@ Function dx_Init(hWnd As DWord, ScreenX As Long, ScreenY As Long, bWindowMode As
 	If h < 1 Then h = 480
 	g_vpW = w
 	g_vpH = h
+	dx_InitViewport = 1
+End Function
 
-	Dim sd As DXGI_SWAP_CHAIN_DESC
+Function dx_InitSwapChain(hWnd As DWord, bWindowMode As Long, ByRef sd As DXGI_SWAP_CHAIN_DESC) As Long
 	ZeroMemory(VarPtr(sd), Len(sd))
-	sd.BufferDesc.Width = w
-	sd.BufferDesc.Height = h
+	sd.BufferDesc.Width = g_vpW
+	sd.BufferDesc.Height = g_vpH
 	sd.BufferDesc.RefreshRate.Numerator = 60
 	sd.BufferDesc.RefreshRate.Denominator = 1
 	sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM
@@ -76,42 +75,63 @@ Function dx_Init(hWnd As DWord, ScreenX As Long, ScreenY As Long, bWindowMode As
 		sd.Windowed = FALSE
 	End If
 	sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD
+	dx_InitSwapChain = 1
+End Function
 
+Function dx_InitDevice(hWnd As DWord, ByRef sd As DXGI_SWAP_CHAIN_DESC) As Long
 	Dim fl[1] As DWord
+	Dim hr As DWord
 	fl[0] = D3D_FEATURE_LEVEL_11_0
 	fl[1] = D3D_FEATURE_LEVEL_10_0
-
-	Dim hr As DWord
 	hr = D3D11CreateDeviceAndSwapChain(0, D3D_DRIVER_TYPE_HARDWARE, 0, 0, VarPtr(fl[0]), 2, D3D11_SDK_VERSION, VarPtr(sd), g_pSwapChain, g_pDevice, 0, g_pContext)
 	If hr Then
 		hr = D3D11CreateDeviceAndSwapChain(0, D3D_DRIVER_TYPE_WARP, 0, 0, VarPtr(fl[0]), 2, D3D11_SDK_VERSION, VarPtr(sd), g_pSwapChain, g_pDevice, 0, g_pContext)
 	End If
 	If hr Then
 		MessageBox(hWnd, "D3D11CreateDeviceAndSwapChain failed.", "Error", MB_OK or MB_ICONSTOP)
-		dx_Init = 0
+		dx_InitDevice = 0
 		Exit Function
 	End If
+	dx_InitDevice = 1
+End Function
 
+Function dx_InitRtv(hWnd As DWord) As Long
 	Dim pBackBuffer As *IUnknown
+	Dim hr As DWord
 	pBackBuffer = 0
 	dx_SetupTexture2dIid()
 	hr = g_pSwapChain->GetBuffer(0, IID_ID3D11Texture2D, VarPtr(pBackBuffer))
 	If hr Then
 		MessageBox(hWnd, "IDXGISwapChain::GetBuffer failed.", "Error", MB_OK or MB_ICONSTOP)
 		dx_Quit()
-		dx_Init = 0
+		dx_InitRtv = 0
 		Exit Function
 	End If
-
 	hr = g_pDevice->CreateRenderTargetView(pBackBuffer, 0, VarPtr(g_pRTV))
 	pBackBuffer->Release()
 	If hr Then
 		MessageBox(hWnd, "CreateRenderTargetView failed.", "Error", MB_OK or MB_ICONSTOP)
 		dx_Quit()
+		dx_InitRtv = 0
+		Exit Function
+	End If
+	dx_InitRtv = 1
+End Function
+
+Function dx_Init(hWnd As DWord, ScreenX As Long, ScreenY As Long, bWindowMode As Long) As Long
+	Dim sd As DXGI_SWAP_CHAIN_DESC
+	CoInitialize(NULL)
+	g_dxHwnd = hWnd
+	dx_InitViewport(hWnd, ScreenX, ScreenY)
+	dx_InitSwapChain(hWnd, bWindowMode, sd)
+	If dx_InitDevice(hWnd, sd) = 0 Then
 		dx_Init = 0
 		Exit Function
 	End If
-
+	If dx_InitRtv(hWnd) = 0 Then
+		dx_Init = 0
+		Exit Function
+	End If
 	dx_Init = 1
 End Function
 

@@ -13,7 +13,7 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 | `src/Include` | 標準ヘッダ（コンパイラ / エディタ共通） |
 | `src/actba64` | コンパイラ（Lexer → Parser → AST → IR は共通。機械語と PE だけ 64 / `-actba32` で分岐）。Parser / AstLower / Preproc は関数単位で分割（[規約](docs/coding.md): ファイル目標 400 / 上限 1000、関数 10 行以内） |
 | `src/projecteditor` | エディタ |
-| `release/` | 配布一式（`build.ps1` が生成。git 管理外） |
+| `release/` | 配布一式（`release_build.ps1` が生成。git 管理外） |
 | `src/prototype*` | 開発途中の試作（旧 abc / アセンブラ / リンカ。現行ツールチェーンではない） |
 | `docs/` | ドキュメント（[一覧](docs/index.md)） |
 
@@ -33,10 +33,10 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 ```powershell
 # 要: src\actba64\bin\stage0\actba64.exe（ActiveBasic 4.20 で actba64.pj をビルド）
 # → release\ に ProjectEditor.exe / actba64.exe / Include / help
-.\build.ps1
+.\release_build.ps1
 
 # 既存 stage2 だけ使い、エディタ再コンパイルとコピーのみ
-.\build.ps1 -SkipSelfHost
+.\release_build.ps1 -SkipSelfHost
 ```
 
 段階ごとの手動ビルド:

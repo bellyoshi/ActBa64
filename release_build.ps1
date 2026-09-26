@@ -1,13 +1,13 @@
-# build.ps1 - リリース一式を release\ に揃える
+# release_build.ps1 - リリース一式を release\ に揃える
 #
 #   既定: actba64 ブートストラップ → ProjectEditor → コピー
 #   -SkipSelfHost: 既存 stage2 を使い、ProjectEditor 再コンパイルとコピーのみ
 #   -SkipCompare: 子スクリプトのバイナリ比較をスキップ
 #
 # 使い方:
-#   .\build.ps1
-#   .\build.ps1 -SkipSelfHost
-#   .\build.ps1 -SkipCompare
+#   .\release_build.ps1
+#   .\release_build.ps1 -SkipSelfHost
+#   .\release_build.ps1 -SkipCompare
 
 param(
     [switch]$SkipSelfHost,
@@ -111,6 +111,10 @@ Copy-Item -LiteralPath $IncludeSrc -Destination (Join-Path $ReleaseDir "Include"
 Copy-Item -LiteralPath $HelpSrc -Destination (Join-Path $ReleaseDir "help") -Recurse -Force
 Get-ChildItem -LiteralPath $EditorDir -Filter "ProjectEditor_lang_*.csv" | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $ReleaseDir $_.Name) -Force
+}
+$settingIni = Join-Path $EditorDir "setting.ini"
+if (Test-Path -LiteralPath $settingIni) {
+    Copy-Item -LiteralPath $settingIni -Destination (Join-Path $ReleaseDir "setting.ini") -Force
 }
 
 Write-Host ""

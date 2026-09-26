@@ -61,16 +61,62 @@ Function LowDimArrBytes(ctx As *LowerCtx, dimIdx As Long, ty As Long, ByRef nbyt
     LowDimArrBytes = 1
 End Function
 
-Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, ty As Long, nm As *Byte, ByRef nbytes As Long, ByRef ti As Long) As Long
+Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, nm As *Byte, ByRef nbytes As Long, ByRef ti As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim bound As Long
     Dim tt As *TypeTable
     Dim tsizes As *Long
-    LowDimFixedBytes = 0
+    LowDimUdtArrBytes = 0
     ast = ctx->ast
     nodes = ast->nodes
     tt = ast->types
+    ti = nodes[dimIdx].extra
+    If ti < 0 Then
+        Print "error: Dim UDT[] missing type '" + MakeStr(nm) + "'"
+        Exit Function
+    End If
+    bound = LowBoundVal(ctx, nodes[dimIdx].left)
+    If bound < 0 Then Exit Function
+    tsizes = tt->typeSizes
+    nbytes = tsizes[ti]
+    If nbytes <= 0 Then
+        Print "error: Dim UDT[] size 0 '" + MakeStr(nm) + "'"
+        Exit Function
+    End If
+    nbytes = nbytes * (bound + 1)
+    LowDimUdtArrBytes = 1
+End Function
+
+Function LowDimUdtBytes(ctx As *LowerCtx, dimIdx As Long, nm As *Byte, ByRef nbytes As Long, ByRef ti As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim tt As *TypeTable
+    Dim tsizes As *Long
+    LowDimUdtBytes = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    tt = ast->types
+    ti = nodes[dimIdx].extra
+    If ti < 0 Then
+        Print "error: Dim UDT missing type '" + MakeStr(nm) + "'"
+        Exit Function
+    End If
+    tsizes = tt->typeSizes
+    nbytes = tsizes[ti]
+    If nbytes <= 0 Then
+        Print "error: Dim UDT size 0 '" + MakeStr(nm) + "'"
+        Exit Function
+    End If
+    LowDimUdtBytes = 1
+End Function
+
+Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, ty As Long, nm As *Byte, ByRef nbytes As Long, ByRef ti As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowDimFixedBytes = 0
+    ast = ctx->ast
+    nodes = ast->nodes
     If ty = TY_BYTE Then
         nbytes = 1
     ElseIf ty = TY_DOUBLE Then
@@ -78,32 +124,9 @@ Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, ty As Long, nm As *B
     ElseIf ty = TY_SINGLE Then
         nbytes = 4
     ElseIf ty = TY_UDT_ARR Then
-        ti = nodes[dimIdx].extra
-        If ti < 0 Then
-            Print "error: Dim UDT[] missing type '" + MakeStr(nm) + "'"
-            Exit Function
-        End If
-        bound = LowBoundVal(ctx, nodes[dimIdx].left)
-        If bound < 0 Then Exit Function
-        tsizes = tt->typeSizes
-        nbytes = tsizes[ti]
-        If nbytes <= 0 Then
-            Print "error: Dim UDT[] size 0 '" + MakeStr(nm) + "'"
-            Exit Function
-        End If
-        nbytes = nbytes * (bound + 1)
+        If LowDimUdtArrBytes(ctx, dimIdx, nm, nbytes, ti) = 0 Then Exit Function
     ElseIf ty = TY_UDT Then
-        ti = nodes[dimIdx].extra
-        If ti < 0 Then
-            Print "error: Dim UDT missing type '" + MakeStr(nm) + "'"
-            Exit Function
-        End If
-        tsizes = tt->typeSizes
-        nbytes = tsizes[ti]
-        If nbytes <= 0 Then
-            Print "error: Dim UDT size 0 '" + MakeStr(nm) + "'"
-            Exit Function
-        End If
+        If LowDimUdtBytes(ctx, dimIdx, nm, nbytes, ti) = 0 Then Exit Function
     ElseIf ty = TY_PTR_UDT Then
         ti = nodes[dimIdx].extra
         If ti < 0 Then Exit Function

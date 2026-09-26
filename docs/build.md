@@ -9,7 +9,7 @@ ActBa64 は **1 本のコンパイラ** `actba64.exe` です。Lexer → Parser 
 
 前提 OS: Windows（PowerShell）
 
-リポジトリ根の `.\build.ps1` が上記に加えて ProjectEditor を組み、`release\` へ配布一式をコピーする。標準ヘッダは [`src/Include`](../src/Include) の 1 本。
+リポジトリ根の `.\release_build.ps1` が上記に加えて ProjectEditor を組み、`release\` へ配布一式をコピーする。標準ヘッダは [`src/Include`](../src/Include) の 1 本。
 
 ---
 
@@ -59,7 +59,7 @@ cd src\actba64
 2. その親〜3 階層上（`bin\stageN\` からは `src\Include\` に到達）
 3. カレントディレクトリの `Include\`
 
-配布の `release\Include` も正本のコピー（ルート `build.ps1`）。
+配布の `release\Include` も正本のコピー（ルート `release_build.ps1`）。
 
 ### コンパイラソースの分割
 
@@ -145,9 +145,9 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 リポジトリ根で実行する。
 
 ```powershell
-.\build.ps1                 # actba64 ブートストラップ → ProjectEditor → release\
-.\build.ps1 -SkipSelfHost   # 既存 stage2 を使い、エディタ再コンパイルとコピーのみ
-.\build.ps1 -SkipCompare
+.\release_build.ps1                 # actba64 ブートストラップ → ProjectEditor → release\
+.\release_build.ps1 -SkipSelfHost   # 既存 stage2 を使い、エディタ再コンパイルとコピーのみ
+.\release_build.ps1 -SkipCompare
 ```
 
 | パス | 内容 |
@@ -156,7 +156,8 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 | `release\actba64.exe` | コンパイラ（既定 64bit、`-actba32` で 32bit） |
 | `release\Include\` | `src\Include` のコピー |
 | `release\help\` | エディタ向け HTML ヘルプ |
-| `release\ProjectEditor_lang_*.csv` | UI 言語パック（既定は英語組み込み。`editor.lang` に `ja` 等） |
+| `release\ProjectEditor_lang_*.csv` | UI 言語パック（既定は英語組み込み） |
+| `release\setting.ini` | `Language=ja` 等（ファイル無し / `en` なら英語） |
 
 `Include` の正本は [`src/Include`](../src/Include) のみ。`VoidPtr` は `*Byte`（ポインタ幅は **コンパイル対象** に従う: 既定 8、`-actba32` で 4）。
 
