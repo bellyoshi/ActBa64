@@ -1,18 +1,46 @@
 # actba64 の String GC
 
-コンパイラが実行ファイルへ埋め込む **文字列専用のハイブリッド GC** の設計と実装。言語仕様側の要約は [language.md §6](./language.md) を参照。
-
-対象ソース（AstLower 系は分割済み。一覧は [build.md](./build.md#コンパイラソースの分割)）:
+文字列専用のハイブリッド GC。**アルゴリズム本体は Include**、コンパイラはルート・セーフポイント・BSS 領域・極小組込に限定する。言語仕様側の要約は [language.md §6](./language.md) を参照。
 
 | 役割 | ファイル |
 |---|---|
-| 確保・マーク・掃き出しの本体 | [`src/actba64/StrGcRt.abp`](../src/actba64/StrGcRt.abp) |
-| GC 定数・`LowerCtx` | [`src/actba64/AstLower.abp`](../src/actba64/AstLower.abp) |
-| precise ルート登録 | [`src/actba64/AstLowerApi.abp`](../src/actba64/AstLowerApi.abp) |
-| セーフポイント・Collect 呼出 | [`src/actba64/AstLowerRt.abp`](../src/actba64/AstLowerRt.abp) |
-| `cmp rcx,rax` / `mov rax, gs:[8]` | [`src/actba64/IR.abp`](../src/actba64/IR.abp) / [`Emitter.abp`](../src/actba64/Emitter.abp) / [`CodeGen.abp`](../src/actba64/CodeGen.abp) |
+| 確保・precise マーク・掃き出し（Basic） | [`src/Include/default/StringGc.abp`](../src/Include/default/StringGc.abp) |
+| GC 定数・武装フラグ | [`src/actba64/AstLower.abp`](../src/actba64/AstLower.abp) |
+| 組込スタブ（Region / InRange / MarkUserBss / MarkStack） | [`src/actba64/StrGcRt.abp`](../src/actba64/StrGcRt.abp) |
+| IR Collect 本体（主に `-actba32` セーフポイント） | [`src/actba64/StrGcCollect.abp`](../src/actba64/StrGcCollect.abp) |
+| precise ルート登録 | [`src/actba64/AstLowerApi.abp`](../src/actba64/AstLowerApi.abp) / [`AstLowerStrQuery.abp`](../src/actba64/AstLowerStrQuery.abp) |
+| セーフポイント・`LowFindFunc` 呼出 | [`src/actba64/AstLowerRt.abp`](../src/actba64/AstLowerRt.abp) |
+| `cmp rcx,rax` / `gs:[8]` / `fs:[4]` | [`IR.abp`](../src/actba64/IR.abp) / Emitter / CodeGen |
 
 C ランタイムや別 DLL は使わない。`HeapAlloc` / `HeapFree`（`kernel32`）だけを呼び、マーク表は PE の BSS（グローバル領域の末尾）に置く。
+
+---
+
+## 0. Include 公開 API
+
+`default.idx` が常時 [`StringGc.abp`](../src/Include/default/StringGc.abp) を読む。
+
+| 名前 | 役割 |
+|---|---|
+| `Function StrHeapAlloc(nbytes As Long) As VoidPtr` | HeapAlloc + `blocks[]` 登録。戻りは **ヘッダ先頭**（呼び出し側が +4） |
+| `Sub StrGcMarkPrecise(p As VoidPtr)` | precise マーク |
+| `Sub StrGcMarkCons(p As VoidPtr)` | conservative マーク（現行実装はタグ必須にしない） |
+| `Sub StrCollect()` | グローバル precise → `GcMarkUserBss` → `GcMarkStack` → sweep |
+
+コンパイラが注入する組込（AST 無し・`LowAddFunc`）:
+
+| 名前 | 役割 |
+|---|---|
+| `Function StrGcRegion() As VoidPtr` | BSS GC 領域先頭（`g_gcBaseOff`） |
+| `Function StrGcGlobals() As VoidPtr` | ユーザ BSS 先頭 |
+| `Function StrGcUserBssSize() As Long` | ユーザ BSS バイト数（= `g_gcBaseOff`） |
+| `Function StrGcInRange(p, lo, hi As VoidPtr) As Long` | 符号なし `lo <= p <= hi`（32bit stdcall は `ret 12`） |
+| `Sub GcMarkUserBss()` | ユーザ BSS の conservative 走査（IR Cons） |
+| `Sub GcMarkStack()` | RSP〜TEB StackBase の conservative 走査（IR Cons） |
+
+コンパイラが残す手助け: precise ルート表、セーフポイント挿入、BSS `GC_REGION_SIZE` 追記、上記スタブ。
+
+**32bit (`-actba32`)**: Include の `StrCollect` / Include Mark + Sweep の組み合わせで AV するため、セーフポイントは **IR `StrCollect` 本体**を呼ぶ（`StrHeapAlloc` は Include のまま）。64bit は Include `StrCollect` が正本。
 
 ---
 
@@ -113,17 +141,12 @@ g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 38928
 
 ## 5. 確保: `StrHeapAlloc`
 
-[`LowEmitRtStrHeapAllocBody`](../src/actba64/StrGcRt.abp)（ラベル `g_rtStrHeapAllocLab`）。
+[`StringGc.abp`](../src/Include/default/StringGc.abp) の `StrHeapAlloc`。コンパイラ組込経路（Cat / Mid$ / …）は `LowFindFunc("StrHeapAlloc")` で呼ぶ。
 
-1. `GetProcessHeap` → `HeapAlloc(heap, 0, rcx)`。`rcx` は呼び出し側が渡したバイト数。
-2. 失敗なら rax = 0 で戻る。
+1. `GetProcessHeap` → `HeapAlloc(heap, 0, nbytes)`。
+2. 失敗なら 0 を返す。
 3. `count < 4096` なら `blocks[count] = base`、`count++`。
-4. rax = base を返す（ユーザポインタへの `+4` は Cat 等が行う）。
-
-呼び出し側（`AstLowerRt.abp` ほか式・文 lowering）:
-
-- `Cat` / `Mid$` / `Str$` / `MakeStr` / `Input` ランタイム
-- 式中の `Chr$`（6 バイト確保、ヘッダ `&H80000001`）
+4. 戻りは base（ユーザポインタへの `+4` は Cat 等が行う）。
 
 ---
 
@@ -131,14 +154,9 @@ g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 38928
 
 ### 6.1 共通本体
 
-[`LowEmitRtStrGcMarkBody`](../src/actba64/StrGcRt.abp) を 2 ラベルで出す。
+[`StringGc.abp`](../src/Include/default/StringGc.abp) の `StrGcMarkOne`。ポインタ範囲判定は組込 `StrGcInRange`（符号なし）。
 
-| ラベル | `requireTag` | 用途 |
-|---|---|---|
-| `g_rtStrGcPreciseLab` | 0 | コンパイラが「ここは String ポインタ」と知っているスロット |
-| `g_rtStrGcConsLab` | 1 | スタック / ユーザ BSS の生ワード |
-
-入力は rcx = 候補ポインタ。
+入力は候補ポインタ `p`。
 
 ```
 if ptr == 0: return
@@ -148,18 +166,10 @@ for i in 0 .. count-1:
     len  = [base] & 0x7FFFFFFF
     user = base + 4
     end  = user + len
-    if ptr < user: continue          ' 符号なし
-    if ptr > end:  continue          ' 符号なし（NUL 位置まで含む）
-    if requireTag && ([base] & 0x80000000) == 0: continue
+    if not StrGcInRange(ptr, user, end): continue
     marks[i] = 1
-    return                           ' 最初に当たった塊で終了
+    return
 ```
-
-範囲は閉区間 `[user, end]`。`String` 変数そのもの（`user`）も、`StrPtr` でデータ内部を指したポインタも、親塊をマークできる。
-
-**x64 ではポインタ比較に `cmp rcx, rax`（`OP_CMP_RCX_RAX` = `48 39 C1`）と `JB` / `JA` / `JAE` を使う。** `cmp ecx, eax` + `JL` / `JG` だと、ヒープが `0x000001xxxxxxxx` のように下位 32bit が `0x80000000` を跨いだとき、生きている塊が未マークのまま `HeapFree` される。32bit 出力では同じ IR を `cmp ecx, eax` に落とす。
-
-ループ変数 `i` と `count` の比較は 32bit 符号付きのまま（値は 0..4096）。
 
 ### 6.2 Precise: グローバル
 
@@ -214,25 +224,7 @@ Collect フレーム内の RSP から、TEB の **StackBase**（x64: `gs:[8]`、
 
 ## 7. 掃き出しと marks クリア
 
-[`LowEmitRtStrCollectBody`](../src/actba64/StrGcRt.abp) の後半。`i = count-1` から 0 方向へ:
-
-```
-if marks[i] != 0:
-    i--
-    continue
-HeapFree(blocks[i])          ' GetProcessHeap + HeapFree。POP の過不足に注意
-last = count - 1
-blocks[i] = blocks[last]
-marks[i]  = marks[last]
-count--
-' i は据え置き（移動してきた要素を再判定）
-```
-
-据え置きを忘れると、末尾から移した未マーク塊が残る。以前は `HeapFree` のあとに POP が余り、2 回目の解放でスタックが壊れた。
-
-**marks[] のゼロクリアは掃き出しの後**（`labSweepDone` のあと）。以前は Collect の先頭で消しており、呼ぶ直前の `LowEmitPreciseLocalMarks` が全部無効になっていた。ローカル String の生存が conservative スタック走査だけに依存し、レジスタに残った戻り値や、スタックに載らなかった一時値が UAF になった。
-
-BSS の marks は起動時 0。次サイクルは「ローカル precise マーク → Collect」から始まる。
+[`StringGc.abp`](../src/Include/default/StringGc.abp) の `StrCollect` 後半。`i = count-1` から 0 方向へ swap-remove。marks クリアは掃き出しの後。
 
 ---
 
@@ -241,11 +233,11 @@ BSS の marks は起動時 0。次サイクルは「ローカル precise マー�
 [`LowEmitStrCollectSafepoint`](../src/actba64/AstLowerRt.abp):
 
 ```
-LowEmitPreciseLocalMarks(ctx)
-CALL StrCollect
+LowEmitPreciseLocalMarks(ctx)   ' CALL StrGcMarkPrecise（32bit は IR Precise）
+CALL StrCollect                 ' 64bit: Include / 32bit: IR Collect
 ```
 
-`g_rtStrCollectLab < 0` なら何もしない（その翻訳単位で String ヒープ確保が一度も出ていないとき）。一度でも `StrHeapAlloc` を出すと 4 ラベル（alloc / precise / cons / collect）が確保される。
+`g_strGcArmed = 0` なら何もしない（その翻訳単位で String ヒープ確保が一度も出ていないとき）。`LowEmitCallStrHeapAlloc` が初めて成功すると武装する。
 
 挿入箇所:
 
@@ -276,15 +268,14 @@ CALL StrCollect
 
 ## 10. ランタイムの出る順
 
-`AstToIr` 末尾で、使ったラベルだけ本体を出す。GC 関連は文字列ランタイムのあと:
+`AstToIr` 末尾で文字列ランタイム本体のあと、GC **組込スタブ**だけを出す（アルゴリズム本体は Include の通常 Function）:
 
 ```
 Cat / Mid / Str$ / Print / Input / Val / ...
 MakeStr / StrCmp / StrFree（呼ばれたとき）
-StrHeapAlloc / StrGcPrecise / StrGcCons / StrCollect
+StrHeapAlloc / Precise / Cons / Collect（IR・フォールバックおよび 32bit Collect）
+StrGcRegion / Globals / UserBssSize / InRange / GcMarkUserBss / GcMarkStack
 ```
-
-IR は通常の `OP_ENTER` / `OP_CALL_LAB` / `OP_CALL_API` で、専用の GC 命令セットは無い。ポインタ比較と TEB 読み出しだけ専用オペコード。
 
 ---
 
