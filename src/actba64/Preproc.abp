@@ -5,6 +5,29 @@
 Const PP_MAX_DEPTH = 16
 Const PP_LINE_MAX = 1024
 Const PP_ONCE_PATH = 512
+Const PJ_PATH_LEN = 260
+Const PP_WITH_CUR_LEN = 256
+' キーワード一時バッファ（Dim kw(PP_KW_LEN - 1)）
+Const PP_KW_LEN = 16
+Const PP_WITH_KW_LEN = 4
+' #include "..." 抽出上限
+Const PP_INC_EXTRACT_MAX = 250
+' #strict 走査用の短行バッファ
+Const PP_STRICT_LINE = 128
+' 展開バッファ余裕 / 下限
+Const PP_EXPAND_GROW = 8
+Const PP_EXPAND_EXTRA = 262144
+Const PP_EXPAND_MIN = 2097152
+' 条件コンパイル出力バッファ余裕 / 下限
+Const PP_COND_EXTRA = 4096
+Const PP_COND_MIN = 8192
+' ファイルマーク "' ---- " / " ----\r\n" / "' ---- end ----"
+Const PP_FILE_MARK_HEAD = 7
+Const PP_FILE_MARK_TAIL = 7
+Const PP_FILE_END_MARK = 15
+Const PP_FILE_MARK_ENDSEP = 5
+' ".pj" 拡張子長
+Const PP_EXT_PJ_LEN = 3
 
 ' include-once / #USEWINDOW / #n88basic (module Dims: stage0 Type field limit)
 Dim g_ppOnce As *Byte
@@ -12,14 +35,14 @@ Dim g_ppOnceCount As Long
 Dim g_ppOnceCap As Long
 Dim g_ppUseWindow As Long
 Dim g_ppN88Basic As Long
-Dim g_ppResPath(259) As Byte
+Dim g_ppResPath(PJ_PATH_LEN - 1) As Byte
 Dim g_ppDidPrintErr As Long
 Dim g_ppLastRawLen As Long
 
 Const PP_WITH_MAX = 8
 Dim g_ppWithDepth As Long
-Dim g_ppWithCur(255) As Byte
-Dim g_ppWithStack(PP_WITH_MAX * 256) As Byte
+Dim g_ppWithCur(PP_WITH_CUR_LEN - 1) As Byte
+Dim g_ppWithStack(PP_WITH_MAX * PP_WITH_CUR_LEN) As Byte
 
 Sub PpErrorTooLongLine(path As *Byte, lineNo As Long, n As Long)
     g_ppDidPrintErr = 1
@@ -40,7 +63,7 @@ End Sub
 Sub PpStrCopy(dst As *Byte, src As *Byte)
     Dim i As Long
     i = 0
-    While src[i] <> CH_NUL And i < 255
+    While src[i] <> CH_NUL And i < PP_WITH_CUR_LEN - 1
         dst[i] = src[i]
         i = i + 1
     Wend
@@ -75,13 +98,13 @@ Function PpLineTrimOff(line As *Byte, n As Long) As Long
 End Function
 
 Function PpIsWithStart(line As *Byte, n As Long, off As Long, exprOut As *Byte) As Long
-    Dim kw(15) As Byte
+    Dim kw(PP_KW_LEN - 1) As Byte
     Dim i As Long
     Dim j As Long
     PpIsWithStart = 0
     If off >= n Then Exit Function
     lstrcpy(VarPtr(kw), "with")
-    If n - off < 4 Then Exit Function
+    If n - off < PP_WITH_KW_LEN Then Exit Function
     i = 0
     While kw[i] <> CH_NUL
         If ToLowerChar(line[off + i]) <> kw[i] Then Exit Function
@@ -94,7 +117,7 @@ Function PpIsWithStart(line As *Byte, n As Long, off As Long, exprOut As *Byte) 
         i = i + 1
     Wend
     j = 0
-    While i < n And j < 255
+    While i < n And j < PP_WITH_CUR_LEN - 1
         exprOut[j] = line[i]
         j = j + 1
         i = i + 1
@@ -108,8 +131,8 @@ Function PpIsWithStart(line As *Byte, n As Long, off As Long, exprOut As *Byte) 
 End Function
 
 Function PpIsEndWith(line As *Byte, n As Long, off As Long) As Long
-    Dim kEnd(7) As Byte
-    Dim kWith(7) As Byte
+    Dim kEnd(PP_KW_LEN - 1) As Byte
+    Dim kWith(PP_KW_LEN - 1) As Byte
     Dim i As Long
     Dim j As Long
     PpIsEndWith = 0
@@ -157,7 +180,7 @@ Function PpWithPush(expr As *Byte) As Long
     Dim stackOff As Long
     PpWithPush = 0
     If g_ppWithDepth >= PP_WITH_MAX Then Exit Function
-    stackOff = g_ppWithDepth * 256
+    stackOff = g_ppWithDepth * PP_WITH_CUR_LEN
     PpStrCopy(VarPtr(g_ppWithStack[stackOff]), VarPtr(g_ppWithCur))
     PpStrCopy(VarPtr(g_ppWithCur), expr)
     g_ppWithDepth = g_ppWithDepth + 1
@@ -168,7 +191,7 @@ Sub PpWithPop()
     Dim stackOff As Long
     g_ppWithDepth = g_ppWithDepth - 1
     If g_ppWithDepth > 0 Then
-        stackOff = g_ppWithDepth * 256
+        stackOff = g_ppWithDepth * PP_WITH_CUR_LEN
         PpStrCopy(VarPtr(g_ppWithCur), VarPtr(g_ppWithStack[stackOff]))
     Else
         g_ppWithCur[0] = CH_NUL
@@ -206,7 +229,7 @@ End Function
 
 Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As Long
     Dim off As Long
-    Dim expr(255) As Byte
+    Dim expr(PP_WITH_CUR_LEN - 1) As Byte
     PpRewriteWithLine = 0
     outN = 0
     off = PpLineTrimOff(line, n)
