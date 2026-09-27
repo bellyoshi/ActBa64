@@ -178,11 +178,24 @@ PAINT (x, y), color1 [, color2]
 ### 2.1 配列
 
 ```
-Dim a(N) As T     ' 添字 0..N（要素数 N+1）
-Dim a[N] As T     ' 同上（バッファ記法）
+Dim a(N) As T           ' 1D: 添字 0..N（要素数 N+1）
+Dim a[N] As T           ' 同上（バッファ記法）
+Dim a(N, M) As T        ' 2D: 添字 (0..N, 0..M)
+Dim a[N, M] As T        ' 同上（バッファ記法）
 ```
 
-`N` は定数式可。`Byte` / `Long` / `String` / UDT 配列をサポート。
+境界は定数式可（例: `Dim Board(BOARD_SIZE - 1, BOARD_SIZE - 1) As Long`）。  
+要素型は `Byte` / `Long` / `Single` / `Double` / `String` / UDT。3 次元以上は非対応。
+
+**レイアウト（first-index-fastest）:** 先頭添字が連続する。
+
+```
+flat = i0 + i1 * (N + 1)     ' Dim a(N, M) の a(i0, i1)
+```
+
+要素数は `(N+1)*(M+1)`。読み書きは `a(i, j)` / `a[i, j]`（括弧・角括弧とも可）。
+
+回帰: `test/t_arr2d_rw.abp`、`test/t_arr2d_const.abp`。サンプル: `samples/reversi.abp`。
 
 ### 2.2 ユーザ定義型
 
@@ -198,7 +211,7 @@ TypeDef PBYTE = *Byte
 TypeDef PADD = *Function(a As Long, b As Long) As Long
 ```
 
-メンバ参照: `x.field` / `p->field` / `a(i)` / `p[i]`（組み合わせ可）。  
+メンバ参照: `x.field` / `p->field` / `a(i)` / `a(i, j)` / `p[i]`（組み合わせ可）。  
 関数ポインタ型（`*Function` / `*Sub`）は [§5.2.1](#521-関数ポインタ型)。
 
 ---
@@ -219,6 +232,7 @@ Dim t As String
 Dim p As *Byte
 Dim buf[259] As Byte
 Dim xs(7) As Long
+Dim board(7, 7) As Long   ' 2D（§2.1）
 Dim h As COFF_HEADER
 ```
 
