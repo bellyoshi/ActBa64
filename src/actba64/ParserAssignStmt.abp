@@ -132,6 +132,7 @@ Function ParseAssignIndexLhs(p As *Parser, name As *Byte) As Long
     Dim nIdx As Long
     Dim nCall As Long
     Dim ix As Long
+    Dim ix2 As Long
     Dim mem(SYM_NAME_LEN - 1) As Byte
 
     ParseAssignIndexLhs = -1
@@ -142,12 +143,19 @@ Function ParseAssignIndexLhs(p As *Parser, name As *Byte) As Long
     p->pos = p->pos + 1
     ix = ParseExpr(p)
     If ix < 0 Then Exit Function
+    ix2 = -1
+    If ParseTokKind(p) = TK_COMMA Then
+        p->pos = p->pos + 1
+        ix2 = ParseExpr(p)
+        If ix2 < 0 Then Exit Function
+    End If
     If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
     nIdx = AstAddNode(ast, AST_INDEX)
     If nIdx < 0 Then Exit Function
     nodes = ast->nodes
     nodes[nIdx].left = nVar
     nodes[nIdx].right = ix
+    nodes[nIdx].extra = ix2
     nodes[nIdx].num = 1
     If ParseTokKind(p) = TK_DOT Then
         p->pos = p->pos + 1
@@ -177,8 +185,20 @@ Function ParseAssignParen(p As *Parser, name As *Byte) As Long
     p->pos = p->pos + 1
     If ParseArgList(p, arg0, nArgs) = 0 Then Exit Function
     If ParseIsAssignOpAhead(p) <> 0 Then
-        If nArgs <> 1 Then
+        If nArgs < 1 Or nArgs > 2 Then
             p->err = 1
+            Exit Function
+        End If
+        If nArgs = 2 Then
+            nCall = AstAddNode(ast, AST_CALL)
+            If nCall < 0 Then Exit Function
+            AstSetStr(ast, nCall, name)
+            nodes = ast->nodes
+            nodes[nCall].left = arg0
+            nodes[nCall].right = -1
+            nodes[nCall].extra = -1
+            nodes[nCall].num = nArgs
+            ParseAssignParen = ParseAssignOpRhs(p, nCall)
             Exit Function
         End If
         nVar = AstAddNode(ast, AST_VAR)

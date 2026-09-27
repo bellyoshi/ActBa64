@@ -2,20 +2,52 @@
 '  ParserDim - Dim / Const / Assign
 ' ===================================================
 
+' bound: -1=scalar, else 1D expr idx, or AST_ARG chain for 2D (bound0, bound1)
 Function ParseDimBound(p As *Parser, ByRef bound As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim e0 As Long
+    Dim e1 As Long
+    Dim a0 As Long
+    Dim a1 As Long
+    Dim closeKind As Long
+
     ParseDimBound = 0
     bound = -1
     If ParseTokKind(p) = TK_LPAREN Then
-        p->pos = p->pos + 1
-        bound = ParseExpr(p)
-        If bound < 0 Then Exit Function
-        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+        closeKind = TK_RPAREN
     ElseIf ParseTokKind(p) = TK_LBRACK Then
-        p->pos = p->pos + 1
-        bound = ParseExpr(p)
-        If bound < 0 Then Exit Function
-        If ParseExpect(p, TK_RBRACK) = 0 Then Exit Function
+        closeKind = TK_RBRACK
+    Else
+        ParseDimBound = 1
+        Exit Function
     End If
+    p->pos = p->pos + 1
+    e0 = ParseExpr(p)
+    If e0 < 0 Then Exit Function
+    If ParseTokKind(p) = TK_COMMA Then
+        p->pos = p->pos + 1
+        e1 = ParseExpr(p)
+        If e1 < 0 Then Exit Function
+        If ParseTokKind(p) = TK_COMMA Then
+            p->err = 1
+            Exit Function
+        End If
+        ast = p->ast
+        a0 = AstAddNode(ast, AST_ARG)
+        If a0 < 0 Then Exit Function
+        a1 = AstAddNode(ast, AST_ARG)
+        If a1 < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[a0].left = e0
+        nodes[a0].nxt = a1
+        nodes[a1].left = e1
+        nodes[a1].nxt = -1
+        bound = a0
+    Else
+        bound = e0
+    End If
+    If ParseExpect(p, closeKind) = 0 Then Exit Function
     ParseDimBound = 1
 End Function
 
