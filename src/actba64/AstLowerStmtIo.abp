@@ -49,8 +49,7 @@ Sub LowStoreInputVar(ctx As *LowerCtx, vOff As Long, vTy As Long, vByRef As Long
     End If
 End Sub
 
-Function LowStmtInput(ctx As *LowerCtx, idx As Long) As Long
-    Dim stackPad(LOW_STACK_PAD - 1) As Byte
+Function LowStmtInputOne(ctx As *LowerCtx, nVarIdx As Long, labIn As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -59,27 +58,13 @@ Function LowStmtInput(ctx As *LowerCtx, idx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim name(SYM_NAME_LEN - 1) As Byte
-    Dim lab As Long
-    Dim nVarIdx As Long
-    Dim nPrompt As Long
 
-    LowStmtInput = 0
+    LowStmtInputOne = 0
     ast = ctx->ast
     nodes = ast->nodes
-    nVarIdx = LowInputVarIdx(ctx, idx, nPrompt)
-    If nVarIdx < 0 Then
-        ctx->err = 1
-        Exit Function
-    End If
     If nodes[nVarIdx].kind <> AST_VAR Then
         ctx->err = 1
         Exit Function
-    End If
-    If nPrompt >= 0 Then
-        If LowExpr(ctx, nPrompt) = 0 Then Exit Function
-        lab = LowEnsureRtPrint(ctx)
-        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
-        LowEmitStrCollectSafepoint(ctx)
     End If
     AstCopyStr(ast, nVarIdx, VarPtr(name))
     If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
@@ -91,10 +76,42 @@ Function LowStmtInput(ctx As *LowerCtx, idx As Long) As Long
         ctx->err = 1
         Exit Function
     End If
-    lab = LowEnsureRtInput(ctx)
-    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    IrEmit(ctx->list, OP_CALL_LAB, labIn, 0)
     LowEmitInputCvt(ctx, vTy)
     LowStoreInputVar(ctx, vOff, vTy, vByRef, vGlob)
+    LowStmtInputOne = 1
+End Function
+
+Function LowStmtInput(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(LOW_STACK_PAD - 1) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim lab As Long
+    Dim nVarIdx As Long
+    Dim nPrompt As Long
+    Dim cur As Long
+
+    LowStmtInput = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    nVarIdx = LowInputVarIdx(ctx, idx, nPrompt)
+    If nVarIdx < 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If nPrompt >= 0 Then
+        If LowExpr(ctx, nPrompt) = 0 Then Exit Function
+        lab = LowEnsureRtPrint(ctx)
+        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
+        LowEmitStrCollectSafepoint(ctx)
+    End If
+    lab = LowEnsureRtInput(ctx)
+    cur = nVarIdx
+    While cur >= 0
+        If LowStmtInputOne(ctx, cur, lab) = 0 Then Exit Function
+        cur = nodes[cur].nxt
+    Wend
     LowEmitStrCollectSafepoint(ctx)
     LowStmtInput = 1
 End Function

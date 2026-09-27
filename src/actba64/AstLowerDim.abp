@@ -30,33 +30,60 @@ Function LowStmtList(ctx As *LowerCtx, idx As Long) As Long
     LowStmtList = 1
 End Function
 
-Function LowDimArrBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, ByRef nbytes As Long) As Long
+' boundIdx: 1D expr, or AST_ARG chain (2D). nElems=product of (b+1); arrLen0=b0+1 for 2D else -1
+Function LowDimEvalBoundNode(ctx As *LowerCtx, boundIdx As Long, ByRef nElems As Long, ByRef arrLen0 As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim bound As Long
+    Dim b0 As Long
+    Dim b1 As Long
+    Dim nxt As Long
+
+    LowDimEvalBoundNode = 0
+    arrLen0 = -1
+    nElems = 0
+    If boundIdx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[boundIdx].kind = AST_ARG Then
+        b0 = LowConstEval(ctx, nodes[boundIdx].left)
+        If b0 < 0 Then Exit Function
+        nxt = nodes[boundIdx].nxt
+        If nxt < 0 Then Exit Function
+        b1 = LowConstEval(ctx, nodes[nxt].left)
+        If b1 < 0 Then Exit Function
+        arrLen0 = b0 + 1
+        nElems = arrLen0 * (b1 + 1)
+    Else
+        b0 = LowConstEval(ctx, boundIdx)
+        If b0 < 0 Then Exit Function
+        nElems = b0 + 1
+    End If
+    LowDimEvalBoundNode = 1
+End Function
+
+Function LowDimArrBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, ByRef nbytes As Long, ByRef arrLen0 As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim nElems As Long
     LowDimArrBytes = 0
+    arrLen0 = -1
     ast = ctx->ast
     nodes = ast->nodes
     If typeKind = TY_BYTE_ARR Then
-        bound = LowConstEval(ctx, nodes[dimIdx].left)
-        If bound < 0 Then Exit Function
-        nbytes = bound + 1
+        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        nbytes = nElems
     ElseIf typeKind = TY_LONG_ARR Then
-        bound = LowConstEval(ctx, nodes[dimIdx].left)
-        If bound < 0 Then Exit Function
-        nbytes = (bound + 1) * 4
+        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        nbytes = nElems * 4
     ElseIf typeKind = TY_DOUBLE_ARR Then
-        bound = LowConstEval(ctx, nodes[dimIdx].left)
-        If bound < 0 Then Exit Function
-        nbytes = (bound + 1) * 8
+        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        nbytes = nElems * 8
     ElseIf typeKind = TY_SINGLE_ARR Then
-        bound = LowConstEval(ctx, nodes[dimIdx].left)
-        If bound < 0 Then Exit Function
-        nbytes = (bound + 1) * 4
+        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        nbytes = nElems * 4
     ElseIf typeKind = TY_STRING_ARR Then
-        bound = LowConstEval(ctx, nodes[dimIdx].left)
-        If bound < 0 Then Exit Function
-        nbytes = (bound + 1) * TyPtrSize()
+        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        nbytes = nElems * TyPtrSize()
     End If
     LowDimArrBytes = 1
 End Function
@@ -64,7 +91,8 @@ End Function
 Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, ByRef nbytes As Long, ByRef typeIdx As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim bound As Long
+    Dim nElems As Long
+    Dim arrLen0 As Long
     Dim typeTable As *TypeTable
     Dim tsizes As *Long
     LowDimUdtArrBytes = 0
@@ -76,15 +104,14 @@ Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, B
         Print "error: Dim UDT[] missing type '" + MakeStr(namePtr) + "'"
         Exit Function
     End If
-    bound = LowConstEval(ctx, nodes[dimIdx].left)
-    If bound < 0 Then Exit Function
+    If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
     tsizes = typeTable->typeSizes
     nbytes = tsizes[typeIdx]
     If nbytes <= 0 Then
         Print "error: Dim UDT[] size 0 '" + MakeStr(namePtr) + "'"
         Exit Function
     End If
-    nbytes = nbytes * (bound + 1)
+    nbytes = nbytes * nElems
     LowDimUdtArrBytes = 1
 End Function
 
@@ -139,6 +166,7 @@ Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, na
 End Function
 
 ' Register one AST_DIM (asGlob=1 -> module global, else local). Returns 0 on error.
+' 2D non-UDT arrays store len0=(bound0+1) in typeIdx for first-index-fastest flattening.
 Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As Long
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -146,6 +174,7 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
     Dim typeKind As Long
     Dim nbytes As Long
     Dim typeIdx As Long
+    Dim arrLen0 As Long
 
     LowRegisterDimNode = 0
     ast = ctx->ast
@@ -154,8 +183,14 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
     typeKind = nodes[dimIdx].num
     nbytes = 8
     typeIdx = -1
-    If LowDimArrBytes(ctx, dimIdx, typeKind, nbytes) = 0 Then Exit Function
+    arrLen0 = -1
+    If LowDimArrBytes(ctx, dimIdx, typeKind, nbytes, arrLen0) = 0 Then Exit Function
     If LowDimFixedBytes(ctx, dimIdx, typeKind, VarPtr(namePtr), nbytes, typeIdx) = 0 Then Exit Function
+    If arrLen0 > 0 Then
+        If typeKind <> TY_UDT_ARR And typeKind <> TY_UDT And typeKind <> TY_PTR_UDT And typeKind <> TY_PTR_FUNC Then
+            typeIdx = arrLen0
+        End If
+    End If
     If asGlob <> 0 Then
         If LowAddGlob(ctx, VarPtr(namePtr), typeKind, nbytes, typeIdx) < 0 Then
             Print "error: register global '" + MakeStr(VarPtr(namePtr)) + "' typeKind=" + Str$(typeKind)

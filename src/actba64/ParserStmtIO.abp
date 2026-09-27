@@ -106,10 +106,20 @@ Function ParseHashFilePrefix(p As *Parser, ByRef nFile As Long) As Long
     ParseHashFilePrefix = 1
 End Function
 
+Function ParseIoExprCanStart(p As *Parser) As Long
+    Dim k As Long
+    ParseIoExprCanStart = 0
+    k = ParseTokKind(p)
+    If k = TK_NUMBER Or k = TK_FLOAT Or k = TK_STRING Or k = TK_IDENT Or k = TK_LPAREN Or k = TK_MINUS Or k = TK_PLUS Then
+        ParseIoExprCanStart = 1
+    End If
+End Function
+
 Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long) As Long
     Dim nodes As *AstNode
     Dim nArg As Long
     Dim e As Long
+    Dim semiLine As Long
 
     ParseIoExprArgs = 0
     Do
@@ -125,8 +135,23 @@ Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef 
             nodes[nPrev].nxt = nArg
         End If
         nPrev = nArg
-        If ParseTokKind(p) <> TK_COMMA Then Exit Do
-        p->pos = p->pos + 1
+        If ParseTokKind(p) = TK_COMMA Then
+            p->pos = p->pos + 1
+        ElseIf ParseTokKind(p) = TK_SEMI Then
+            ' same-line ";" separates items; EOL ";" is Print stay
+            semiLine = ParseTokLine(p)
+            p->pos = p->pos + 1
+            If ParseIoExprCanStart(p) = 0 Then
+                p->pos = p->pos - 1
+                Exit Do
+            End If
+            If ParseTokLine(p) <> semiLine Then
+                p->pos = p->pos - 1
+                Exit Do
+            End If
+        Else
+            Exit Do
+        End If
     Loop
     ParseIoExprArgs = 1
 End Function
@@ -255,13 +280,15 @@ Function ParseInputPrompt(p As *Parser) As Long
     ParseInputPrompt = nInput
 End Function
 
-' Input var ― stdin から1行読み取り、文字列または数値変数へ代入
+' Input var[, var...] ― stdin から変数ごとに1行読み取り
 ' Input #n, var[, ...] ― ファイルからフィールド読み取り
 Function ParseInputStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nInput As Long
     Dim nVar As Long
+    Dim nFirst As Long
+    Dim nPrev As Long
     Dim name(SYM_NAME_LEN - 1) As Byte
 
     ParseInputStmt = -1
@@ -274,15 +301,28 @@ Function ParseInputStmt(p As *Parser) As Long
         ParseInputStmt = ParseInputPrompt(p)
         Exit Function
     End If
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-    ast = p->ast
-    nVar = AstAddNode(ast, AST_VAR)
-    If nVar < 0 Then Exit Function
-    AstSetStr(ast, nVar, VarPtr(name))
+    nFirst = -1
+    nPrev = -1
+    Do
+        If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+        ast = p->ast
+        nVar = AstAddNode(ast, AST_VAR)
+        If nVar < 0 Then Exit Function
+        AstSetStr(ast, nVar, VarPtr(name))
+        If nFirst < 0 Then
+            nFirst = nVar
+        Else
+            nodes = ast->nodes
+            nodes[nPrev].nxt = nVar
+        End If
+        nPrev = nVar
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p->pos = p->pos + 1
+    Loop
     nInput = AstAddNode(ast, AST_INPUT)
     If nInput < 0 Then Exit Function
     nodes = ast->nodes
-    nodes[nInput].left = nVar
+    nodes[nInput].left = nFirst
     nodes[nInput].right = -1
     ParseInputStmt = nInput
 End Function

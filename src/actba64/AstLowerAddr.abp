@@ -184,6 +184,25 @@ Function LowAddrArrayCallScale(ctx As *LowerCtx, list As *IrList, typeTable As *
     LowAddrArrayCallScale = 1
 End Function
 
+' flat = i0 + i1 * len0 into rax (first-index-fastest). len0 from symbol typeIdx.
+Function LowEmitFlat2D(ctx As *LowerCtx, list As *IrList, i0 As Long, i1 As Long, len0 As Long) As Long
+    LowEmitFlat2D = 0
+    If len0 <= 0 Then
+        ctx->err = 1
+        Exit Function
+    End If
+    If LowExpr(ctx, i1) = 0 Then Exit Function
+    LowEmitZxEax(list)
+    IrEmit(list, OP_MOV_ECX, len0, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, i0) = 0 Then Exit Function
+    LowEmitZxEax(list)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    LowEmitFlat2D = 1
+End Function
+
 Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
@@ -197,6 +216,8 @@ Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
     Dim nArgs As Long
     Dim typeTable As *TypeTable
     Dim ix As Long
+    Dim a0 As Long
+    Dim a1 As Long
 
     LowAddrArrayCall = 0
     ast = ctx->ast
@@ -204,7 +225,7 @@ Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
     nodes = ast->nodes
     typeTable = ast->types
     nArgs = nodes[idx].num
-    If nArgs <> 1 Then
+    If nArgs <> 1 And nArgs <> 2 Then
         ctx->err = 1
         Exit Function
     End If
@@ -217,12 +238,30 @@ Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
         ctx->err = 1
         Exit Function
     End If
-    ' index expr is left of CALL (AST_ARG wrapper)
-    ix = nodes[idx].left
-    If ix >= 0 Then
-        If nodes[ix].kind = AST_ARG Then ix = nodes[ix].left
+    If nArgs = 2 Then
+        If vTy = TY_UDT_ARR Then
+            ctx->err = 1
+            Exit Function
+        End If
+        a0 = nodes[idx].left
+        If a0 < 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        a1 = nodes[a0].nxt
+        If a1 < 0 Then
+            ctx->err = 1
+            Exit Function
+        End If
+        If LowEmitFlat2D(ctx, list, nodes[a0].left, nodes[a1].left, vTypeIdx) = 0 Then Exit Function
+    Else
+        ' index expr is left of CALL (AST_ARG wrapper)
+        ix = nodes[idx].left
+        If ix >= 0 Then
+            If nodes[ix].kind = AST_ARG Then ix = nodes[ix].left
+        End If
+        If LowExpr(ctx, ix) = 0 Then Exit Function
     End If
-    If LowExpr(ctx, ix) = 0 Then Exit Function
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     LowEmitLeaOff(list, vOff, vGlob)
     IrEmit(list, OP_POP_RCX, 0, 0)
