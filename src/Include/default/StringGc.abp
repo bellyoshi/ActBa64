@@ -1,0 +1,207 @@
+' StringGc.abp — String ヒープ GC（default 常時読込）
+'
+' 公開: StrHeapAlloc / StrGcMarkPrecise / StrGcMarkCons / StrCollect
+' 組込（コンパイラ注入）: StrGcRegion / StrGcGlobals / StrGcUserBssSize /
+'   StrGcInRange / GcMarkUserBss / GcMarkStack
+'
+' BSS レイアウトはコンパイラの GC_HDR_* と一致（docs/string-gc.md）。
+' blocks[] は常に 8 バイト枠（32/64 共通）。
+' conservative 走査（BSS/スタック）は IR スタブ（stdcall 安定・軽量）。
+
+Const STRGC_MAX_BLOCKS = 4096
+Const STRGC_SLOT = 8
+Const STRGC_HDR_COUNT = 0
+Const STRGC_HDR_BLOCKS = 8
+Const STRGC_HDR_MARKS = 32776
+Const STRGC_HDR_PRECISE_COUNT = 36872
+Const STRGC_HDR_PRECISE_ROOTS = 36880
+
+Type StrGcSlot
+    p As VoidPtr
+End Type
+
+Function StrGcByteAt(region As VoidPtr, off As Long) As BytePtr
+    Dim b As BytePtr
+    b = region
+    StrGcByteAt = VarPtr(b[off])
+End Function
+
+Function StrGcGetCount() As Long
+    Dim p As *Long
+    p = StrGcByteAt(StrGcRegion(), STRGC_HDR_COUNT)
+    StrGcGetCount = p[0]
+End Function
+
+Sub StrGcSetCount(n As Long)
+    Dim b As BytePtr
+    Dim p As *Long
+    Dim i As Long
+    b = StrGcByteAt(StrGcRegion(), STRGC_HDR_COUNT)
+    i = 0
+    While i < STRGC_SLOT
+        b[i] = 0
+        i = i + 1
+    Wend
+    p = b
+    p[0] = n
+End Sub
+
+Function StrGcGetBlock(i As Long) As VoidPtr
+    Dim s As *StrGcSlot
+    s = StrGcByteAt(StrGcRegion(), STRGC_HDR_BLOCKS + i * STRGC_SLOT)
+    StrGcGetBlock = s[0].p
+End Function
+
+Sub StrGcSetBlock(i As Long, base As VoidPtr)
+    Dim s As *StrGcSlot
+    s = StrGcByteAt(StrGcRegion(), STRGC_HDR_BLOCKS + i * STRGC_SLOT)
+    s[0].p = base
+End Sub
+
+Function StrGcGetMark(i As Long) As Long
+    Dim m As BytePtr
+    m = StrGcByteAt(StrGcRegion(), STRGC_HDR_MARKS)
+    StrGcGetMark = m[i]
+End Function
+
+Sub StrGcSetMark(i As Long, v As Long)
+    Dim m As BytePtr
+    m = StrGcByteAt(StrGcRegion(), STRGC_HDR_MARKS)
+    m[i] = v And 255
+End Sub
+
+Function StrGcGetPrecCount() As Long
+    Dim p As *Long
+    p = StrGcByteAt(StrGcRegion(), STRGC_HDR_PRECISE_COUNT)
+    StrGcGetPrecCount = p[0]
+End Function
+
+Function StrGcGetPrecRoot(i As Long) As Long
+    Dim pr As *Long
+    pr = StrGcByteAt(StrGcRegion(), STRGC_HDR_PRECISE_ROOTS)
+    StrGcGetPrecRoot = pr[i]
+End Function
+
+Function StrHeapAlloc(nbytes As Long) As VoidPtr
+    Dim heap As HANDLE
+    Dim base As VoidPtr
+    Dim n As Long
+
+    StrHeapAlloc = 0
+    heap = GetProcessHeap()
+    base = HeapAlloc(heap, 0, nbytes)
+    If base = 0 Then Exit Function
+    n = StrGcGetCount()
+    If n < STRGC_MAX_BLOCKS Then
+        StrGcSetBlock(n, base)
+        StrGcSetCount(n + 1)
+    End If
+    StrHeapAlloc = base
+End Function
+
+Sub StrGcMarkOne(ptr As VoidPtr)
+    Dim i As Long
+    Dim n As Long
+    Dim base As VoidPtr
+    Dim bp As BytePtr
+    Dim hdr As *Long
+    Dim ln As Long
+    Dim user As VoidPtr
+    Dim endp As VoidPtr
+    Dim ub As BytePtr
+
+    If ptr = 0 Then Exit Sub
+    n = StrGcGetCount()
+    i = 0
+    While i < n
+        base = StrGcGetBlock(i)
+        If base <> 0 Then
+            bp = base
+            hdr = VarPtr(bp[0])
+            ln = hdr[0] And 2147483647
+            user = VarPtr(bp[4])
+            ub = user
+            endp = VarPtr(ub[ln])
+            If StrGcInRange(ptr, user, endp) <> 0 Then
+                StrGcSetMark(i, 1)
+                Exit Sub
+            End If
+        End If
+        i = i + 1
+    Wend
+End Sub
+
+Sub StrGcMarkPrecise(p As VoidPtr)
+    StrGcMarkOne(p)
+End Sub
+
+Sub StrGcMarkCons(p As VoidPtr)
+    StrGcMarkOne(p)
+End Sub
+
+Sub StrGcMarkPrecRoots()
+    Dim i As Long
+    Dim n As Long
+    Dim off As Long
+    Dim g As BytePtr
+    Dim s As *StrGcSlot
+
+    n = StrGcGetPrecCount()
+    g = StrGcGlobals()
+    i = 0
+    While i < n
+        off = StrGcGetPrecRoot(i)
+        s = VarPtr(g[off])
+        StrGcMarkPrecise(s[0].p)
+        i = i + 1
+    Wend
+End Sub
+
+Sub StrGcSweepOne(i As Long)
+    Dim last As Long
+    Dim base As VoidPtr
+
+    base = StrGcGetBlock(i)
+    HeapFree(GetProcessHeap(), 0, base)
+    last = StrGcGetCount() - 1
+    StrGcSetBlock(i, StrGcGetBlock(last))
+    StrGcSetMark(i, StrGcGetMark(last))
+    StrGcSetCount(last)
+End Sub
+
+Sub StrGcSweep()
+    Dim i As Long
+    Dim n As Long
+
+    i = StrGcGetCount() - 1
+    While i >= 0
+        n = StrGcGetCount()
+        If i >= n Then
+            i = n - 1
+        ElseIf StrGcGetMark(i) = 0 Then
+            StrGcSweepOne(i)
+        Else
+            i = i - 1
+        End If
+    Wend
+End Sub
+
+Sub StrGcClearMarks()
+    Dim i As Long
+    Dim n As Long
+
+    n = StrGcGetCount()
+    i = 0
+    While i < n
+        StrGcSetMark(i, 0)
+        i = i + 1
+    Wend
+End Sub
+
+Sub StrCollect()
+    StrGcMarkPrecRoots()
+    GcMarkUserBss()
+    GcMarkStack()
+    StrGcSweep()
+    StrGcClearMarks()
+End Sub

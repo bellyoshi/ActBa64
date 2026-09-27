@@ -221,3 +221,187 @@ Sub LowEmitRtStrGcConsBody(ctx As *LowerCtx)
     ' ヘッダ書き込み前の窓を conservative で落とさないため。
     LowEmitRtStrGcMarkBody(ctx, g_rtStrGcConsLab, 0)
 End Sub
+
+' ---- Include StringGc 向け組込スタブ ----
+
+Function LowInjectStrGcStubs(ctx As *LowerCtx) As Long
+    Dim name(KW_LEN - 1) As Byte
+
+    LowInjectStrGcStubs = 0
+    g_stubStrGcRegionLab = LowNewLabel(ctx)
+    g_stubStrGcGlobalsLab = LowNewLabel(ctx)
+    g_stubStrGcUserBssLab = LowNewLabel(ctx)
+    g_stubStrGcInRangeLab = LowNewLabel(ctx)
+    g_stubGcMarkStackLab = LowNewLabel(ctx)
+    g_stubGcMarkUserBssLab = LowNewLabel(ctx)
+    ' conservative 走査用 IR Cons（Include Collect と併用）
+    If g_rtStrGcConsLab < 0 Then
+        g_rtStrGcConsLab = LowNewLabel(ctx)
+    End If
+
+    lstrcpy(VarPtr(name), "StrGcRegion")
+    If LowAddFunc(ctx, VarPtr(name), g_stubStrGcRegionLab, 0) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "StrGcGlobals")
+    If LowAddFunc(ctx, VarPtr(name), g_stubStrGcGlobalsLab, 0) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "StrGcUserBssSize")
+    If LowAddFunc(ctx, VarPtr(name), g_stubStrGcUserBssLab, 0) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "StrGcInRange")
+    If LowAddFunc(ctx, VarPtr(name), g_stubStrGcInRangeLab, 0) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "GcMarkStack")
+    If LowAddFunc(ctx, VarPtr(name), g_stubGcMarkStackLab, 0) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "GcMarkUserBss")
+    If LowAddFunc(ctx, VarPtr(name), g_stubGcMarkUserBssLab, 0) = 0 Then Exit Function
+    LowInjectStrGcStubs = 1
+End Function
+
+Sub LowEmitStubStrGcRegion(ctx As *LowerCtx)
+    Dim list As *IrList
+    list = ctx->list
+    IrEmit(list, OP_LABEL, g_stubStrGcRegionLab, 0)
+    IrEmit(list, OP_ENTER, 16, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, g_gcBaseOff, 0)
+    LowEmitLeave(list, 0)
+End Sub
+
+Sub LowEmitStubStrGcGlobals(ctx As *LowerCtx)
+    Dim list As *IrList
+    list = ctx->list
+    IrEmit(list, OP_LABEL, g_stubStrGcGlobalsLab, 0)
+    IrEmit(list, OP_ENTER, 16, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, 0, 0)
+    LowEmitLeave(list, 0)
+End Sub
+
+Sub LowEmitStubStrGcUserBss(ctx As *LowerCtx)
+    Dim list As *IrList
+    list = ctx->list
+    IrEmit(list, OP_LABEL, g_stubStrGcUserBssLab, 0)
+    IrEmit(list, OP_ENTER, 16, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, g_gcBaseOff, 0)
+    LowEmitLeave(list, 0)
+End Sub
+
+Sub LowEmitStubStrGcInRange(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labFail As Long
+    Dim labOk As Long
+
+    list = ctx->list
+    labFail = LowNewLabel(ctx)
+    labOk = LowNewLabel(ctx)
+    IrEmit(list, OP_LABEL, g_stubStrGcInRangeLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    LowEmitCaptureArg0(list, -8)
+    LowEmitCaptureArg1(list, -16)
+    LowEmitCaptureArg2(list, -24)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_CMP_RCX_RAX, 0, 0)
+    IrEmit(list, OP_JB, labFail, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -24, 0)
+    IrEmit(list, OP_CMP_RCX_RAX, 0, 0)
+    IrEmit(list, OP_JA, labFail, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+    IrEmit(list, OP_JMP, labOk, 0)
+    IrEmit(list, OP_LABEL, labFail, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_LABEL, labOk, 0)
+    ' 32bit stdcall: 引数 3 つ分を callee が破棄
+    LowEmitLeave(list, 3)
+End Sub
+
+Sub LowEmitRtGcMarkStack(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labStk As Long
+    Dim labDone As Long
+    Dim labCons As Long
+
+    If g_stubGcMarkStackLab < 0 Then Exit Sub
+    list = ctx->list
+    labCons = g_rtStrGcConsLab
+    If labCons < 0 Then
+        IrEmit(list, OP_LABEL, g_stubGcMarkStackLab, 0)
+        IrEmit(list, OP_ENTER, 16, 0)
+        LowEmitLeave(list, 0)
+        Exit Sub
+    End If
+    labStk = LowNewLabel(ctx)
+    labDone = LowNewLabel(ctx)
+    IrEmit(list, OP_LABEL, g_stubGcMarkStackLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    IrEmit(list, OP_MOV_R8_RSP, 0, 0)
+    IrEmit(list, OP_MOV_RAX_R8, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LABEL, labStk, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_RAX_GS8, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_RCX_RAX, 0, 0)
+    IrEmit(list, OP_JAE, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_LOAD_PTR, 0, 0)
+    LowEmitCall1Rax(list, 0, 0, 0, labCons)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, TyPtrSize(), 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labStk, 0)
+    IrEmit(list, OP_LABEL, labDone, 0)
+    LowEmitLeave(list, 0)
+End Sub
+
+Sub LowEmitRtGcMarkUserBss(ctx As *LowerCtx)
+    Dim list As *IrList
+    Dim labGlob As Long
+    Dim labDone As Long
+    Dim labCons As Long
+
+    If g_stubGcMarkUserBssLab < 0 Then Exit Sub
+    list = ctx->list
+    labCons = g_rtStrGcConsLab
+    If labCons < 0 Then
+        IrEmit(list, OP_LABEL, g_stubGcMarkUserBssLab, 0)
+        IrEmit(list, OP_ENTER, 16, 0)
+        LowEmitLeave(list, 0)
+        Exit Sub
+    End If
+    labGlob = LowNewLabel(ctx)
+    labDone = LowNewLabel(ctx)
+    IrEmit(list, OP_LABEL, g_stubGcMarkUserBssLab, 0)
+    IrEmit(list, OP_ENTER, 48, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_LABEL, labGlob, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, g_gcBaseOff, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_LOAD_PTR, 0, 0)
+    LowEmitCall1Rax(list, 0, 0, 0, labCons)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, TyPtrSize(), 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+    IrEmit(list, OP_JMP, labGlob, 0)
+    IrEmit(list, OP_LABEL, labDone, 0)
+    LowEmitLeave(list, 0)
+End Sub
+
+Sub LowEmitRtStrGcStubs(ctx As *LowerCtx)
+    If g_stubStrGcRegionLab < 0 Then Exit Sub
+    LowEmitStubStrGcRegion(ctx)
+    LowEmitStubStrGcGlobals(ctx)
+    LowEmitStubStrGcUserBss(ctx)
+    LowEmitStubStrGcInRange(ctx)
+    LowEmitRtGcMarkUserBss(ctx)
+    LowEmitRtGcMarkStack(ctx)
+End Sub
