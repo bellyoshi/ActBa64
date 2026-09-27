@@ -202,6 +202,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `#strict` | 型不一致を警告 | **実装済み**（変数代入。詳細は [動作が異なるもの](#動作が異なるもの)） |
 | `#define` / `#ifdef` | 条件コンパイル | **実装済み** |
 | 関数ポインタ | `*Function` / `*Sub` / `TypeDef` / `AddressOf` / 間接 call | **実装済み**（[language.md §5.2.1](./language.md)） |
+| 2 次元配列 | `Dim a(N, M)` / `a(i, j)`（first-index-fastest） | **実装済み**（[language.md §2.1](./language.md#21-配列)。3 次元以上・`ReDim` は未） |
 
 ### 入出力・文字列・メモリ（組み込み）
 
