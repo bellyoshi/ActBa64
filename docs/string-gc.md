@@ -40,7 +40,7 @@ C ランタイムや別 DLL は使わない。`HeapAlloc` / `HeapFree`（`kernel
 
 コンパイラが残す手助け: precise ルート表、セーフポイント挿入、BSS `GC_REGION_SIZE` 追記、上記スタブ。
 
-**32bit (`-actba32`)**: Include の `StrCollect` / Include Mark + Sweep の組み合わせで AV するため、セーフポイントは **IR `StrCollect` 本体**を呼ぶ（`StrHeapAlloc` は Include のまま）。64bit は Include `StrCollect` が正本。
+**32bit (`-actba32`)**: セーフポイントも 64bit と同様に Include の `StrCollect` を呼ぶ（BSS/スタックの conservative は IR スタブ）。IR `StrCollect` 本体は Include が無いときのフォールバック。
 
 ---
 
@@ -233,11 +233,13 @@ Collect フレーム内の RSP から、TEB の **StackBase**（x64: `gs:[8]`、
 [`LowEmitStrCollectSafepoint`](../src/actba64/AstLowerRt.abp):
 
 ```
-LowEmitPreciseLocalMarks(ctx)   ' CALL StrGcMarkPrecise（32bit は IR Precise）
-CALL StrCollect                 ' 64bit: Include / 32bit: IR Collect
+LowEmitPreciseLocalMarks(ctx)   ' CALL StrGcMarkPrecise（Include。無ければ IR Precise）
+CALL StrCollect                 ' Include（無ければ IR Collect）
 ```
 
-`g_strGcArmed = 0` なら何もしない（その翻訳単位で String ヒープ確保が一度も出ていないとき）。`LowEmitCallStrHeapAlloc` が初めて成功すると武装する。
+`g_strGcArmed = 0` なら何もしない。`LowEmitCallStrHeapAlloc` が初めて成功すると武装する。
+
+**MAIN ループは例外:** セーフポイントは本体 lower **前**に出すため、その時点ではまだ武装していないことがある。`LowMaybeLoopStrCollect` が AST 上で確保（Cat / Mid$ 等）を見つけたら、先に武装してから Collect を出す（出さないとループ内の一時 String が `blocks[]` 上限まで溜まる）。
 
 挿入箇所:
 
@@ -250,6 +252,8 @@ CALL StrCollect                 ' 64bit: Include / 32bit: IR Collect
 関数エピローグでは Collect しない。`Mid$` や `Hl_Lower$` のような入れ子の終了時に、呼び出し元の `String` が conservative 走査から漏れて `HeapFree` されるのを避けるため。GUI ではメッセージループ（MAIN の `Do`）の先頭で回収する。関数内の一時値は、MAIN に戻ったあとで回収する。
 
 **関数内ループでも Collect しない**（2026-09 修正）。`TrimCode$(Mid$(s, 10))` のように ByVal String 引数へ渡した `Mid$` 一時値が、関数内 `While`/`For` の Collect で unmarked のまま掃き出され、`"ja"` → `"a"` / `"j"` のように壊れる事例があった。呼び出し元のホーム領域や precise ルートがあっても再現するため、関数内セーフポイントは出さず MAIN に任せる。
+
+**-actba32 の MAIN ループも Collect しない**（2026-10）。`junk` の Cat/Mid$ と `Mid$(t, 10)` を同じ `For` で回すと、Include `StrCollect` で回収は進むが UAF（AV）になる。IR Collect にすると回収が進まず `blocks[]` が上限まで伸びる。64bit の MAIN ループ Collect は有効。32bit は `Print` 後など従来のセーフポイントのみ。
 
 ---
 
@@ -319,6 +323,8 @@ StrGcRegion / Globals / UserBssSize / InRange / GcMarkUserBss / GcMarkStack
 | `t_gc_nested.abp` | `While`+`Mid$` の内側で確保しない `For` が走っても元の行が残る |
 | `t_gc_trim_mid.abp` | `TrimCode$(Mid$(t, 10))` + `Chr$` 圧力でも `"ja"` が残る |
 | `t_gc_param.abp` | ByVal String 引数が callee 内ループ後も残る |
+| `t_gc_udt.abp` | UDT の String メンバ（precise 外）がグローバル/ローカルとも残る |
+| `t_gc_blocks.abp` | 3000 回 Cat 後も `StrGcGetCount` が小さく、掃き出しが効いている（`Skip32`: 32bit MAIN ループ Collect は未） |
 | `t_str_ret.abp` | String 戻りが、先行する Cat で有効になった Collect に潰されない |
 | `t_malloc_makestr.abp` | UDT の `*Byte` + `malloc` + `MakeStr`。ヒープが高位でも複製が残る |
 
