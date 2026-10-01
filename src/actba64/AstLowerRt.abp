@@ -33,10 +33,6 @@ Sub LowEmitCallStrHeapAlloc(ctx As *LowerCtx)
         If g_rtStrGcConsLab < 0 Then
             g_rtStrGcConsLab = LowNewLabel(ctx)
         End If
-        ' 32bit: Include Collect と Sweep の組み合わせで AV するため IR Collect を併用
-        If TyIs32() <> 0 Then
-            LowEnsureRtStrCollect(ctx)
-        End If
         LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
         Exit Sub
     End If
@@ -50,14 +46,8 @@ Sub LowEmitPreciseLocalMarks(ctx As *LowerCtx)
     Dim name(KW_LEN - 1) As Byte
     If g_fnPreciseRootCount <= 0 Then Exit Sub
     If g_strGcArmed = 0 Then Exit Sub
-    lab = -1
-    If TyIs32() <> 0 Then
-        lab = g_rtStrGcPreciseLab
-    End If
-    If lab < 0 Then
-        lstrcpy(VarPtr(name), "StrGcMarkPrecise")
-        lab = LowFindStrGc(ctx, VarPtr(name))
-    End If
+    lstrcpy(VarPtr(name), "StrGcMarkPrecise")
+    lab = LowFindStrGc(ctx, VarPtr(name))
     If lab < 0 Then
         lab = g_rtStrGcPreciseLab
     End If
@@ -76,14 +66,8 @@ Sub LowEmitStrCollectSafepoint(ctx As *LowerCtx)
     Dim callBytes As Long
     If g_strGcArmed = 0 Then Exit Sub
     LowEmitPreciseLocalMarks(ctx)
-    lab = -1
-    If TyIs32() <> 0 Then
-        lab = g_rtStrCollectLab
-    End If
-    If lab < 0 Then
-        lstrcpy(VarPtr(name), "StrCollect")
-        lab = LowFindStrGc(ctx, VarPtr(name))
-    End If
+    lstrcpy(VarPtr(name), "StrCollect")
+    lab = LowFindStrGc(ctx, VarPtr(name))
     If lab < 0 Then
         lab = g_rtStrCollectLab
     End If
@@ -247,12 +231,28 @@ Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' ループ条件・本体（必要なら第3引数）が確保するときだけセーフポイントを出す。
-' MAIN（メッセージループ等）は毎回集める。
-' 関数内では集めない: ByVal String 引数＋入れ子 Mid$ が、関数内 Collect で
-' unmarked 掃き出しされる既知の穴がある（precise ルートが生きていても
-' 再現する）。エピローグと同様、呼び出し元に戻ってから MAIN で回収する。
+' MAIN のみ。関数内は集めない（ByVal + Mid$ 一時が unmarked 掃き出しされる穴）。
+' 注意: 本体 lower 前に呼ぶため、g_strGcArmed はまだ 0 のことがある。
+' AST 上で確保が分かればここで武装する（さもないと Collect 呼び出し自体が省略される）。
+Function LowLoopNeedsStrGc(ctx As *LowerCtx, condIdx As Long, bodyIdx As Long, extraIdx As Long) As Long
+    LowLoopNeedsStrGc = 1
+    If LowAstNeedsStrGc(ctx, condIdx) <> 0 Then Exit Function
+    If LowAstNeedsStrGc(ctx, bodyIdx) <> 0 Then Exit Function
+    If LowAstNeedsStrGc(ctx, extraIdx) <> 0 Then Exit Function
+    LowLoopNeedsStrGc = 0
+End Function
+
+Sub LowArmStrGcForLoop(ctx As *LowerCtx)
+    g_strGcArmed = 1
+End Sub
+
 Sub LowMaybeLoopStrCollect(ctx As *LowerCtx, condIdx As Long, bodyIdx As Long, extraIdx As Long)
     If ctx->inFunc <> 0 Then Exit Sub
+    ' 32bit: MAIN ループ先頭の Collect が junk Cat/Mid$ 圧力下で AV する。
+    ' Include Collect は回収できるが UAF、IR Collect は回収不足。Print 等は従来どおり。
+    If TyIs32() <> 0 Then Exit Sub
+    If LowLoopNeedsStrGc(ctx, condIdx, bodyIdx, extraIdx) = 0 Then Exit Sub
+    LowArmStrGcForLoop(ctx)
     LowEmitStrCollectSafepoint(ctx)
 End Sub
 
