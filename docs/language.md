@@ -92,7 +92,8 @@ actba64 <src.abp|.pj> [-actba32] [-o <out>]
 
 `-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。
 
-エントリは結合後ソースのトップレベル文。終了は `ExitProcess(n)` または `End`（終了コード 0）。  
+EXE のエントリは結合後ソースのトップレベル文です。終了は `ExitProcess(n)` または `End`（終了コード 0）。  
+DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出力する)）。  
 `#n88basic` 時の `End` は窓を出して閉じるまで待つ（actba64）。
 
 ### 1.6 N88BASIC モード
@@ -263,6 +264,7 @@ End Sub
 - `Exit Sub` / `Exit Function`
 - ネストした `Sub`/`Function` は不可
 - `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT。任意 DLL・自作可。拡張子省略時は `.dll`。詳細は [§8](#8-winapi--iat)）
+- `Function Export Name` / `Sub Export Name` は DLL のエクスポート（[§8.4](#84-dll-を出力する)）
 
 ### 3.3 Class
 
@@ -663,18 +665,45 @@ user32（`MessageBoxA` 等）、gdi32（`CreatePen` / `Ellipse` / `BitBlt` 等�
 
 ### 8.4 DLL を出力する
 
-`.pj` の `#MODULETYPE=1` で PE DLL を出す。`Function Export Name` / `Sub Export Name` がエクスポートされる（名前はソースの綴り、名前表は昇順）。入口は `DllMain`（無いとエラー）。先頭の `JMP` が `DllMain` へ飛ぶので、ローダーが渡した引数はそのまま届く。
+`.pj` の `#MODULETYPE=1` で PE DLL を出します。`#MODULETYPE=0` と省略時は EXE です。
 
-`_System_StartupProgram` をソースが定義していなければ、コンパイラが合成する。中身は EXE の main と同じ GC 初期化とモジュール文で、`ExitProcess` は呼ばず戻る。サンプルの `DllMain` は `DLL_PROCESS_ATTACH` でこれを呼ぶ。
+```
+Function Export SampleFuncName() As Long
+    SampleFuncName = 123456
+End Function
 
-優先イメージベースは EXE と重ならないよう、64bit は `0x180000000`、32bit（`-actba32`）は `0x10000000`。再配置（`.reloc`）は出さない。このベースが空いていればロードできる。
+Sub Export Init()
+End Sub
+```
+
+`Export` を付けた `Function` / `Sub` だけがエクスポートされます。名前はソースの綴りのまま、名前表はバイト順の昇順です。上限は 64 個です。戻り値のある `Function Export` は、通常の `Function` と同じく値を返します。
+
+入口は名前が `DllMain` の手続きです（大小無視。無いと `error: DLL requires Function Export DllMain`）。先頭の `JMP` がそこへ飛ぶので、ローダーが渡した引数はそのまま届きます。64bit は `RCX` / `RDX` / `R8`、32bit は stdcall のスタックです。サンプルの形は次のとおりです。
+
+```
+Function Export DllMain(hinstDLL As HINSTANCE, fdwReason As DWord, lpvReserved As VoidPtr) As Long
+    Select Case fdwReason
+        Case DLL_PROCESS_ATTACH
+            _System_StartupProgram()
+            DllMain = 1
+    End Select
+End Function
+```
+
+`DLL_PROCESS_ATTACH`（1）/ `DLL_PROCESS_DETACH`（0）/ `DLL_THREAD_ATTACH`（2）/ `DLL_THREAD_DETACH`（3）は `WinConsts.sbp` にあります。`PROCESS_ATTACH` では 0 以外を返します。0 だとローダーは DLL をアンロードします。
+
+`_System_StartupProgram` をソースが定義していなければ、コンパイラが合成します。中身は EXE の main と同じ GC 初期化とモジュール文で、`ExitProcess` は呼ばず戻ります。ソースに同名の手続きがあるときは、それを使います。
+
+優先イメージベースは EXE（64bit `0x140000000`、32bit `0x400000`）と重ならないよう、64bit DLL は `0x180000000`、32bit（`-actba32`）は `0x10000000` です。再配置（`.reloc`）は出しません。このベースが空いていればロードできます。
+
+`src\actba64` からの例です。`-o` は `#OUTPUT_RELEASE` があるので省略できます。
 
 ```text
 actba64 samples\dllcall\dllsample\dllsample.pj
 actba64 samples\dllcall\dllcall\dllcall.pj
 ```
 
-`dllsample.dll` は `dllcall.exe` と同じディレクトリに置く。回帰は `test/t_dll_host.abp`（`' Prebuild:` で DLL を先に出す）。
+`dllsample.dll` は `dllcall.exe` と同じディレクトリに置きます（出力先はそれぞれの `.pj` フォルダです）。回帰は `test/t_dll_host.abp`（`' Prebuild:` で DLL を先に出します）。
 
 ---
 
@@ -689,6 +718,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 | `Long` | 4 | 4（LP64 ではない） |
 | 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop） |
 | `Declare Lib` | ○ | ○ |
+| DLL 優先ベース | `0x180000000` | `0x10000000` |
 | `Double` 演算 | ○（SSE） | 未（テストはスキップ） |
 | N88 `LINE`/`CIRCLE` 文 | ○ | ○ |
 | `SizeOf`（ポインタを含む UDT） | ポインタ 8 バイト込み | ポインタ 4 バイト込み（期待サイズを 64bit 決め打ちしない） |

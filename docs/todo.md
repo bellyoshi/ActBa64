@@ -44,6 +44,7 @@
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
 - **Win32 `api_*.sbp` 増分**: 需要に応じ `Declare` / idx 追加
+- **DLL の再配置（`.reloc`）**: `#MODULETYPE=1` の出力自体は済。優先ベース（64bit `0x180000000` / 32bit `0x10000000`）が塞がるとロード失敗
 
 ### P3 — 保留・非推奨に近い
 

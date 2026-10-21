@@ -55,10 +55,12 @@ cd src\actba64
 ## 使い方
 
 ```text
-actba64 <src.abp|.pj> [-actba32] -o <out.exe>
+actba64 <src.abp|.pj> [-actba32] [-o <out>]
 ```
 
-例:
+`.abp` では `-o` が必要です。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、パスは `.pj` のあるディレクトリ基準です。`-o` を付けたときはそちらが優先されます。
+
+例（`src\actba64` から）:
 
 ```powershell
 .\bin\stage2\actba64.exe hello.abp -o hello.exe
@@ -66,6 +68,12 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 
 # N88BASIC 図形（640x480）
 .\bin\stage2\actba64.exe .\samples\n88_shapes.abp -o .\samples\n88_shapes.exe
+
+# DLL（#MODULETYPE=1）と、それを呼ぶ EXE
+.\bin\stage2\actba64.exe .\samples\dllcall\dllsample\dllsample.pj
+.\bin\stage2\actba64.exe .\samples\dllcall\dllcall\dllcall.pj
+Copy-Item .\samples\dllcall\dllsample\dllsample.dll .\samples\dllcall\dllcall\dllsample.dll
+.\samples\dllcall\dllcall\dllcall.exe
 ```
 
-`#n88basic` で `LINE` / `CIRCLE` が使えます（角度はラジアン `Double`）。`Sleep` と IEEE Double の `Math`（`Sin` / `Cos` / `Log` 等）、小数リテラルは標準で利用できます。詳細は [docs/language.md](docs/language.md)。
+`#n88basic` で `LINE` / `CIRCLE` が使えます（角度はラジアン `Double`）。`Sleep` と IEEE Double の `Math`（`Sin` / `Cos` / `Log` 等）、小数リテラルは標準で利用できます。DLL 出力（`#MODULETYPE=1`、`Function Export`）は [docs/language.md §8.4](docs/language.md#84-dll-を出力する) を参照してください。
