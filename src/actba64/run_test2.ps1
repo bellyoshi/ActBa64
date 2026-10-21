@@ -25,6 +25,7 @@
 #                        自動判定: #USEWINDOW=1 / ファイル名 _pe_gui*
 #   ' Target: actba64  … このランナーの対象（必須）
 #   ' Skip32: 1        … -Actba32 時はスキップ（ポインタ幅に依存する SizeOf 等）
+#   ' Prebuild: x.pj   … 本体の前に x.pj をコンパイル（出力は <base>.dll、exe と同じディレクトリ）
 # スキップ内訳は Summary 直後に表示。残りはビルド不能（no Target）・pj 包含・GUI・32bit 制限。
 # Print はコンソール WriteFile（上記ルール以外の GUI 自動判定なし）
 # .pj の #SOURCE に載る .abp は単独ビルドしない
@@ -157,6 +158,27 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     }
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($name) + "_test.exe"
     $exePath = Join-Path $OutDir $exeName
+    $preDll = ""
+    if ($meta.Prebuild) {
+        $preSrc = Join-Path $TestDir $meta.Prebuild
+        $preDll = Join-Path $OutDir ([System.IO.Path]::GetFileNameWithoutExtension($meta.Prebuild) + ".dll")
+        if (-not (Test-Path -LiteralPath $preSrc)) {
+            $stats.fail++
+            Add-Result $name "FAIL" "prebuild missing: $($meta.Prebuild)"
+            return
+        }
+        $preArgs = @($preSrc)
+        if ($Actba32) { $preArgs += "-actba32" }
+        $preArgs += @("-o", $preDll)
+        $preLog = & $Linker @preArgs 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $preDll)) {
+            $stats.fail++
+            $hint = ($preLog | Select-Object -Last 3) -join " / "
+            if ($hint -eq "") { $hint = "prebuild failed" }
+            Add-Result $name "FAIL" $hint
+            return
+        }
+    }
     $stdinPath = $exePath + ".stdin"
 
     if (Test-Path -LiteralPath $exePath) {
@@ -294,6 +316,9 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     if (-not $KeepArtifacts) {
         Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $stdinPath -Force -ErrorAction SilentlyContinue
+        if ($preDll -ne "") {
+            Remove-Item -LiteralPath $preDll -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

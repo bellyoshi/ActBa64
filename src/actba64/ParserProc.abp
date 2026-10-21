@@ -11,10 +11,11 @@ Function ParseSubStmt(p As *Parser) As Long
     Dim kSub(KW_SHORT_LEN - 1) As Byte
     Dim empty(1) As Byte
     Dim nParams As Long
+    Dim exp As Long
 
     ParseSubStmt = -1
-    p->pos = p->pos + 1
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    exp = ParseBeginProc(p, VarPtr(name))
+    If exp < 0 Then Exit Function
     If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
     ast = p->ast
     If ParseParamList(p, nFirst, nParams, 0, 1) = 0 Then Exit Function
@@ -39,7 +40,8 @@ Function ParseSubStmt(p As *Parser) As Long
     nodes = ast->nodes
     nodes[nFunc].left = nFirst
     nodes[nFunc].right = body
-    nodes[nFunc].num = nParams Or 256
+    nodes[nFunc].num = nParams Or AST_FUNC_SUB
+    ParseApplyExport(ast, nFunc, exp)
     ParseSubStmt = nFunc
 End Function
 
@@ -216,10 +218,11 @@ Function ParseFuncStmt(p As *Parser) As Long
     Dim empty(1) As Byte
     Dim nParams As Long
     Dim retTy As Long
+    Dim exp As Long
 
     ParseFuncStmt = -1
-    p->pos = p->pos + 1
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    exp = ParseBeginProc(p, VarPtr(name))
+    If exp < 0 Then Exit Function
     If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
     ast = p->ast
     If ParseParamList(p, nFirst, nParams, 1, 1) = 0 Then Exit Function
@@ -245,5 +248,32 @@ Function ParseFuncStmt(p As *Parser) As Long
         Exit Function
     End If
     p->pos = p->pos + 1
-    ParseFuncStmt = ParseFuncMakeNode(ast, VarPtr(name), nFirst, body, nParams, retTy)
+    ParseFuncStmt = ParseApplyExport(ast, ParseFuncMakeNode(ast, VarPtr(name), nFirst, body, nParams, retTy), exp)
+End Function
+
+Function ParseEatExport(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseEatExport = 0
+    lstrcpy(VarPtr(kw), "export")
+    If ParseIdentIs(p, VarPtr(kw)) = 0 Then Exit Function
+    If ParseTokKindAt(p, p->pos + 1) <> TK_IDENT Then Exit Function
+    p->pos = p->pos + 1
+    ParseEatExport = 1
+End Function
+
+Function ParseBeginProc(p As *Parser, name As *Byte) As Long
+    Dim exp As Long
+    ParseBeginProc = -1
+    p->pos = p->pos + 1
+    exp = ParseEatExport(p)
+    If ParseCopyIdent(p, name) = 0 Then Exit Function
+    ParseBeginProc = exp
+End Function
+
+Function ParseApplyExport(ast As *Ast, nFunc As Long, exp As Long) As Long
+    Dim nodes As *AstNode
+    ParseApplyExport = nFunc
+    If nFunc < 0 Or exp = 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[nFunc].num = nodes[nFunc].num Or AST_FUNC_EXPORT
 End Function

@@ -2,6 +2,11 @@
 '  CodeGen32 - IR -> i386 machine code (abs IAT / strings)
 ' ===================================================
 
+Function CgImageBase32() As DWord
+    CgImageBase32 = IMAGE_BASE_32
+    If g_ppModuleDll <> 0 Then CgImageBase32 = IMAGE_BASE_32_DLL
+End Function
+
 Sub CgApplyFixups32(cb As *CodeBuffer)
     Dim i As Long
     Dim li As Long
@@ -15,7 +20,7 @@ Sub CgApplyFixups32(cb As *CodeBuffer)
         If CgEnsureLabIdx(li) <> 0 Then
             If g_cgLabOff[li] >= 0 Then
                 If g_cgFix[i].kind = IR_FIX_ABS32 Then
-                    absAddr = IMAGE_BASE_32 + TEXT_RVA + g_cgLabOff[li]
+                    absAddr = CgImageBase32() + TEXT_RVA + g_cgLabOff[li]
                     If at >= 0 And at + 4 <= cb->capacity Then
                         PutDword(cb->buf, at, absAddr)
                     End If
@@ -29,6 +34,7 @@ Sub CgApplyFixups32(cb As *CodeBuffer)
             End If
         End If
     Next
+    CgSnapExports()
     free(g_cgLabOff)
     free(g_cgFix)
     g_cgLabOff = NULL
@@ -53,13 +59,13 @@ Function CgTryEmit32A1(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder
         EmitXorEcx(cb)
     ElseIf opv = OP_LEA_RDX_STR Then
         strRva = IbGetStringRva(builder, op->strId)
-        Emit32MovEdxAbs(cb, IMAGE_BASE_32 + strRva)
+        Emit32MovEdxAbs(cb, CgImageBase32() + strRva)
     ElseIf opv = OP_LEA_R8_STR Then
         strRva = IbGetStringRva(builder, op->strId)
-        Emit32MovEdxAbs(cb, IMAGE_BASE_32 + strRva)
+        Emit32MovEdxAbs(cb, CgImageBase32() + strRva)
     ElseIf opv = OP_LEA_RAX_STR Then
         strRva = IbGetStringRva(builder, op->strId)
-        Emit32MovAbsEax(cb, IMAGE_BASE_32 + strRva)
+        Emit32MovAbsEax(cb, CgImageBase32() + strRva)
     ElseIf opv = OP_MOV_RCX_RAX Then
         Emit32MovEcxEax(cb)
     ElseIf opv = OP_MOV_RDX_RAX Then
@@ -209,7 +215,7 @@ Function CgTryEmit32B3(cb As *CodeBuffer, op As *IrOp, dataRva As DWord) As Long
         CgPushFix(at, op->arg1, IR_FIX_ABS32)
     ElseIf opv = OP_LEA_RAX_GLOB Then
         globOff = op->arg1
-        Emit32MovAbsEax(cb, IMAGE_BASE_32 + dataRva + globOff)
+        Emit32MovAbsEax(cb, CgImageBase32() + dataRva + globOff)
     Else
         Exit Function
     End If
@@ -289,7 +295,7 @@ Function CgTryEmit32D(list As *IrList, cb As *CodeBuffer, builder As *ImportBuil
     ElseIf opv = OP_CALL_API Then
         If IrResolveApiNames(list, i, VarPtr(dll), VarPtr(api)) = 0 Then Exit Function
         iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(api))
-        Emit32CallIatAbs(cb, IMAGE_BASE_32 + iatRva)
+        Emit32CallIatAbs(cb, CgImageBase32() + iatRva)
     Else
         Exit Function
     End If

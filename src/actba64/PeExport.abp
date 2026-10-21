@@ -1,0 +1,311 @@
+' PeExport - DLL export directory (.edata)
+
+Function CgLabOff(li As Long) As Long
+    CgLabOff = -1
+    If g_cgLabOff = NULL Then Exit Function
+    If li < 0 Or li >= g_cgLabCap Then Exit Function
+    CgLabOff = g_cgLabOff[li]
+End Function
+
+Sub CgSnapOne(i As Long)
+    Dim off As Long
+    off = CgLabOff(g_expLabs[i])
+    g_expRvas[i] = 0
+    If off >= 0 Then g_expRvas[i] = TEXT_RVA + off
+End Sub
+
+Sub CgSnapExports()
+    Dim i As Long
+    i = 0
+    While i < g_expCount
+        CgSnapOne(i)
+        i = i + 1
+    Wend
+End Sub
+
+Function PeFileChars64() As Long
+    Dim c As Long
+    c = IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_LARGE_ADDRESS_AWARE
+    If g_ppModuleDll <> 0 Then c = c Or IMAGE_FILE_DLL
+    PeFileChars64 = c
+End Function
+
+Function PeFileChars32() As Long
+    Dim c As Long
+    c = IMAGE_FILE_EXECUTABLE_IMAGE Or IMAGE_FILE_32BIT_MACHINE
+    If g_ppModuleDll <> 0 Then c = c Or IMAGE_FILE_DLL
+    PeFileChars32 = c
+End Function
+
+Function PeImageLow() As DWord
+    PeImageLow = IMAGE_BASE_LOW
+    If g_ppModuleDll <> 0 Then PeImageLow = IMAGE_BASE_DLL_LOW
+End Function
+
+Function PeSepAt(path As *Byte, i As Long) As Long
+    PeSepAt = 0
+    If path[i] = CH_BSLASH Or path[i] = CH_SLASH Then PeSepAt = 1
+End Function
+
+Function PeLastSep(path As *Byte) As Long
+    Dim i As Long
+    Dim last As Long
+    last = 0
+    For i = 0 To lstrlen(path) - 1
+        If PeSepAt(path, i) <> 0 Then last = i + 1
+    Next
+    PeLastSep = last
+End Function
+
+Sub PeCopyBase(path As *Byte, start As Long, dst As *Byte)
+    Dim j As Long
+    j = 0
+    While path[start] <> 0 And j < DLL_NAME_LEN - 1
+        dst[j] = path[start]
+        j = j + 1
+        start = start + 1
+    Wend
+    dst[j] = 0
+End Sub
+
+Sub PeSetDllFile(path As *Byte)
+    g_dllFileName[0] = 0
+    If g_ppModuleDll = 0 Then Exit Sub
+    PeCopyBase(path, PeLastSep(path), VarPtr(g_dllFileName))
+End Sub
+
+Function PeExpName(i As Long) As *Byte
+    PeExpName = VarPtr(g_expNames[i * SYM_NAME_LEN])
+End Function
+
+Function PeExpNameBytes() As Long
+    Dim i As Long
+    Dim n As Long
+    n = 0
+    For i = 0 To g_expCount - 1
+        n = n + lstrlen(PeExpName(i)) + 1
+    Next
+    PeExpNameBytes = n
+End Function
+
+Function PeEdataBytes() As Long
+    Dim n As Long
+    Dim dlln As Long
+    n = g_expCount
+    dlln = lstrlen(VarPtr(g_dllFileName))
+    PeEdataBytes = 40 + n * 10 + dlln + 1 + PeExpNameBytes()
+End Function
+
+Function PeEdataSize() As Long
+    PeEdataSize = 0
+    If g_ppModuleDll = 0 Then Exit Function
+    If g_expCount <= 0 Then Exit Function
+    If g_dllFileName[0] = 0 Then Exit Function
+    PeEdataSize = PeEdataBytes()
+End Function
+
+Function PeNameCmp(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    PeNameCmp = 0
+    i = 0
+    While a[i] <> 0 And a[i] = b[i]
+        i = i + 1
+    Wend
+    PeNameCmp = a[i] - b[i]
+End Function
+
+Function PeExpLess(i As Long, j As Long) As Long
+    PeExpLess = 0
+    If PeNameCmp(PeExpName(i), PeExpName(j)) < 0 Then PeExpLess = 1
+End Function
+
+Sub PeSwapBytes(a As *Byte, b As *Byte, n As Long)
+    Dim i As Long
+    Dim t As Byte
+    For i = 0 To n - 1
+        t = a[i]
+        a[i] = b[i]
+        b[i] = t
+    Next
+End Sub
+
+Sub PeSwapNames(i As Long, j As Long)
+    PeSwapBytes(PeExpName(i), PeExpName(j), SYM_NAME_LEN)
+End Sub
+
+Sub PeSwapRva(i As Long, j As Long)
+    Dim rva As DWord
+    rva = g_expRvas[i]
+    g_expRvas[i] = g_expRvas[j]
+    g_expRvas[j] = rva
+End Sub
+
+Sub PeSwapExp(i As Long, j As Long)
+    Dim lab As Long
+    PeSwapNames(i, j)
+    lab = g_expLabs[i]
+    g_expLabs[i] = g_expLabs[j]
+    g_expLabs[j] = lab
+    PeSwapRva(i, j)
+End Sub
+
+Sub PeSortPass(n As Long)
+    Dim i As Long
+    i = 0
+    While i < n - 1
+        If PeExpLess(i + 1, i) <> 0 Then PeSwapExp(i, i + 1)
+        i = i + 1
+    Wend
+End Sub
+
+Sub PeSortExports()
+    Dim n As Long
+    Dim k As Long
+    n = g_expCount
+    k = 0
+    While k < n
+        PeSortPass(n)
+        k = k + 1
+    Wend
+End Sub
+
+Function PeOffNames(n As Long) As Long
+    PeOffNames = 40 + n * 4
+End Function
+
+Function PeOffOrds(n As Long) As Long
+    PeOffOrds = 40 + n * 8
+End Function
+
+Function PeOffDll(n As Long) As Long
+    PeOffDll = 40 + n * 10
+End Function
+
+Sub PePutExpDir(buf As *Byte, rva As DWord, n As Long, nameRva As DWord)
+    PutDword(buf, 12, nameRva)
+    PutDword(buf, 16, 1)
+    PutDword(buf, 20, n)
+    PutDword(buf, 24, n)
+    PutDword(buf, 28, rva + 40)
+    PutDword(buf, 32, rva + PeOffNames(n))
+    PutDword(buf, 36, rva + PeOffOrds(n))
+End Sub
+
+Sub PePutFuncRvas(buf As *Byte, n As Long)
+    Dim i As Long
+    i = 0
+    While i < n
+        PutDword(buf, 40 + i * 4, g_expRvas[i])
+        i = i + 1
+    Wend
+End Sub
+
+Sub PePutOrds(buf As *Byte, n As Long)
+    Dim i As Long
+    i = 0
+    While i < n
+        PutWord(buf, PeOffOrds(n) + i * 2, i As Word)
+        i = i + 1
+    Wend
+End Sub
+
+Function PePutCStr(buf As *Byte, off As Long, s As *Byte) As Long
+    Dim j As Long
+    j = 0
+    While s[j] <> 0
+        buf[off + j] = s[j]
+        j = j + 1
+    Wend
+    buf[off + j] = 0
+    PePutCStr = j + 1
+End Function
+
+Sub PePutNames(buf As *Byte, rva As DWord, n As Long, ByRef off As Long)
+    Dim i As Long
+    i = 0
+    While i < n
+        PutDword(buf, PeOffNames(n) + i * 4, rva + off)
+        off = off + PePutCStr(buf, off, PeExpName(i))
+        i = i + 1
+    Wend
+End Sub
+
+Sub PeFillStrings(buf As *Byte, rva As DWord, n As Long)
+    Dim off As Long
+    off = PeOffDll(n)
+    PePutExpDir(buf, rva, n, rva + off)
+    off = off + PePutCStr(buf, off, VarPtr(g_dllFileName))
+    PePutFuncRvas(buf, n)
+    PePutOrds(buf, n)
+    PePutNames(buf, rva, n, off)
+End Sub
+
+Function PeAllocEdata() As *Byte
+    g_edataSize = PeEdataBytes()
+    PeAllocEdata = calloc(g_edataSize)
+End Function
+
+Function PeBuildEdata(rva As DWord) As *Byte
+    Dim buf As *Byte
+    PeBuildEdata = NULL
+    PeSortExports()
+    buf = PeAllocEdata()
+    If buf = NULL Then Exit Function
+    PeFillStrings(buf, rva, g_expCount)
+    PeBuildEdata = buf
+End Function
+
+Function PeExportsReady() As Long
+    Dim i As Long
+    PeExportsReady = 0
+    i = 0
+    While i < g_expCount
+        If g_expRvas[i] = 0 Then Exit Function
+        i = i + 1
+    Wend
+    PeExportsReady = 1
+End Function
+
+Function PeStoreEdata(rva As DWord) As Long
+    PeStoreEdata = 0
+    If PeExportsReady() = 0 Then
+        Print "error: export address missing"
+        Exit Function
+    End If
+    g_edataBuf = PeBuildEdata(rva)
+    If g_edataBuf <> NULL Then PeStoreEdata = 1
+End Function
+
+Function PePrepareEdata(lay As *PeLayout) As Long
+    PePrepareEdata = 1
+    g_edataBuf = NULL
+    If lay->edataRaw <= 0 Then Exit Function
+    PePrepareEdata = PeStoreEdata(lay->edataRva)
+End Function
+
+Sub PeFreeEdata()
+    If g_edataBuf <> NULL Then free(g_edataBuf)
+    g_edataBuf = NULL
+End Sub
+
+Sub PeWriteEdataSect(outBuf As *Byte, ByRef sectOff As DWord, lay As *PeLayout)
+    If lay->edataRaw <= 0 Then Exit Sub
+    PeWriteSect(outBuf, sectOff, ".edata", lay->edataVirt, lay->edataRva, lay->edataRaw, lay->edataOff, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ)
+End Sub
+
+Sub PeCopyEdata(outBuf As *Byte, lay As *PeLayout)
+    If lay->edataRaw <= 0 Or g_edataBuf = NULL Then Exit Sub
+    MemCopyAt(outBuf, lay->edataOff, g_edataBuf, g_edataSize)
+End Sub
+
+Sub PeWriteExpDir64(outBuf As *Byte, optOff As DWord, lay As *PeLayout)
+    If lay->edataRaw <= 0 Then Exit Sub
+    PutDword(outBuf, optOff + 112, lay->edataRva)
+    PutDword(outBuf, optOff + 116, g_edataSize)
+End Sub
+
+Sub PeWriteExpDir32(outBuf As *Byte, optOff As DWord, lay As *PeLayout)
+    If lay->edataRaw <= 0 Then Exit Sub
+    PutDword(outBuf, optOff + 96, lay->edataRva)
+    PutDword(outBuf, optOff + 100, g_edataSize)
+End Sub

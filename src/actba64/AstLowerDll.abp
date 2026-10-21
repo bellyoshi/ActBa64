@@ -1,0 +1,203 @@
+' AstLowerDll - Export 表、DLL 入口、_System_StartupProgram
+
+Sub LowResetExports()
+    g_expCount = 0
+    g_dllEntryLab = -1
+    g_startupLab = -1
+End Sub
+
+Sub LowCopyNameAt(dst As *Byte, name As *Byte)
+    Dim j As Long
+    j = 0
+    While name[j] <> 0 And j < SYM_NAME_LEN - 1
+        dst[j] = name[j]
+        j = j + 1
+    Wend
+    dst[j] = 0
+End Sub
+
+Function LowPushExport(name As *Byte, lab As Long) As Long
+    Dim off As Long
+    LowPushExport = 0
+    If g_expCount >= EXP_MAX Then Exit Function
+    off = g_expCount * SYM_NAME_LEN
+    LowCopyNameAt(VarPtr(g_expNames[off]), name)
+    g_expLabs[g_expCount] = lab
+    g_expCount = g_expCount + 1
+    LowPushExport = 1
+End Function
+
+Function LowNoteExport(name As *Byte, lab As Long, nFlags As Long) As Long
+    LowNoteExport = 1
+    If (nFlags And AST_FUNC_EXPORT) = 0 Then Exit Function
+    LowNoteExport = LowPushExport(name, lab)
+    If LowNoteExport = 0 Then Print "error: too many exports"
+End Function
+
+Sub LowNoteDllMain(name As *Byte, lab As Long)
+    Dim dll(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(dll), "DllMain")
+    If LowNameEq(name, VarPtr(dll)) = 0 Then Exit Sub
+    g_dllEntryLab = lab
+End Sub
+
+Function LowNoteFunc(name As *Byte, lab As Long, nFlags As Long) As Long
+    LowNoteDllMain(name, lab)
+    LowNoteFunc = LowNoteExport(name, lab, nFlags)
+End Function
+
+Function LowStartupMissing(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "_System_StartupProgram")
+    LowStartupMissing = 0
+    If LowFindFunc(ctx, VarPtr(name)) >= 0 Then Exit Function
+    LowStartupMissing = 1
+End Function
+
+Function LowAddStartup(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim lab As Long
+    LowAddStartup = 0
+    lstrcpy(VarPtr(name), "_System_StartupProgram")
+    lab = LowNewLabel(ctx)
+    If LowAddFunc(ctx, VarPtr(name), lab, 0) = 0 Then Exit Function
+    g_startupLab = lab
+    LowAddStartup = 1
+End Function
+
+Function LowEnsureStartup(ctx As *LowerCtx) As Long
+    LowEnsureStartup = 1
+    If g_ppModuleDll = 0 Then Exit Function
+    If LowStartupMissing(ctx) = 0 Then Exit Function
+    LowEnsureStartup = LowAddStartup(ctx)
+End Function
+
+Function LowPickEntry(labMain As Long) As Long
+    LowPickEntry = labMain
+    If g_ppModuleDll = 0 Then Exit Function
+    LowPickEntry = -1
+    If g_dllEntryLab < 0 Then
+        Print "error: DLL requires Function Export DllMain"
+        Exit Function
+    End If
+    LowPickEntry = g_dllEntryLab
+End Function
+
+Function LowEmitEntry(list As *IrList, labMain As Long) As Long
+    Dim lab As Long
+    LowEmitEntry = 0
+    lab = LowPickEntry(labMain)
+    If lab < 0 Then Exit Function
+    IrEmit(list, OP_JMP, lab, 0)
+    LowEmitEntry = 1
+End Function
+
+Sub LowEmitFrame(ctx As *LowerCtx, lab As Long, frame As Long)
+    IrEmit(ctx->list, OP_LABEL, lab, 0)
+    IrEmit(ctx->list, OP_ENTER, frame, 0)
+    LowEmitGcPreciseRootsInit(ctx)
+End Sub
+
+Sub LowEmitMainOpen(ctx As *LowerCtx, lab As Long)
+    ctx->symCount = 0
+    ctx->frameUsed = 0
+    LowResetFnPreciseRoots()
+    LowEmitFrame(ctx, lab, LowAlign16(&H28))
+End Sub
+
+Sub LowEmitMainClose(ctx As *LowerCtx)
+    LowEmitGlobalClassDtors(ctx)
+    LowEmitStrCollectSafepoint(ctx)
+    LowEmitExitImm(ctx, 0)
+    IrEmit(ctx->list, OP_LEAVE, 0, 0)
+End Sub
+
+Sub LowEmitStartupClose(ctx As *LowerCtx)
+    LowEmitGlobalClassDtors(ctx)
+    LowEmitStrCollectSafepoint(ctx)
+    LowEmitLeave(ctx->list, 0)
+End Sub
+
+Function LowIsModSkip(kind As Long) As Long
+    LowIsModSkip = 0
+    If kind = AST_FUNC Or kind = AST_CONST Then LowIsModSkip = 1
+    If kind = AST_TYPE Or kind = AST_ENUM Then LowIsModSkip = 1
+End Function
+
+Sub LowEmitModFail(ctx As *LowerCtx, stmt As Long)
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    If ctx->err <> 0 Then Exit Sub
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowerDiagError(ctx, stmt, "codegen in module stmt kind " + Str$(nodes[stmt].kind))
+End Sub
+
+Sub LowEmitModStmt(ctx As *LowerCtx, stmt As Long)
+    Dim savedErr As Long
+    savedErr = ctx->err
+    ctx->err = 0
+    If LowStmt(ctx, stmt) = 0 Then LowEmitModFail(ctx, stmt)
+    If ctx->err <> 0 Then savedErr = 1
+    ctx->err = savedErr
+End Sub
+
+Sub LowEmitModOne(ctx As *LowerCtx, stmt As Long)
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowIsModSkip(nodes[stmt].kind) <> 0 Then Exit Sub
+    LowEmitModStmt(ctx, stmt)
+End Sub
+
+Function LowModStmtNext(ctx As *LowerCtx, stmt As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowEmitModOne(ctx, stmt)
+    LowModStmtNext = nodes[stmt].nxt
+End Function
+
+Function LowModFirst(ctx As *LowerCtx, prog As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowModFirst = nodes[prog].left
+End Function
+
+Function LowModBodyOk(ctx As *LowerCtx) As Long
+    LowModBodyOk = 0
+    If ctx->err <> 0 Then Exit Function
+    If DiagErrorCount() > 0 Then Exit Function
+    LowModBodyOk = 1
+End Function
+
+Function LowEmitModBody(ctx As *LowerCtx, prog As Long) As Long
+    Dim stmt As Long
+    LowEmitModBody = 0
+    stmt = LowModFirst(ctx, prog)
+    While stmt >= 0
+        stmt = LowModStmtNext(ctx, stmt)
+    Wend
+    LowEmitModBody = LowModBodyOk(ctx)
+End Function
+
+Function AstToIrEmitStartup(ctx As *LowerCtx, prog As Long) As Long
+    AstToIrEmitStartup = 1
+    If g_startupLab < 0 Then Exit Function
+    AstToIrEmitStartup = 0
+    LowEmitMainOpen(ctx, g_startupLab)
+    If LowEmitModBody(ctx, prog) = 0 Then Exit Function
+    LowEmitStartupClose(ctx)
+    AstToIrEmitStartup = 1
+End Function
+
+Function AstToIrEmitTail(ctx As *LowerCtx, prog As Long, labMain As Long) As Long
+    AstToIrEmitTail = AstToIrEmitStartup(ctx, prog)
+    If g_ppModuleDll = 0 Then
+        AstToIrEmitTail = AstToIrEmitMain(ctx, prog, labMain)
+    End If
+End Function
