@@ -42,6 +42,7 @@ footer { color:var(--muted); font-size:13px; margin-top:40px; }
   <a href="#types">型とサイズ</a>
   <a href="#declare-dim">Dim / Const / Type</a>
   <a href="#declare">Declare Lib</a>
+  <a href="#dll-out">DLL 出力</a>
   <a href="#abi">呼び出し規則</a>
   <a href="#class">Class</a>
   <a href="#statements">文</a>
@@ -61,7 +62,8 @@ footer { color:var(--muted); font-size:13px; margin-top:40px; }
 
 <h2 id="overview">概要</h2>
 <p><span class="kw" id="actba64">actba64</span> は ActiveBasic 風ソースを <strong>64bit PE（PE32+）</strong> に直接コンパイルします。<code>-actba32</code> を付けると <strong>32bit PE（PE32）</strong> です。Lexer → Parser → AST → IR は共通で、機械語と PE だけ分岐します。エントリは結合後ソースのトップレベル文です。終了は <code>End</code>（コード 0）または <code>ExitProcess(n)</code>。</p>
-<pre>actba64 &lt;src.abp|.pj&gt; [-actba32] -o &lt;out.exe&gt;</pre>
+<pre>actba64 &lt;src.abp|.pj&gt; [-actba32] [-o &lt;out&gt;]</pre>
+<p><code>.abp</code> では <code>-o</code> が必要です。<code>.pj</code> に <code>#OUTPUT_RELEASE</code> があれば省略でき、パスは <code>.pj</code> のあるディレクトリ基準です。<code>-o</code> を付けたときはそちらが優先されます。DLL は <a href="#dll-out"><code>#MODULETYPE=1</code></a> です。</p>
 <table>
 <tr><th>拡張子</th><th>意味</th></tr>
 <tr><td><code>.abp</code></td><td>ソース 1 ファイル</td></tr>
@@ -151,6 +153,28 @@ Declare Sub RtlMoveMemory Lib "kernel32" (ByVal dest As *Byte, ByVal src As *Byt
 <li>実行時は DLL が exe と同じ検索パスに必要（動的 <code>LoadLibrary</code> ではなく起動時 IAT 解決）</li>
 </ul>
 <p id="alias"><code>Alias</code> はエクスポート名が Basic 名と違うとき（または C++ マングル名）に指定します。</p>
+
+<h2 id="dll-out">DLL を出力する</h2>
+<p><code>.pj</code> の <code>#MODULETYPE=1</code> で PE DLL を出します。<code>0</code> と省略時は EXE です。</p>
+<pre id="export">Function Export SampleFuncName() As Long
+    SampleFuncName = 123456
+End Function
+
+Function Export DllMain(hinstDLL As HINSTANCE, fdwReason As DWord, lpvReserved As VoidPtr) As Long
+    Select Case fdwReason
+        Case DLL_PROCESS_ATTACH
+            _System_StartupProgram()
+            DllMain = 1
+    End Select
+End Function</pre>
+<ul>
+<li id="moduletype"><code>Function Export</code> / <code>Sub Export</code> だけをエクスポートする。名前はソースの綴り、名前表は昇順。上限 64</li>
+<li>入口は <code>DllMain</code>（大小無視。無いとエラー）。先頭の <code>JMP</code> がそこへ飛ぶので、ローダーの引数はそのまま届く</li>
+<li><code>DLL_PROCESS_ATTACH</code>=1 / <code>DETACH</code>=0 / <code>THREAD_ATTACH</code>=2 / <code>THREAD_DETACH</code>=3（<code>WinConsts.sbp</code>）。<code>PROCESS_ATTACH</code> では 0 以外を返す</li>
+<li><code>_System_StartupProgram</code> が無ければ、GC 初期化とモジュール文を実行して戻る Sub を合成する（<code>ExitProcess</code> は呼ばない）</li>
+<li>優先ベースは 64bit <code>0x180000000</code>、32bit <code>0x10000000</code>。再配置（<code>.reloc</code>）は出さない。このベースが空いていればロードできる</li>
+<li>呼び出す EXE と同じディレクトリに DLL を置く。サンプルは <code>samples\dllcall\</code></li>
+</ul>
 
 <h2 id="abi">呼び出し規則</h2>
 <ul>
@@ -332,6 +356,8 @@ End</pre>
 <tr id="n88dir"><td><code>#n88basic</code> / <code>#prompt</code></td><td>N88 モード（上記）。GUI を強制。完全別名</td></tr>
 <tr id="strict"><td><code>#strict</code></td><td>無視</td></tr>
 <tr id="source"><td><code>#SOURCE</code>（.pj）</td><td>続く行が入力ソース</td></tr>
+<tr id="output-release"><td><code>#OUTPUT_RELEASE</code>（.pj）</td><td><code>-o</code> が無いときの出力パス（<code>.pj</code> ディレクトリ基準）</td></tr>
+<tr><td><code>#MODULETYPE</code>（.pj）</td><td><code>0</code>=EXE、<code>1</code>=DLL（<a href="#dll-out">DLL 出力</a>）</td></tr>
 <tr><td>その他 <code>#...</code></td><td>字句レベルで行スキップ</td></tr>
 </table>
 <p>実行ファイル近傍の <code>Include\default\default.idx</code> を先頭に自動挿入します（<code>Windows.sbp</code> / <code>WinConsts.sbp</code> / <code>WinTypes.sbp</code> / <code>Math.abp</code> / <code>Sleep.abp</code> / <code>Space.abp</code> / <code>DoubleStr.abp</code> / <code>BasicFile.abp</code> 等）。<code>UnicodeApi.sbp</code> は Preproc が別途挿入。ヘッダに Declare 群は載せません。<code>Space$(n)</code> / <code>StrD$</code> は常時利用可。</p>
@@ -357,6 +383,7 @@ InsMenu hMenu, pos, flags          ' セパレータ</pre>
 <tr><td>Long</td><td>4</td><td>4</td></tr>
 <tr><td>呼び出し</td><td>x64 Windows ABI</td><td>stdcall</td></tr>
 <tr><td>Declare Lib</td><td>○</td><td>○</td></tr>
+<tr><td>DLL 優先ベース</td><td><code>0x180000000</code></td><td><code>0x10000000</code></td></tr>
 <tr><td>Double 演算</td><td>○</td><td>未（SSE）</td></tr>
 <tr><td>N88 LINE/CIRCLE 文</td><td>○</td><td>○</td></tr>
 </table>
@@ -378,6 +405,7 @@ InsMenu hMenu, pos, flags          ' セパレータ</pre>
 <a href="#string">String</a> <a href="#ptr">*T</a> <a href="#handle">HANDLE</a> <a href="#hwnd">HWND</a>
 <a href="#wparam">WPARAM</a> <a href="#long_ptr">LONG_PTR</a> <a href="#longlong">LongLong</a> <a href="#typedef">TypeDef</a> <a href="#type">Type</a>
 <a href="#dim">Dim</a> <a href="#const">Const</a> <a href="#declare">Declare</a> <a href="#alias">Alias</a> <a href="#lib">Lib</a>
+<a href="#export">Export</a> <a href="#dll-out">DllMain</a> <a href="#moduletype">#MODULETYPE</a>
 <a href="#byval">ByVal</a> <a href="#byref">ByRef</a> <a href="#function">Function</a> <a href="#sub">Sub</a> <a href="#class">Class</a>
 <a href="#if">If</a> <a href="#select">Select</a> <a href="#while">While</a> <a href="#for">For</a> <a href="#do">Do</a> <a href="#with">With</a>
 <a href="#print">Print</a> <a href="#print-file">Print #</a> <a href="#input">Input</a> <a href="#open">Open</a>
