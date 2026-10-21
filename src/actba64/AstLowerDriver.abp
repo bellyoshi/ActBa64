@@ -65,53 +65,11 @@ Function AstToIrEmitFuncs(ctx As *LowerCtx, prog As Long) As Long
 End Function
 
 Function AstToIrEmitMain(ctx As *LowerCtx, prog As Long, labMain As Long) As Long
-    Dim nodes As *AstNode
-    Dim ast As *Ast
-    Dim list As *IrList
-    Dim stmt As Long
-    Dim frame As Long
-    Dim savedErr As Long
-
     AstToIrEmitMain = 0
-    list = ctx->list
-    ast = ctx->ast
-    nodes = ast->nodes
     ' main: module Dims are globals; frame only needs temps (16-byte aligned)
-    ' 直前の Function の fn precise が残ると、MAIN セーフポイントが
-    ' 別フレーム用オフセットで LOAD_LOCAL してしまう。
-    ctx->symCount = 0
-    ctx->frameUsed = 0
-    LowResetFnPreciseRoots()
-    frame = LowAlign16(&H28)
-
-    IrEmit(list, OP_LABEL, labMain, 0)
-    IrEmit(list, OP_ENTER, frame, 0)
-    LowEmitGcPreciseRootsInit(ctx)
-
-    stmt = nodes[prog].left
-    While stmt >= 0
-        If nodes[stmt].kind <> AST_FUNC And nodes[stmt].kind <> AST_CONST And nodes[stmt].kind <> AST_TYPE And nodes[stmt].kind <> AST_ENUM Then
-            savedErr = ctx->err
-            ctx->err = 0
-            If LowStmt(ctx, stmt) = 0 Then
-                If ctx->err = 0 Then
-                    LowerDiagError(ctx, stmt, "codegen in module stmt kind " + Str$(nodes[stmt].kind))
-                End If
-            End If
-            If ctx->err <> 0 Then savedErr = 1
-            ctx->err = savedErr
-        End If
-        stmt = nodes[stmt].nxt
-    Wend
-
-    If ctx->err <> 0 Or DiagErrorCount() > 0 Then
-        Exit Function
-    End If
-
-    LowEmitGlobalClassDtors(ctx)
-    LowEmitStrCollectSafepoint(ctx)
-    LowEmitExitImm(ctx, 0)
-    IrEmit(list, OP_LEAVE, 0, 0)
+    LowEmitMainOpen(ctx, labMain)
+    If LowEmitModBody(ctx, prog) = 0 Then Exit Function
+    LowEmitMainClose(ctx)
     AstToIrEmitMain = 1
 End Function
 
@@ -190,6 +148,7 @@ Function AstToIrAlloc() As Long
 End Function
 
 Sub AstToIrInitLabs()
+    LowResetExports()
     g_doEndLab = -1
     g_doTopLab = -1
     g_whileEndLab = -1
@@ -300,13 +259,16 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     End If
 
     labMain = LowNewLabel(VarPtr(ctx))
-    IrEmit(list, OP_JMP, labMain, 0)
+    If LowEmitEntry(list, labMain) = 0 Then
+        LowFreeAstBufs()
+        Exit Function
+    End If
 
     If AstToIrEmitFuncs(VarPtr(ctx), prog) = 0 Then
         LowFreeAstBufs()
         Exit Function
     End If
-    If AstToIrEmitMain(VarPtr(ctx), prog, labMain) = 0 Then
+    If AstToIrEmitTail(VarPtr(ctx), prog, labMain) = 0 Then
         LowFreeAstBufs()
         Exit Function
     End If

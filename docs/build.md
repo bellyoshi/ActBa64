@@ -77,8 +77,10 @@ cd src\actba64
 使い方:
 
 ```text
-actba64 <src.abp|.pj> [-actba32] -o <out.exe>
+actba64 <src.abp|.pj> [-actba32] [-o <out>]
 ```
+
+`.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1`（[language.md §8.4](./language.md#84-dll-を出力する)）。
 
 サンプル:
 
@@ -113,6 +115,7 @@ actba64 <src.abp|.pj> [-actba32] -o <out.exe>
 | `' ExpectErrors: N` | `CompileFail` 時の診断件数下限（省略時 1） |
 | `' Gui: 1` | 対話 UI 想定。**既定は SKIP**（`-IncludeGui` で実行） |
 | `' Skip32: 1` | `-Actba32` 時はスキップ（ポインタ幅依存など） |
+| `' Prebuild: file.pj` | 本体の前にその `.pj` をコンパイルし、成果物をテスト exe と同じディレクトリへ置く（DLL 名は `.pj` のベース名 + `.dll`） |
 
 ### コンパイル診断（複数エラー）
 

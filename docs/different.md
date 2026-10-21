@@ -197,6 +197,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | `#include` | `"path"` / `<path>` で `.sbp` 取り込み（同一パスの再 `#include` は都度展開） | **`"path"`**（ソース相対）と **`<path>`**（`Include\` 検索）の両方可（拡張子は `.abp` / `.sbp` 可）。**同一パスは一度だけ**（[制御・プリプロセス](#制御プリプロセス)） |
 | 行継続 `_` | 行末 `_` で次行と連結 | **実装済み** |
 | `Declare` | `Declare Sub/Function ... Lib "dll" [Alias "..."]` | **実装済み**（32/64 とも IAT。`Lib` は任意 DLL・自作 C/C++ 可。詳細は [language.md §8](./language.md#8-winapi--iat)） |
+| DLL 出力 | `#MODULETYPE=1`、`Function Export`、`DllMain` | **実装済み**（`.edata`。再配置なし。優先ベース 64bit `0x180000000` / 32bit `0x10000000`。詳細は [language.md §8.4](./language.md#84-dll-を出力する)） |
 | `Enum` | 列挙型 | **実装済み** |
 | Ex文字列 | `Ex"..."`（エスケープ付き） | **実装済み** |
 | `#strict` | 型不一致を警告 | **実装済み**（変数代入。詳細は [動作が異なるもの](#動作が異なるもの)） |

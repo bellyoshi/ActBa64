@@ -1,0 +1,161 @@
+' PreprocPjOpt - #MODULETYPE / #OUTPUT_RELEASE
+
+Function PpSkipHash(line As *Byte, n As Long) As Long
+    Dim i As Long
+    PpSkipHash = -1
+    i = PpSkipWsAt(line, n, 0)
+    If i >= n Then Exit Function
+    If line[i] <> CH_HASH Then Exit Function
+    PpSkipHash = i + 1
+End Function
+
+Function PpWordCharOk(line As *Byte, n As Long, i As Long, word As *Byte, k As Long) As Long
+    PpWordCharOk = 0
+    If i + k >= n Then Exit Function
+    If ToLowerChar(line[i + k]) <> word[k] Then Exit Function
+    PpWordCharOk = 1
+End Function
+
+Function PpMatchWord(line As *Byte, n As Long, i As Long, word As *Byte) As Long
+    Dim k As Long
+    PpMatchWord = -1
+    k = 0
+    While word[k] <> CH_NUL
+        If PpWordCharOk(line, n, i, word, k) = 0 Then Exit Function
+        k = k + 1
+    Wend
+    PpMatchWord = i + k
+End Function
+
+Function PpHashKeyEnd(line As *Byte, n As Long, word As *Byte) As Long
+    Dim i As Long
+    PpHashKeyEnd = -1
+    i = PpSkipHash(line, n)
+    If i < 0 Then Exit Function
+    PpHashKeyEnd = PpMatchWord(line, n, i, word)
+End Function
+
+Function PpAfterEq(line As *Byte, n As Long, i As Long) As Long
+    PpAfterEq = -1
+    i = PpSkipWsAt(line, n, i)
+    If i >= n Then Exit Function
+    If line[i] <> CH_EQ Then Exit Function
+    PpAfterEq = PpSkipWsAt(line, n, i + 1)
+End Function
+
+Function PpLineKeyedNum(line As *Byte, n As Long, word As *Byte, ByRef valOut As Long) As Long
+    Dim i As Long
+    PpLineKeyedNum = 0
+    i = PpHashKeyEnd(line, n, word)
+    If i < 0 Then Exit Function
+    i = PpAfterEq(line, n, i)
+    If i < 0 Then Exit Function
+    PpLineKeyedNum = PpParseEqNumber(line, n, i, valOut)
+End Function
+
+Sub PpTakeModuleType(line As *Byte, n As Long)
+    Dim word(KW_LEN - 1) As Byte
+    Dim v As Long
+    lstrcpy(VarPtr(word), "moduletype")
+    v = 0
+    If PpLineKeyedNum(line, n, VarPtr(word), v) = 0 Then Exit Sub
+    g_ppModuleDll = 0
+    If v <> 0 Then g_ppModuleDll = 1
+End Sub
+
+Sub PpApplyPjOpt(line As *Byte, n As Long)
+    PpTakeModuleType(line, n)
+End Sub
+
+Function PpRelPathChar(c As Long) As Long
+    PpRelPathChar = 1
+    If c = CH_SQUOTE Or c = CH_SP Or c = CH_TAB Or c = CH_NUL Then
+        PpRelPathChar = 0
+    End If
+End Function
+
+Sub PpCopyRelBody(line As *Byte, n As Long, i As Long, dst As *Byte, ByRef j As Long)
+    While i < n And j < PJ_PATH_LEN - 1
+        If PpRelPathChar(line[i]) = 0 Then Exit Sub
+        dst[j] = line[i]
+        j = j + 1
+        i = i + 1
+    Wend
+End Sub
+
+Function PpCopyRelPath(line As *Byte, n As Long, i As Long, dst As *Byte) As Long
+    Dim j As Long
+    PpCopyRelPath = 0
+    j = 0
+    PpCopyRelBody(line, n, i, dst, j)
+    dst[j] = CH_NUL
+    If j > 0 Then PpCopyRelPath = 1
+End Function
+
+Function PpKeyedPath(line As *Byte, n As Long, word As *Byte, dst As *Byte) As Long
+    Dim i As Long
+    PpKeyedPath = 0
+    i = PpHashKeyEnd(line, n, word)
+    If i < 0 Then Exit Function
+    i = PpAfterEq(line, n, i)
+    If i < 0 Then Exit Function
+    PpKeyedPath = PpCopyRelPath(line, n, i, dst)
+End Function
+
+Sub PpTakeOutputRel(line As *Byte, n As Long, dst As *Byte)
+    Dim word(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(word), "output_release")
+    PpKeyedPath(line, n, VarPtr(word), dst)
+End Sub
+
+Function PpScanPjStep(pj As *Byte, pjSize As Long, ByRef i As Long, line As *Byte, rel As *Byte) As Long
+    Dim n As Long
+    PpScanPjStep = 0
+    While i < pjSize
+        n = PpNextPjLine(pj, pjSize, i, line)
+        If n < 0 Then Exit Function
+        PpTakeOutputRel(line, n, rel)
+    Wend
+    PpScanPjStep = 1
+End Function
+
+Function PpReadRel(pj As *Byte, pjSize As Long, rel As *Byte) As Long
+    Dim i As Long
+    Dim line(PP_LINE_MAX - 1) As Byte
+    PpReadRel = 0
+    rel[0] = CH_NUL
+    i = 0
+    If PpScanPjStep(pj, pjSize, i, VarPtr(line), rel) = 0 Then Exit Function
+    If rel[0] <> CH_NUL Then PpReadRel = 1
+End Function
+
+Sub PpJoinPjOut(pjPath As *Byte, rel As *Byte, dst As *Byte)
+    Dim dir(PP_ONCE_PATH - 1) As Byte
+    PpDirOf(pjPath, VarPtr(dir))
+    PpJoinSrcPath(VarPtr(dir), rel, dst)
+End Sub
+
+Function PpFinishPjOut(pjPath As *Byte, pj As *Byte, pjSize As Long, dst As *Byte) As Long
+    Dim rel(PJ_PATH_LEN - 1) As Byte
+    PpFinishPjOut = 0
+    If PpReadRel(pj, pjSize, VarPtr(rel)) = 0 Then Exit Function
+    PpJoinPjOut(pjPath, VarPtr(rel), dst)
+    PpFinishPjOut = 1
+End Function
+
+Function PpLoadPj(pjPath As *Byte, ByRef pjSize As Long) As *Byte
+    PpLoadPj = NULL
+    If PpPathEndsWithPj(pjPath) = 0 Then Exit Function
+    PpLoadPj = LoadFile(pjPath, pjSize)
+End Function
+
+Function PpResolvePjOut(pjPath As *Byte, dst As *Byte) As Long
+    Dim pj As *Byte
+    Dim pjSize As Long
+    PpResolvePjOut = 0
+    dst[0] = CH_NUL
+    pj = PpLoadPj(pjPath, pjSize)
+    If pj = NULL Then Exit Function
+    PpResolvePjOut = PpFinishPjOut(pjPath, pj, pjSize, dst)
+    free(pj)
+End Function

@@ -76,8 +76,9 @@ b.abp
 | 指令 | 意味 |
 |---|---|
 | `#SOURCE` | 必須。続く行が入力 `.abp`（結合して 1 コンパイル単位） |
-| `#OUTPUT_RELEASE` | AB4.20 の stage0 出力パス。`actba64` の CLI は常に `-o` |
+| `#OUTPUT_RELEASE` | `.pj` からの相対出力パス。`-o` が無いとき使う（`-o` が優先） |
 | `#USEWINDOW` | サブシステム（既定 CUI。`#n88basic` で GUI） |
+| `#MODULETYPE` | `0` = EXE（既定）、`1` = DLL（[§8.4](#84-dll-を出力する)） |
 | `#PLATFORM` | AB4.20 用。`actba64` は読まない（対象は `-actba32`） |
 | その他 | 無視 |
 
@@ -86,10 +87,10 @@ b.abp
 ### 1.5 CLI
 
 ```text
-actba64 <src.abp|.pj> [-actba32] -o <out.exe>
+actba64 <src.abp|.pj> [-actba32] [-o <out>]
 ```
 
-`-o` は必須。`-actba32` は引数のどこでも可。省略時は PE32+。
+`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。
 
 エントリは結合後ソースのトップレベル文。終了は `ExitProcess(n)` または `End`（終了コード 0）。  
 `#n88basic` 時の `End` は窓を出して閉じるまで待つ（actba64）。
@@ -659,6 +660,21 @@ user32（`MessageBoxA` 等）、gdi32（`CreatePen` / `Ellipse` / `BitBlt` 等�
 `PeekMessageA` / `MsgWaitForMultipleObjects` などは `api.idx` の Declare で解決する。
 
 不足 API・自作 DLL はソース側で `Declare Lib`。未登録かつ未 `Declare` の呼び出しはコンパイルエラーです。
+
+### 8.4 DLL を出力する
+
+`.pj` の `#MODULETYPE=1` で PE DLL を出す。`Function Export Name` / `Sub Export Name` がエクスポートされる（名前はソースの綴り、名前表は昇順）。入口は `DllMain`（無いとエラー）。先頭の `JMP` が `DllMain` へ飛ぶので、ローダーが渡した引数はそのまま届く。
+
+`_System_StartupProgram` をソースが定義していなければ、コンパイラが合成する。中身は EXE の main と同じ GC 初期化とモジュール文で、`ExitProcess` は呼ばず戻る。サンプルの `DllMain` は `DLL_PROCESS_ATTACH` でこれを呼ぶ。
+
+優先イメージベースは EXE と重ならないよう、64bit は `0x180000000`、32bit（`-actba32`）は `0x10000000`。再配置（`.reloc`）は出さない。このベースが空いていればロードできる。
+
+```text
+actba64 samples\dllcall\dllsample\dllsample.pj
+actba64 samples\dllcall\dllcall\dllcall.pj
+```
+
+`dllsample.dll` は `dllcall.exe` と同じディレクトリに置く。回帰は `test/t_dll_host.abp`（`' Prebuild:` で DLL を先に出す）。
 
 ---
 
