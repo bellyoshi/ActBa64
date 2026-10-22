@@ -1,0 +1,94 @@
+' ===================================================
+'  CmdLine - GetCommandLine の引数トークン
+' ===================================================
+' CH_* は ByteCharUtils.abp。このファイルを #include するときは先に読むこと。
+' GetCommandLine のバッファは読み取り専用なので、先にコピーしてからトークンを切る。
+
+Sub CmdCopyUntil(rawCmd As *Byte, cmdlen As Long, ByRef n As Long, ctmp As *Byte, ByRef m As Long, stopCh As Byte)
+    While n < cmdlen And rawCmd[n] <> stopCh
+        If m < MAX_PATH - 1 Then
+            ctmp[m] = rawCmd[n]
+            m = m + 1
+        End If
+        n = n + 1
+    Wend
+End Sub
+
+Sub CmdNextQuoted(rawCmd As *Byte, cmdlen As Long, ByRef n As Long, ctmp As *Byte, ByRef m As Long)
+    n = n + 1
+    CmdCopyUntil(rawCmd, cmdlen, n, ctmp, m, CH_DQUOTE)
+    If n < cmdlen And rawCmd[n] = CH_DQUOTE Then n = n + 1
+End Sub
+
+Sub CmdNextToken(rawCmd As *Byte, cmdlen As Long, ByRef n As Long, ctmp As *Byte)
+    Dim m As Long
+    m = 0
+    If rawCmd[n] = CH_DQUOTE Then
+        CmdNextQuoted(rawCmd, cmdlen, n, ctmp, m)
+    Else
+        CmdCopyUntil(rawCmd, cmdlen, n, ctmp, m, CH_SP)
+    End If
+    ctmp[m] = 0
+End Sub
+
+Sub CmdLoadRaw(rawCmd As *Byte, ByRef cmdlen As Long)
+    Dim cmd As *Byte
+    cmd = GetCommandLine()
+    cmdlen = lstrlen(cmd)
+    If cmdlen > 4094 Then cmdlen = 4094
+    memcpy(rawCmd, cmd, cmdlen)
+    rawCmd[cmdlen] = 0
+End Sub
+
+Sub CmdSkipSp(rawCmd As *Byte, cmdlen As Long, ByRef n As Long)
+    While n < cmdlen And rawCmd[n] = CH_SP
+        n = n + 1
+    Wend
+End Sub
+
+Function CmdTake(rawCmd As *Byte, cmdlen As Long, ByRef n As Long, ctmp As *Byte) As Long
+    CmdTake = 0
+    CmdSkipSp(rawCmd, cmdlen, n)
+    If n >= cmdlen Then Exit Function
+    CmdNextToken(rawCmd, cmdlen, n, ctmp)
+    CmdTake = 1
+End Function
+
+Function CmdKeep(cidx As Long, cnt As Long, ctmp As *Byte, buf As *Byte) As Long
+    CmdKeep = 0
+    If cidx <> cnt Then Exit Function
+    lstrcpy(buf, ctmp)
+    CmdKeep = 1
+End Function
+
+Function CmdStep(cnt As Long, rawCmd As *Byte, cmdlen As Long, ByRef n As Long, ByRef cidx As Long, buf As *Byte) As Long
+    Dim ctmp[MAX_PATH] As Byte
+    CmdStep = 0
+    If CmdTake(rawCmd, cmdlen, n, VarPtr(ctmp)) = 0 Then Exit Function
+    If CmdKeep(cidx, cnt, VarPtr(ctmp), buf) <> 0 Then
+        CmdStep = 1
+        Exit Function
+    End If
+    cidx = cidx + 1
+End Function
+
+Sub CmdScan(cnt As Long, rawCmd As *Byte, cmdlen As Long, buf As *Byte, ByRef found As Long)
+    Dim cidx As Long
+    Dim n As Long
+    cidx = 0
+    n = 0
+    found = 0
+    While n < cmdlen And found = 0
+        found = CmdStep(cnt, rawCmd, cmdlen, n, cidx, buf)
+    Wend
+End Sub
+
+Function GetCmd(cnt As Long, buf As *Byte) As Long
+    Dim rawCmd[4096] As Byte
+    Dim cmdlen As Long
+    Dim found As Long
+    CmdLoadRaw(VarPtr(rawCmd), cmdlen)
+    buf[0] = 0
+    CmdScan(cnt, VarPtr(rawCmd), cmdlen, buf, found)
+    GetCmd = found
+End Function

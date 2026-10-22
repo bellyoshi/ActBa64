@@ -1,7 +1,6 @@
 ' TRUE / FALSE は AstLower の組み込み定数（AB 4.20 互換: TRUE=1, FALSE=0）。
 ' その他 Win32 定数 (NULL / MAX_PATH / GENERIC_* 等) は Include\default\WinConsts.sbp。
 ' ここで再定義すると stage0 ビルドで「すでに定義されています」になる。
-' CH_* を使う箇所は呼び出し側で ByteCharUtils.abp を先に #include すること。
 
 ' Initial capacity for dynamically grown compiler tables.
 Const DYN_INIT = 64
@@ -120,101 +119,6 @@ Sub PtrAddTo(p As *Byte, off As Long, ByRef dst As *Byte)
     dst = q
 End Sub
 
-' rawCmd[n] から 1 トークン取り出し、n を次の位置へ進める
-Sub CmdNextToken(rawCmd As *Byte, cmdlen As Long, ByRef n As Long, ctmp As *Byte)
-    Dim m As Long
-    m = 0
-    If rawCmd[n] = CH_DQUOTE Then
-        n = n + 1
-        While n < cmdlen And rawCmd[n] <> CH_DQUOTE
-            If m < MAX_PATH - 1 Then
-                ctmp[m] = rawCmd[n]
-                m = m + 1
-            End If
-            n = n + 1
-        Wend
-        If n < cmdlen And rawCmd[n] = CH_DQUOTE Then n = n + 1
-    Else
-        While n < cmdlen And rawCmd[n] <> CH_SP
-            If m < MAX_PATH - 1 Then
-                ctmp[m] = rawCmd[n]
-                m = m + 1
-            End If
-            n = n + 1
-        Wend
-    End If
-    ctmp[m] = 0
-End Sub
-
-Function GetCmd(cnt As Long, buf As *Byte) As Long
-    Dim cmd As *Byte
-    Dim rawCmd[4096] As Byte
-    Dim cmdlen As Long
-    Dim cidx As Long
-    Dim ctmp[MAX_PATH] As Byte
-    Dim n As Long
-    cmd = GetCommandLine()
-    cmdlen = lstrlen(cmd)
-    If cmdlen > 4094 Then cmdlen = 4094
-    ' GetCommandLine buffer is read-only; copy first
-    memcpy(VarPtr(rawCmd), cmd, cmdlen)
-    rawCmd[cmdlen] = 0
-    buf[0] = 0
-    cidx = 0
-    n = 0
-    While n < cmdlen
-        While n < cmdlen And rawCmd[n] = CH_SP
-            n = n + 1
-        Wend
-        If n >= cmdlen Then Exit While
-        CmdNextToken(VarPtr(rawCmd), cmdlen, n, VarPtr(ctmp))
-        If cidx = cnt Then
-            lstrcpy(buf, ctmp)
-            GetCmd = 1
-            Exit Function
-        End If
-        cidx = cidx + 1
-    Wend
-    GetCmd = 0
-End Function
-Function LoadFile(path As *Byte, ByRef outSize As Long) As *Byte
-    Dim hFile As HANDLE
-    Dim fsiz As Long
-    Dim nRead As Long
-    Dim p As *Byte
-    LoadFile = 0
-    outSize = 0
-    hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then Exit Function
-    fsiz = GetFileSize(hFile, 0 As DWordPtr)
-    If fsiz <= 0 Then
-        CloseHandle(hFile)
-        Exit Function
-    End If
-    p = malloc(fsiz)
-    If p = 0 Then
-        CloseHandle(hFile)
-        Exit Function
-    End If
-    ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
-    CloseHandle(hFile)
-    outSize = fsiz
-    LoadFile = p
-End Function
-
-Function WriteAll(path As *Byte, p As *Byte, size As Long) As Long
-    Dim hFile As HANDLE
-    Dim nWritten As Long
-    WriteAll = 0
-    hFile = CreateFile(path, GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then Exit Function
-    WriteFile(hFile, p, size, VarPtr(nWritten), ByVal NULL)
-    CloseHandle(hFile)
-    If nWritten = size Then
-        WriteAll = 1
-    End If
-End Function
-
 Sub ZeroMem(p As *Byte, n As Long)
     Dim i As Long
     If n <= 0 Then Exit Sub
@@ -247,25 +151,4 @@ Sub ZeroAt(dst As *Byte, off As Long, n As Long)
     If n <= 0 Then Exit Sub
     PtrAddTo(dst, off, q)
     ZeroMem(q, n)
-End Sub
-
-Sub WriteDosStub(buf As *Byte)
-    buf[&H40] = &H0E
-    buf[&H41] = &H1F
-    buf[&H42] = &HBA
-    buf[&H43] = &H0E
-    buf[&H44] = &H00
-    buf[&H45] = &HB4
-    buf[&H46] = &H09
-    buf[&H47] = &HCD
-    buf[&H48] = &H21
-    buf[&H49] = &HB8
-    buf[&H4A] = &H01
-    buf[&H4B] = &H4C
-    buf[&H4C] = &HCD
-    buf[&H4D] = &H21
-    lstrcpy(VarPtr(buf[&H4E]), "This program cannot be run in DOS mode.")
-    buf[&H75] = &H0D
-    buf[&H76] = &H0A
-    buf[&H77] = &H24
 End Sub
