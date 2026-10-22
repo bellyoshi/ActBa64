@@ -1,10 +1,11 @@
 ' ParserDeclare - Declare と InsertMenu
 
 ' Declare Function|Sub Name Lib "dll" [Alias "api"] (params) [As Type]
-Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte, ByRef isSub As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte, ByRef isSub As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
 
-    ParseDeclareHdr = 0
+    ParseDeclareHdr = false
     isSub = 0
     lstrcpy(VarPtr(kw), "function")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
@@ -19,46 +20,47 @@ Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName 
             Exit Function
         End If
     End If
-    If ParseCopyIdent(p, name) = 0 Then Exit Function
+    If Not ParseCopyIdent(p, name) Then Exit Function
     lstrcpy(VarPtr(kw), "lib")
     If ParseIdentIs(p, VarPtr(kw)) = 0 Then
         p->err = 1
         Exit Function
     End If
     p->pos = p->pos + 1
-    If ParseStringArg(p, libName) = 0 Then Exit Function
+    If Not ParseStringArg(p, libName) Then Exit Function
     lstrcpy(VarPtr(kw), "alias")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         p->pos = p->pos + 1
-        If ParseStringArg(p, apiName) = 0 Then Exit Function
+        If Not ParseStringArg(p, apiName) Then Exit Function
     Else
         lstrcpy(apiName, name)
     End If
-    If ParseExpect(p, TK_LPAREN) = 0 Then Exit Function
-    ParseDeclareHdr = 1
+    If Not ParseExpect(p, TK_LPAREN) Then Exit Function
+    ParseDeclareHdr = true
 End Function
 
-Function ParseDeclareRetSkip(p As *Parser) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDeclareRetSkip(p As *Parser) As boolean
     Dim kw(KW_LEN - 1) As Byte
     Dim typeName(SYM_NAME_LEN - 1) As Byte
 
-    ParseDeclareRetSkip = 0
+    ParseDeclareRetSkip = false
     lstrcpy(VarPtr(kw), "as")
     If ParseIdentIs(p, VarPtr(kw)) = 0 Then
-        ParseDeclareRetSkip = 1
+        ParseDeclareRetSkip = true
         Exit Function
     End If
     p->pos = p->pos + 1
     lstrcpy(VarPtr(kw), "long")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         p->pos = p->pos + 1
-        ParseDeclareRetSkip = 1
+        ParseDeclareRetSkip = true
         Exit Function
     End If
     lstrcpy(VarPtr(kw), "string")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         p->pos = p->pos + 1
-        ParseDeclareRetSkip = 1
+        ParseDeclareRetSkip = true
         Exit Function
     End If
     If ParseTokKind(p) = TK_STAR Then
@@ -70,23 +72,23 @@ Function ParseDeclareRetSkip(p As *Parser) As Long
         If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
             p->pos = p->pos + 1
         Else
-            If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
+            If Not ParseCopyIdent(p, VarPtr(typeName)) Then Exit Function
         End If
-        ParseDeclareRetSkip = 1
+        ParseDeclareRetSkip = true
         Exit Function
     End If
     lstrcpy(VarPtr(typeName), "double")
     If ParseIdentIs(p, VarPtr(typeName)) <> 0 Then
         p->pos = p->pos + 1
-        ParseDeclareRetSkip = 1
+        ParseDeclareRetSkip = true
         Exit Function
     End If
-    If ParseEatLongAlias(p) <> 0 Then
-        ParseDeclareRetSkip = 1
+    If ParseEatLongAlias(p) Then
+        ParseDeclareRetSkip = true
         Exit Function
     End If
-    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then Exit Function
-    ParseDeclareRetSkip = 1
+    If Not ParseCopyIdent(p, VarPtr(typeName)) Then Exit Function
+    ParseDeclareRetSkip = true
 End Function
 
 Function ParseDeclareStmt(p As *Parser) As Long
@@ -105,10 +107,10 @@ Function ParseDeclareStmt(p As *Parser) As Long
     ParseDeclareStmt = -1
     p->pos = p->pos + 1
     ast = p->ast
-    If ParseDeclareHdr(p, VarPtr(name), VarPtr(libName), VarPtr(apiName), isSub) = 0 Then Exit Function
-    If ParseParamList(p, nFirst, nParams, 1, 1) = 0 Then Exit Function
+    If Not ParseDeclareHdr(p, VarPtr(name), VarPtr(libName), VarPtr(apiName), isSub) Then Exit Function
+    If Not ParseParamList(p, nFirst, nParams, 1, 1) Then Exit Function
     If isSub = 0 Then
-        If ParseDeclareRetSkip(p) = 0 Then Exit Function
+        If Not ParseDeclareRetSkip(p) Then Exit Function
     End If
     nDll = AstAddNode(ast, AST_STRING)
     If nDll < 0 Then Exit Function
@@ -127,20 +129,21 @@ Function ParseDeclareStmt(p As *Parser) As Long
     ParseDeclareStmt = nDecl
 End Function
 
-Function ParseInsMenuArg(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseInsMenuArg(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByRef nArgs As Long) As boolean
     Dim nodes As *AstNode
     Dim nArg As Long
     Dim e As Long
     Dim kEx(KW_SHORT_LEN - 1) As Byte
     Dim s(TEXT_LEN - 1) As Byte
 
-    ParseInsMenuArg = 0
+    ParseInsMenuArg = false
     e = -1
     lstrcpy(VarPtr(kEx), "ex")
     If ParseIdentIs(p, VarPtr(kEx)) <> 0 Then
         If ParseTokKindAt(p, p->pos + 1) = TK_STRING Then
             p->pos = p->pos + 1
-            If ParseStringArg(p, VarPtr(s)) = 0 Then Exit Function
+            If Not ParseStringArg(p, VarPtr(s)) Then Exit Function
             e = AstAddNode(ast, AST_STRING)
             If e < 0 Then Exit Function
             AstSetStr(ast, e, VarPtr(s))
@@ -161,7 +164,7 @@ Function ParseInsMenuArg(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef 
     End If
     nPrev = nArg
     nArgs = nArgs + 1
-    ParseInsMenuArg = 1
+    ParseInsMenuArg = true
 End Function
 
 ' InsMenu hMenu, pos, flags [, caption [, id [, hSubMenu [, ignored]]]]
@@ -180,7 +183,7 @@ Function ParseInsMenuStmt(p As *Parser) As Long
     nPrev = -1
     nArgs = 0
     Do
-        If ParseInsMenuArg(p, ast, nFirst, nPrev, nArgs) = 0 Then Exit Function
+        If Not ParseInsMenuArg(p, ast, nFirst, nPrev, nArgs) Then Exit Function
         If ParseTokKind(p) <> TK_COMMA Then Exit Do
         p->pos = p->pos + 1
     Loop

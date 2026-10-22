@@ -14,7 +14,7 @@ Function LowAddrVar(ctx As *LowerCtx, idx As Long) As Long
     list = ctx->list
     nodes = ast->nodes
     AstCopyStr(ast, idx, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
@@ -27,7 +27,8 @@ Function LowAddrVar(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' AST_INDEX を基底に持つメンバの基底アドレスを出力し、UDT 型を tiOut へ返す
-Function LowAddrMemberIdxBase(ctx As *LowerCtx, base As Long, ByRef tiOut As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowAddrMemberIdxBase(ctx As *LowerCtx, base As Long, ByRef tiOut As Long) As boolean
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -37,22 +38,23 @@ Function LowAddrMemberIdxBase(ctx As *LowerCtx, base As Long, ByRef tiOut As Lon
     Dim ast As *Ast
     Dim name(SYM_NAME_LEN - 1) As Byte
 
-    LowAddrMemberIdxBase = 0
+    LowAddrMemberIdxBase = false
     tiOut = -1
     ast = ctx->ast
     nodes = ast->nodes
     If LowAddr(ctx, base) = 0 Then Exit Function
     AstCopyStr(ast, nodes[base].left, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
     tiOut = vTypeIdx
-    LowAddrMemberIdxBase = 1
+    LowAddrMemberIdxBase = true
 End Function
 
 ' AST_VAR を基底に持つメンバの基底アドレスを出力し、UDT 型を tiOut へ返す
-Function LowAddrMemberVarBase(ctx As *LowerCtx, idx As Long, base As Long, ByRef tiOut As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowAddrMemberVarBase(ctx As *LowerCtx, idx As Long, base As Long, ByRef tiOut As Long) As boolean
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -63,13 +65,13 @@ Function LowAddrMemberVarBase(ctx As *LowerCtx, idx As Long, base As Long, ByRef
     Dim list As *IrList
     Dim name(SYM_NAME_LEN - 1) As Byte
 
-    LowAddrMemberVarBase = 0
+    LowAddrMemberVarBase = false
     tiOut = -1
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
     AstCopyStr(ast, base, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
@@ -81,7 +83,7 @@ Function LowAddrMemberVarBase(ctx As *LowerCtx, idx As Long, base As Long, ByRef
     Else
         LowEmitLeaOff(list, vOff, vGlob)
     End If
-    LowAddrMemberVarBase = 1
+    LowAddrMemberVarBase = true
 End Function
 
 Function LowAddrMember(ctx As *LowerCtx, idx As Long) As Long
@@ -112,9 +114,9 @@ Function LowAddrMember(ctx As *LowerCtx, idx As Long) As Long
             Exit Function
         End If
     ElseIf nodes[base].kind = AST_INDEX Then
-        If LowAddrMemberIdxBase(ctx, base, typeIdx) = 0 Then Exit Function
+        If Not LowAddrMemberIdxBase(ctx, base, typeIdx) Then Exit Function
     ElseIf nodes[base].kind = AST_VAR Then
-        If LowAddrMemberVarBase(ctx, idx, base, typeIdx) = 0 Then Exit Function
+        If Not LowAddrMemberVarBase(ctx, idx, base, typeIdx) Then Exit Function
     Else
         ctx->err = 1
         Exit Function
@@ -130,12 +132,13 @@ Function LowAddrMember(ctx As *LowerCtx, idx As Long) As Long
     LowAddrMember = 1
 End Function
 
-Function LowIsArrTy(typeKind As Long) As Long
-    LowIsArrTy = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowIsArrTy(typeKind As Long) As boolean
+    LowIsArrTy = false
     If typeKind = TY_BYTE_ARR Or typeKind = TY_LONG_ARR Or typeKind = TY_STRING_ARR Then
-        LowIsArrTy = 1
+        LowIsArrTy = true
     ElseIf typeKind = TY_DOUBLE_ARR Or typeKind = TY_SINGLE_ARR Or typeKind = TY_UDT_ARR Then
-        LowIsArrTy = 1
+        LowIsArrTy = true
     End If
 End Function
 
@@ -185,8 +188,9 @@ Function LowAddrArrayCallScale(ctx As *LowerCtx, list As *IrList, typeTable As *
 End Function
 
 ' flat = i0 + i1 * len0 into rax (first-index-fastest). len0 from symbol typeIdx.
-Function LowEmitFlat2D(ctx As *LowerCtx, list As *IrList, i0 As Long, i1 As Long, len0 As Long) As Long
-    LowEmitFlat2D = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitFlat2D(ctx As *LowerCtx, list As *IrList, i0 As Long, i1 As Long, len0 As Long) As boolean
+    LowEmitFlat2D = false
     If len0 <= 0 Then
         ctx->err = 1
         Exit Function
@@ -200,7 +204,7 @@ Function LowEmitFlat2D(ctx As *LowerCtx, list As *IrList, i0 As Long, i1 As Long
     LowEmitZxEax(list)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
-    LowEmitFlat2D = 1
+    LowEmitFlat2D = true
 End Function
 
 Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
@@ -230,11 +234,11 @@ Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     AstCopyStr(ast, idx, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
-    If LowIsArrTy(vTy) = 0 Then
+    If Not LowIsArrTy(vTy) Then
         ctx->err = 1
         Exit Function
     End If
@@ -253,7 +257,7 @@ Function LowAddrArrayCall(ctx As *LowerCtx, idx As Long) As Long
             ctx->err = 1
             Exit Function
         End If
-        If LowEmitFlat2D(ctx, list, nodes[a0].left, nodes[a1].left, vTypeIdx) = 0 Then Exit Function
+        If Not LowEmitFlat2D(ctx, list, nodes[a0].left, nodes[a1].left, vTypeIdx) Then Exit Function
     Else
         ' index expr is left of CALL (AST_ARG wrapper)
         ix = nodes[idx].left

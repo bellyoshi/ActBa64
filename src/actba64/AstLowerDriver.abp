@@ -2,7 +2,8 @@
 '  AstLowerDriver - AstToIr pipeline
 ' ===================================================
 
-Function AstToIrEmitFuncFinish(ctx As *LowerCtx, stmt As Long, retBuf As *Byte, leaveArgCount As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function AstToIrEmitFuncFinish(ctx As *LowerCtx, stmt As Long, retBuf As *Byte, leaveArgCount As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
@@ -11,7 +12,7 @@ Function AstToIrEmitFuncFinish(ctx As *LowerCtx, stmt As Long, retBuf As *Byte, 
     Dim pi As Long
     Dim savedErr As Long
 
-    AstToIrEmitFuncFinish = 0
+    AstToIrEmitFuncFinish = false
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
@@ -39,17 +40,18 @@ Function AstToIrEmitFuncFinish(ctx As *LowerCtx, stmt As Long, retBuf As *Byte, 
     ctx->inFunc = 0
     g_funcEndLab = -1
     retBuf[0] = 0
-    AstToIrEmitFuncFinish = 1
+    AstToIrEmitFuncFinish = true
 End Function
 
-Function AstToIrEmitFuncs(ctx As *LowerCtx, prog As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function AstToIrEmitFuncs(ctx As *LowerCtx, prog As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim stmt As Long
     Dim retBuf(SYM_NAME_LEN - 1) As Byte
     Dim leaveArgCount As Long
 
-    AstToIrEmitFuncs = 0
+    AstToIrEmitFuncs = false
     ast = ctx->ast
     nodes = ast->nodes
     stmt = nodes[prog].left
@@ -57,11 +59,11 @@ Function AstToIrEmitFuncs(ctx As *LowerCtx, prog As Long) As Long
         If nodes[stmt].kind = AST_FUNC Then
             leaveArgCount = AstToIrEmitFuncSetup(ctx, stmt, VarPtr(retBuf))
             If leaveArgCount < 0 Then Exit Function
-            If AstToIrEmitFuncFinish(ctx, stmt, VarPtr(retBuf), leaveArgCount) = 0 Then Exit Function
+            If Not AstToIrEmitFuncFinish(ctx, stmt, VarPtr(retBuf), leaveArgCount) Then Exit Function
         End If
         stmt = nodes[stmt].nxt
     Wend
-    AstToIrEmitFuncs = 1
+    AstToIrEmitFuncs = true
 End Function
 
 Function AstToIrEmitMain(ctx As *LowerCtx, prog As Long, labMain As Long) As Long
@@ -91,8 +93,9 @@ Sub AstToIrEmitRt(ctx As *LowerCtx)
     LowEmitRtStrGcStubs(ctx)
 End Sub
 
-Function AstToIrAlloc() As Long
-    AstToIrAlloc = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function AstToIrAlloc() As boolean
+    AstToIrAlloc = false
     g_freeSymNames = calloc(BytesN(DYN_INIT, SYM_NAME_LEN))
     g_freeSymOffs = calloc(BytesN(DYN_INIT, SizeOf(Long)))
     g_freeSymTypes = calloc(BytesN(DYN_INIT, SizeOf(Long)))
@@ -144,7 +147,7 @@ Function AstToIrAlloc() As Long
     g_globTypeIdxs = g_freeGlobTypeIdxs
     g_globCount = 0
     g_globDataSize = 0
-    AstToIrAlloc = 1
+    AstToIrAlloc = true
 End Function
 
 Sub AstToIrInitLabs()
@@ -214,57 +217,59 @@ Sub AstToIrInitCtx(ctx As *LowerCtx, list As *IrList, ast As *Ast)
     list->globSize = 0
 End Sub
 
-Function AstToIrBindMod(ctx As *LowerCtx, prog As Long, list As *IrList) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function AstToIrBindMod(ctx As *LowerCtx, prog As Long, list As *IrList) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
-    AstToIrBindMod = 0
+    AstToIrBindMod = false
     ast = ctx->ast
     nodes = ast->nodes
-    If AstToIrRegDecls(ctx, prog) = 0 Then Exit Function
-    If AstToIrRegConsts(ctx, prog) = 0 Then Exit Function
-    If AstToIrRegFuncs(ctx, prog) = 0 Then Exit Function
-    If LowInjectStrGcStubs(ctx) = 0 Then Exit Function
+    If Not AstToIrRegDecls(ctx, prog) Then Exit Function
+    If Not AstToIrRegConsts(ctx, prog) Then Exit Function
+    If Not AstToIrRegFuncs(ctx, prog) Then Exit Function
+    If Not LowInjectStrGcStubs(ctx) Then Exit Function
     ' module-level Dim -> globals (before any function emit; nested Dims in main too)
-    If LowCollectDimsInList(ctx, nodes[prog].left, 1) = 0 Then Exit Function
+    If Not LowCollectDimsInList(ctx, nodes[prog].left, 1) Then Exit Function
     LowCollectPreciseGlobRoots()
     g_gcBaseOff = g_globDataSize
     g_globDataSize = g_globDataSize + GC_REGION_SIZE
     list->globSize = g_globDataSize
-    AstToIrBindMod = 1
+    AstToIrBindMod = true
 End Function
 
-Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As boolean
     Dim ctx As LowerCtx
     Dim nodes As *AstNode
     Dim prog As Long
     Dim labMain As Long
 
-    AstToIr = 0
+    AstToIr = false
     subsystemOut = IMAGE_SUBSYSTEM_WINDOWS_CUI
     If ast->root < 0 Then Exit Function
     nodes = ast->nodes
     prog = ast->root
     If nodes[prog].kind <> AST_PROGRAM Then Exit Function
 
-    If AstToIrAlloc() = 0 Then
+    If Not AstToIrAlloc() Then
         LowFreeAstBufs()
         Exit Function
     End If
     AstToIrInitCtx(VarPtr(ctx), list, ast)
 
     ' #USEWINDOW による GUI サブシステム切り替えは CompileSource 側で行う
-    If AstToIrBindMod(VarPtr(ctx), prog, list) = 0 Then
+    If Not AstToIrBindMod(VarPtr(ctx), prog, list) Then
         LowFreeAstBufs()
         Exit Function
     End If
 
     labMain = LowNewLabel(VarPtr(ctx))
-    If LowEmitEntry(list, labMain) = 0 Then
+    If Not LowEmitEntry(list, labMain) Then
         LowFreeAstBufs()
         Exit Function
     End If
 
-    If AstToIrEmitFuncs(VarPtr(ctx), prog) = 0 Then
+    If Not AstToIrEmitFuncs(VarPtr(ctx), prog) Then
         LowFreeAstBufs()
         Exit Function
     End If
@@ -281,6 +286,6 @@ Function AstToIr(ast As *Ast, list As *IrList, ByRef subsystemOut As Long) As Lo
     g_globTypeIdxs = NULL
     g_globCount = 0
     g_globDataSize = 0
-    AstToIr = 1
+    AstToIr = true
 End Function
 

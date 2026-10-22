@@ -1,27 +1,29 @@
 ' PreprocPjSrc - プロジェクトのソース結合
 
-Function PpPathEndsWithPj(path As *Byte) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function PpPathEndsWithPj(path As *Byte) As boolean
     Dim n As Long
     Dim c0 As Long
     Dim c1 As Long
     Dim c2 As Long
-    PpPathEndsWithPj = 0
+    PpPathEndsWithPj = false
     n = lstrlen(path)
     If n < PP_EXT_PJ_LEN Then Exit Function
     c0 = path[n - PP_EXT_PJ_LEN]
     c1 = ToLowerChar(path[n - 2])
     c2 = ToLowerChar(path[n - 1])
     If c0 = CH_DOT And c1 = CH_Lp And c2 = CH_Lj Then
-        PpPathEndsWithPj = 1
+        PpPathEndsWithPj = true
     End If
 End Function
 
-Function PpLineIsSourceHeader(line As *Byte, n As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpLineIsSourceHeader(line As *Byte, n As Long) As boolean
     Dim i As Long
     Dim word(KW_LEN - 1) As Byte
     Dim k As Long
     Dim c As Long
-    PpLineIsSourceHeader = 0
+    PpLineIsSourceHeader = false
     i = 0
     While i < n
         c = line[i]
@@ -42,7 +44,7 @@ Function PpLineIsSourceHeader(line As *Byte, n As Long) As Long
         c = line[i + k]
         If Not IsHSpace(c) And c <> CH_NUL Then Exit Function
     End If
-    PpLineIsSourceHeader = 1
+    PpLineIsSourceHeader = true
 End Function
 
 Function PpSkipWsAt(line As *Byte, n As Long, from As Long) As Long
@@ -84,12 +86,13 @@ Function PpParseEqNumber(line As *Byte, n As Long, from As Long, ByRef valOut As
 End Function
 
 ' #USEWINDOW=1 / #usewindow=0 （#SOURCE 節の外も含め全行を対象）
-Function PpLineUseWindow(line As *Byte, n As Long, ByRef valOut As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpLineUseWindow(line As *Byte, n As Long, ByRef valOut As Long) As boolean
     Dim i As Long
     Dim k As Long
     Dim word(KW_LEN - 1) As Byte
 
-    PpLineUseWindow = 0
+    PpLineUseWindow = false
     i = PpSkipWsAt(line, n, 0)
     If i >= n Then Exit Function
     If line[i] <> CH_HASH Then Exit Function
@@ -105,7 +108,7 @@ Function PpLineUseWindow(line As *Byte, n As Long, ByRef valOut As Long) As Long
     If i >= n Then Exit Function
     If line[i] <> CH_EQ Then Exit Function
     If PpParseEqNumber(line, n, i + 1, valOut) = 0 Then Exit Function
-    PpLineUseWindow = 1
+    PpLineUseWindow = true
 End Function
 
 Function PpTrimCopy(line As *Byte, n As Long, dst As *Byte, dstMax As Long) As Long
@@ -148,31 +151,33 @@ Sub PpJoinSrcPath(dir As *Byte, name As *Byte, full As *Byte)
     End If
 End Sub
 
-Function PpEmitSrcHeader(dst As *Byte, ByRef dstLen As Long, dstCap As Long, name As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpEmitSrcHeader(dst As *Byte, ByRef dstLen As Long, dstCap As Long, name As *Byte) As boolean
     Dim hdr(SYM_NAME_LEN - 1) As Byte
-    PpEmitSrcHeader = 0
+    PpEmitSrcHeader = false
     lstrcpy(VarPtr(hdr), "' ---- ")
-    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) = 0 Then Exit Function
-    If PpAppend(dst, dstLen, dstCap, name, lstrlen(name)) = 0 Then Exit Function
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(hdr), lstrlen(VarPtr(hdr))) Then Exit Function
+    If Not PpAppend(dst, dstLen, dstCap, name, lstrlen(name)) Then Exit Function
     lstrcpy(VarPtr(hdr), " ----")
     hdr[5] = CH_CR
     hdr[6] = CH_NL
     hdr[7] = CH_NUL
-    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), PP_FILE_MARK_TAIL) = 0 Then Exit Function
-    PpEmitSrcHeader = 1
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(hdr), PP_FILE_MARK_TAIL) Then Exit Function
+    PpEmitSrcHeader = true
 End Function
 
-Function PpAppendOneSource(dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, name As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpAppendOneSource(dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, name As *Byte) As boolean
     Dim full(PP_ONCE_PATH - 1) As Byte
     Dim src As *Byte
     Dim srcSize As Long
     Dim expanded As *Byte
     Dim expLen As Long
     Dim crlf(1) As Byte
-    PpAppendOneSource = 0
+    PpAppendOneSource = false
     PpJoinSrcPath(dir, name, VarPtr(full))
-    If PpOnceHas(VarPtr(full)) <> 0 Then
-        PpAppendOneSource = 1
+    If PpOnceHas(VarPtr(full)) Then
+        PpAppendOneSource = true
         Exit Function
     End If
     src = LoadFile(VarPtr(full), srcSize)
@@ -181,31 +186,32 @@ Function PpAppendOneSource(dst As *Byte, ByRef dstLen As Long, dstCap As Long, d
     expanded = ExpandIncludes(src, srcSize, VarPtr(full))
     free(src)
     If expanded = NULL Then Exit Function
-    If PpEmitSrcHeader(dst, dstLen, dstCap, name) = 0 Then
+    If Not PpEmitSrcHeader(dst, dstLen, dstCap, name) Then
         free(expanded)
         Exit Function
     End If
     expLen = lstrlen(expanded)
-    If PpAppend(dst, dstLen, dstCap, expanded, expLen) = 0 Then
+    If Not PpAppend(dst, dstLen, dstCap, expanded, expLen) Then
         free(expanded)
         Exit Function
     End If
     crlf[0] = CH_CR
     crlf[1] = CH_NL
-    If PpAppend(dst, dstLen, dstCap, VarPtr(crlf), 2) = 0 Then
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(crlf), 2) Then
         free(expanded)
         Exit Function
     End If
     free(expanded)
-    PpAppendOneSource = 1
+    PpAppendOneSource = true
 End Function
 
-Function PpHandleSourceLoop(line As *Byte, n As Long, ByRef inSource As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, ByRef nSrc As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpHandleSourceLoop(line As *Byte, n As Long, ByRef inSource As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, ByRef nSrc As Long) As boolean
     Dim j As Long
     Dim c As Long
     Dim name(PJ_PATH_LEN - 1) As Byte
-    PpHandleSourceLoop = 1
-    If PpLineIsSourceHeader(line, n) <> 0 Then
+    PpHandleSourceLoop = true
+    If PpLineIsSourceHeader(line, n) Then
         inSource = 1
         Exit Function
     End If
@@ -221,8 +227,8 @@ Function PpHandleSourceLoop(line As *Byte, n As Long, ByRef inSource As Long, ds
         Exit Function
     End If
     If PpTrimCopy(line, n, VarPtr(name), PJ_PATH_LEN) > 0 Then
-        If PpAppendOneSource(dst, dstLen, dstCap, dir, VarPtr(name)) = 0 Then
-            PpHandleSourceLoop = 0
+        If Not PpAppendOneSource(dst, dstLen, dstCap, dir, VarPtr(name)) Then
+            PpHandleSourceLoop = false
             Exit Function
         End If
         nSrc = nSrc + 1
@@ -257,15 +263,16 @@ Function PpNextPjLine(pj As *Byte, pjSize As Long, ByRef i As Long, line As *Byt
     PpNextPjLine = n
 End Function
 
-Function PpPjProcessLine(line As *Byte, n As Long, ByRef inSource As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, ByRef nSrc As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpPjProcessLine(line As *Byte, n As Long, ByRef inSource As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long, dir As *Byte, ByRef nSrc As Long) As boolean
     Dim uwVal As Long
-    PpPjProcessLine = 0
+    PpPjProcessLine = false
     PpApplyPjOpt(line, n)
-    If PpLineUseWindow(line, n, uwVal) <> 0 Then
+    If PpLineUseWindow(line, n, uwVal) Then
         g_ppUseWindow = uwVal
     End If
-    If PpHandleSourceLoop(line, n, inSource, dst, dstLen, dstCap, dir, nSrc) = 0 Then Exit Function
-    PpPjProcessLine = 1
+    If Not PpHandleSourceLoop(line, n, inSource, dst, dstLen, dstCap, dir, nSrc) Then Exit Function
+    PpPjProcessLine = true
 End Function
 
 Function CombinePjSources(pjPath As *Byte) As *Byte
@@ -311,7 +318,7 @@ Function CombinePjSources(pjPath As *Byte) As *Byte
             free(dst)
             Exit Function
         End If
-        If PpPjProcessLine(VarPtr(line), n, inSource, dst, dstLen, dstCap, VarPtr(dir), nSrc) = 0 Then
+        If Not PpPjProcessLine(VarPtr(line), n, inSource, dst, dstLen, dstCap, VarPtr(dir), nSrc) Then
             free(pj)
             free(dst)
             Exit Function

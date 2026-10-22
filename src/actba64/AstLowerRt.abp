@@ -110,14 +110,15 @@ End Sub
 
 ' 部分木が String を新たに確保しうるか。
 ' 再帰しない（関数フレームが ~8KB のため、ElseIf 連鎖や長い文リストでスタックを尽くす）。
-Function LowAstNeedsStrGcFor(nodes As *AstNode, cur As Long, walkStk As *Long, ByRef walkSp As Long) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function LowAstNeedsStrGcFor(nodes As *AstNode, cur As Long, walkStk As *Long, ByRef walkSp As Long) As boolean
     Dim n As Long
-    LowAstNeedsStrGcFor = 0
+    LowAstNeedsStrGcFor = false
     If nodes[cur].kind <> AST_FOR Then Exit Function
     n = nodes[cur].num
     If n >= 0 Then
         If walkSp >= 255 Then
-            LowAstNeedsStrGcFor = 1
+            LowAstNeedsStrGcFor = true
             Exit Function
         End If
         walkStk[walkSp] = n
@@ -126,7 +127,7 @@ Function LowAstNeedsStrGcFor(nodes As *AstNode, cur As Long, walkStk As *Long, B
     n = nodes[cur].strId
     If n >= 0 Then
         If walkSp >= 255 Then
-            LowAstNeedsStrGcFor = 1
+            LowAstNeedsStrGcFor = true
             Exit Function
         End If
         walkStk[walkSp] = n
@@ -134,13 +135,14 @@ Function LowAstNeedsStrGcFor(nodes As *AstNode, cur As Long, walkStk As *Long, B
     End If
 End Function
 
-Function LowAstNeedsStrGcEdges(nodes As *AstNode, cur As Long, walkStk As *Long, ByRef walkSp As Long) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function LowAstNeedsStrGcEdges(nodes As *AstNode, cur As Long, walkStk As *Long, ByRef walkSp As Long) As boolean
     Dim n As Long
-    LowAstNeedsStrGcEdges = 0
+    LowAstNeedsStrGcEdges = false
     n = nodes[cur].left
     If n >= 0 Then
         If walkSp >= 255 Then
-            LowAstNeedsStrGcEdges = 1
+            LowAstNeedsStrGcEdges = true
             Exit Function
         End If
         walkStk[walkSp] = n
@@ -149,7 +151,7 @@ Function LowAstNeedsStrGcEdges(nodes As *AstNode, cur As Long, walkStk As *Long,
     n = nodes[cur].right
     If n >= 0 Then
         If walkSp >= 255 Then
-            LowAstNeedsStrGcEdges = 1
+            LowAstNeedsStrGcEdges = true
             Exit Function
         End If
         walkStk[walkSp] = n
@@ -158,7 +160,7 @@ Function LowAstNeedsStrGcEdges(nodes As *AstNode, cur As Long, walkStk As *Long,
     n = nodes[cur].extra
     If n >= 0 Then
         If walkSp >= 255 Then
-            LowAstNeedsStrGcEdges = 1
+            LowAstNeedsStrGcEdges = true
             Exit Function
         End If
         walkStk[walkSp] = n
@@ -166,13 +168,14 @@ Function LowAstNeedsStrGcEdges(nodes As *AstNode, cur As Long, walkStk As *Long,
     End If
 End Function
 
-Function LowAstNeedsStrGcHit(nodes As *AstNode, cur As Long) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function LowAstNeedsStrGcHit(nodes As *AstNode, cur As Long) As boolean
     Dim kind As Long
     Dim bi As Long
-    LowAstNeedsStrGcHit = 0
+    LowAstNeedsStrGcHit = false
     kind = nodes[cur].kind
     If kind = AST_PRINT Or kind = AST_INPUT Or kind = AST_FINPUT Or kind = AST_OPEN Or kind = AST_CLOSE Or kind = AST_FIELD Or kind = AST_GET Or kind = AST_PUT Or kind = AST_WRITE Then
-        LowAstNeedsStrGcHit = 1
+        LowAstNeedsStrGcHit = true
         Exit Function
     End If
     ' 呼び出しは見ない。Hl_MidBytes$ / GetLinePrefix$ も本体の Mid$ は
@@ -181,19 +184,20 @@ Function LowAstNeedsStrGcHit(nodes As *AstNode, cur As Long) As Long
     ' 引数式の Cat / Mid$ は left を辿って拾う。
     If kind = AST_BINOP Then
         If nodes[cur].num = BOP_CAT Then
-            LowAstNeedsStrGcHit = 1
+            LowAstNeedsStrGcHit = true
             Exit Function
         End If
     End If
     If kind = AST_BUILTIN Then
         bi = nodes[cur].num
         If bi = BIK_LEFT Or bi = BIK_MID Or bi = BIK_STR Or bi = BIK_MAKESTR Or bi = BIK_CHR Or bi = BIK_RIGHT Then
-            LowAstNeedsStrGcHit = 1
+            LowAstNeedsStrGcHit = true
         End If
     End If
 End Function
 
-Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As boolean
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim cur As Long
@@ -201,7 +205,7 @@ Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
     Dim walkStk(TEXT_LEN - 1) As Long
     Dim walkStkBase As *Long
 
-    LowAstNeedsStrGc = 0
+    LowAstNeedsStrGc = false
     If idx < 0 Then Exit Function
     ast = ctx->ast
     If ast = NULL Then Exit Function
@@ -213,16 +217,16 @@ Function LowAstNeedsStrGc(ctx As *LowerCtx, idx As Long) As Long
         walkSp = walkSp - 1
         cur = walkStk[walkSp]
         While cur >= 0
-            If LowAstNeedsStrGcHit(nodes, cur) <> 0 Then
-                LowAstNeedsStrGc = 1
+            If LowAstNeedsStrGcHit(nodes, cur) Then
+                LowAstNeedsStrGc = true
                 Exit Function
             End If
-            If LowAstNeedsStrGcFor(nodes, cur, walkStkBase, walkSp) <> 0 Then
-                LowAstNeedsStrGc = 1
+            If LowAstNeedsStrGcFor(nodes, cur, walkStkBase, walkSp) Then
+                LowAstNeedsStrGc = true
                 Exit Function
             End If
-            If LowAstNeedsStrGcEdges(nodes, cur, walkStkBase, walkSp) <> 0 Then
-                LowAstNeedsStrGc = 1
+            If LowAstNeedsStrGcEdges(nodes, cur, walkStkBase, walkSp) Then
+                LowAstNeedsStrGc = true
                 Exit Function
             End If
             cur = nodes[cur].nxt
@@ -234,12 +238,13 @@ End Function
 ' MAIN のみ。関数内は集めない（ByVal + Mid$ 一時が unmarked 掃き出しされる穴）。
 ' 注意: 本体 lower 前に呼ぶため、g_strGcArmed はまだ 0 のことがある。
 ' AST 上で確保が分かればここで武装する（さもないと Collect 呼び出し自体が省略される）。
-Function LowLoopNeedsStrGc(ctx As *LowerCtx, condIdx As Long, bodyIdx As Long, extraIdx As Long) As Long
-    LowLoopNeedsStrGc = 1
-    If LowAstNeedsStrGc(ctx, condIdx) <> 0 Then Exit Function
-    If LowAstNeedsStrGc(ctx, bodyIdx) <> 0 Then Exit Function
-    If LowAstNeedsStrGc(ctx, extraIdx) <> 0 Then Exit Function
-    LowLoopNeedsStrGc = 0
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function LowLoopNeedsStrGc(ctx As *LowerCtx, condIdx As Long, bodyIdx As Long, extraIdx As Long) As boolean
+    LowLoopNeedsStrGc = true
+    If LowAstNeedsStrGc(ctx, condIdx) Then Exit Function
+    If LowAstNeedsStrGc(ctx, bodyIdx) Then Exit Function
+    If LowAstNeedsStrGc(ctx, extraIdx) Then Exit Function
+    LowLoopNeedsStrGc = false
 End Function
 
 Sub LowArmStrGcForLoop(ctx As *LowerCtx)
@@ -251,7 +256,7 @@ Sub LowMaybeLoopStrCollect(ctx As *LowerCtx, condIdx As Long, bodyIdx As Long, e
     ' 32bit: MAIN ループ先頭の Collect が junk Cat/Mid$ 圧力下で AV する。
     ' Include Collect は回収できるが UAF、IR Collect は回収不足。Print 等は従来どおり。
     If TyIs32() <> 0 Then Exit Sub
-    If LowLoopNeedsStrGc(ctx, condIdx, bodyIdx, extraIdx) = 0 Then Exit Sub
+    If Not LowLoopNeedsStrGc(ctx, condIdx, bodyIdx, extraIdx) Then Exit Sub
     LowArmStrGcForLoop(ctx)
     LowEmitStrCollectSafepoint(ctx)
 End Sub

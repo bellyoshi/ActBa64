@@ -75,26 +75,27 @@ Function LowExprString(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' 定数（数値／文字列）なら rax へ積んで 1 を返す
-Function LowExprVarConst(ctx As *LowerCtx, name As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowExprVarConst(ctx As *LowerCtx, name As *Byte) As boolean
     Dim list As *IrList
     Dim ci As Long
     Dim vals As *Long
     Dim strs As *Byte
 
-    LowExprVarConst = 0
+    LowExprVarConst = false
     list = ctx->list
     ci = LowFindConst(ctx, name)
     If ci >= 0 Then
         vals = ctx->constVals
         IrEmit(list, OP_MOV_EAX_IMM, vals[ci], 0)
-        LowExprVarConst = 1
+        LowExprVarConst = true
         Exit Function
     End If
     ci = LowFindStrConst(ctx, name)
     If ci >= 0 Then
         strs = ctx->constStrVals
         IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(strs[ci * AST_STR_LEN]))
-        LowExprVarConst = 1
+        LowExprVarConst = true
     End If
 End Function
 
@@ -114,11 +115,11 @@ Function LowExprVar(ctx As *LowerCtx, idx As Long) As Long
     list = ctx->list
 
     AstCopyStr(ast, idx, VarPtr(name))
-    If LowExprVarConst(ctx, VarPtr(name)) <> 0 Then
+    If LowExprVarConst(ctx, VarPtr(name)) Then
         LowExprVar = 1
         Exit Function
     End If
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         LowerDiagError(ctx, idx, "undefined variable '" + MakeStr(VarPtr(name)) + "'")
         Exit Function
     End If
@@ -153,11 +154,11 @@ Function LowExprMember(ctx As *LowerCtx, idx As Long) As Long
 
     If LowAddr(ctx, idx) = 0 Then Exit Function
     AstCopyStr(ast, idx, VarPtr(name))
-    If LowMemberBaseName(ctx, idx, VarPtr(buf)) = 0 Then
+    If Not LowMemberBaseName(ctx, idx, VarPtr(buf)) Then
         ctx->err = 1
         Exit Function
     End If
-    If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
@@ -199,11 +200,11 @@ Function LowExprIndexMember(ctx As *LowerCtx, idx As Long) As Long
     base = nodes[idx].left
     If LowAddr(ctx, idx) = 0 Then Exit Function
     AstCopyStr(ast, base, VarPtr(name))
-    If LowMemberBaseName(ctx, base, VarPtr(buf)) = 0 Then
+    If Not LowMemberBaseName(ctx, base, VarPtr(buf)) Then
         ctx->err = 1
         Exit Function
     End If
-    If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
@@ -243,7 +244,7 @@ Function LowExprIndexBase(ctx As *LowerCtx, idx As Long) As Long
     base = nodes[idx].left
     If LowAddr(ctx, idx) = 0 Then Exit Function
     AstCopyStr(ast, base, VarPtr(buf))
-    If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) <> 0 Then
+    If LowLookupVar(ctx, VarPtr(buf), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         If vTy = TY_PTR_LONG Or vTy = TY_LONG_ARR Then
             LowLoadSized(list, 4)
         ElseIf vTy = TY_PTR_BYTE Then

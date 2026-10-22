@@ -3,7 +3,8 @@
 ' ===================================================
 
 ' bound: -1=scalar, else 1D expr idx, or AST_ARG chain for 2D (bound0, bound1)
-Function ParseDimBound(p As *Parser, ByRef bound As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDimBound(p As *Parser, ByRef bound As Long) As boolean
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim e0 As Long
@@ -12,14 +13,14 @@ Function ParseDimBound(p As *Parser, ByRef bound As Long) As Long
     Dim a1 As Long
     Dim closeKind As Long
 
-    ParseDimBound = 0
+    ParseDimBound = false
     bound = -1
     If ParseTokKind(p) = TK_LPAREN Then
         closeKind = TK_RPAREN
     ElseIf ParseTokKind(p) = TK_LBRACK Then
         closeKind = TK_RBRACK
     Else
-        ParseDimBound = 1
+        ParseDimBound = true
         Exit Function
     End If
     p->pos = p->pos + 1
@@ -47,12 +48,13 @@ Function ParseDimBound(p As *Parser, ByRef bound As Long) As Long
     Else
         bound = e0
     End If
-    If ParseExpect(p, closeKind) = 0 Then Exit Function
-    ParseDimBound = 1
+    If Not ParseExpect(p, closeKind) Then Exit Function
+    ParseDimBound = true
 End Function
 
-Function ParseDimStringSuffix(name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As Long
-    ParseDimStringSuffix = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDimStringSuffix(name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
+    ParseDimStringSuffix = false
     ti = 0
     While name[ti] <> 0
         ti = ti + 1
@@ -60,31 +62,32 @@ Function ParseDimStringSuffix(name As *Byte, bound As Long, ByRef ty As Long, By
     If ti > 0 And name[ti - 1] = CH_DOLLAR And bound < 0 Then
         ty = TY_STRING
         ti = -1
-        ParseDimStringSuffix = 1
+        ParseDimStringSuffix = true
     End If
 End Function
 
-Function ParseAsPtrByteLong(p As *Parser, ByRef ty As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAsPtrByteLong(p As *Parser, ByRef ty As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
 
-    ParseAsPtrByteLong = 0
+    ParseAsPtrByteLong = false
     lstrcpy(VarPtr(kw), "byte")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         p->pos = p->pos + 1
         ty = TY_PTR_BYTE
-        ParseAsPtrByteLong = 1
+        ParseAsPtrByteLong = true
         Exit Function
     End If
     lstrcpy(VarPtr(kw), "long")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         p->pos = p->pos + 1
         ty = TY_PTR_LONG
-        ParseAsPtrByteLong = 1
+        ParseAsPtrByteLong = true
         Exit Function
     End If
-    If ParseEatLongAlias(p) <> 0 Then
+    If ParseEatLongAlias(p) Then
         ty = TY_PTR_LONG
-        ParseAsPtrByteLong = 1
+        ParseAsPtrByteLong = true
     End If
 End Function
 
@@ -96,7 +99,7 @@ Function ParseAsPtrUdt(p As *Parser, ByRef ty As Long, ByRef ti As Long) As Long
     ParseAsPtrUdt = 0
     ast = p->ast
     types = ast->types
-    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+    If Not ParseCopyIdent(p, VarPtr(typeName)) Then
         p->err = 1
         Exit Function
     End If
@@ -111,7 +114,7 @@ End Function
 
 Function ParseAsPtrDataType(p As *Parser, ByRef ty As Long, ByRef ti As Long) As Long
     ParseAsPtrDataType = 0
-    If ParseAsPtrByteLong(p, ty) <> 0 Then
+    If ParseAsPtrByteLong(p, ty) Then
         ParseAsPtrDataType = 1
         Exit Function
     End If
@@ -124,7 +127,7 @@ Function ParseAsPtrType(p As *Parser, ByRef ty As Long, ByRef ti As Long, ByRef 
     ParseAsPtrType = 0
     params = -1
     p->pos = p->pos + 1
-    If ParseFnPtrTry(p, ty, ti, params) <> 0 Then
+    If ParseFnPtrTry(p, ty, ti, params) Then
         ParseAsPtrType = 1
         Exit Function
     End If
@@ -140,10 +143,11 @@ Sub ParseAsLongTy(bound As Long, ByRef ty As Long)
     End If
 End Sub
 
-Function ParseAsIntType(p As *Parser, bound As Long, ByRef ty As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAsIntType(p As *Parser, bound As Long, ByRef ty As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
 
-    ParseAsIntType = 0
+    ParseAsIntType = false
     lstrcpy(VarPtr(kw), "long")
     If ParseIdentIs(p, VarPtr(kw)) = 0 Then
         lstrcpy(VarPtr(kw), "integer")
@@ -151,13 +155,14 @@ Function ParseAsIntType(p As *Parser, bound As Long, ByRef ty As Long) As Long
     End If
     ParseAsLongTy(bound, ty)
     p->pos = p->pos + 1
-    ParseAsIntType = 1
+    ParseAsIntType = true
 End Function
 
-Function ParseAsStrByteType(p As *Parser, bound As Long, ByRef ty As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAsStrByteType(p As *Parser, bound As Long, ByRef ty As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
 
-    ParseAsStrByteType = 0
+    ParseAsStrByteType = false
     lstrcpy(VarPtr(kw), "string")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         If bound >= 0 Then
@@ -166,7 +171,7 @@ Function ParseAsStrByteType(p As *Parser, bound As Long, ByRef ty As Long) As Lo
             ty = TY_STRING
         End If
         p->pos = p->pos + 1
-        ParseAsStrByteType = 1
+        ParseAsStrByteType = true
         Exit Function
     End If
     lstrcpy(VarPtr(kw), "byte")
@@ -177,14 +182,15 @@ Function ParseAsStrByteType(p As *Parser, bound As Long, ByRef ty As Long) As Lo
         Else
             ty = TY_BYTE
         End If
-        ParseAsStrByteType = 1
+        ParseAsStrByteType = true
     End If
 End Function
 
-Function ParseAsFloatType(p As *Parser, bound As Long, ByRef ty As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAsFloatType(p As *Parser, bound As Long, ByRef ty As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
 
-    ParseAsFloatType = 0
+    ParseAsFloatType = false
     lstrcpy(VarPtr(kw), "double")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         p->pos = p->pos + 1
@@ -193,7 +199,7 @@ Function ParseAsFloatType(p As *Parser, bound As Long, ByRef ty As Long) As Long
         Else
             ty = TY_DOUBLE
         End If
-        ParseAsFloatType = 1
+        ParseAsFloatType = true
         Exit Function
     End If
     lstrcpy(VarPtr(kw), "single")
@@ -204,7 +210,7 @@ Function ParseAsFloatType(p As *Parser, bound As Long, ByRef ty As Long) As Long
         Else
             ty = TY_SINGLE
         End If
-        ParseAsFloatType = 1
+        ParseAsFloatType = true
     End If
 End Function
 
@@ -216,7 +222,7 @@ Function ParseAsAliasOrUdt(p As *Parser, bound As Long, ByRef ty As Long, ByRef 
     ParseAsAliasOrUdt = 0
     ast = p->ast
     types = ast->types
-    If ParseEatBytePtrAlias(p) <> 0 Then
+    If ParseEatBytePtrAlias(p) Then
         If bound >= 0 Then
             p->err = 1
             Exit Function
@@ -225,12 +231,12 @@ Function ParseAsAliasOrUdt(p As *Parser, bound As Long, ByRef ty As Long, ByRef 
         ParseAsAliasOrUdt = 1
         Exit Function
     End If
-    If ParseEatLongAlias(p) <> 0 Then
+    If ParseEatLongAlias(p) Then
         ParseAsLongTy(bound, ty)
         ParseAsAliasOrUdt = 1
         Exit Function
     End If
-    If ParseCopyIdent(p, VarPtr(typeName)) = 0 Then
+    If Not ParseCopyIdent(p, VarPtr(typeName)) Then
         p->err = 1
         Exit Function
     End If
@@ -249,35 +255,36 @@ End Function
 
 Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long) As Long
     ParseAsPrimType = 0
-    If ParseAsIntType(p, bound, ty) <> 0 Then
+    If ParseAsIntType(p, bound, ty) Then
         ParseAsPrimType = 1
         Exit Function
     End If
-    If ParseAsStrByteType(p, bound, ty) <> 0 Then
+    If ParseAsStrByteType(p, bound, ty) Then
         ParseAsPrimType = 1
         Exit Function
     End If
-    If ParseAsFloatType(p, bound, ty) <> 0 Then
+    If ParseAsFloatType(p, bound, ty) Then
         ParseAsPrimType = 1
         Exit Function
     End If
     ParseAsPrimType = ParseAsAliasOrUdt(p, bound, ty, ti)
 End Function
 
-Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As boolean
     Dim kAs(KW_SHORT_LEN - 1) As Byte
 
-    ParseDimAsType = 0
+    ParseDimAsType = false
     ty = -1
     ti = -1
     params = -1
     lstrcpy(VarPtr(kAs), "as")
     If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
-        If ParseDimStringSuffix(name, bound, ty, ti) = 0 Then
+        If Not ParseDimStringSuffix(name, bound, ty, ti) Then
             p->err = 1
             Exit Function
         End If
-        ParseDimAsType = 1
+        ParseDimAsType = true
         Exit Function
     End If
     p->pos = p->pos + 1
@@ -286,7 +293,7 @@ Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As 
     Else
         If ParseAsPrimType(p, bound, ty, ti) = 0 Then Exit Function
     End If
-    ParseDimAsType = 1
+    ParseDimAsType = true
 End Function
 
 Function ParseDimResolveFnPtrAlias(p As *Parser, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
@@ -310,12 +317,13 @@ Function ParseDimResolveFnPtrAlias(p As *Parser, ByRef ty As Long, ByRef ti As L
     ti = retTy
 End Function
 
-Function ParseDimClassCtor(p As *Parser, ty As Long, ti As Long, ByRef initE As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDimClassCtor(p As *Parser, ty As Long, ti As Long, ByRef initE As Long) As boolean
     Dim types As *TypeTable
     Dim nArgs As Long
     Dim ast As *Ast
 
-    ParseDimClassCtor = 0
+    ParseDimClassCtor = false
     ast = p->ast
     types = ast->types
     If ty = TY_UDT And ti >= 0 Then
@@ -326,7 +334,7 @@ Function ParseDimClassCtor(p As *Parser, ty As Long, ti As Long, ByRef initE As 
             End If
         End If
     End If
-    ParseDimClassCtor = 1
+    ParseDimClassCtor = true
 End Function
 
 Function ParseDimBoundTyOk(ty As Long) As Long
@@ -357,15 +365,16 @@ Function ParseDimMakeNode(p As *Parser, name As *Byte, ty As Long, bound As Long
     ParseDimMakeNode = nDim
 End Function
 
-Function ParseDimOneInit(p As *Parser, ByRef initE As Long) As Long
-    ParseDimOneInit = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDimOneInit(p As *Parser, ByRef initE As Long) As boolean
+    ParseDimOneInit = false
     initE = -1
     If ParseTokKind(p) = TK_EQ Then
         p->pos = p->pos + 1
         initE = ParseExprNoAs(p)
         If initE < 0 Then Exit Function
     End If
-    ParseDimOneInit = 1
+    ParseDimOneInit = true
 End Function
 
 Function ParseDimOneTail(p As *Parser, ByRef initE As Long) As Long
@@ -386,7 +395,7 @@ Function ParseDimOneTyped(p As *Parser, name As *Byte, ByRef ty As Long, ByRef b
     Dim params As Long
 
     ParseDimOneTyped = 0
-    If ParseDimAsType(p, name, bound, ty, ti, params) = 0 Then Exit Function
+    If Not ParseDimAsType(p, name, bound, ty, ti, params) Then Exit Function
     If ParseDimResolveFnPtrAlias(p, ty, ti, params) = 0 Then Exit Function
     If ty < 0 Then
         p->err = 1
@@ -399,7 +408,7 @@ Function ParseDimOneTyped(p As *Parser, name As *Byte, ByRef ty As Long, ByRef b
         End If
     End If
     If ty = TY_PTR_FUNC Then bound = params
-    If ParseDimClassCtor(p, ty, ti, initE) = 0 Then Exit Function
+    If Not ParseDimClassCtor(p, ty, ti, initE) Then Exit Function
     ParseDimOneTyped = ParseDimOneTail(p, initE)
 End Function
 
@@ -411,9 +420,9 @@ Function ParseDimOne(p As *Parser) As Long
     Dim initE As Long
 
     ParseDimOne = -1
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
-    If ParseDimBound(p, bound) = 0 Then Exit Function
-    If ParseDimOneInit(p, initE) = 0 Then Exit Function
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    If Not ParseDimBound(p, bound) Then Exit Function
+    If Not ParseDimOneInit(p, initE) Then Exit Function
     If ParseDimOneTyped(p, VarPtr(name), ty, bound, ti, initE) = 0 Then Exit Function
     ParseDimOne = ParseDimMakeNode(p, VarPtr(name), ty, bound, initE, ti)
 End Function

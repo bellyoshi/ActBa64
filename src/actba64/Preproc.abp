@@ -69,16 +69,17 @@ Sub PpStrCopy(dst As *Byte, src As *Byte)
     dst[i] = CH_NUL
 End Sub
 
-Function PpStrEqCI(a As *Byte, b As *Byte) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function PpStrEqCI(a As *Byte, b As *Byte) As boolean
     Dim i As Long
-    PpStrEqCI = 0
+    PpStrEqCI = false
     i = 0
     While a[i] <> CH_NUL And b[i] <> CH_NUL
         If ToLowerChar(a[i]) <> ToLowerChar(b[i]) Then Exit Function
         i = i + 1
     Wend
     If a[i] <> b[i] Then Exit Function
-    PpStrEqCI = 1
+    PpStrEqCI = true
 End Function
 
 Function PpLineTrimOff(line As *Byte, n As Long) As Long
@@ -96,11 +97,12 @@ Function PpLineTrimOff(line As *Byte, n As Long) As Long
     PpLineTrimOff = n
 End Function
 
-Function PpIsWithStart(line As *Byte, n As Long, off As Long, exprOut As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpIsWithStart(line As *Byte, n As Long, off As Long, exprOut As *Byte) As boolean
     Dim kw(KW_LEN - 1) As Byte
     Dim i As Long
     Dim j As Long
-    PpIsWithStart = 0
+    PpIsWithStart = false
     If off >= n Then Exit Function
     lstrcpy(VarPtr(kw), "with")
     If n - off < PP_WITH_KW_LEN Then Exit Function
@@ -126,15 +128,16 @@ Function PpIsWithStart(line As *Byte, n As Long, off As Long, exprOut As *Byte) 
     Wend
     exprOut[j] = CH_NUL
     If j <= 0 Then Exit Function
-    PpIsWithStart = 1
+    PpIsWithStart = true
 End Function
 
-Function PpIsEndWith(line As *Byte, n As Long, off As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpIsEndWith(line As *Byte, n As Long, off As Long) As boolean
     Dim kEnd(KW_LEN - 1) As Byte
     Dim kWith(KW_LEN - 1) As Byte
     Dim i As Long
     Dim j As Long
-    PpIsEndWith = 0
+    PpIsEndWith = false
     If off >= n Then Exit Function
     lstrcpy(VarPtr(kEnd), "end")
     lstrcpy(VarPtr(kWith), "with")
@@ -159,14 +162,15 @@ Function PpIsEndWith(line As *Byte, n As Long, off As Long) As Long
         i = i + 1
     Wend
     If i < n Then Exit Function
-    PpIsEndWith = 1
+    PpIsEndWith = true
 End Function
 
-Function PpDotNeedsBase(line As *Byte, pos As Long) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function PpDotNeedsBase(line As *Byte, pos As Long) As boolean
     Dim c As Long
-    PpDotNeedsBase = 0
+    PpDotNeedsBase = false
     If pos <= 0 Then
-        PpDotNeedsBase = 1
+        PpDotNeedsBase = true
         Exit Function
     End If
     c = line[pos - 1]
@@ -175,15 +179,16 @@ Function PpDotNeedsBase(line As *Byte, pos As Long) As Long
     If c = CH_EQ Or c = CH_COMMA Or c = CH_LESS Or c = CH_GREATER Then PpDotNeedsBase = 1
 End Function
 
-Function PpWithPush(expr As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpWithPush(expr As *Byte) As boolean
     Dim stackOff As Long
-    PpWithPush = 0
+    PpWithPush = false
     If g_ppWithDepth >= PP_WITH_MAX Then Exit Function
     stackOff = g_ppWithDepth * PP_WITH_CUR_LEN
     PpStrCopy(VarPtr(g_ppWithStack[stackOff]), VarPtr(g_ppWithCur))
     PpStrCopy(VarPtr(g_ppWithCur), expr)
     g_ppWithDepth = g_ppWithDepth + 1
-    PpWithPush = 1
+    PpWithPush = true
 End Function
 
 Sub PpWithPop()
@@ -197,17 +202,18 @@ Sub PpWithPop()
     End If
 End Sub
 
-Function PpWithSubstitute(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpWithSubstitute(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As boolean
     Dim i As Long
     Dim j As Long
     Dim wi As Long
-    PpWithSubstitute = 0
+    PpWithSubstitute = false
     outN = 0
     j = 0
     i = 0
     While i < n
         If line[i] = CH_DOT Then
-            If PpDotNeedsBase(line, i) <> 0 Then
+            If PpDotNeedsBase(line, i) Then
                 wi = 0
                 While g_ppWithCur[wi] <> CH_NUL And j < PP_LINE_MAX - 1
                     out[j] = g_ppWithCur[wi]
@@ -223,7 +229,7 @@ Function PpWithSubstitute(line As *Byte, n As Long, out As *Byte, ByRef outN As 
     Wend
     out[j] = CH_NUL
     outN = j
-    PpWithSubstitute = 1
+    PpWithSubstitute = true
 End Function
 
 Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As Long) As Long
@@ -232,12 +238,12 @@ Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As
     PpRewriteWithLine = 0
     outN = 0
     off = PpLineTrimOff(line, n)
-    If PpIsWithStart(line, n, off, VarPtr(expr)) <> 0 Then
-        If PpWithPush(VarPtr(expr)) = 0 Then Exit Function
+    If PpIsWithStart(line, n, off, VarPtr(expr)) Then
+        If Not PpWithPush(VarPtr(expr)) Then Exit Function
         PpRewriteWithLine = 2
         Exit Function
     End If
-    If g_ppWithDepth > 0 And PpIsEndWith(line, n, off) <> 0 Then
+    If g_ppWithDepth > 0 And PpIsEndWith(line, n, off) Then
         PpWithPop()
         PpRewriteWithLine = 2
         Exit Function
@@ -246,6 +252,6 @@ Function PpRewriteWithLine(line As *Byte, n As Long, out As *Byte, ByRef outN As
         PpRewriteWithLine = 1
         Exit Function
     End If
-    If PpWithSubstitute(line, n, out, outN) = 0 Then Exit Function
+    If Not PpWithSubstitute(line, n, out, outN) Then Exit Function
     PpRewriteWithLine = 1
 End Function

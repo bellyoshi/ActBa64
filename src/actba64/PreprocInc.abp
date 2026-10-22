@@ -1,8 +1,9 @@
 ' PreprocInc - include 展開
 
-Function PpAppend(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, n As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpAppend(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, n As Long) As boolean
     Dim i As Long
-    PpAppend = 0
+    PpAppend = false
     If dstLen + n + 1 > dstCap Then Exit Function
     i = 0
     While i < n
@@ -11,49 +12,53 @@ Function PpAppend(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *By
     Wend
     dstLen = dstLen + n
     dst[dstLen] = CH_NUL
-    PpAppend = 1
+    PpAppend = true
 End Function
 
-Function PpEmitFileMark(dst As *Byte, ByRef dstLen As Long, dstCap As Long, path As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpEmitFileMark(dst As *Byte, ByRef dstLen As Long, dstCap As Long, path As *Byte) As boolean
     Dim hdr(KW_LEN - 1) As Byte
     Dim tail(PP_FILE_MARK_TAIL) As Byte
-    PpEmitFileMark = 0
+    PpEmitFileMark = false
     lstrcpy(VarPtr(hdr), "' ---- ")
-    If PpAppend(dst, dstLen, dstCap, VarPtr(hdr), PP_FILE_MARK_HEAD) = 0 Then Exit Function
-    If PpAppend(dst, dstLen, dstCap, path, lstrlen(path)) = 0 Then Exit Function
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(hdr), PP_FILE_MARK_HEAD) Then Exit Function
+    If Not PpAppend(dst, dstLen, dstCap, path, lstrlen(path)) Then Exit Function
     lstrcpy(VarPtr(tail), " ----")
     tail[5] = CH_CR
     tail[6] = CH_NL
     tail[7] = CH_NUL
-    If PpAppend(dst, dstLen, dstCap, VarPtr(tail), PP_FILE_MARK_TAIL) = 0 Then Exit Function
-    PpEmitFileMark = 1
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(tail), PP_FILE_MARK_TAIL) Then Exit Function
+    PpEmitFileMark = true
 End Function
 
-Function PpEmitFileEnd(dst As *Byte, ByRef dstLen As Long, dstCap As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpEmitFileEnd(dst As *Byte, ByRef dstLen As Long, dstCap As Long) As boolean
     Dim s(PP_FILE_END_MARK) As Byte
-    PpEmitFileEnd = 0
+    PpEmitFileEnd = false
     lstrcpy(VarPtr(s), "' ---- end ----")
-    If PpAppend(dst, dstLen, dstCap, VarPtr(s), PP_FILE_END_MARK) = 0 Then Exit Function
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(s), PP_FILE_END_MARK) Then Exit Function
     s[0] = CH_CR
     s[1] = CH_NL
-    If PpAppend(dst, dstLen, dstCap, VarPtr(s), 2) = 0 Then Exit Function
-    PpEmitFileEnd = 1
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(s), 2) Then Exit Function
+    PpEmitFileEnd = true
 End Function
 
-Function PpNameIsEnd(name As *Byte) As Long
-    PpNameIsEnd = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpNameIsEnd(name As *Byte) As boolean
+    PpNameIsEnd = false
     If name = 0 Then Exit Function
     If ToLowerChar(name[0]) <> CH_Le Then Exit Function
     If ToLowerChar(name[1]) <> CH_Ln Then Exit Function
     If ToLowerChar(name[2]) <> CH_Ld Then Exit Function
     If name[3] <> CH_NUL Then Exit Function
-    PpNameIsEnd = 1
+    PpNameIsEnd = true
 End Function
 
-Function PpLineIsFileMark(line As *Byte, n As Long, nameOut As *Byte, nameMax As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpLineIsFileMark(line As *Byte, n As Long, nameOut As *Byte, nameMax As Long) As boolean
     Dim i As Long
     Dim nameLen As Long
-    PpLineIsFileMark = 0
+    PpLineIsFileMark = false
     nameOut[0] = CH_NUL
     i = 0
     While i < n
@@ -84,7 +89,7 @@ Function PpLineIsFileMark(line As *Byte, n As Long, nameOut As *Byte, nameMax As
     Wend
     nameOut[nameLen] = CH_NUL
     If nameLen <= 0 Then Exit Function
-    PpLineIsFileMark = 1
+    PpLineIsFileMark = true
 End Function
 
 Function PpLineEndAt(src As *Byte, from As Long) As Long
@@ -131,8 +136,8 @@ Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) 
         start = i
         i = PpLineEndAt(src, i)
         n = i - start
-        If PpLineIsFileMark(VarPtr(src[start]), n, VarPtr(name), PJ_PATH_LEN) <> 0 Then
-            If PpNameIsEnd(VarPtr(name)) <> 0 Then
+        If PpLineIsFileMark(VarPtr(src[start]), n, VarPtr(name), PJ_PATH_LEN) Then
+            If PpNameIsEnd(VarPtr(name)) Then
                 If nestSp > 0 Then nestSp = nestSp - 1
             Else
                 If nestSp < PP_MAX_DEPTH Then
@@ -169,21 +174,23 @@ Function PpErrLoc$(src As *Byte, combLine As Long) As String
     End If
 End Function
 
-Function PpEmitLineCrlf(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpEmitLineCrlf(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long) As boolean
     Dim crlf(1) As Byte
-    PpEmitLineCrlf = 0
+    PpEmitLineCrlf = false
     If n > 0 Then
-        If PpAppend(dst, dstLen, dstCap, line, n) = 0 Then Exit Function
+        If Not PpAppend(dst, dstLen, dstCap, line, n) Then Exit Function
     End If
     crlf[0] = CH_CR
     crlf[1] = CH_NL
-    If PpAppend(dst, dstLen, dstCap, VarPtr(crlf), 2) = 0 Then Exit Function
-    PpEmitLineCrlf = 1
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(crlf), 2) Then Exit Function
+    PpEmitLineCrlf = true
 End Function
 
-Function PpResolveIncPath(inc As *Byte, isAngle As Long, curFile As *Byte, full As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpResolveIncPath(inc As *Byte, isAngle As Long, curFile As *Byte, full As *Byte) As boolean
     Dim dir(PP_ONCE_PATH - 1) As Byte
-    PpResolveIncPath = 0
+    PpResolveIncPath = false
     full[0] = CH_NUL
     If inc[0] = CH_NUL Then Exit Function
     If isAngle <> 0 Then
@@ -195,40 +202,42 @@ Function PpResolveIncPath(inc As *Byte, isAngle As Long, curFile As *Byte, full 
         lstrcpy(full, VarPtr(dir))
         lstrcat(full, inc)
     End If
-    PpResolveIncPath = 1
+    PpResolveIncPath = true
 End Function
 
-Function PpExpandIncludeLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long, curFile As *Byte, depth As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpExpandIncludeLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long, curFile As *Byte, depth As Long) As boolean
     Dim inc(PP_WITH_CUR_LEN - 1) As Byte
     Dim full(PP_ONCE_PATH - 1) As Byte
     Dim isAngle As Long
     Dim child As *Byte
     Dim childSize As Long
-    PpExpandIncludeLine = 0
+    PpExpandIncludeLine = false
     isAngle = 0
-    If PpExtractInclude(line, n, VarPtr(inc), isAngle) = 0 Then Exit Function
-    If PpResolveIncPath(VarPtr(inc), isAngle, curFile, VarPtr(full)) = 0 Then Exit Function
-    If PpEmitLineCrlf(dst, dstLen, dstCap, line, n) = 0 Then Exit Function
-    If PpOnceHas(VarPtr(full)) <> 0 Then
-        PpExpandIncludeLine = 1
+    If Not PpExtractInclude(line, n, VarPtr(inc), isAngle) Then Exit Function
+    If Not PpResolveIncPath(VarPtr(inc), isAngle, curFile, VarPtr(full)) Then Exit Function
+    If Not PpEmitLineCrlf(dst, dstLen, dstCap, line, n) Then Exit Function
+    If PpOnceHas(VarPtr(full)) Then
+        PpExpandIncludeLine = true
         Exit Function
     End If
     child = LoadFile(VarPtr(full), childSize)
     If child = NULL Then Exit Function
     PpOnceAdd(VarPtr(full))
-    If PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) = 0 Then
+    If Not PpExpandInto(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) Then
         free(child)
         Exit Function
     End If
     free(child)
-    PpExpandIncludeLine = 1
+    PpExpandIncludeLine = true
 End Function
 
-Function PpExpandNormalLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpExpandNormalLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long) As boolean
     Dim wOut(PP_LINE_MAX - 1) As Byte
     Dim wN As Long
     Dim wSt As Long
-    PpExpandNormalLine = 0
+    PpExpandNormalLine = false
     wN = 0
     wSt = PpRewriteWithLine(line, n, VarPtr(wOut), wN)
     If wSt = 0 Then
@@ -240,18 +249,19 @@ Function PpExpandNormalLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, 
     End If
     If wSt = 2 Then
         ' With / End With 行は出力しない
-        PpExpandNormalLine = 1
+        PpExpandNormalLine = true
         Exit Function
     End If
     If wSt = 1 And wN > 0 Then
-        If PpEmitLineCrlf(dst, dstLen, dstCap, VarPtr(wOut), wN) = 0 Then Exit Function
+        If Not PpEmitLineCrlf(dst, dstLen, dstCap, VarPtr(wOut), wN) Then Exit Function
     Else
-        If PpEmitLineCrlf(dst, dstLen, dstCap, line, n) = 0 Then Exit Function
+        If Not PpEmitLineCrlf(dst, dstLen, dstCap, line, n) Then Exit Function
     End If
-    PpExpandNormalLine = 1
+    PpExpandNormalLine = true
 End Function
 
-Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As *Byte, srcSize As Long, curFile As *Byte, depth As Long) As boolean
     Dim i As Long
     Dim start As Long
     Dim n As Long
@@ -260,10 +270,10 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
     Dim j As Long
     Dim lineNo As Long
 
-    PpExpandInto = 0
+    PpExpandInto = false
     If depth >= PP_MAX_DEPTH Then Exit Function
     If depth = 0 Then PpWithReset()
-    If PpEmitFileMark(dst, dstLen, dstCap, curFile) = 0 Then Exit Function
+    If Not PpEmitFileMark(dst, dstLen, dstCap, curFile) Then Exit Function
     i = 0
     lineNo = 1
     While i < srcSize
@@ -284,19 +294,19 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
             j = j + 1
         Wend
         line[n] = CH_NUL
-        If PpTryResourceLine(VarPtr(line), n, curFile) <> 0 Then
+        If PpTryResourceLine(VarPtr(line), n, curFile) Then
             ' #resource 行は出力しない
-        ElseIf PpIsIncludeLine(VarPtr(line), n) <> 0 Then
-            If PpExpandIncludeLine(dst, dstLen, dstCap, VarPtr(line), n, curFile, depth) = 0 Then Exit Function
+        ElseIf PpIsIncludeLine(VarPtr(line), n) Then
+            If Not PpExpandIncludeLine(dst, dstLen, dstCap, VarPtr(line), n, curFile, depth) Then Exit Function
         Else
-            If PpExpandNormalLine(dst, dstLen, dstCap, VarPtr(line), n) = 0 Then Exit Function
+            If Not PpExpandNormalLine(dst, dstLen, dstCap, VarPtr(line), n) Then Exit Function
         End If
         If i < srcSize And src[i] = CH_CR Then i = i + 1
         If i < srcSize And src[i] = CH_NL Then i = i + 1
         lineNo = lineNo + 1
     Wend
-    If PpEmitFileEnd(dst, dstLen, dstCap) = 0 Then Exit Function
-    PpExpandInto = 1
+    If Not PpEmitFileEnd(dst, dstLen, dstCap) Then Exit Function
+    PpExpandInto = true
 End Function
 
 Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte) As *Byte
@@ -311,7 +321,7 @@ Function ExpandIncludes(src As *Byte, srcSize As Long, srcPath As *Byte) As *Byt
     If dst = NULL Then Exit Function
     dstLen = 0
     dst[0] = CH_NUL
-    If PpExpandInto(dst, dstLen, dstCap, src, srcSize, srcPath, 0) = 0 Then
+    If Not PpExpandInto(dst, dstLen, dstCap, src, srcSize, srcPath, 0) Then
         free(dst)
         Exit Function
     End If
@@ -352,7 +362,7 @@ Function PpSourceHasStrict(src As *Byte) As Long
                 j = j + 1
             Wend
             lstrcpy(VarPtr(word), "strict")
-            If PpLineWordMatch(VarPtr(line), j, n, VarPtr(word)) <> 0 Then
+            If PpLineWordMatch(VarPtr(line), j, n, VarPtr(word)) Then
                 PpSourceHasStrict = 1
                 Exit Function
             End If
@@ -363,10 +373,11 @@ Function PpSourceHasStrict(src As *Byte) As Long
     Wend
 End Function
 
-Function PpLineWordMatch(line As *Byte, pos As Long, n As Long, word As *Byte) As Long
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function PpLineWordMatch(line As *Byte, pos As Long, n As Long, word As *Byte) As boolean
     Dim i As Long
     Dim wi As Long
-    PpLineWordMatch = 0
+    PpLineWordMatch = false
     i = pos
     wi = 0
     While word[wi] <> CH_NUL And i < n
@@ -375,14 +386,15 @@ Function PpLineWordMatch(line As *Byte, pos As Long, n As Long, word As *Byte) A
         wi = wi + 1
     Wend
     If word[wi] <> CH_NUL Then Exit Function
-    If i < n And PpIsIdentCont(line[i]) <> 0 Then Exit Function
-    PpLineWordMatch = 1
+    If i < n And PpIsIdentCont(line[i]) Then Exit Function
+    PpLineWordMatch = true
 End Function
 
-Function PpIsIdentCont(c As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function PpIsIdentCont(c As Long) As boolean
     If IsAlphabet(c) Or IsDigit(c) Or c = CH_UNDER Then
-        PpIsIdentCont = 1
+        PpIsIdentCont = true
     Else
-        PpIsIdentCont = 0
+        PpIsIdentCont = false
     End If
 End Function

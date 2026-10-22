@@ -4,15 +4,16 @@
 '  AstLowerStmtCtrl - Field/Get/Put / loops / Heavy / reg
 ' ===================================================
 
-Function LowEmitToStringRax(ctx As *LowerCtx, exprIdx As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitToStringRax(ctx As *LowerCtx, exprIdx As Long) As boolean
     Dim name(SYM_NAME_LEN - 1) As Byte
     Dim lab As Long
     Dim ety As Long
 
-    LowEmitToStringRax = 0
+    LowEmitToStringRax = false
     If LowIsStringExpr(ctx, exprIdx) <> 0 Then
         If LowExpr(ctx, exprIdx) = 0 Then Exit Function
-        LowEmitToStringRax = 1
+        LowEmitToStringRax = true
         Exit Function
     End If
     ety = LowExprType(ctx, exprIdx)
@@ -31,7 +32,7 @@ Function LowEmitToStringRax(ctx As *LowerCtx, exprIdx As Long) As Long
         If LowExpr(ctx, exprIdx) = 0 Then Exit Function
         LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
     End If
-    LowEmitToStringRax = 1
+    LowEmitToStringRax = true
 End Function
 
 Function LowStmtField(ctx As *LowerCtx, idx As Long) As Long
@@ -119,7 +120,7 @@ Function LowStmtGet(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     AstCopyStr(ast, varIdx, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
@@ -154,7 +155,7 @@ Function LowStmtPut(ctx As *LowerCtx, idx As Long) As Long
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
     IrEmit(list, OP_PUSH_RAX, 0, 0)
-    If LowEmitToStringRax(ctx, nodes[idx].extra) = 0 Then Exit Function
+    If Not LowEmitToStringRax(ctx, nodes[idx].extra) Then Exit Function
     If TyIs32() <> 0 Then
         IrEmit(list, OP_POP_RDX, 0, 0)
         IrEmit(list, OP_POP_RCX, 0, 0)
@@ -169,11 +170,12 @@ Function LowStmtPut(ctx As *LowerCtx, idx As Long) As Long
     LowStmtPut = 1
 End Function
 
-Function LowStmtWriteItem(ctx As *LowerCtx, idx As Long, cur As Long, labItem As Long, labComma As Long, ByRef first As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowStmtWriteItem(ctx As *LowerCtx, idx As Long, cur As Long, labItem As Long, labComma As Long, ByRef first As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
-    LowStmtWriteItem = 0
+    LowStmtWriteItem = false
     ast = ctx->ast
     nodes = ast->nodes
     list = ctx->list
@@ -186,7 +188,7 @@ Function LowStmtWriteItem(ctx As *LowerCtx, idx As Long, cur As Long, labItem As
         LowEmitCall1Rax(list, 0, 0, 0, labComma)
     End If
     first = 0
-    If LowEmitToStringRax(ctx, nodes[cur].left) = 0 Then Exit Function
+    If Not LowEmitToStringRax(ctx, nodes[cur].left) Then Exit Function
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     If nodes[idx].left < 0 Then
         IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
@@ -197,7 +199,7 @@ Function LowStmtWriteItem(ctx As *LowerCtx, idx As Long, cur As Long, labItem As
     IrEmit(list, OP_POP_RAX, 0, 0)
     IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
     LowEmitCallLab2(list, labItem)
-    LowStmtWriteItem = 1
+    LowStmtWriteItem = true
 End Function
 
 Function LowStmtWrite(ctx As *LowerCtx, idx As Long) As Long
@@ -231,7 +233,7 @@ Function LowStmtWrite(ctx As *LowerCtx, idx As Long) As Long
     first = 1
     cur = nodes[idx].right
     While cur >= 0
-        If LowStmtWriteItem(ctx, idx, cur, labItem, labComma, first) = 0 Then Exit Function
+        If Not LowStmtWriteItem(ctx, idx, cur, labItem, labComma, first) Then Exit Function
         cur = nodes[cur].nxt
     Wend
     If nodes[idx].num = 0 Then
