@@ -14,7 +14,7 @@ Function LowJumpIfFalse(ctx As *LowerCtx, idx As Long, lab As Long) As Long
     nodes = ast->nodes
     If nodes[idx].kind = AST_UNARY Then
         If nodes[idx].num = UOP_NOT Then
-            If LowJumpIfTrue(ctx, nodes[idx].left, lab) = 0 Then Exit Function
+            If Not LowJumpIfTrue(ctx, nodes[idx].left, lab) Then Exit Function
             LowJumpIfFalse = 1
             Exit Function
         End If
@@ -33,7 +33,7 @@ Function LowJumpIfFalse(ctx As *LowerCtx, idx As Long, lab As Long) As Long
         LowJumpIfFalse = 1
     ElseIf op = BOP_OR Then
         labSkip = LowNewLabel(ctx)
-        If LowJumpIfTrue(ctx, nodes[idx].left, labSkip) = 0 Then Exit Function
+        If Not LowJumpIfTrue(ctx, nodes[idx].left, labSkip) Then Exit Function
         If LowJumpIfFalse(ctx, nodes[idx].right, lab) = 0 Then Exit Function
         IrEmit(ctx->list, OP_LABEL, labSkip, 0)
         LowJumpIfFalse = 1
@@ -51,11 +51,12 @@ Function LowJumpIfFalse(ctx As *LowerCtx, idx As Long, lab As Long) As Long
 End Function
 
 ' 比較 BINOP が真のとき lab へ飛ぶ
-Function LowJumpCmpTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowJumpCmpTrue(ctx As *LowerCtx, idx As Long, lab As Long) As boolean
     Dim jcc As Long
     Dim jTrue As Long
 
-    LowJumpCmpTrue = 0
+    LowJumpCmpTrue = false
     jcc = LowCmpFalseJcc(ctx, idx)
     If jcc = 0 Then Exit Function
     jTrue = LowCmpTrueJcc(jcc)
@@ -64,22 +65,23 @@ Function LowJumpCmpTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
         Exit Function
     End If
     IrEmit(ctx->list, jTrue, lab, 0)
-    LowJumpCmpTrue = 1
+    LowJumpCmpTrue = true
 End Function
 
-Function LowJumpIfTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowJumpIfTrue(ctx As *LowerCtx, idx As Long, lab As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim op As Long
     Dim labSkip As Long
 
-    LowJumpIfTrue = 0
+    LowJumpIfTrue = false
     ast = ctx->ast
     nodes = ast->nodes
     If nodes[idx].kind = AST_UNARY Then
         If nodes[idx].num = UOP_NOT Then
             If LowJumpIfFalse(ctx, nodes[idx].left, lab) = 0 Then Exit Function
-            LowJumpIfTrue = 1
+            LowJumpIfTrue = true
             Exit Function
         End If
     End If
@@ -87,28 +89,28 @@ Function LowJumpIfTrue(ctx As *LowerCtx, idx As Long, lab As Long) As Long
         If LowExpr(ctx, idx) = 0 Then Exit Function
         IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
         IrEmit(ctx->list, OP_JNZ, lab, 0)
-        LowJumpIfTrue = 1
+        LowJumpIfTrue = true
         Exit Function
     End If
     op = nodes[idx].num
     If op = BOP_OR Then
-        If LowJumpIfTrue(ctx, nodes[idx].left, lab) = 0 Then Exit Function
-        If LowJumpIfTrue(ctx, nodes[idx].right, lab) = 0 Then Exit Function
-        LowJumpIfTrue = 1
+        If Not LowJumpIfTrue(ctx, nodes[idx].left, lab) Then Exit Function
+        If Not LowJumpIfTrue(ctx, nodes[idx].right, lab) Then Exit Function
+        LowJumpIfTrue = true
     ElseIf op = BOP_AND Then
         labSkip = LowNewLabel(ctx)
         If LowJumpIfFalse(ctx, nodes[idx].left, labSkip) = 0 Then Exit Function
-        If LowJumpIfTrue(ctx, nodes[idx].right, lab) = 0 Then Exit Function
+        If Not LowJumpIfTrue(ctx, nodes[idx].right, lab) Then Exit Function
         IrEmit(ctx->list, OP_LABEL, labSkip, 0)
-        LowJumpIfTrue = 1
+        LowJumpIfTrue = true
     ElseIf op = BOP_EQ Or op = BOP_NE Or op = BOP_LT Or op = BOP_LE Or op = BOP_GT Or op = BOP_GE Then
-        If LowJumpCmpTrue(ctx, idx, lab) = 0 Then Exit Function
-        LowJumpIfTrue = 1
+        If Not LowJumpCmpTrue(ctx, idx, lab) Then Exit Function
+        LowJumpIfTrue = true
     Else
         If LowExpr(ctx, idx) = 0 Then Exit Function
         IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
         IrEmit(ctx->list, OP_JNZ, lab, 0)
-        LowJumpIfTrue = 1
+        LowJumpIfTrue = true
     End If
 End Function
 
@@ -213,13 +215,14 @@ Function LowCtorArgCount(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' Ctor のユーザー引数を rsp+8.. のホーム領域へ
-Function LowEmitCtorArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitCtorArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim argIdx As Long
     Dim argNode As Long
 
-    LowEmitCtorArgs = 0
+    LowEmitCtorArgs = false
     ast = ctx->ast
     nodes = ast->nodes
     argIdx = 1
@@ -230,11 +233,12 @@ Function LowEmitCtorArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
         argIdx = argIdx + 1
         argNode = nodes[argNode].nxt
     Wend
-    LowEmitCtorArgs = 1
+    LowEmitCtorArgs = true
 End Function
 
 ' this をホーム領域へ置いて Ctor を呼ぶ
-Function LowEmitCtorCall(ctx As *LowerCtx, idx As Long, lab As Long, nArgs As Long, callBytes As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitCtorCall(ctx As *LowerCtx, idx As Long, lab As Long, nArgs As Long, callBytes As Long) As boolean
     Dim vOff As Long
     Dim vTy As Long
     Dim vTypeIdx As Long
@@ -243,10 +247,10 @@ Function LowEmitCtorCall(ctx As *LowerCtx, idx As Long, lab As Long, nArgs As Lo
     Dim ast As *Ast
     Dim fname(SYM_NAME_LEN - 1) As Byte
 
-    LowEmitCtorCall = 0
+    LowEmitCtorCall = false
     ast = ctx->ast
     AstCopyStr(ast, idx, VarPtr(fname))
-    If LowLookupVar(ctx, VarPtr(fname), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+    If Not LowLookupVar(ctx, VarPtr(fname), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
@@ -255,10 +259,11 @@ Function LowEmitCtorCall(ctx As *LowerCtx, idx As Long, lab As Long, nArgs As Lo
     LowEmitLoadRegArgs(ctx->list, nArgs)
     IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
     LowEmitCallFinish(ctx->list, callBytes)
-    LowEmitCtorCall = 1
+    LowEmitCtorCall = true
 End Function
 
-Function LowStmtDimCtor(ctx As *LowerCtx, idx As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowStmtDimCtor(ctx As *LowerCtx, idx As Long) As boolean
     Dim stackPad(LOW_STACK_PAD - 1) As Byte
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -269,7 +274,7 @@ Function LowStmtDimCtor(ctx As *LowerCtx, idx As Long) As Long
     Dim nArgs As Long
     Dim callBytes As Long
 
-    LowStmtDimCtor = 0
+    LowStmtDimCtor = false
     ast = ctx->ast
     nodes = ast->nodes
     typeTable = ast->types
@@ -292,9 +297,9 @@ Function LowStmtDimCtor(ctx As *LowerCtx, idx As Long) As Long
     If callBytes > 0 Then
         IrEmit(ctx->list, OP_SUB_RSP, callBytes, 0)
     End If
-    If LowEmitCtorArgs(ctx, idx, nArgs) = 0 Then Exit Function
-    If LowEmitCtorCall(ctx, idx, lab, nArgs, callBytes) = 0 Then Exit Function
-    LowStmtDimCtor = 1
+    If Not LowEmitCtorArgs(ctx, idx, nArgs) Then Exit Function
+    If Not LowEmitCtorCall(ctx, idx, lab, nArgs, callBytes) Then Exit Function
+    LowStmtDimCtor = true
 End Function
 
 Function LowStmtDim(ctx As *LowerCtx, idx As Long) As Long
@@ -311,7 +316,7 @@ Function LowStmtDim(ctx As *LowerCtx, idx As Long) As Long
     LowStmtDim = 0
     ast = ctx->ast
     nodes = ast->nodes
-    If LowStmtDimCtor(ctx, idx) <> 0 Then
+    If LowStmtDimCtor(ctx, idx) Then
         LowStmtDim = 1
         Exit Function
     End If
@@ -319,7 +324,7 @@ Function LowStmtDim(ctx As *LowerCtx, idx As Long) As Long
     If nodes[idx].right >= 0 Then
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
         AstCopyStr(ast, idx, VarPtr(name))
-        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then
+        If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
             ctx->err = 1
             Exit Function
         End If

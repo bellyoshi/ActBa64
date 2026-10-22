@@ -1,7 +1,8 @@
 ' AstLowerExprCallEmit - 通常呼び出しの引数と発行
 
 ' 実引数を rsp+0.. のホーム領域へ格納（ByRef ビット / 仮引数型変換つき）
-Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, isApi As Long, name As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, isApi As Long, name As *Byte) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
@@ -11,7 +12,7 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
     Dim byRefBit As Long
     Dim useAddr As Long
 
-    LowEmitCallArgHomes = 0
+    LowEmitCallArgHomes = false
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
@@ -41,10 +42,11 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
         argIdx = argIdx + 1
         argNode = nodes[argNode].nxt
     Wend
-    LowEmitCallArgHomes = 1
+    LowEmitCallArgHomes = true
 End Function
 
-Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Long, dllKind As Long, byBits As Long, apiName As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Long, dllKind As Long, byBits As Long, apiName As *Byte) As boolean
     Dim stackPad(LOW_STACK_PAD - 1) As Byte
     Dim nodes As *AstNode
     Dim ast As *Ast
@@ -54,7 +56,7 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     Dim argIdx As Long
     Dim callBytes As Long
 
-    LowExprCallEmit = 0
+    LowExprCallEmit = false
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
@@ -79,7 +81,7 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     If callBytes > 0 Then
         IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
-    If LowEmitCallArgHomes(ctx, idx, nArgs, byBits, isApi, VarPtr(name)) = 0 Then Exit Function
+    If Not LowEmitCallArgHomes(ctx, idx, nArgs, byBits, isApi, VarPtr(name)) Then Exit Function
     LowEmitLoadRegArgs(list, nArgs)
     If isApi <> 0 Then
         IrEmitStr(list, OP_CALL_API, dllKind, apiName)
@@ -87,14 +89,15 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
         IrEmit(list, OP_CALL_LAB, lab, 0)
     End If
     LowEmitCallFinish(list, callBytes)
-    LowExprCallEmit = 1
+    LowExprCallEmit = true
 End Function
 
 ' Decl 呼び出し用: "dll|api" を packed に組み立てる
-Function LowPackApiCall(dllName As *Byte, apiName As *Byte, packed As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowPackApiCall(dllName As *Byte, apiName As *Byte, packed As *Byte) As boolean
     Dim i As Long
     Dim j As Long
-    LowPackApiCall = 0
+    LowPackApiCall = false
     i = 0
     While dllName[i] <> 0 And i < 120
         packed[i] = dllName[i]
@@ -111,7 +114,7 @@ Function LowPackApiCall(dllName As *Byte, apiName As *Byte, packed As *Byte) As 
     Wend
     If apiName[j] <> 0 Then Exit Function
     packed[i] = 0
-    LowPackApiCall = 1
+    LowPackApiCall = true
 End Function
 
 Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
@@ -140,7 +143,7 @@ Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
     byBits = 0
     If lab >= 0 Then
         byBits = LowFindFuncByRefs(ctx, VarPtr(name))
-        If LowExprCallEmit(ctx, idx, lab, 0, 0, byBits, VarPtr(apiName)) = 0 Then Exit Function
+        If Not LowExprCallEmit(ctx, idx, lab, 0, 0, byBits, VarPtr(apiName)) Then Exit Function
     Else
         di = LowFindDecl(ctx, VarPtr(name))
         If di < 0 Then
@@ -152,13 +155,13 @@ Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
         LowDeclDllName(ctx, di, VarPtr(dllName))
         bys = ctx->declByRefs
         byBits = bys[di]
-        If LowPackApiCall(VarPtr(dllName), VarPtr(apiName), VarPtr(packed)) = 0 Then
+        If Not LowPackApiCall(VarPtr(dllName), VarPtr(apiName), VarPtr(packed)) Then
             Print "error: Declare name too long '" + MakeStr(VarPtr(name)) + "'"
             ctx->err = 1
             Exit Function
         End If
         isApi = 1
-        If LowExprCallEmit(ctx, idx, lab, isApi, 0, byBits, VarPtr(packed)) = 0 Then Exit Function
+        If Not LowExprCallEmit(ctx, idx, lab, isApi, 0, byBits, VarPtr(packed)) Then Exit Function
     End If
     LowExprCallNormal = 1
 End Function

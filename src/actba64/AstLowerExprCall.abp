@@ -27,7 +27,8 @@ Function LowCountCallArgs(ctx As *LowerCtx, idx As Long, base As Long) As Long
 End Function
 
 ' メソッド呼び出しのユーザー引数を rsp+8.. のホーム領域へ
-Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
@@ -35,7 +36,7 @@ Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
     Dim argNode As Long
     Dim useAddr As Long
 
-    LowEmitMethodArgs = 0
+    LowEmitMethodArgs = false
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
@@ -52,7 +53,7 @@ Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
         argIdx = argIdx + 1
         argNode = nodes[argNode].nxt
     Wend
-    LowEmitMethodArgs = 1
+    LowEmitMethodArgs = true
 End Function
 
 Sub LowEmitMethodRegArgs(list As *IrList, nArgs As Long)
@@ -73,12 +74,13 @@ Sub LowEmitMethodRegArgs(list As *IrList, nArgs As Long)
     End If
 End Sub
 
-Function LowEmitMethodThis(ctx As *LowerCtx, idx As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitMethodThis(ctx As *LowerCtx, idx As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim list As *IrList
 
-    LowEmitMethodThis = 0
+    LowEmitMethodThis = false
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
@@ -92,7 +94,7 @@ Function LowEmitMethodThis(ctx As *LowerCtx, idx As Long) As Long
     If TyIs32() = 0 Then
         IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
     End If
-    LowEmitMethodThis = 1
+    LowEmitMethodThis = true
 End Function
 
 Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
@@ -133,10 +135,10 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     callBytes = LowCallBytes(nArgs)
     IrEmit(list, OP_SUB_RSP, callBytes, 0)
     ' user args 1..n-1 into home/stack; this (rcx) set last
-    If LowEmitMethodArgs(ctx, idx, nArgs) = 0 Then Exit Function
+    If Not LowEmitMethodArgs(ctx, idx, nArgs) Then Exit Function
     LowEmitMethodRegArgs(list, nArgs)
-    If LowEmitMethodThis(ctx, idx) = 0 Then Exit Function
-    If LowExprCallMethodInvoke(ctx, idx, typeIdx, nArgs, callBytes) = 0 Then Exit Function
+    If Not LowEmitMethodThis(ctx, idx) Then Exit Function
+    If Not LowExprCallMethodInvoke(ctx, idx, typeIdx, nArgs, callBytes) Then Exit Function
     LowExprCallMethod = 1
 End Function
 
@@ -269,7 +271,7 @@ Function LowExprCallFnPtrEmit(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob
     AstCopyStr(ctx->ast, idx, VarPtr(name))
     callBytes = LowCallBytes(nArgs)
     If callBytes > 0 Then IrEmit(list, OP_SUB_RSP, callBytes, 0)
-    If LowEmitCallArgHomes(ctx, idx, nArgs, 0, 0, VarPtr(name)) = 0 Then Exit Function
+    If Not LowEmitCallArgHomes(ctx, idx, nArgs, 0, 0, VarPtr(name)) Then Exit Function
     LowEmitLoadRegArgs(list, nArgs)
     LowEmitLoadOff(list, vOff, vGlob)
     IrEmit(list, OP_CALL_RAX, 0, 0)
@@ -339,7 +341,7 @@ Function LowExprCallArr(ctx As *LowerCtx, idx As Long) As Long
     LowExprCallArr = 0
     ast = ctx->ast
     AstCopyStr(ast, idx, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
     If vTy = TY_PTR_FUNC Then
         LowExprCallArr = LowExprCallFnPtr(ctx, idx, vOff, vGlob)
         Exit Function
@@ -349,7 +351,8 @@ End Function
 
 
 
-Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, typeIdx As Long, nArgs As Long, callBytes As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, typeIdx As Long, nArgs As Long, callBytes As Long) As boolean
     Dim name(SYM_NAME_LEN - 1) As Byte
     Dim buf(TEXT_LEN - 1) As Byte
     Dim list As *IrList
@@ -360,7 +363,7 @@ Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, typeIdx As Long,
     Dim names As *Byte
     Dim ast As *Ast
 
-    LowExprCallMethodInvoke = 0
+    LowExprCallMethodInvoke = false
     ast = ctx->ast
     list = ctx->list
     typeTable = ast->types
@@ -392,5 +395,5 @@ Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, typeIdx As Long,
     End If
     LowEmitCallFinish(list, callBytes)
 
-    LowExprCallMethodInvoke = 1
+    LowExprCallMethodInvoke = true
 End Function

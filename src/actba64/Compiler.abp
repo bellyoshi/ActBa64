@@ -20,8 +20,9 @@ Function CompCodeCap() As Long
     CompCodeCap = codeCap
 End Function
 
-Function CompAllocScratch(ByRef builder As *ImportBuilder, ByRef idataBuf As *Byte, ByRef codeMem As *Byte) As Long
-    CompAllocScratch = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function CompAllocScratch(ByRef builder As *ImportBuilder, ByRef idataBuf As *Byte, ByRef codeMem As *Byte) As boolean
+    CompAllocScratch = false
     builder = calloc(SizeOf(ImportBuilder))
     If builder = NULL Then
         Print "error: out of memory (import builder)"
@@ -44,10 +45,11 @@ Function CompAllocScratch(ByRef builder As *ImportBuilder, ByRef idataBuf As *By
         builder = NULL
         Exit Function
     End If
-    CompAllocScratch = 1
+    CompAllocScratch = true
 End Function
 
-Function CompEmitOnce(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function CompEmitOnce(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord) As boolean
     cb->size = 0
     If TyIs32() <> 0 Then
         IrEmitCode32(list, cb, builder, dataRva)
@@ -56,9 +58,9 @@ Function CompEmitOnce(list As *IrList, cb As *CodeBuffer, builder As *ImportBuil
     End If
     If cb->size >= cb->capacity Then
         Print "error: code too large"
-        CompEmitOnce = 0
+        CompEmitOnce = false
     Else
-        CompEmitOnce = 1
+        CompEmitOnce = true
     End If
 End Function
 
@@ -86,14 +88,14 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     Dim idataRva As DWord
 
     CompileIrToPe = 0
-    If CompAllocScratch(builder, idataBuf, codeMem) = 0 Then Exit Function
+    If Not CompAllocScratch(builder, idataBuf, codeMem) Then Exit Function
     IrCollect(list, builder)
     cb.buf = codeMem
     cb.capacity = CompCodeCap()
     dataVirt = AlignUp(list->globSize, SECTION_ALIGN)
     If dataVirt < SECTION_ALIGN Then dataVirt = SECTION_ALIGN
     IbFinalize(builder, IDATA_RVA, idataBuf, idataSize)
-    If CompEmitOnce(list, VarPtr(cb), builder, TEXT_RVA + SECTION_ALIGN) = 0 Then
+    If Not CompEmitOnce(list, VarPtr(cb), builder, TEXT_RVA + SECTION_ALIGN) Then
         CompFreePe(codeMem, idataBuf, builder)
         Exit Function
     End If
@@ -103,7 +105,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     idataRva = dataRva
     idataRva = idataRva + dataVirt
     IbFinalize(builder, idataRva, idataBuf, idataSize)
-    If CompEmitOnce(list, VarPtr(cb), builder, dataRva) = 0 Then
+    If Not CompEmitOnce(list, VarPtr(cb), builder, dataRva) Then
         CompFreePe(codeMem, idataBuf, builder)
         Exit Function
     End If
@@ -116,15 +118,16 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
     CompFreePe(codeMem, idataBuf, builder)
 End Function
 
-Function CompSourceToIr(src As *Byte, ByRef ast As *Ast, ByRef list As *IrList, ByRef subsystem As Long) As Long
-    CompSourceToIr = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function CompSourceToIr(src As *Byte, ByRef ast As *Ast, ByRef list As *IrList, ByRef subsystem As Long) As boolean
+    CompSourceToIr = false
     g_compileStrict = PpSourceHasStrict(src)
     ast = AstCreate(AST_MAX_NODES)
     If ast = NULL Then
         Print "error: out of memory (ast)"
         Exit Function
     End If
-    If ParseSource(src, ast) = 0 Then
+    If Not ParseSource(src, ast) Then
         AstFree(ast)
         ast = NULL
         Exit Function
@@ -137,7 +140,7 @@ Function CompSourceToIr(src As *Byte, ByRef ast As *Ast, ByRef list As *IrList, 
         Exit Function
     End If
     subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI
-    If AstToIr(ast, list, subsystem) = 0 Then
+    If Not AstToIr(ast, list, subsystem) Then
         If DiagErrorCount() > 0 Then
             DiagPrintAll()
             DiagPrintSummary()
@@ -154,7 +157,7 @@ Function CompSourceToIr(src As *Byte, ByRef ast As *Ast, ByRef list As *IrList, 
         DiagPrintAll()
         DiagPrintSummary()
     End If
-    CompSourceToIr = 1
+    CompSourceToIr = true
 End Function
 
 Function CompileSource(src As *Byte, outPath As *Byte, useWindow As Long) As Long
@@ -163,7 +166,7 @@ Function CompileSource(src As *Byte, outPath As *Byte, useWindow As Long) As Lon
     Dim subsystem As Long
 
     CompileSource = 0
-    If CompSourceToIr(src, ast, list, subsystem) = 0 Then Exit Function
+    If Not CompSourceToIr(src, ast, list, subsystem) Then Exit Function
     If useWindow <> 0 Then subsystem = IMAGE_SUBSYSTEM_WINDOWS_GUI
     If ResPrepareFromPp() = 0 Then
         IrFree(list)
@@ -218,7 +221,7 @@ Function CompileFile(srcPath As *Byte, outPath As *Byte) As Long
     Dim full As *Byte
 
     CompileFile = 0
-    If PpStateInit() = 0 Then
+    If Not PpStateInit() Then
         Print "error: out of memory (preproc)"
         Exit Function
     End If
@@ -258,7 +261,7 @@ Function CompilePj(pjPath As *Byte, outPath As *Byte) As Long
     Dim full As *Byte
 
     CompilePj = 0
-    If PpStateInit() = 0 Then
+    If Not PpStateInit() Then
         Print "error: out of memory (preproc)"
         Exit Function
     End If
@@ -287,7 +290,7 @@ Function CompilePj(pjPath As *Byte, outPath As *Byte) As Long
 End Function
 
 Function CompileInput(srcPath As *Byte, outPath As *Byte) As Long
-    If PpPathEndsWithPj(srcPath) <> 0 Then
+    If PpPathEndsWithPj(srcPath) Then
         CompileInput = CompilePj(srcPath, outPath)
     Else
         CompileInput = CompileFile(srcPath, outPath)

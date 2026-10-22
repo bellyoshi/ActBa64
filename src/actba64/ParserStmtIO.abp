@@ -92,8 +92,9 @@ Function ParseStmtListUntil3(p As *Parser, stop1 As *Byte, stop2 As *Byte, stop3
     ParseStmtListUntil3 = nFirst
 End Function
 
-Function ParseHashFilePrefix(p As *Parser, ByRef nFile As Long) As Long
-    ParseHashFilePrefix = 0
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function ParseHashFilePrefix(p As *Parser, ByRef nFile As Long) As boolean
+    ParseHashFilePrefix = false
     nFile = -1
     If ParseTokKind(p) = TK_HASH Then
         p->pos = p->pos + 1
@@ -103,25 +104,27 @@ Function ParseHashFilePrefix(p As *Parser, ByRef nFile As Long) As Long
             p->pos = p->pos + 1
         End If
     End If
-    ParseHashFilePrefix = 1
+    ParseHashFilePrefix = true
 End Function
 
-Function ParseIoExprCanStart(p As *Parser) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseIoExprCanStart(p As *Parser) As boolean
     Dim k As Long
-    ParseIoExprCanStart = 0
+    ParseIoExprCanStart = false
     k = ParseTokKind(p)
     If k = TK_NUMBER Or k = TK_FLOAT Or k = TK_STRING Or k = TK_IDENT Or k = TK_LPAREN Or k = TK_MINUS Or k = TK_PLUS Then
-        ParseIoExprCanStart = 1
+        ParseIoExprCanStart = true
     End If
 End Function
 
-Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long) As boolean
     Dim nodes As *AstNode
     Dim nArg As Long
     Dim e As Long
     Dim semiLine As Long
 
-    ParseIoExprArgs = 0
+    ParseIoExprArgs = false
     Do
         e = ParseExpr(p)
         If e < 0 Then Exit Function
@@ -141,7 +144,7 @@ Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef 
             ' same-line ";" separates items; EOL ";" is Print stay
             semiLine = ParseTokLine(p)
             p->pos = p->pos + 1
-            If ParseIoExprCanStart(p) = 0 Then
+            If Not ParseIoExprCanStart(p) Then
                 p->pos = p->pos - 1
                 Exit Do
             End If
@@ -153,24 +156,25 @@ Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef 
             Exit Do
         End If
     Loop
-    ParseIoExprArgs = 1
+    ParseIoExprArgs = true
 End Function
 
-Function ParsePrintItems(p As *Parser, ByRef nFirst As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParsePrintItems(p As *Parser, ByRef nFirst As Long) As boolean
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim nArg As Long
     Dim nPrev As Long
     Dim e As Long
 
-    ParsePrintItems = 0
+    ParsePrintItems = false
     nFirst = -1
     nPrev = -1
     If ParseTokKind(p) = TK_LPAREN Then
         p->pos = p->pos + 1
         e = ParseExpr(p)
         If e < 0 Then Exit Function
-        If ParseExpect(p, TK_RPAREN) = 0 Then Exit Function
+        If Not ParseExpect(p, TK_RPAREN) Then Exit Function
         ast = p->ast
         nArg = AstAddNode(ast, AST_ARG)
         If nArg < 0 Then Exit Function
@@ -180,10 +184,10 @@ Function ParsePrintItems(p As *Parser, ByRef nFirst As Long) As Long
     ElseIf ParseTokKind(p) <> TK_SEMI Then
         If ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_FLOAT Or ParseTokKind(p) = TK_STRING Or ParseTokKind(p) = TK_IDENT Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_PLUS Then
             ast = p->ast
-            If ParseIoExprArgs(p, ast, nFirst, nPrev) = 0 Then Exit Function
+            If Not ParseIoExprArgs(p, ast, nFirst, nPrev) Then Exit Function
         End If
     End If
-    ParsePrintItems = 1
+    ParsePrintItems = true
 End Function
 
 Function ParsePrintStmt(p As *Parser) As Long
@@ -197,8 +201,8 @@ Function ParsePrintStmt(p As *Parser) As Long
     ParsePrintStmt = -1
     p->pos = p->pos + 1
     stay = 0
-    If ParseHashFilePrefix(p, nFile) = 0 Then Exit Function
-    If ParsePrintItems(p, nFirst) = 0 Then Exit Function
+    If Not ParseHashFilePrefix(p, nFile) Then Exit Function
+    If Not ParsePrintItems(p, nFirst) Then Exit Function
     If ParseTokKind(p) = TK_SEMI Then
         p->pos = p->pos + 1
         stay = 1
@@ -228,11 +232,11 @@ Function ParseInputFileVars(p As *Parser) As Long
     p->pos = p->pos + 1
     nFile = ParseExpr(p)
     If nFile < 0 Then Exit Function
-    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
+    If Not ParseExpect(p, TK_COMMA) Then Exit Function
     nFirst = -1
     nPrev = -1
     Do
-        If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+        If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
         ast = p->ast
         nVar = AstAddNode(ast, AST_VAR)
         If nVar < 0 Then Exit Function
@@ -266,8 +270,8 @@ Function ParseInputPrompt(p As *Parser) As Long
     ParseInputPrompt = -1
     nPrompt = ParseExpr(p)
     If nPrompt < 0 Then Exit Function
-    If ParseExpect(p, TK_COMMA) = 0 Then Exit Function
-    If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+    If Not ParseExpect(p, TK_COMMA) Then Exit Function
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
     ast = p->ast
     nVar = AstAddNode(ast, AST_VAR)
     If nVar < 0 Then Exit Function
@@ -304,7 +308,7 @@ Function ParseInputStmt(p As *Parser) As Long
     nFirst = -1
     nPrev = -1
     Do
-        If ParseCopyIdent(p, VarPtr(name)) = 0 Then Exit Function
+        If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
         ast = p->ast
         nVar = AstAddNode(ast, AST_VAR)
         If nVar < 0 Then Exit Function

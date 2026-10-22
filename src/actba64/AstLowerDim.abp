@@ -31,14 +31,15 @@ Function LowStmtList(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' boundIdx: 1D expr, or AST_ARG chain (2D). nElems=product of (b+1); arrLen0=b0+1 for 2D else -1
-Function LowDimEvalBoundNode(ctx As *LowerCtx, boundIdx As Long, ByRef nElems As Long, ByRef arrLen0 As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowDimEvalBoundNode(ctx As *LowerCtx, boundIdx As Long, ByRef nElems As Long, ByRef arrLen0 As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim b0 As Long
     Dim b1 As Long
     Dim nxt As Long
 
-    LowDimEvalBoundNode = 0
+    LowDimEvalBoundNode = false
     arrLen0 = -1
     nElems = 0
     If boundIdx < 0 Then Exit Function
@@ -58,44 +59,46 @@ Function LowDimEvalBoundNode(ctx As *LowerCtx, boundIdx As Long, ByRef nElems As
         If b0 < 0 Then Exit Function
         nElems = b0 + 1
     End If
-    LowDimEvalBoundNode = 1
+    LowDimEvalBoundNode = true
 End Function
 
-Function LowDimArrBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, ByRef nbytes As Long, ByRef arrLen0 As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowDimArrBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, ByRef nbytes As Long, ByRef arrLen0 As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim nElems As Long
-    LowDimArrBytes = 0
+    LowDimArrBytes = false
     arrLen0 = -1
     ast = ctx->ast
     nodes = ast->nodes
     If typeKind = TY_BYTE_ARR Then
-        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        If Not LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) Then Exit Function
         nbytes = nElems
     ElseIf typeKind = TY_LONG_ARR Then
-        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        If Not LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) Then Exit Function
         nbytes = nElems * 4
     ElseIf typeKind = TY_DOUBLE_ARR Then
-        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        If Not LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) Then Exit Function
         nbytes = nElems * 8
     ElseIf typeKind = TY_SINGLE_ARR Then
-        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        If Not LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) Then Exit Function
         nbytes = nElems * 4
     ElseIf typeKind = TY_STRING_ARR Then
-        If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+        If Not LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) Then Exit Function
         nbytes = nElems * TyPtrSize()
     End If
-    LowDimArrBytes = 1
+    LowDimArrBytes = true
 End Function
 
-Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, ByRef nbytes As Long, ByRef typeIdx As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, ByRef nbytes As Long, ByRef typeIdx As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim nElems As Long
     Dim arrLen0 As Long
     Dim typeTable As *TypeTable
     Dim tsizes As *Long
-    LowDimUdtArrBytes = 0
+    LowDimUdtArrBytes = false
     ast = ctx->ast
     nodes = ast->nodes
     typeTable = ast->types
@@ -104,7 +107,7 @@ Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, B
         Print "error: Dim UDT[] missing type '" + MakeStr(namePtr) + "'"
         Exit Function
     End If
-    If LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) = 0 Then Exit Function
+    If Not LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) Then Exit Function
     tsizes = typeTable->typeSizes
     nbytes = tsizes[typeIdx]
     If nbytes <= 0 Then
@@ -112,15 +115,16 @@ Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, B
         Exit Function
     End If
     nbytes = nbytes * nElems
-    LowDimUdtArrBytes = 1
+    LowDimUdtArrBytes = true
 End Function
 
-Function LowDimUdtBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, ByRef nbytes As Long, ByRef typeIdx As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowDimUdtBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, ByRef nbytes As Long, ByRef typeIdx As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim typeTable As *TypeTable
     Dim tsizes As *Long
-    LowDimUdtBytes = 0
+    LowDimUdtBytes = false
     ast = ctx->ast
     nodes = ast->nodes
     typeTable = ast->types
@@ -135,13 +139,14 @@ Function LowDimUdtBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, ByRe
         Print "error: Dim UDT size 0 '" + MakeStr(namePtr) + "'"
         Exit Function
     End If
-    LowDimUdtBytes = 1
+    LowDimUdtBytes = true
 End Function
 
-Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, namePtr As *Byte, ByRef nbytes As Long, ByRef typeIdx As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, namePtr As *Byte, ByRef nbytes As Long, ByRef typeIdx As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
-    LowDimFixedBytes = 0
+    LowDimFixedBytes = false
     ast = ctx->ast
     nodes = ast->nodes
     If typeKind = TY_BYTE Then
@@ -151,9 +156,9 @@ Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, na
     ElseIf typeKind = TY_SINGLE Then
         nbytes = 4
     ElseIf typeKind = TY_UDT_ARR Then
-        If LowDimUdtArrBytes(ctx, dimIdx, namePtr, nbytes, typeIdx) = 0 Then Exit Function
+        If Not LowDimUdtArrBytes(ctx, dimIdx, namePtr, nbytes, typeIdx) Then Exit Function
     ElseIf typeKind = TY_UDT Then
-        If LowDimUdtBytes(ctx, dimIdx, namePtr, nbytes, typeIdx) = 0 Then Exit Function
+        If Not LowDimUdtBytes(ctx, dimIdx, namePtr, nbytes, typeIdx) Then Exit Function
     ElseIf typeKind = TY_PTR_UDT Then
         typeIdx = nodes[dimIdx].extra
         If typeIdx < 0 Then Exit Function
@@ -162,12 +167,13 @@ Function LowDimFixedBytes(ctx As *LowerCtx, dimIdx As Long, typeKind As Long, na
         typeIdx = nodes[dimIdx].extra
         nbytes = TyPtrSize()
     End If
-    LowDimFixedBytes = 1
+    LowDimFixedBytes = true
 End Function
 
 ' Register one AST_DIM (asGlob=1 -> module global, else local). Returns 0 on error.
 ' 2D non-UDT arrays store len0=(bound0+1) in typeIdx for first-index-fastest flattening.
-Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim namePtr(SYM_NAME_LEN - 1) As Byte
@@ -176,7 +182,7 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
     Dim typeIdx As Long
     Dim arrLen0 As Long
 
-    LowRegisterDimNode = 0
+    LowRegisterDimNode = false
     ast = ctx->ast
     nodes = ast->nodes
     AstCopyStr(ast, dimIdx, VarPtr(namePtr))
@@ -184,8 +190,8 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
     nbytes = 8
     typeIdx = -1
     arrLen0 = -1
-    If LowDimArrBytes(ctx, dimIdx, typeKind, nbytes, arrLen0) = 0 Then Exit Function
-    If LowDimFixedBytes(ctx, dimIdx, typeKind, VarPtr(namePtr), nbytes, typeIdx) = 0 Then Exit Function
+    If Not LowDimArrBytes(ctx, dimIdx, typeKind, nbytes, arrLen0) Then Exit Function
+    If Not LowDimFixedBytes(ctx, dimIdx, typeKind, VarPtr(namePtr), nbytes, typeIdx) Then Exit Function
     If arrLen0 > 0 Then
         If typeKind <> TY_UDT_ARR And typeKind <> TY_UDT And typeKind <> TY_PTR_UDT And typeKind <> TY_PTR_FUNC Then
             typeIdx = arrLen0
@@ -202,37 +208,38 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
             Exit Function
         End If
     End If
-    LowRegisterDimNode = 1
+    LowRegisterDimNode = true
 End Function
 
 ' Walk statement list (and nested If/While/For/Do bodies) to register Dims.
-Function LowCollectDimsInList(ctx As *LowerCtx, idx As Long, asGlob As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowCollectDimsInList(ctx As *LowerCtx, idx As Long, asGlob As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
     Dim cur As Long
     Dim kind As Long
 
-    LowCollectDimsInList = 0
+    LowCollectDimsInList = false
     ast = ctx->ast
     nodes = ast->nodes
     cur = idx
     While cur >= 0
         kind = nodes[cur].kind
         If kind = AST_DIM Then
-            If LowRegisterDimNode(ctx, cur, asGlob) = 0 Then Exit Function
+            If Not LowRegisterDimNode(ctx, cur, asGlob) Then Exit Function
         ElseIf kind = AST_IF Then
-            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
-            If LowCollectDimsInList(ctx, nodes[cur].extra, asGlob) = 0 Then Exit Function
+            If Not LowCollectDimsInList(ctx, nodes[cur].right, asGlob) Then Exit Function
+            If Not LowCollectDimsInList(ctx, nodes[cur].extra, asGlob) Then Exit Function
         ElseIf kind = AST_WHILE Then
-            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+            If Not LowCollectDimsInList(ctx, nodes[cur].right, asGlob) Then Exit Function
         ElseIf kind = AST_DO Then
-            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+            If Not LowCollectDimsInList(ctx, nodes[cur].right, asGlob) Then Exit Function
         ElseIf kind = AST_FOR Then
-            If LowCollectDimsInList(ctx, nodes[cur].num, asGlob) = 0 Then Exit Function
+            If Not LowCollectDimsInList(ctx, nodes[cur].num, asGlob) Then Exit Function
         ElseIf kind = AST_WITH Then
-            If LowCollectDimsInList(ctx, nodes[cur].right, asGlob) = 0 Then Exit Function
+            If Not LowCollectDimsInList(ctx, nodes[cur].right, asGlob) Then Exit Function
         End If
         cur = nodes[cur].nxt
     Wend
-    LowCollectDimsInList = 1
+    LowCollectDimsInList = true
 End Function

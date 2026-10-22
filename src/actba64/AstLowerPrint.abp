@@ -17,18 +17,19 @@ Function LowPrintVarTy(ctx As *LowerCtx, exprIdx As Long) As Long
     If LowIsStringExpr(ctx, exprIdx) <> 0 Then Exit Function
     If nodes[exprIdx].kind <> AST_VAR Then Exit Function
     AstCopyStr(ast, exprIdx, VarPtr(name))
-    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) = 0 Then Exit Function
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
     LowPrintVarTy = vTy
 End Function
 
 ' Print 対象を rax の文字列ポインタへ
-Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As boolean
     Dim name(SYM_NAME_LEN - 1) As Byte
     Dim lab As Long
     Dim labStr As Long
     Dim exprTy As Long
 
-    LowEmitPrintValue = 0
+    LowEmitPrintValue = false
     exprTy = LowExprType(ctx, exprIdx)
     If vTy = TY_BYTE_ARR Then
         If LowExprArg(ctx, exprIdx) = 0 Then Exit Function
@@ -51,15 +52,16 @@ Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Lo
     Else
         If LowExpr(ctx, exprIdx) = 0 Then Exit Function
     End If
-    LowEmitPrintValue = 1
+    LowEmitPrintValue = true
 End Function
 
 ' rax の文字列を出力（N88 モードは N88_Print へ）
-Function LowEmitPrintCall(ctx As *LowerCtx, stay As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitPrintCall(ctx As *LowerCtx, stay As Long) As boolean
     Dim name(SYM_NAME_LEN - 1) As Byte
     Dim lab As Long
 
-    LowEmitPrintCall = 0
+    LowEmitPrintCall = false
     If PpIsN88Basic() <> 0 Then
         lstrcpy(VarPtr(name), "N88_Print")
         If stay <> 0 Then
@@ -80,22 +82,23 @@ Function LowEmitPrintCall(ctx As *LowerCtx, stay As Long) As Long
         lab = LowEnsureRtPrint(ctx)
         LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
     End If
-    LowEmitPrintCall = 1
+    LowEmitPrintCall = true
 End Function
 
-Function LowStmtPrintOneConsole(ctx As *LowerCtx, exprIdx As Long, stay As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowStmtPrintOneConsole(ctx As *LowerCtx, exprIdx As Long, stay As Long) As boolean
     Dim stackPad(LOW_STACK_PAD - 1) As Byte
     Dim vTy As Long
 
-    LowStmtPrintOneConsole = 0
+    LowStmtPrintOneConsole = false
     If exprIdx < 0 Then
-        LowStmtPrintOneConsole = 1
+        LowStmtPrintOneConsole = true
         Exit Function
     End If
     vTy = LowPrintVarTy(ctx, exprIdx)
-    If LowEmitPrintValue(ctx, exprIdx, vTy) = 0 Then Exit Function
-    If LowEmitPrintCall(ctx, stay) = 0 Then Exit Function
-    LowStmtPrintOneConsole = 1
+    If Not LowEmitPrintValue(ctx, exprIdx, vTy) Then Exit Function
+    If Not LowEmitPrintCall(ctx, stay) Then Exit Function
+    LowStmtPrintOneConsole = true
 End Function
 
 Function LowStmtPrint(ctx As *LowerCtx, idx As Long) As Long
@@ -117,7 +120,7 @@ Function LowStmtPrint(ctx As *LowerCtx, idx As Long) As Long
         LowStmtPrint = 1
         Exit Function
     End If
-    If LowStmtPrintOneConsole(ctx, nodes[cur].left, nodes[idx].num) = 0 Then Exit Function
+    If Not LowStmtPrintOneConsole(ctx, nodes[cur].left, nodes[idx].num) Then Exit Function
     LowEmitStrCollectSafepoint(ctx)
     LowStmtPrint = 1
 End Function
@@ -157,7 +160,7 @@ Function LowStmtPrintFile(ctx As *LowerCtx, idx As Long, fileIdx As Long) As Lon
             LowEmitCall1Rax(list, 0, 0, 0, labSp)
         End If
         first = 0
-        If LowEmitToStringRax(ctx, nodes[cur].left) = 0 Then Exit Function
+        If Not LowEmitToStringRax(ctx, nodes[cur].left) Then Exit Function
         IrEmit(list, OP_PUSH_RAX, 0, 0)
         If LowExpr(ctx, fileIdx) = 0 Then Exit Function
         IrEmit(list, OP_MOV_RCX_RAX, 0, 0)

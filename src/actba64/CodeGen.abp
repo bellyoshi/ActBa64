@@ -18,14 +18,15 @@ Dim g_cgFix As *IrFixup
 Dim g_cgFixCap As Long
 Dim g_cgNFix As Long
 
-Function CgEnsureLabIdx(li As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function CgEnsureLabIdx(li As Long) As boolean
     Dim newCap As Long
     Dim p As *Byte
     Dim i As Long
-    CgEnsureLabIdx = 0
+    CgEnsureLabIdx = false
     If li < 0 Then Exit Function
     If li < g_cgLabCap Then
-        CgEnsureLabIdx = 1
+        CgEnsureLabIdx = true
         Exit Function
     End If
     newCap = g_cgLabCap
@@ -43,13 +44,14 @@ Function CgEnsureLabIdx(li As Long) As Long
         i = i + 1
     Wend
     g_cgLabCap = newCap
-    CgEnsureLabIdx = 1
+    CgEnsureLabIdx = true
 End Function
 
-Function CgPushFix(at As Long, lab As Long, kind As Long) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function CgPushFix(at As Long, lab As Long, kind As Long) As boolean
     Dim newCap As Long
     Dim p As *Byte
-    CgPushFix = 0
+    CgPushFix = false
     If g_cgNFix >= g_cgFixCap Then
         newCap = g_cgFixCap * 2
         If newCap < DYN_INIT Then newCap = DYN_INIT
@@ -63,54 +65,56 @@ Function CgPushFix(at As Long, lab As Long, kind As Long) As Long
     g_cgFix[g_cgNFix].lab = lab
     g_cgFix[g_cgNFix].kind = kind
     g_cgNFix = g_cgNFix + 1
-    CgPushFix = 1
+    CgPushFix = true
 End Function
 
-Function IrDllNameOf(dllKind As DWord, dst As *Byte) As Long
-    IrDllNameOf = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function IrDllNameOf(dllKind As DWord, dst As *Byte) As boolean
+    IrDllNameOf = false
     If dllKind = IR_DLL_USER32 Then
         lstrcpy(dst, "user32.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_KERNEL32 Then
         lstrcpy(dst, "kernel32.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_GDI32 Then
         lstrcpy(dst, "gdi32.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_IMM32 Then
         lstrcpy(dst, "imm32.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_COMDLG32 Then
         lstrcpy(dst, "comdlg32.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_SHELL32 Then
         lstrcpy(dst, "shell32.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_OLE32 Then
         lstrcpy(dst, "ole32.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_D3D11 Then
         lstrcpy(dst, "d3d11.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     ElseIf dllKind = IR_DLL_D3DCOMPILER Then
         lstrcpy(dst, "d3dcompiler_47.dll")
-        IrDllNameOf = 1
+        IrDllNameOf = true
     End If
 End Function
 
 ' arg1<>0: enum + str=api / arg1=0: str="dll|api"
-Function IrResolveApiNames(list As *IrList, i As Long, dllOut As *Byte, apiOut As *Byte) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function IrResolveApiNames(list As *IrList, i As Long, dllOut As *Byte, apiOut As *Byte) As boolean
     Dim ops As *IrOp
     Dim packed(TEXT_LEN - 1) As Byte
     Dim j As Long
     Dim k As Long
 
-    IrResolveApiNames = 0
+    IrResolveApiNames = false
     ops = list->ops
     If ops[i].arg1 <> 0 Then
-        If IrDllNameOf(ops[i].arg1, dllOut) = 0 Then Exit Function
+        If Not IrDllNameOf(ops[i].arg1, dllOut) Then Exit Function
         IrCopyStrAt(list, i, apiOut)
-        IrResolveApiNames = 1
+        IrResolveApiNames = true
         Exit Function
     End If
     IrCopyStrAt(list, i, VarPtr(packed))
@@ -130,7 +134,7 @@ Function IrResolveApiNames(list As *IrList, i As Long, dllOut As *Byte, apiOut A
     Wend
     apiOut[k] = 0
     If dllOut[0] = 0 Or apiOut[0] = 0 Then Exit Function
-    IrResolveApiNames = 1
+    IrResolveApiNames = true
 End Function
 
 Sub IrCollect(list As *IrList, builder As *ImportBuilder)
@@ -148,7 +152,7 @@ Sub IrCollect(list As *IrList, builder As *ImportBuilder)
     For i = 0 To n - 1
         opv = ops[i].op
         If opv = OP_CALL_API Then
-            If IrResolveApiNames(list, i, VarPtr(dll), VarPtr(api)) <> 0 Then
+            If IrResolveApiNames(list, i, VarPtr(dll), VarPtr(api)) Then
                 IbAddImport(builder, VarPtr(dll), VarPtr(api))
             End If
         ElseIf opv = OP_LEA_RDX_STR Or opv = OP_LEA_R8_STR Or opv = OP_LEA_RAX_STR Then
@@ -166,9 +170,10 @@ Sub IrCollect(list As *IrList, builder As *ImportBuilder)
     Next
 End Sub
 
-Function CgInitFixups() As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function CgInitFixups() As boolean
     Dim i As Long
-    CgInitFixups = 0
+    CgInitFixups = false
     If g_cgLabOff <> NULL Then free(g_cgLabOff)
     If g_cgFix <> NULL Then free(g_cgFix)
     g_cgLabCap = DYN_INIT
@@ -188,7 +193,7 @@ Function CgInitFixups() As Long
         g_cgLabOff[i] = -1
     Next
     g_cgNFix = 0
-    CgInitFixups = 1
+    CgInitFixups = true
 End Function
 
 Sub CgApplyFixups(cb As *CodeBuffer)
@@ -200,7 +205,7 @@ Sub CgApplyFixups(cb As *CodeBuffer)
     For i = 0 To g_cgNFix - 1
         li = g_cgFix[i].lab
         at = g_cgFix[i].at
-        If CgEnsureLabIdx(li) <> 0 Then
+        If CgEnsureLabIdx(li) Then
             If g_cgLabOff[li] >= 0 Then
                 nextRip = at + 4
                 rel = g_cgLabOff[li] - nextRip
@@ -220,10 +225,11 @@ Sub CgApplyFixups(cb As *CodeBuffer)
     g_cgNFix = 0
 End Sub
 
-Function CgTryEmitA1(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function CgTryEmitA1(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) As boolean
     Dim opv As Long
     Dim strRva As DWord
-    CgTryEmitA1 = 0
+    CgTryEmitA1 = false
     opv = op->op
     If opv = OP_ENTER Then
         EmitEnter(cb, op->arg1)
@@ -260,12 +266,13 @@ Function CgTryEmitA1(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) 
     Else
         Exit Function
     End If
-    CgTryEmitA1 = 1
+    CgTryEmitA1 = true
 End Function
 
-Function CgTryEmitA2(cb As *CodeBuffer, op As *IrOp) As Long
+' 戻り値 true : 正常終了  false : エラーあり
+Function CgTryEmitA2(cb As *CodeBuffer, op As *IrOp) As boolean
     Dim opv As Long
-    CgTryEmitA2 = 0
+    CgTryEmitA2 = false
     opv = op->op
     If opv = OP_LEA_LOCAL Then
         EmitLeaLocal(cb, op->arg1)
@@ -296,16 +303,17 @@ Function CgTryEmitA2(cb As *CodeBuffer, op As *IrOp) As Long
     Else
         Exit Function
     End If
-    CgTryEmitA2 = 1
+    CgTryEmitA2 = true
 End Function
 
-Function CgTryEmitA(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) As Long
-    CgTryEmitA = 0
-    If CgTryEmitA1(cb, op, builder) <> 0 Then
-        CgTryEmitA = 1
+' 戻り値 true : 正常終了  false : エラーあり
+Function CgTryEmitA(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) As boolean
+    CgTryEmitA = false
+    If CgTryEmitA1(cb, op, builder) Then
+        CgTryEmitA = true
         Exit Function
     End If
-    If CgTryEmitA2(cb, op) <> 0 Then
-        CgTryEmitA = 1
+    If CgTryEmitA2(cb, op) Then
+        CgTryEmitA = true
     End If
 End Function
