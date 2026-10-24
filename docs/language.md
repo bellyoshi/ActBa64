@@ -57,7 +57,7 @@ Print a +_
 
 ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -189,6 +189,7 @@ Dim a[N, M] As T        ' 同上（バッファ記法）
 ```
 
 境界は定数式可（例: `Dim Board(BOARD_SIZE - 1, BOARD_SIZE - 1) As Long`）。  
+`ELM(n)` は要素数 `n` に対する上限で、値は `n - 1`。`Dim a[ELM(10)]` は `Dim a[9]` と同じ（添字 0..9）。  
 要素型は `Byte` / `Long` / `Single` / `Double` / `String` / UDT。3 次元以上は非対応。
 
 **レイアウト（first-index-fastest）:** 先頭添字が連続する。
@@ -197,7 +198,8 @@ Dim a[N, M] As T        ' 同上（バッファ記法）
 flat = i0 + i1 * (N + 1)     ' Dim a(N, M) の a(i0, i1)
 ```
 
-要素数は `(N+1)*(M+1)`。読み書きは `a(i, j)` / `a[i, j]`（括弧・角括弧とも可）。
+要素数は `(N+1)*(M+1)`。読み書きは `a(i, j)` / `a[i, j]`（括弧・角括弧とも可）。  
+境界は `Dim` のときに決まり、実行中には変えない。`ReDim` は Visual Basic の機能で、ActiveBasic 4.20 にも ActBa64 にも無い。
 
 回帰: `test/t_arr2d_rw.abp`、`test/t_arr2d_const.abp`。サンプル: `samples/reversi.abp`。
 
@@ -465,6 +467,7 @@ StrPtr(s)
 MakeStr(p As *Byte)
 RGB(r, g, b)
 LOWORD(n)
+ELM(n)                   ' 要素数 n の上限。値は n - 1
 MakeIntResource(id)
 ```
 
@@ -527,6 +530,8 @@ memcpy(dst, src, n)
 
 `Chr$` / `Right$` は組み込み。`Hex$` / `Oct$` / `ZeroString` / `Val` / `InStr` などはライブラリ側。`Oct$` は 32bit のビット列を 8 進にし、先頭の 0 は付けない。`ZeroString(n)` の `Len` は `n` で、中身は 0（埋め込み NUL）。`n` が負のときは空文字。
 
+`_splitpath(path, drive, dir, fname, ext)` は `X:\` で始まる絶対パスを NUL 終端の各バッファへ分ける。`drive` は `"C:"`、`dir` は `"\dir1\dir2\"`、`fname` は拡張子を除いた名前、`ext` は `".txt"`（最後の `.` から）。出力ポインタが 0 の欄は書き込まない。`path` が 0、または `X:\` で始まらないときは何も書き込まない。2 バイト文字の先行バイトは区切りにしない。
+
 ---
 
 ## 7. プリプロセスと標準ヘッダ
@@ -557,7 +562,7 @@ memcpy(dst, src, n)
 
 ### 7.3 自動 Include
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
 続けて Preproc が `api.idx`（主要 Win32 の `Declare Lib`）と `UnicodeApi.sbp`（Unicode 版 API）を挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
@@ -767,7 +772,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` は対応。`Super` は未対応）
 - `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は IEEE Double（64bit と `-actba32`。32bit の配列要素・UDT フィールド転送と、`Print` の Double 変換は未）
-- `GoTo` / `GoSub` / `ReDim`
+- `GoTo` / `GoSub`
 - ネスト手続き
 - `#resource` の `.rc` 直接コンパイル、ICON/MENU など型付きリソース（ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化

@@ -1,0 +1,130 @@
+' SplitPath.abp - _splitpath（default 自動読込）
+' X:\ で始まる絶対パスだけを分解する。出力ポインタが 0 の欄は書き込まない。
+
+Declare Function IsDBCSLeadByte Lib "kernel32.dll" (ByVal TestChar As Long) As Long
+
+Function StrU_IsAbs(path As *Byte) As Long
+    StrU_IsAbs = 0
+    If path = 0 Then Exit Function
+    If path[0] = 0 Or path[1] <> Asc(":") Then Exit Function
+    If path[2] = STRU_CH_BSLASH Then StrU_IsAbs = 1
+End Function
+
+Function StrU_Lead(path As *Byte, i As Long) As Long
+    StrU_Lead = 0
+    If IsDBCSLeadByte(path[i]) = 0 Then Exit Function
+    If path[i + 1] = 0 Then Exit Function
+    StrU_Lead = 1
+End Function
+
+Function StrU_Step(path As *Byte, i As Long) As Long
+    If StrU_Lead(path, i) <> 0 Then
+        StrU_Step = i + 2
+    Else
+        StrU_Step = i + 1
+    End If
+End Function
+
+Function StrU_SlashAt(path As *Byte, i As Long, last As Long) As Long
+    If StrU_Lead(path, i) <> 0 Then
+        StrU_SlashAt = last
+    ElseIf path[i] = STRU_CH_BSLASH Then
+        StrU_SlashAt = i
+    Else
+        StrU_SlashAt = last
+    End If
+End Function
+
+Function StrU_ScanSlash(path As *Byte, i As Long, last As Long) As Long
+    While path[i] <> 0
+        last = StrU_SlashAt(path, i, last)
+        i = StrU_Step(path, i)
+    Wend
+    StrU_ScanSlash = last
+End Function
+
+Function StrU_DotAt(path As *Byte, i As Long, dot As Long) As Long
+    If StrU_Lead(path, i) <> 0 Then
+        StrU_DotAt = dot
+    ElseIf path[i] = STRU_CH_DOT Then
+        StrU_DotAt = i
+    Else
+        StrU_DotAt = dot
+    End If
+End Function
+
+Function StrU_ScanDot(path As *Byte, i As Long, dot As Long) As Long
+    While path[i] <> 0
+        dot = StrU_DotAt(path, i, dot)
+        i = StrU_Step(path, i)
+    Wend
+    StrU_ScanDot = dot
+End Function
+
+Function StrU_LenAt(path As *Byte, i As Long) As Long
+    Dim n As Long
+    n = 0
+    While path[i] <> 0
+        n = n + 1
+        i = i + 1
+    Wend
+    StrU_LenAt = n
+End Function
+
+Sub StrU_CopyTo(dst As *Byte, src As *Byte, n As Long)
+    Dim i As Long
+    For i = 0 To n - 1
+        dst[i] = src[i]
+    Next
+    dst[n] = 0
+End Sub
+
+Sub StrU_PutDrive(path As *Byte, drive As *Byte)
+    If drive = 0 Then Exit Sub
+    drive[0] = path[0]
+    drive[1] = path[1]
+    drive[2] = 0
+End Sub
+
+Sub StrU_PutDir(path As *Byte, dir As *Byte, last As Long)
+    If dir = 0 Then Exit Sub
+    StrU_CopyTo(dir, path + 2, last - 1)
+End Sub
+
+Function StrU_NameLen(path As *Byte, start As Long, dot As Long) As Long
+    If dot < 0 Then
+        StrU_NameLen = StrU_LenAt(path, start)
+    Else
+        StrU_NameLen = dot - start
+    End If
+End Function
+
+Sub StrU_PutName(path As *Byte, fname As *Byte, start As Long, dot As Long)
+    If fname = 0 Then Exit Sub
+    StrU_CopyTo(fname, path + start, StrU_NameLen(path, start, dot))
+End Sub
+
+Sub StrU_PutExt(path As *Byte, ext As *Byte, dot As Long)
+    If ext = 0 Then Exit Sub
+    If dot < 0 Then
+        ext[0] = 0
+    Else
+        StrU_CopyTo(ext, path + dot, StrU_LenAt(path, dot))
+    End If
+End Sub
+
+Sub StrU_PutFile(path As *Byte, fname As *Byte, ext As *Byte, last As Long)
+    Dim dot As Long
+    dot = StrU_ScanDot(path, last + 1, -1)
+    StrU_PutName(path, fname, last + 1, dot)
+    StrU_PutExt(path, ext, dot)
+End Sub
+
+Sub _splitpath(path As BytePtr, drive As BytePtr, dir As BytePtr, fname As BytePtr, ext As BytePtr)
+    Dim last As Long
+    If StrU_IsAbs(path) = 0 Then Exit Sub
+    StrU_PutDrive(path, drive)
+    last = StrU_ScanSlash(path, 2, 2)
+    StrU_PutDir(path, dir, last)
+    StrU_PutFile(path, fname, ext, last)
+End Sub
