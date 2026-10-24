@@ -83,7 +83,7 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` | `Memory.abp` は Byte〜DWord まで。浮動小数 Get/Set は未 |
+| `SetSingle` / `GetDouble` / `SetDouble` | `Memory.abp` は Byte〜DWord と `GetSingle` まで。残りは未 |
 | `realloc` | 4.20 C ヒープ。未 |
 
 ## GUI・Win32・マルチメディア

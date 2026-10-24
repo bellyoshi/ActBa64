@@ -507,9 +507,12 @@ p = malloc(n)
 p = calloc(n)
 free(p)
 memcpy(dst, src, n)
+GetByte(p) / GetWord(p) / GetDWord(p) / GetSingle(p)
+SetByte(p, n) / SetWord(p, n) / SetDWord(p, n)
 ```
 
-（実装により `RtlMoveMemory` / `FillMemory` 等へマップ）
+（`memcpy` は `RtlMoveMemory`、`FillMemory` は `RtlFillMemory` へマップ）  
+`Get*` / `Set*` は `Memory.abp`。ポインタが 0 のとき `Get` は 0、`Set` は何もしない。`GetSingle` は 4 バイトの IEEE Single ビットをそのまま返す。
 
 ---
 
