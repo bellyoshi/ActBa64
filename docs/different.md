@@ -75,8 +75,6 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` / `Trim$` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |
 | 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp`（IEEE Double）**。ネストした関数呼び出しは対応（複雑な入れ子は一時変数経由が安全） |
-| メモリ | `malloc` / `calloc` / `realloc` / `free` | `malloc` / `free` / `memcpy` / `FillMemory`。**`calloc` は `HeapAlloc` へマップ**。`realloc` なし |
-| `GetByte` 等 / `SetWord` 等 | ポインタ経由の読み書き | **`Memory.abp`**（浮動小数版は未） |
 | `Int64` / `QWord` / `Char` | 基本型として定義 | **`Char` / `Int64` / `QWord` 型なし**（`Byte` / `Long` / `DWord` 等） |
 | DLL 再配置 | ロード時のベース再配置 | 出力は可（`.edata`）。**`.reloc` なし**。優先ベース（64bit `0x180000000` / 32bit `0x10000000`）が塞がるとロード失敗 |
 | ソース拡張子 | `.sbp` 推奨 | **`.abp`**（`.pj` で結合） |
@@ -155,6 +153,7 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
   - 行列変換（移動・回転・拡大縮小）+ キーボード操作: [`src/actba64/samples/dxxform/`](../src/actba64/samples/dxxform/)。
   - 6面立方体 + 行列変換: [`src/actba64/samples/dxcube2/`](../src/actba64/samples/dxcube2/)。
   - BasicHelp の DirectX 章の利用パターン（初期化 → メッセージループ内描画 → 終了）を D3D11 上で再現していく。
+  - `dx_SetProjection` / `dx_SetCamera` は [`dx_camera.sbp`](../src/Include/d3d11/dx_camera.sbp)。ビューと射影は `g_dxView` / `g_dxProj`（デバイスの `SetTransform` はない）。
 
 ---
 
@@ -184,7 +183,6 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
 | `CDbl` / `CInt` / `CSng` | 型変換関数 | `As` キャストは可 |
-| `realloc` | C ヒープ | `calloc`（→ `HeapAlloc` ゼロ埋め）は済。`realloc` 未 |
 
 ### GUI・Win32・マルチメディア
 

@@ -505,6 +505,7 @@ s(r)
 ```
 p = malloc(n)
 p = calloc(n)
+p = realloc(p, n)
 free(p)
 memcpy(dst, src, n)
 GetByte(p) / GetWord(p) / GetDWord(p) / GetSingle(p) / GetDouble(p)
@@ -512,6 +513,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 ```
 
 （`memcpy` は `RtlMoveMemory`、`FillMemory` は `RtlFillMemory` へマップ）  
+`realloc(p, n)` は `HeapReAlloc(GetProcessHeap(), 0, p, n)`。戻り値は新しい先頭ポインタ。失敗時は 0 で、元のブロックはそのまま残る。  
 `Get*` / `Set*` は `Memory.abp`。ポインタが 0 のとき `Get` は 0、`Set` は何もしない。`GetSingle` / `SetSingle` は 4 バイト、`GetDouble` / `SetDouble` は 8 バイトの IEEE ビットをそのまま読む／書く。
 
 ---
@@ -670,6 +672,20 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 `Field` の割り当て変数形式（BasicHelp の拡張形）は未実装。
 
 回帰テスト例: `src/actba64/test/t_open_close.abp`、`t_input_hash*.abp`、`t_field_get_put.abp`、`t_write_file.abp`、`t_print_file.abp`、`t_eof_loc_lof.abp`
+
+### 7.6 カメラと射影（`dx_camera.sbp`）
+
+`Include\d3d11\dx_camera.sbp`。`dx_graphics.sbp` が取り込む。D3D11 には固定機能の変換がないので、結果は行優先 4×4 の `g_dxProj` / `g_dxView`（`Single` 16 個、D3DX の `D3DMATRIX` と同じ並び）に入る。
+
+```
+dx_SetProjection(angle, aspect, nearclip, backclip)
+dx_SetCamera(pEye, pAt, pUp)
+```
+
+- `angle` は視野角（ラジアン）。`aspect` はビュー空間の幅/高さ。`D3DX_PI` は `MathPi()` と同じ値
+- 射影は `D3DXMatrixPerspectiveFovLH`、カメラは `D3DXMatrixLookAtLH`
+- ポインタが 0 の `dx_SetCamera` は行列を変えない
+- シェーダの定数バッファへは `VarPtr(g_dxProj[0])` / `VarPtr(g_dxView[0])` を渡す
 
 ---
 
