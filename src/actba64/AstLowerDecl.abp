@@ -218,16 +218,21 @@ Function AstToIrCaptureParams(ctx As *LowerCtx, stmt As Long) As Long
     Dim offs As *Long
     Dim pi As Long
     Dim j As Long
+    Dim slot As Long
+    Dim types As *Long
 
     list = ctx->list
     ast = ctx->ast
     nodes = ast->nodes
     offs = ctx->offs
+    types = ctx->types
     pi = 0
+    slot = 8
     param = nodes[stmt].left
     While param >= 0
         If TyIs32() <> 0 Then
-            offs[pi] = 8 + pi * 4
+            offs[pi] = slot
+            slot = slot + LowParamBytes(nodes[param].extra, nodes[param].num)
         ElseIf pi = 0 Then
             IrEmit(list, OP_STORE_LOCAL_ECX, offs[pi], 0)
         ElseIf pi = 1 Then
@@ -253,11 +258,14 @@ Function AstToIrCaptureParams(ctx As *LowerCtx, stmt As Long) As Long
     ' HeapFree して AV するため必須。
     j = pi
     While j < ctx->symCount
-        IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
-        IrEmit(list, OP_STORE_LOCAL, offs[j], 0)
+        LowEmitZeroSlot(list, offs[j], types[j])
         j = j + 1
     Wend
-    AstToIrCaptureParams = pi
+    If TyIs32() <> 0 Then
+        AstToIrCaptureParams = slot - 8
+    Else
+        AstToIrCaptureParams = pi
+    End If
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり

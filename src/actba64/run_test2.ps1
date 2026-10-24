@@ -116,7 +116,7 @@ function Get-PjOwnedAbp {
     return $owned
 }
 
-$stats = @{ pass = 0; fail = 0; skip = 0; skipNoTarget = 0; skipPj = 0; skipGui = 0; skip32Meta = 0; skipDouble32 = 0 }
+$stats = @{ pass = 0; fail = 0; skip = 0; skipNoTarget = 0; skipPj = 0; skipGui = 0; skip32Meta = 0 }
 $pjOwned = Get-PjOwnedAbp
 
 function Add-Result([string]$name, [string]$status, [string]$detail) {
@@ -145,14 +145,6 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         $stats.skip32Meta++
         if ($ShowSkipped) {
             Add-Result $name "SKIP" "skip32"
-        }
-        return
-    }
-    if ($Actba32 -and $name -match '(?i)^t_double') {
-        $stats.skip++
-        $stats.skipDouble32++
-        if ($ShowSkipped) {
-            Add-Result $name "SKIP" "double/sse32"
         }
         return
     }
@@ -377,7 +369,6 @@ if ($stats.skip -gt 0) {
     if ($stats.skipPj -gt 0) { $parts += ("{0} pj-covered" -f $stats.skipPj) }
     if ($stats.skipGui -gt 0) { $parts += ("{0} gui (-IncludeGui)" -f $stats.skipGui) }
     if ($stats.skip32Meta -gt 0) { $parts += ("{0} Skip32" -f $stats.skip32Meta) }
-    if ($stats.skipDouble32 -gt 0) { $parts += ("{0} double/sse32" -f $stats.skipDouble32) }
     Write-Host ("  skipped: {0}" -f ($parts -join ", "))
 }
 

@@ -137,7 +137,7 @@ actba64 <src.abp|.pj> [-actba32] [-o <out>]
 | no Target | `' Target: actba64` が無い旧手動テスト |
 | pj-covered | `.pj` の `#SOURCE` に含まれる `.abp`（プロジェクト側で実行） |
 | gui | 上記 GUI（`-IncludeGui` で有効） |
-| skip32 / double | `-Actba32` 時の `Skip32: 1` や `t_double*`（SSE 未対応） |
+| skip32 | `-Actba32` 時の `Skip32: 1`（ポインタ幅依存など） |
 
 `SizeOf(UDT)` やポインタ幅に依存する期待値は、64bit 決め打ちせず `SizeOf(*Byte)` 相当（例: ポインタ用ダミー Type）や `' Skip32: 1` で扱う。
 

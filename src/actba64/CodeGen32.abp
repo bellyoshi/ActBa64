@@ -231,6 +231,10 @@ End Function
 ' 戻り値 true : 正常終了  false : エラーあり
 Function CgTryEmit32B(cb As *CodeBuffer, op As *IrOp, dataRva As DWord) As boolean
     CgTryEmit32B = false
+    If CgTryEmit32Dbl(cb, op) Then
+        CgTryEmit32B = true
+        Exit Function
+    End If
     If CgTryEmit32B1(cb, op) Then
         CgTryEmit32B = true
         Exit Function
@@ -248,6 +252,10 @@ End Function
 Function CgTryEmit32C(cb As *CodeBuffer, op As *IrOp) As boolean
     Dim opv As Long
     CgTryEmit32C = false
+    If CgTryEmit32Fpu(cb, op) Then
+        CgTryEmit32C = true
+        Exit Function
+    End If
     If CgTryEmitSharedC(cb, op) Then
         CgTryEmit32C = true
         Exit Function
@@ -309,6 +317,141 @@ Function CgTryEmit32D(list As *IrList, cb As *CodeBuffer, builder As *ImportBuil
         Exit Function
     End If
     CgTryEmit32D = true
+End Function
+
+Function CgEmit32DblImm(cb As *CodeBuffer, op As *IrOp) As boolean
+    CgEmit32DblImm = false
+    If op->op <> OP_MOV_RAX_IMM64 Then Exit Function
+    Emit32MovRaxImm64(cb, op->arg1, op->arg2)
+    CgEmit32DblImm = true
+End Function
+
+Function CgEmit32DblLocal(cb As *CodeBuffer, op As *IrOp) As boolean
+    CgEmit32DblLocal = true
+    If op->op = OP_LOAD_DBL Then
+        Emit32LoadDbl(cb, op->arg1)
+    ElseIf op->op = OP_STORE_DBL Then
+        Emit32StoreDbl(cb, op->arg1)
+    Else
+        CgEmit32DblLocal = false
+    End If
+End Function
+
+Function CgEmit32DblMove(cb As *CodeBuffer, op As *IrOp) As boolean
+    CgEmit32DblMove = CgEmit32DblImm(cb, op)
+    If CgEmit32DblMove <> 0 Then Exit Function
+    CgEmit32DblMove = CgEmit32DblLocal(cb, op)
+End Function
+
+Function CgEmit32DblPush(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32DblPush = true
+    If opv = OP_PUSH_DBL Then
+        Emit32PushDbl(cb)
+    ElseIf opv = OP_POP_DBL Then
+        Emit32PopDbl(cb)
+    Else
+        CgEmit32DblPush = false
+    End If
+End Function
+
+Function CgEmit32DblPtr(cb As *CodeBuffer, op As *IrOp) As boolean
+    Dim opv As Long
+    opv = op->op
+    CgEmit32DblPtr = true
+    If opv = OP_LOAD_DBL_MEM Then
+        Emit32LoadDblMem(cb)
+    ElseIf opv = OP_STORE_DBL_MEM Then
+        Emit32StoreDblMem(cb)
+    ElseIf opv = OP_STORE_RSP_DBL Then
+        Emit32StoreEspDbl(cb, op->arg1)
+    Else
+        CgEmit32DblPtr = false
+    End If
+End Function
+
+Function CgTryEmit32Dbl(cb As *CodeBuffer, op As *IrOp) As boolean
+    CgTryEmit32Dbl = CgEmit32DblMove(cb, op)
+    If CgTryEmit32Dbl <> 0 Then Exit Function
+    CgTryEmit32Dbl = CgEmit32DblPush(cb, op->op)
+    If CgTryEmit32Dbl <> 0 Then Exit Function
+    CgTryEmit32Dbl = CgEmit32DblPtr(cb, op)
+End Function
+
+Function CgEmit32FpuArith(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32FpuArith = true
+    If opv = OP_ADD_SD Then
+        Emit32AddSd(cb)
+    ElseIf opv = OP_SUB_SD Then
+        Emit32SubSd(cb)
+    Else
+        CgEmit32FpuArith = false
+    End If
+End Function
+
+Function CgEmit32FpuMul(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32FpuMul = true
+    If opv = OP_MUL_SD Then
+        Emit32MulSd(cb)
+    ElseIf opv = OP_DIV_SD Then
+        Emit32DivSd(cb)
+    Else
+        CgEmit32FpuMul = false
+    End If
+End Function
+
+Function CgEmit32FpuAdd(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32FpuAdd = CgEmit32FpuArith(cb, opv)
+    If CgEmit32FpuAdd <> 0 Then Exit Function
+    CgEmit32FpuAdd = CgEmit32FpuMul(cb, opv)
+End Function
+
+Function CgEmit32FpuCmp(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32FpuCmp = true
+    If opv = OP_UCOMISD Then
+        Emit32Ucomisd(cb)
+    ElseIf opv = OP_NEG_SD Then
+        Emit32NegSd(cb)
+    Else
+        CgEmit32FpuCmp = false
+    End If
+End Function
+
+Function CgEmit32FpuCvtI(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32FpuCvtI = true
+    If opv = OP_CVT_I32_TO_SD Then
+        Emit32CvtI32ToSd(cb)
+    ElseIf opv = OP_CVT_SD_TO_I32 Then
+        Emit32CvtSdToI32(cb)
+    Else
+        CgEmit32FpuCvtI = false
+    End If
+End Function
+
+Function CgEmit32FpuCvtS(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32FpuCvtS = true
+    If opv = OP_CVT_SS_TO_SD Then
+        Emit32CvtSsToSd(cb)
+    ElseIf opv = OP_CVT_SD_TO_SS Then
+        Emit32CvtSdToSs(cb)
+    Else
+        CgEmit32FpuCvtS = false
+    End If
+End Function
+
+Function CgEmit32FpuCvt(cb As *CodeBuffer, opv As Long) As boolean
+    CgEmit32FpuCvt = CgEmit32FpuCvtI(cb, opv)
+    If CgEmit32FpuCvt <> 0 Then Exit Function
+    CgEmit32FpuCvt = CgEmit32FpuCvtS(cb, opv)
+End Function
+
+Function CgTryEmit32Fpu(cb As *CodeBuffer, op As *IrOp) As boolean
+    Dim opv As Long
+    opv = op->op
+    CgTryEmit32Fpu = CgEmit32FpuAdd(cb, opv)
+    If CgTryEmit32Fpu <> 0 Then Exit Function
+    CgTryEmit32Fpu = CgEmit32FpuCmp(cb, opv)
+    If CgTryEmit32Fpu <> 0 Then Exit Function
+    CgTryEmit32Fpu = CgEmit32FpuCvt(cb, opv)
 End Function
 
 Sub IrEmitCode32(list As *IrList, cb As *CodeBuffer, builder As *ImportBuilder, dataRva As DWord)

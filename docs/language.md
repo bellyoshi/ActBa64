@@ -28,7 +28,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
   - `/* ... */` ブロック（ネスト不可。途中にも可）
 - 識別子: `[A-Za-z_][A-Za-z0-9_]*`、末尾 `$` 可（例: `Left$`）
 - 整数: 十進 / `&H` 十六進
-- 小数リテラル: `1.5` / `1.12345` など（符号・小数点付き十進）。字句テキストを保持し、**AST 上で IEEE 754 Double ビット**（64bit: `num`=下位32 / `left`=上位32）に変換する。科学記法（`1.0e10`）は未対応。コード生成は `movabs rax, imm64`
+- 小数リテラル: `1.5` / `1.12345` など（符号・小数点付き十進）。字句テキストを保持し、**AST 上で IEEE 754 Double ビット**（`num`=下位32 / `left`=上位32）に変換する。科学記法（`1.0e10`）は未対応。コード生成は 64bit が `movabs rax, imm64`、`-actba32` は `edx:eax`
 - 文字列リテラル: `"..."`（`""` で `"`）
 - 識別子の大小文字: **定数・変数・Sub/Function・Type/Class 名は区別する**（AB 4.20 同様。`Foo` と `foo` は別）。**言語キーワード**（`If` / `Then` / `Dim` 等）と **組み込みランタイム名**（`FillMemory` / `malloc` 等）の認識のみ大小無視
 - 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）
@@ -169,7 +169,7 @@ PAINT (x, y), color1 [, color2]
 | `Word` | 2 | 2 | |
 | `Single` | 4 | 4 | サイズと格納。汎用 IEEE 演算は未（`Double` を使う） |
 | `Long` / `DWord` / `Integer` | 4 | 4 | 別名あり |
-| `Double` | 8 | **8** | IEEE 倍精度。64bit は加減乗除・比較・`Function As Double` / Double 仮引数。`-actba32` は SSE 未実装 |
+| `Double` | 8 | **8** | IEEE 倍精度。加減乗除・比較・`Function As Double` / Double 仮引数は 64bit と `-actba32` の両方。32bit の値は `edx:eax`。配列要素と UDT フィールドの 8 バイト転送は 64bit のみ |
 | `HANDLE` / `HWND` 等 | 4 | **8** | 64bit は `VoidPtr` / `*T`（`HFILE` は 4 のまま） |
 | `*T` | 4 | **8** | ポインタ |
 | `String` | ポインタ相当 (4) | ポインタ相当 (**8**) | 長さプレフィックス付きバイト列（AB4.20 互換） |
@@ -259,7 +259,7 @@ Sub Inc(ByRef x As Long)
 End Sub
 ```
 
-- `ByRef` 対応。呼び出し側の `ByVal` は無視してよい
+- `ByRef` 対応。呼び出し側の `ByVal` は無視してよい。構造体引数は `ByRef` 必須（`ByVal` と指定なしはエラー）。フィールド代入は呼び出し元に残る
 - 戻り値は `Function名 = 式`
 - `Exit Sub` / `Exit Function`
 - ネストした `Sub`/`Function` は不可
@@ -397,10 +397,10 @@ ExitProcess(式)
 | 演算 | 対応 |
 |---|---|
 | `+ - *`（整数） | ○ |
-| `+ - * /`（`Double`、64bit） | ○（IEEE。`-actba32` は SSE 未実装） |
+| `+ - * /`（`Double`） | ○（IEEE。64bit と `-actba32`） |
 | 文字列 `+` / `&`（連結・同義） | ○ |
 | 単項 `-` / `Not` | ○ |
-| `= <> >< < > <= >=` | ○（値は -1/0。文字列は辞書順。`Double` 比較は 64bit） |
+| `= <> >< < > <= >=` | ○（値は -1/0。文字列は辞書順。`Double` 比較は 64bit と `-actba32`） |
 | `And` / `Or` / `Xor` | ○（ビット。条件の And/Or は短絡） |
 | `\` `/`（整数除算） | ○（Long では同義） |
 | `Mod` | ○ |
@@ -553,7 +553,7 @@ Print Log(MathE())    ' ≒ 1
 - N88 `CIRCLE` の角度・aspect も `Double`（内部の千分率表現は廃止）
 - `Input` / `Input #` の `Double`/`Single` は十進文字列を `ValDouble` で IEEE 化（`Single` はその後 `cvtsd2ss`）
 - `Rnd()` は `[0, 1)` の Double。`Abs` は Double 引数
-- `-actba32` では SSE 未実装のため Double 演算テストはスキップ
+- `-actba32` でもスカラーの Double 演算・`Math.abp`・`StrD$` は動く。`Print` の Double 自動変換と、配列要素・UDT フィールドの 8 バイト転送は 64bit のみ
 
 `Space$(n)` は `Space.abp` から常時利用可。ネストした関数呼び出しは対応する。複雑な入れ子は一時変数経由が安全。
 
@@ -719,7 +719,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 | 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop） |
 | `Declare Lib` | ○ | ○ |
 | DLL 優先ベース | `0x180000000` | `0x10000000` |
-| `Double` 演算 | ○（SSE） | 未（テストはスキップ） |
+| `Double` 演算 | ○（SSE。`rax`） | ○（SSE2。値は `edx:eax`。配列要素・UDT フィールドは未） |
 | N88 `LINE`/`CIRCLE` 文 | ○ | ○ |
 | `SizeOf`（ポインタを含む UDT） | ポインタ 8 バイト込み | ポインタ 4 バイト込み（期待サイズを 64bit 決め打ちしない） |
 
@@ -730,7 +730,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 ## 10. 非対応（意図的）
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` / `Super` は未対応）
-- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は **64bit IEEE Double**（`-actba32` は SSE 未実装）
+- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は IEEE Double（64bit と `-actba32`。32bit の配列要素・UDT フィールド転送と、`Print` の Double 変換は未）
 - `GoTo` / `GoSub` / `ReDim`
 - ネスト手続き
 - `#resource` の `.rc` 直接コンパイル、ICON/MENU など型付きリソース（ファイル全体の RCDATA 埋め込みは対応）

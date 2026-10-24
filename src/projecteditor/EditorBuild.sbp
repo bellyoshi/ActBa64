@@ -1,9 +1,11 @@
-Declare Function EditorBuild_CreateProcess Lib "kernel32" Alias "CreateProcessA" (ByVal lpApplicationName As Long, ByVal lpCommandLine As *Byte, ByVal lpProcessAttributes As Long, ByVal lpThreadAttributes As Long, ByVal bInheritHandles As Long, ByVal dwCreationFlags As DWord, ByVal lpEnvironment As Long, ByVal lpCurrentDirectory As Long, ByRef lpStartupInfo As STARTUPINFO, ByRef lpProcessInformation As PROCESS_INFORMATION) As Long
-Declare Function EditorBuild_CreatePipe Lib "kernel32" Alias "CreatePipe" (ByRef hReadPipe As HANDLE, ByRef hWritePipe As HANDLE, ByRef lpPipeAttributes As SECURITY_ATTRIBUTES, ByVal nSize As Long) As Long
+Declare Function EditorBuild_CreateProcess Lib "kernel32" Alias "CreateProcessA" (ByVal lpApplicationName As Long, ByVal lpCommandLine As *Byte, ByVal lpProcessAttributes As Long, ByVal lpThreadAttributes As Long, ByVal bInheritHandles As Long, ByVal dwCreationFlags As DWord, ByVal lpEnvironment As Long, ByVal lpCurrentDirectory As Long, ByVal lpStartupInfo As *Byte, ByVal lpProcessInformation As *Byte) As Long
+Declare Function EditorBuild_CreatePipe Lib "kernel32" Alias "CreatePipe" (ByVal hReadPipe As *Byte, ByVal hWritePipe As *Byte, ByVal lpPipeAttributes As Long, ByVal nSize As Long) As Long
 Declare Function EditorBuild_SetHandleInformation Lib "kernel32" Alias "SetHandleInformation" (ByVal hObject As HANDLE, ByVal dwMask As DWord, ByVal dwFlags As DWord) As Long
-Declare Function EditorBuild_GetExitCodeProcess Lib "kernel32" Alias "GetExitCodeProcess" (ByVal hProcess As HANDLE, ByRef lpExitCode As DWord) As Long
+Declare Function EditorBuild_GetExitCodeProcess Lib "kernel32" Alias "GetExitCodeProcess" (ByVal hProcess As HANDLE, ByVal lpExitCode As *Byte) As Long
 
 Const EDITORBUILD_HANDLE_FLAG_INHERIT = 1
+Dim g_buildSi As STARTUPINFO
+Dim g_buildPi As PROCESS_INFORMATION
 
 ' 0 = 64bit (actba64) / 1 = 32bit (actba64 -actba32)
 Dim g_buildTarget32 As Long
@@ -235,65 +237,75 @@ Function EditorBuild_ReadPipeAll$(hRead As HANDLE) As String
 End Function
 
 Function EditorBuild_RunCapture(cmdLine As String, ByRef outText As String, ByRef exitCode As Long) As Long
-    Dim sa As SECURITY_ATTRIBUTES
-    Dim si As STARTUPINFO
-    Dim pi As PROCESS_INFORMATION
     Dim hRead As HANDLE
-    Dim hWrite As HANDLE
-
+    Dim hProcess As HANDLE
     EditorBuild_RunCapture = 0
     outText = ""
     exitCode = 1
-    If EditorBuild_OpenCapturePipe(sa, hRead, hWrite) = 0 Then Exit Function
-    If EditorBuild_SpawnCapture(cmdLine, hRead, hWrite, si, pi) = 0 Then Exit Function
-    outText = EditorBuild_ReadPipeAll$(hRead)
-    CloseHandle(hRead)
-    exitCode = EditorBuild_WaitExit(pi.hProcess)
-    CloseHandle(pi.hProcess)
-    EditorBuild_RunCapture = 1
+    If EditorBuild_CaptureChild(cmdLine, hRead, hProcess) = 0 Then Exit Function
+    EditorBuild_RunCapture = EditorBuild_FinishCapture(hRead, hProcess, outText, exitCode)
 End Function
 
-Function EditorBuild_OpenCapturePipe(ByRef sa As SECURITY_ATTRIBUTES, ByRef hRead As HANDLE, ByRef hWrite As HANDLE) As Long
+Function EditorBuild_FinishCapture(hRead As HANDLE, hProcess As HANDLE, ByRef outText As String, ByRef exitCode As Long) As Long
+    outText = EditorBuild_ReadPipeAll$(hRead)
+    CloseHandle(hRead)
+    exitCode = EditorBuild_WaitExit(hProcess)
+    CloseHandle(hProcess)
+    EditorBuild_FinishCapture = 1
+End Function
+
+Function EditorBuild_CaptureChild(cmdLine As String, ByRef hRead As HANDLE, ByRef hProcess As HANDLE) As Long
+    Dim hWrite As HANDLE
+    EditorBuild_CaptureChild = 0
+    If EditorBuild_OpenCapturePipe(hRead, hWrite) = 0 Then Exit Function
+    EditorBuild_CaptureChild = EditorBuild_SpawnCapture(cmdLine, hRead, hWrite, hProcess)
+End Function
+
+Function EditorBuild_OpenCapturePipe(ByRef hRead As HANDLE, ByRef hWrite As HANDLE) As Long
+    Dim hr As HANDLE
+    Dim hw As HANDLE
     EditorBuild_OpenCapturePipe = 0
-    FillMemory(VarPtr(sa), Len(sa), 0)
-    sa.nLength = Len(sa)
-    sa.bInheritHandle = 1
-    hRead = 0
-    hWrite = 0
-    If EditorBuild_CreatePipe(hRead, hWrite, sa, 0) = 0 Then Exit Function
-    EditorBuild_SetHandleInformation(hRead, EDITORBUILD_HANDLE_FLAG_INHERIT, 0)
+    If EditorBuild_CreatePipe(VarPtr(hr), VarPtr(hw), 0, 0) = 0 Then Exit Function
+    EditorBuild_SetHandleInformation(hw, EDITORBUILD_HANDLE_FLAG_INHERIT, EDITORBUILD_HANDLE_FLAG_INHERIT)
+    hRead = hr
+    hWrite = hw
     EditorBuild_OpenCapturePipe = 1
 End Function
 
-Function EditorBuild_SpawnCapture(cmdLine As String, ByRef hRead As HANDLE, ByRef hWrite As HANDLE, ByRef si As STARTUPINFO, ByRef pi As PROCESS_INFORMATION) As Long
-    Dim cmd As String
-    Dim pCmd As *Byte
-    EditorBuild_SpawnCapture = 0
-    FillMemory(VarPtr(si), Len(si), 0)
-    FillMemory(VarPtr(pi), Len(pi), 0)
-    si.cb = Len(si)
-    si.dwFlags = STARTF_USESHOWWINDOW Or STARTF_USESTDHANDLES
-    si.wShowWindow = SW_HIDE
-    si.hStdOutput = hWrite
-    si.hStdError = hWrite
-    si.hStdInput = 0
-    cmd = cmdLine
-    pCmd = StrPtr(cmd)
-    If EditorBuild_CreateProcess(0, pCmd, 0, 0, 1, CREATE_NO_WINDOW, 0, 0, si, pi) = 0 Then
-        CloseHandle(hRead)
-        CloseHandle(hWrite)
-        Exit Function
-    End If
-    CloseHandle(hWrite)
-    CloseHandle(pi.hThread)
-    EditorBuild_SpawnCapture = 1
+Sub EditorBuild_ClosePair(hA As HANDLE, hB As HANDLE)
+    CloseHandle(hA)
+    CloseHandle(hB)
+End Sub
+
+Function EditorBuild_SpawnCapture(cmdLine As String, ByRef hRead As HANDLE, ByRef hWrite As HANDLE, ByRef hProcess As HANDLE) As Long
+    EditorBuild_SpawnCapture = EditorBuild_StartProcess(cmdLine, hWrite, hProcess)
+    If EditorBuild_SpawnCapture = 0 Then EditorBuild_ClosePair(hRead, hWrite)
+    If EditorBuild_SpawnCapture <> 0 Then CloseHandle(hWrite)
+End Function
+
+Sub EditorBuild_ArmSi(hWrite As HANDLE)
+    FillMemory(VarPtr(g_buildSi), Len(g_buildSi), 0)
+    g_buildSi.cb = Len(g_buildSi)
+    g_buildSi.dwFlags = STARTF_USESHOWWINDOW Or STARTF_USESTDHANDLES
+    g_buildSi.wShowWindow = SW_HIDE
+    g_buildSi.hStdOutput = hWrite
+    g_buildSi.hStdError = hWrite
+End Sub
+
+Function EditorBuild_StartProcess(cmdLine As String, hWrite As HANDLE, ByRef hProcess As HANDLE) As Long
+    EditorBuild_ArmSi(hWrite)
+    FillMemory(VarPtr(g_buildPi), Len(g_buildPi), 0)
+    EditorBuild_StartProcess = EditorBuild_CreateProcess(0, StrPtr(cmdLine), 0, 0, 1, CREATE_NO_WINDOW, 0, 0, VarPtr(g_buildSi), VarPtr(g_buildPi))
+    If EditorBuild_StartProcess = 0 Then Exit Function
+    CloseHandle(g_buildPi.hThread)
+    hProcess = g_buildPi.hProcess
 End Function
 
 Function EditorBuild_WaitExit(hProcess As HANDLE) As Long
     Dim code As DWord
     WaitForSingleObject(hProcess, INFINITE)
     code = 1
-    EditorBuild_GetExitCodeProcess(hProcess, code)
+    EditorBuild_GetExitCodeProcess(hProcess, VarPtr(code))
     EditorBuild_WaitExit = code
 End Function
 
