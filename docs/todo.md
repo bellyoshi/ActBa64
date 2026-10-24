@@ -103,7 +103,7 @@
 | `Inkey$` / `Input$(n)` | 4.20 対話入出力 |
 | `ChDir` / `Exec` / `Kill` / `MkDir` | 4.20。`CreateProcessA` 等で代替可 |
 | `Date$` / `Time$` | 4.20 |
-| Project Editor / RAD | 4.20: `.pj`・ウィンドウ RAD・`MainWnd.sbp` 雛形（エディタ本体は有。RAD 全面は未） |
+| Project Editor / RAD | MDI・`.pj` のプロジェクトウィンドウ・コンパイル切替は済（[build.md §5](./build.md#5-projecteditor)）。4.20 のウィンドウ RAD・`MainWnd.sbp` 雛形の全面再現は未 |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
 | ICON / MENU 等の型付きリソース | `#resource` で RCDATA 埋め込みは済。LoadIcon/LoadMenu 向けは未 |
@@ -129,4 +129,7 @@
 - [x] スクロールバー（`WS_VSCROLL` + `SetScrollInfo` / `WM_VSCROLL`）
 - [x] 多言語 UI（英語組み込み。`setting.ini` の `Language=` + `ProjectEditor_lang_<code>.csv`。ini なしは英語）
 - [x] 設定ダイアログ（Setting メニュー → 言語選択 → OK で ini 保存と再起動確認）
-- [x] コンソールプログラム。実行後コンソール閉じないように（`#console` 時は `cmd /k`）
+- [x] コンソールプログラム。実行後コンソール閉じないように（単体は先頭 120 行の `#console`、プロジェクトは `#USEWINDOW=0` のとき `cmd /k`）
+- [x] MDI（子ウィンドウ最大 8。Window メニューで Cascade / Tile）
+- [x] `.pj` のプロジェクトウィンドウ（`#SOURCE` 一覧。クリックで開く。閉じるとプロジェクト解除）
+- [x] コンパイル切替（プロジェクトを開いていればその `.pj`、なければ前面の 1 ファイル）

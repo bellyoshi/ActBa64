@@ -77,3 +77,12 @@ Copy-Item .\samples\dllcall\dllsample\dllsample.dll .\samples\dllcall\dllcall\dl
 ```
 
 `#n88basic` で `LINE` / `CIRCLE` が使えます（角度はラジアン `Double`）。`Sleep` と IEEE Double の `Math`（`Sin` / `Cos` / `Log` 等）、小数リテラルは標準で利用できます。DLL 出力（`#MODULETYPE=1`、`Function Export`）は [docs/language.md §8.4](docs/language.md#84-dll-を出力する) を参照してください。
+
+```powershell
+# MDI サンプル（#OUTPUT_RELEASE があるので -o は省略可）
+.\bin\stage2\actba64.exe .\samples\mdi\mdi.pj
+```
+
+## エディタ
+
+`ProjectEditor.exe` は MDI です。ソースは子ウィンドウで、同時に最大 8 枚開いたままにします。`.pj` を開くとプロジェクトウィンドウに `#SOURCE` のファイル一覧が出て、行をクリックするとそのファイルを開きます。プロジェクトを開いているあいだの Compile / Run はその `.pj` を渡し、閉じていれば前面の 1 ファイルを渡します。操作の詳細は [docs/build.md §5](docs/build.md#5-projecteditor) です。
