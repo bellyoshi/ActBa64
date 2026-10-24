@@ -32,12 +32,11 @@
 
 - **`Super.*`**、メンバ Class の自動 ctor/dtor
 - **厳密 `Protected` / `Private`**（受理のみ。Public と同等）
-- **`ReDim`**, **`Const` マクロ関数**, **ネスト手続き**
+- **`Const` マクロ関数**, **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術
 - **`Single` IEEE 演算**（格納と Input 変換が中心。汎用 SSE は未）
 - **`Double` 配列要素・UDT フィールド @ `-actba32`** — 要素とフィールドのロード／ストアは `OP_LOAD_QWORD` / `OP_STORE_QWORD` のまま（32bit では 4 バイト）
 - **符号無し演算**の AB 4.20 ルール完全化
-- **BASIC 命令の残り**: `_splitpath`
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
 - **Win32 `api_*.sbp` 増分**: 需要に応じ `Declare` / idx 追加
@@ -63,7 +62,6 @@
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
 | `#resource` の `.rc` / ICON・MENU | `rc.exe` 連携・型付きリソースは未 |
-| `ReDim` | 動的配列サイズ変更（4.20） |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
 | `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章） |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
@@ -85,7 +83,6 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `_splitpath` | `system\string.sbp`（4.20） |
 | `GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` | `Memory.abp` は Byte〜DWord まで。浮動小数 Get/Set は未 |
 | `realloc` | 4.20 C ヒープ。未 |
 
