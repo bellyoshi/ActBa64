@@ -1,0 +1,187 @@
+' 診断行のクリックで、エディタの該当行へ移す。
+
+Sub MessageJump_Hook()
+    Dim hEdit As HWND
+    If g_msgEditProc <> 0 Then Exit Sub
+    hEdit = GetDlgItem(hMessageWnd, EditBox1)
+    If hEdit = 0 Then Exit Sub
+    g_msgEditProc = EditorSetWndProc(hEdit, GWL_WNDPROC, AddressOf(MessageEditProc) As LONG_PTR)
+End Sub
+
+Function MessageEditProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    If dwMsg = WM_LBUTTONDOWN Then MsgJump_Down(lParam)
+    MessageEditProc = EditorCallWndProc(g_msgEditProc, hWnd, dwMsg, wParam, lParam)
+    If dwMsg = WM_LBUTTONUP Then MsgJump_Up(hWnd, lParam)
+End Function
+
+Sub MsgJump_Down(lParam As LPARAM)
+    g_msgDownX = LOWORD(lParam)
+    g_msgDownY = HIWORD(lParam)
+End Sub
+
+Function MsgJump_IsClick(lParam As LPARAM) As Long
+    Dim dx As Long
+    Dim dy As Long
+    dx = LOWORD(lParam) - g_msgDownX
+    dy = HIWORD(lParam) - g_msgDownY
+    If dx < 0 Then dx = 0 - dx
+    If dy < 0 Then dy = 0 - dy
+    MsgJump_IsClick = 0
+    If dx <= 3 And dy <= 3 Then MsgJump_IsClick = 1
+End Function
+
+Sub MsgJump_Up(hEdit As HWND, lParam As LPARAM)
+    Dim hit As Long
+    If MsgJump_IsClick(lParam) = 0 Then Exit Sub
+    hit = SendMessage(hEdit, &HD7, 0, lParam)
+    MsgJump_FromLine(hEdit, HIWORD(hit))
+End Sub
+
+Function MsgJump_PrefixLen(line As String) As Long
+    MsgJump_PrefixLen = 0
+    If Left$(line, 7) = "error: " Then MsgJump_PrefixLen = 7
+    If Left$(line, 9) = "warning: " Then MsgJump_PrefixLen = 9
+End Function
+
+Function MsgJump_SkipSp(s As String, j As Long) As Long
+    MsgJump_SkipSp = j
+    While MsgJump_SkipSp <= Len(s)
+        If Mid$(s, MsgJump_SkipSp, 1) <> " " Then Exit Function
+        MsgJump_SkipSp = MsgJump_SkipSp + 1
+    Wend
+End Function
+
+Function MsgJump_ReadNum(s As String, ByRef j As Long) As Long
+    Dim c As Long
+    MsgJump_ReadNum = 0
+    While j <= Len(s)
+        c = Asc(Mid$(s, j, 1))
+        If c < 48 Or c > 57 Then Exit Function
+        MsgJump_ReadNum = MsgJump_ReadNum * 10 + (c - 48)
+        j = j + 1
+    Wend
+End Function
+
+Function MsgJump_TryLoc(s As String, i As Long, ByRef srcLine As Long) As Long
+    Dim j As Long
+    j = MsgJump_SkipSp(s, i + 1)
+    srcLine = MsgJump_ReadNum(s, j)
+    j = MsgJump_SkipSp(s, j)
+    MsgJump_TryLoc = 0
+    If srcLine < 1 Then Exit Function
+    If Mid$(s, j, 2) <> "):" Then Exit Function
+    MsgJump_TryLoc = i
+End Function
+
+Function MsgJump_FindLoc(rest As String, ByRef srcLine As Long) As Long
+    Dim i As Long
+    MsgJump_FindLoc = 0
+    For i = 1 To Len(rest)
+        If Mid$(rest, i, 1) = "(" Then MsgJump_FindLoc = MsgJump_TryLoc(rest, i, srcLine)
+        If MsgJump_FindLoc <> 0 Then Exit Function
+    Next
+End Function
+
+Function MsgJump_Bare(rest As String, ByRef srcLine As Long) As Long
+    Dim j As Long
+    srcLine = 0
+    MsgJump_Bare = 0
+    If Left$(rest, 5) <> "line " Then Exit Function
+    j = MsgJump_SkipSp(rest, 6)
+    srcLine = MsgJump_ReadNum(rest, j)
+    If Mid$(rest, MsgJump_SkipSp(rest, j), 1) <> ":" Then srcLine = 0
+    If srcLine > 0 Then MsgJump_Bare = 1
+End Function
+
+Function MsgJump_File$(rest As String, ByRef srcLine As Long) As String
+    Dim i As Long
+    srcLine = 0
+    MsgJump_File$ = ""
+    i = MsgJump_FindLoc(rest, srcLine)
+    If i > 1 Then MsgJump_File$ = Left$(rest, i - 1)
+    If i = 0 Then srcLine = 0
+    If i = 0 Then MsgJump_Bare(rest, srcLine)
+End Function
+
+Sub MsgJump_Apply(line As String)
+    Dim rest As String, srcLine As Long, file As String
+    If MsgJump_PrefixLen(line) = 0 Then Exit Sub
+    rest = Mid$(line, MsgJump_PrefixLen(line) + 1)
+    file = MsgJump_File$(rest, srcLine)
+    If srcLine < 1 Then Exit Sub
+    If Len(file) = 0 Then MsgJump_GoLine(srcLine)
+    If Len(file) > 0 Then MsgJump_Go(MsgJump_Resolve$(file), srcLine)
+End Sub
+
+Sub MsgJump_GoLine(srcLine As Long)
+    If g_activeChild = 0 Then Exit Sub
+    If g_activeChild = g_hProject Then Exit Sub
+    MsgJump_Show(g_activeChild, srcLine)
+End Sub
+
+Function MsgJump_Resolve$(file As String) As String
+    MsgJump_Resolve$ = file
+    If ProjAbs(file) <> 0 Then Exit Function
+    If Len(g_projectPath) > 0 Then MsgJump_Resolve$ = ProjJoin$(file)
+    If Len(g_projectPath) > 0 Then Exit Function
+    MsgJump_Resolve$ = ProjDirOf$(g_docPath) + file
+End Function
+
+Function MsgJump_Ensure(path As String) As HWND
+    MsgJump_Ensure = ProjFindOpen(path)
+    If MsgJump_Ensure <> 0 Then Exit Function
+    MdiOpenPath(path)
+    MsgJump_Ensure = ProjFindOpen(path)
+End Function
+
+Sub MsgJump_Go(path As String, srcLine As Long)
+    Dim h As HWND
+    If EditorDoc_CmdExists(path) = 0 Then Exit Sub
+    h = MsgJump_Ensure(path)
+    If h = 0 Then Exit Sub
+    If h <> g_activeChild Then SendMessage(g_hClient, WM_MDIACTIVATE, h As WPARAM, 0)
+    If ProjSamePath(g_docPath, path) = 0 Then Exit Sub
+    MsgJump_Show(g_activeChild, srcLine)
+End Sub
+
+Sub MsgJump_Show(hWnd As HWND, srcLine As Long)
+    TextBuf_ClearSelection()
+    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(srcLine, 0))
+    TextBuf_SyncPreferredCol()
+    VirtualScroll_EnsureCursorVisible(hWnd)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+    SetFocus(hWnd)
+End Sub
+
+Sub MsgJump_SetCap(buf As *Byte)
+    buf[0] = 255
+    buf[1] = 3
+End Sub
+
+Function MsgJump_ReadLine(hEdit As HWND, idx As Long, buf As *Byte) As Long
+    MsgJump_SetCap(buf)
+    MsgJump_ReadLine = SendMessage(hEdit, &HC4, idx, buf As LPARAM)
+End Function
+
+Function MsgJump_CopyLine$(buf As *Byte, n As Long) As String
+    MsgJump_CopyLine$ = ""
+    If n <= 0 Then Exit Function
+    If n > 1023 Then n = 1023
+    buf[n] = 0
+    MsgJump_CopyLine$ = Enc_DupCStr$(buf, n)
+End Function
+
+Function MsgJump_GetLine$(hEdit As HWND, idx As Long) As String
+    Dim buf As *Byte
+    Dim n As Long
+    buf = malloc(1024)
+    MsgJump_GetLine$ = ""
+    If buf <> 0 Then n = MsgJump_ReadLine(hEdit, idx, buf)
+    If buf <> 0 Then MsgJump_GetLine$ = MsgJump_CopyLine$(buf, n)
+    If buf <> 0 Then free(buf)
+End Function
+
+Sub MsgJump_FromLine(hEdit As HWND, idx As Long)
+    If idx < 0 Then Exit Sub
+    MsgJump_Apply(MsgJump_GetLine$(hEdit, idx))
+End Sub
