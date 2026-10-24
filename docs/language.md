@@ -57,7 +57,7 @@ Print a +_
 
 ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -98,13 +98,14 @@ DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出�
 
 ### 1.6 N88BASIC モード
 
-`#n88basic` / `#N88BASIC` / `#prompt` で `Include\N88BASIC\n88basic.idx`（実体は `n88graph.abp`）を挿入する。  
+`#n88basic` / `#N88BASIC` / `#prompt` で `Include\N88BASIC\n88basic.idx`（`n88graph.abp` と `n88key.abp`）を挿入する。  
 `#prompt` は ActiveBasic 互換の別名で、`#n88basic` と全く同じ動作。
 
 | | 既定（64bit） | `-actba32` |
 |---|---|---|
 | ライブラリ挿入 | ○ | ○ |
 | `LINE` / `CIRCLE` / `LOCATE` / `PAINT` 文 | ○（パーサ） | ○（同じパーサ） |
+| `Inkey$` / `Input$(n)` | ○（`n88key.abp`） | ○ |
 | 640×480 黒窓 GUI | ○（自動） | ○ |
 | `End` → 窓待ち | ○（`N88_End`） | ○ |
 
@@ -309,7 +310,8 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=Me`、32bit は stdcall の第1引数）
 - `Inherits` / `Virtual` / vtable 呼び出しは **部分対応**（COM / D3D11 向け。本体なし `Virtual Function|Sub` と継承先へのスロットコピー）
 - `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
-- `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。`Delete` は変数のクラスポインタ型から `Class_Dtor` を呼び、ヘッダごと `HeapFree` する。クラスは使用箇所より前に定義する。ポインタのクラス型が取れない `Delete` はコンパイルエラー
+- `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。個数を省略したときは 1。コンストラクタ引数は一度だけ評価し、各要素へ同じ値を渡す。確保に失敗したときは 0 を返し、コンストラクタは呼ばない
+- `Delete` は変数のクラスポインタ型から `Class_Dtor` を逆順に呼び、ヘッダごと `HeapFree` する。クラスは使用箇所より前に定義する。ポインタのクラス型が取れない `Delete` はコンパイルエラー。`Delete 0` は何もしない
 
 **未対応:** `Super.Method`、メンバ実体クラスの自動 ctor・dtor、アクセス制御の厳密検査
 
@@ -369,7 +371,7 @@ Put #番号, レコード, 式
 Write [#番号,] [式 [, ...]] [;]  ' カンマ区切り。番号省略は標準出力
 Sleep(ミリ秒)       ' 待ち中もウインドウメッセージを処理
 Beep
-Cls [n]             ' コンソールをクリア。n は受け取るが画面種別は見ない
+Cls [n]             ' コンソールをクリア。省略時 n は 1。負なら何もしない
 MsgBox hWnd, text$ [, title$ [, type [, ans]]]
 DelWnd hWnd
 Window hWnd, hOwner, x, y, w, h, title$, style [, class$ [, id [, proc [, exStyle]]]]
@@ -405,7 +407,15 @@ ExitProcess(式)
 | `ChDir` / `MkDir` / `Kill` / `Exec` | ○（`BasicCmd.abp`） |
 | `Delete` | ○（クラスポインタ） |
 | `Date$` / `Time$` | ○（`yyyy/mm/dd` と `hh:mm:ss`。月日時刻は 2 桁） |
-| `Inkey$` / `Input$(n)` | ○（`#n88basic` のみ。窓の `WM_KEYDOWN`） |
+| `Inkey$` / `Input$(n)` | ○（関数。`#n88basic` のみ。窓の `WM_KEYDOWN`） |
+
+命令の引数は同じ行のカンマ区切りで、次の文キーワードは引数にしない。
+
+- `Cls` の `n` は受け取るが、グラフィック画面は無いので常にコンソールをクリアする
+- `MsgBox` は `hWnd` と `text$` が必須。`title$` の省略は空、`type` の省略は 0。第 5 引数があるときだけ `MessageBoxA` の戻り値をその変数へ代入する
+- `Window` の `hWnd` は `ByRef HWND`。`class$` を省略すると `ActBa64Wnd` を一度だけ登録する（ウィンドウ手続きは `DefWindowProc`）。`id` 以降の省略は 0。メッセージループは作らない。`proc` は `CreateWindowEx` の `lpParam` に渡す
+- `Exec` の `cmd$` を省略すると空文字にする
+- `Date$()` / `Time$()` は文ではなく関数（`BasicCmd.abp`）。それぞれ `yyyy/mm/dd` と `hh:mm:ss` で、月日と時刻は 2 桁。`Str$` の先頭空白は付けない
 
 ---
 
@@ -447,6 +457,8 @@ Left$(s, n) / Right$(s, n) / Mid$(s, start[, len])
 Chr$(n) / Chr(n)
 Str$(n)
 StrD$(d)                 ' Double → 文字列（Include\default\DoubleStr.abp）
+Date$() / Time$()        ' yyyy/mm/dd と hh:mm:ss（BasicCmd.abp）
+Inkey$() / Input$(n)     ' #n88basic のみ（n88key.abp）
 StrPtr(s)
 MakeStr(p As *Byte)
 RGB(r, g, b)
@@ -543,7 +555,7 @@ memcpy(dst, src, n)
 
 ### 7.3 自動 Include
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
 続けて Preproc が `api.idx`（主要 Win32 の `Declare Lib`）と `UnicodeApi.sbp`（Unicode 版 API）を挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 

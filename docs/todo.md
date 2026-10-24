@@ -27,22 +27,21 @@
 ### P1 — 言語・相互運用
 
 - **D3D11**: `dx_SetProjection` / `dx_SetCamera` 相当 — `dxxform` 以上のカメラ・射影の共通化
-- **ProjectEditor**: 多言語（英語デフォルト + `setting.ini` / `ProjectEditor_lang_*.csv`）。スクロールバー / コンソール実行後に閉じない — 済
 
 ### P2 — OOP・メディア・規模
 
-- **`Super.*`**、メンバ Class の自動 ctor/dtor（`New` / `Delete` と `Sub ~ClassName` は済）
+- **`Super.*`**、メンバ Class の自動 ctor/dtor
 - **厳密 `Protected` / `Private`**（受理のみ。Public と同等）
 - **`ReDim`**, **`Const` マクロ関数**, **ネスト手続き**
-- **`Int64` / `QWord` / `Char`** と算術（64bit ポインタは済）
-- **`Single` IEEE 演算**（格納・変換中心。汎用 SSE は未。`Double` / `Math.abp` は 64bit / `-actba32` とも済）
-- **`Double` 配列要素・UDT フィールド @ `-actba32`** — スカラーの演算・比較・仮引数・戻り値は済。要素とフィールドのロード／ストアは `OP_LOAD_QWORD` / `OP_STORE_QWORD` のまま（32bit では 4 バイト）
+- **`Int64` / `QWord` / `Char`** と算術
+- **`Single` IEEE 演算**（格納と Input 変換が中心。汎用 SSE は未）
+- **`Double` 配列要素・UDT フィールド @ `-actba32`** — 要素とフィールドのロード／ストアは `OP_LOAD_QWORD` / `OP_STORE_QWORD` のまま（32bit では 4 バイト）
 - **符号無し演算**の AB 4.20 ルール完全化
-- **BASIC 命令の残り**: `Oct$` / `ZeroString` 等（`MsgBox` / `Window` / `Cls` / `Date$` / `ChDir` 等は `BasicCmd.abp`。`Inkey$` / `Input$` は `#n88basic` のみ）
+- **BASIC 命令の残り**: `Oct$` / `ZeroString` 等
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
 - **Win32 `api_*.sbp` 増分**: 需要に応じ `Declare` / idx 追加
-- **DLL の再配置（`.reloc`）**: `#MODULETYPE=1` の出力自体は済。優先ベース（64bit `0x180000000` / 32bit `0x10000000`）が塞がるとロード失敗
+- **DLL の再配置（`.reloc`）**: 優先ベース（64bit `0x180000000` / 32bit `0x10000000`）が塞がるとロード失敗
 
 ### P3 — 保留・非推奨に近い
 
@@ -57,27 +56,26 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `New` / `Delete` | 済。`New [num] Class[(params)]` / `Delete pObj`。塊先頭 8 バイトが要素数 |
-| `Super.Method` | スーパークラス ctor/dtor 呼び出し（4.20 Class 章）。`Inherits` / `Virtual` は COM/vtable 向けに部分対応済 |
+| `Super.Method` | スーパークラス ctor/dtor 呼び出し（4.20 Class 章） |
 | 厳密な `Protected` / `Private` | 受理するが Public と同等 |
 | メンバ Class の自動 ctor/dtor | 親 Class 内のメンバ Class 生成・破棄（4.20） |
 | `GoTo` / `GoSub` / `Return`（`*ラベル`） | 行番号は非対応方針。ラベル付き分岐・復帰も未 |
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
-| `#resource` の `.rc` / ICON・MENU | ファイル→RCDATA(1) 埋め込みは済。`rc.exe` 連携・型付きリソースは未 |
+| `#resource` の `.rc` / ICON・MENU | `rc.exe` 連携・型付きリソースは未 |
 | `ReDim` | 動的配列サイズ変更（4.20） |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
-| `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章）。整数・文字列リテラルのみ対応 |
+| `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章） |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | `Print Using "fmt"` | 書式付き出力（4.20 関数ポインタサンプル等） |
-| 関数ポインタの厳密シグネチャ照合 | `*Function` / `*Sub` 自体は済。引数型の照合は未 |
+| 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
 | `Char` / `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は `Byte`/`Long`/`DWord` 中心 |
 
 ## 数値・型
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Double` 配列・UDT フィールドを `-actba32` で | スカラーの IEEE 演算は済。要素とフィールドの 8 バイト転送は未 |
+| `Double` 配列・UDT フィールドを `-actba32` で | 要素とフィールドの 8 バイト転送は未 |
 | `Single` の汎用演算 | 4.20 は IEEE 浮動小数。格納と Input 変換が中心 |
 | 符号無し演算 | 4.20: 両オペランドが符号無し型なら符号無し演算 |
 | `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |
@@ -87,21 +85,19 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Oct$` | `StrUtils.abp` 未（`Hex$` 等は済） |
+| `Oct$` | `StrUtils.abp` 未 |
 | `ZeroString` / `_splitpath` | `system\string.sbp`（4.20） |
 | `GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` | `Memory.abp` は Byte〜DWord まで。浮動小数 Get/Set は未 |
-| `realloc` | 4.20 C ヒープ。`calloc` は `HeapAlloc` マップ済 |
+| `realloc` | 4.20 C ヒープ。未 |
 
 ## GUI・Win32・マルチメディア
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Inkey$` / `Input$(n)` | 済（`#n88basic` のみ。窓の `WM_KEYDOWN`） |
-| `Window` / `MsgBox` / `Cls` / `Beep` / `Date$` / `Time$` / `ChDir` / `Exec` / `Kill` / `MkDir` | 済（`BasicCmd.abp`。`Cls` はコンソール） |
-| Project Editor / RAD | MDI・`.pj` のプロジェクトウィンドウ・コンパイル切替は済（[build.md §5](./build.md#5-projecteditor)）。4.20 のウィンドウ RAD・`MainWnd.sbp` 雛形の全面再現は未 |
+| Project Editor / RAD | 4.20 のウィンドウ RAD・`MainWnd.sbp` 雛形の全面再現は未 |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
-| ICON / MENU 等の型付きリソース | `#resource` で RCDATA 埋め込みは済。LoadIcon/LoadMenu 向けは未 |
+| ICON / MENU 等の型付きリソース | LoadIcon/LoadMenu 向けは未 |
 
 ### DirectX（4.20 は D3D9 + `dx_*.sbp` → ActBa64 は D3D11 で段階的に）
 
@@ -112,19 +108,9 @@
 | `CImage2D` / `CMeshModel` / `CRectPolygon` | 未 | 高レベル描画 |
 | `CInputKeyboard` / `CInputMouse` | 未 | `dx_input.sbp`（DirectInput） |
 | `CAudio` / `CAudio3D` / `CListener` | 未 | `dx_music.sbp` |
-| `dx_ui.sbp` 等 | `Include/d3d11/dx_ui.sbp` 着手 | キー・TextOut 程度。UI ラッパは未 |
+| `dx_ui.sbp` 等 | UI ラッパは未 | キー・TextOut 以上は未 |
 
 ## 標準ライブラリ
 
 - BasicHelp の `basic\*.sbp` / `system\*.sbp` 相当を `.abp` として増やす（4.20 目録: `basic\function.sbp`, `basic\prompt.sbp`, `system\string.sbp` など）
 - 4.20 の `#N88BASIC As EXE` / `IDNAME` 相当（実行ファイル名・サブシステム指定）は `.pj` / CLI で代替検討
-
-## ProjectEditor
-
-- [x] スクロールバー（`WS_VSCROLL` + `SetScrollInfo` / `WM_VSCROLL`）
-- [x] 多言語 UI（英語組み込み。`setting.ini` の `Language=` + `ProjectEditor_lang_<code>.csv`。ini なしは英語）
-- [x] 設定ダイアログ（Setting メニュー → 言語選択 → OK で ini 保存と再起動確認）
-- [x] コンソールプログラム。実行後コンソール閉じないように（単体は先頭 120 行の `#console`、プロジェクトは `#USEWINDOW=0` のとき `cmd /k`）
-- [x] MDI（子ウィンドウ最大 8。Window メニューで Cascade / Tile）
-- [x] `.pj` のプロジェクトウィンドウ（`#SOURCE` 一覧。クリックで開く。閉じるとプロジェクト解除）
-- [x] コンパイル切替（プロジェクトを開いていればその `.pj`、なければ前面の 1 ファイル）

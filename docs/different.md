@@ -194,7 +194,6 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Window` / `DelWnd` | BASIC ウィンドウ生成・破棄 | Win32 API で代替 |
 | Win32API 全量 | `api_*.sbp` 382 関数超 | 主要 API は `api.idx` Declare。不足分・自作 DLL はソース側 `Declare` |
 | DirectX | D3D9 + `dx_graphics.sbp` 等 | **D3D11 基盤はサンプルで動作**。`dx_input`・`dx_music` 等の D3D11 版は未整備 |
 | RAD | Project Editor | 機能拡充予定 |
