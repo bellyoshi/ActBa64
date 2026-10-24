@@ -35,10 +35,8 @@
 - **厳密 `Protected` / `Private`**（受理のみ。Public と同等）
 - **`ReDim`**, **`Const` マクロ関数**, **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術（64bit ポインタは済）
-- **`Single` IEEE 演算**（格納・変換中心。汎用 SSE は未。`Double` / `Math.abp` は済）
-
-- **`Double` @ `-actba32`**
-- **`InsertMenu`（`AstLowerInsMenu`）@ `-actba32`** — `callBytes` は `LowCallBytes(5)` 済み。emit 列は x64 専用（第5引数を `rsp+32`、他は RCX/RDX/R8/R9）。32bit は stdcall どおり全引数を `esp+0..16` に並べる分岐が必要
+- **`Single` IEEE 演算**（格納・変換中心。汎用 SSE は未。`Double` / `Math.abp` は 64bit / `-actba32` とも済）
+- **`Double` 配列要素・UDT フィールド @ `-actba32`** — スカラーの演算・比較・仮引数・戻り値は済。要素とフィールドのロード／ストアは `OP_LOAD_QWORD` / `OP_STORE_QWORD` のまま（32bit では 4 バイト）
 - **符号無し演算**の AB 4.20 ルール完全化
 - **BASIC 命令**: `Window` / `MsgBox` / `Inkey$` 等（API 代替で足りるなら Include のみ）
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
@@ -79,7 +77,7 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Double` を `-actba32` で | 64bit は IEEE 加減乗除・比較・`Function As Double` 済。32bit は SSE 未実装 |
+| `Double` 配列・UDT フィールドを `-actba32` で | スカラーの IEEE 演算は済。要素とフィールドの 8 バイト転送は未 |
 | `Single` の汎用演算 | 4.20 は IEEE 浮動小数。格納と Input 変換が中心 |
 | 符号無し演算 | 4.20: 両オペランドが符号無し型なら符号無し演算 |
 | `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |

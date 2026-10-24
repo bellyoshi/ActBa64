@@ -11,11 +11,14 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
     Dim j As Long
     Dim byRefBit As Long
     Dim useAddr As Long
+    Dim home As Long
+    Dim slot As Long
 
     LowEmitCallArgHomes = false
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
+    home = 0
     argIdx = 0
     argNode = nodes[idx].left
     While argIdx < nArgs
@@ -38,7 +41,9 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
                 End If
             End If
         End If
-        IrEmit(list, OP_STORE_RSP_RAX, argIdx * TyPtrSize(), 0)
+        slot = LowNextArgBytes(ctx, name, argIdx, useAddr, isApi)
+        LowEmitHomeStore(list, home, slot)
+        home = home + slot
         argIdx = argIdx + 1
         argNode = nodes[argNode].nxt
     Wend
@@ -72,7 +77,7 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
         ctx->err = 1
         Exit Function
     End If
-    callBytes = LowCallBytes(nArgs)
+    callBytes = LowEmitCallBytes(ctx, idx, nArgs, byBits, isApi, VarPtr(name))
     If callBytes > 120 Then
         Print "error: call stack too large (" + Str$(callBytes) + ") '" + MakeStr(VarPtr(name)) + "'"
         ctx->err = 1
@@ -185,4 +190,56 @@ Function LowExprCall(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     LowExprCall = LowExprCallNormal(ctx, idx)
+End Function
+
+Function LowNextArgBytes(ctx As *LowerCtx, name As *Byte, argIdx As Long, useAddr As Long, isApi As Long) As Long
+    Dim ty As Long
+    LowNextArgBytes = TyPtrSize()
+    If TyIs32() = 0 Or isApi <> 0 Or useAddr <> 0 Then Exit Function
+    ty = LowFindFuncParamTy(ctx, name, argIdx)
+    If ty = TY_DOUBLE Then LowNextArgBytes = 8
+End Function
+
+Sub LowEmitHomeStore(list As *IrList, disp As Long, slot As Long)
+    If slot = 8 And TyIs32() <> 0 Then
+        IrEmit(list, OP_STORE_RSP_DBL, disp, 0)
+        Exit Sub
+    End If
+    IrEmit(list, OP_STORE_RSP_RAX, disp, 0)
+End Sub
+
+Function LowHomesStep(ctx As *LowerCtx, name As *Byte, argNode As Long, argIdx As Long, byBits As Long, bit As Long) As Long
+    Dim useAddr As Long
+    useAddr = LowCallArgNeedsAddr(ctx, argNode, byBits, bit, 0)
+    LowHomesStep = LowNextArgBytes(ctx, name, argIdx, useAddr, 0)
+End Function
+
+Function LowStackHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim argNode As Long
+    Dim argIdx As Long
+    Dim n As Long
+    Dim bit As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    n = 0
+    bit = 1
+    argIdx = 0
+    argNode = nodes[idx].left
+    While argIdx < nArgs
+        n = n + LowHomesStep(ctx, name, argNode, argIdx, byBits, bit)
+        bit = bit * 2
+        argIdx = argIdx + 1
+        argNode = nodes[argNode].nxt
+    Wend
+    LowStackHomes = n
+End Function
+
+Function LowEmitCallBytes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, isApi As Long, name As *Byte) As Long
+    If TyIs32() <> 0 And isApi = 0 Then
+        LowEmitCallBytes = LowStackHomes(ctx, idx, nArgs, byBits, name)
+        Exit Function
+    End If
+    LowEmitCallBytes = LowCallBytes(nArgs)
 End Function

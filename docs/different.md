@@ -82,7 +82,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 |---|---|---|
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | **変数同士の代入**で型不一致を warning（`As` で抑制）。リテラル代入は対象外。`Include\default` は抑制 |
 | `Input` | `Input "prompt", variable` または `Input variable` | **両方対応**（`String` / `Long` / `Byte` / `Single` / `Double`） |
-| `Single` / `Double` | IEEE 浮動小数点演算 | **`Double`（64bit）**: 加減乗除・比較・`Function As Double` / Double 仮引数・小数リテラルは AST 上 IEEE ビット（千分率は不使用）。`Math.abp` も IEEE Double。**`Single`**: 格納と Input 変換が中心（汎用演算は未）。N88 `CIRCLE` 角度・aspect は `Double`。`-actba32` は SSE 未実装のため Double 演算テストをスキップ |
+| `Single` / `Double` | IEEE 浮動小数点演算 | **`Double`**: 加減乗除・比較・`Function As Double` / Double 仮引数・小数リテラルは AST 上 IEEE ビット（千分率は不使用）。`Math.abp` も IEEE Double。64bit と `-actba32` の両方（32bit の値は `edx:eax`。配列要素と UDT フィールドの 8 バイト転送は 64bit のみ）。**`Single`**: 格納と Input 変換が中心（汎用演算は未）。N88 `CIRCLE` 角度・aspect は `Double` |
 | `Const` | `Const name = expr` および `Const name(arglist) = expr`（マクロ関数） | 整数・文字列リテラル中心。複雑な定数式・マクロ関数は制限あり |
 | `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New`/`Delete` / `Super` 演算子なし。`Private` / `Public` / `Protected` は**受理のみ**（アクセス制御なし）。メソッドはマングル名 + 暗黙 `Me` |
 | `For` … `Next` | `For c = start To end [Step step]`、`Exit For` | **Step / Exit For 対応**（[language.md §4](./language.md#4-文) 参照） |
@@ -160,11 +160,11 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 
 ### IEEE Double
 
-- **浮動小数は IEEE 754 Double を正式サポート**（64bit ターゲット）
+- **浮動小数は IEEE 754 Double を正式サポート**（64bit と `-actba32`）
   - 小数リテラル・式・`Math.abp`・`Function As Double` / Double 仮引数・N88 `CIRCLE` 角度・aspect・`Input` の数値変換まで一貫して Double ビット列を扱う。
   - 旧内部表現（千分率整数）は廃止。
-  - `-actba32` では SSE 未実装のため Double 演算は未対応（テストはスキップ）。
-  - 回帰: `test/t_double_*.abp` / `test/t_dbl_*.abp` / `test/t_math_*.abp`。
+  - `-actba32` の値は `edx:eax`。`InsertMenuA` は stdcall で全引数をスタックに置く。配列要素と UDT フィールドの 8 バイト転送、および `Print` の Double 自動変換は 64bit のみ。
+  - 回帰: `test/t_double_*.abp` / `test/t_dbl_*.abp` / `test/t_math_*.abp` / `test/t_insmenu.abp`。
 
 ### DirectX 11
 
@@ -191,7 +191,7 @@ BasicHelp に記載があり、ActBa64 で利用できる主要項目。詳細�
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
 | `With` … `End With` | 構造体メンバを `.Member` で省略、ネスト可 | **実装済み** |
-| `ByRef` / `ByVal` | 既定は値渡し。`ByRef p As Type` で参照渡し | **実装済み** |
+| `ByRef` / `ByVal` | 既定は値渡し。構造体引数は `ByRef` 必須（`ByVal` と指定なしはエラー）。フィールド代入は呼び出し元に残る | **実装済み** |
 | `TypeDef` | `TypeDef newtype = basetype`（型エイリアス） | **実装済み**（`*Function` / `*Sub` 別名も可） |
 | `Type` / `Class` | UDT / OOP（後者は [動作が異なる](#動作が異なるもの) 参照） | **実装済み**（`Type Name Align(n)`、`Inherits` / `Virtual` は部分対応） |
 | `#include` | `"path"` / `<path>` で `.sbp` 取り込み（同一パスの再 `#include` は都度展開） | **`"path"`**（ソース相対）と **`<path>`**（`Include\` 検索）の両方可（拡張子は `.abp` / `.sbp` 可）。**同一パスは一度だけ**（[制御・プリプロセス](#制御プリプロセス)） |

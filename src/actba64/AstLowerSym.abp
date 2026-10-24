@@ -290,6 +290,87 @@ End Sub
 
 ' AST_NUM.extra: 0=整数, 1=Single IEEE bits, 4=Double IEEE bits (Ast.abp)
 
+Sub LowEmitDblAddr(list As *IrList, off As Long, isByRef As Long, isGlob As Long)
+    If isGlob <> 0 And isByRef = 0 Then
+        IrEmit(list, OP_LEA_RAX_GLOB, off, 0)
+        Exit Sub
+    End If
+    LowEmitLoadOff(list, off, isGlob)
+End Sub
+
+Sub LowEmitLoadDbl(list As *IrList, off As Long, isByRef As Long, isGlob As Long)
+    If isByRef = 0 And isGlob = 0 Then
+        IrEmit(list, OP_LOAD_DBL, off, 0)
+        Exit Sub
+    End If
+    LowEmitDblAddr(list, off, isByRef, isGlob)
+    IrEmit(list, OP_LOAD_DBL_MEM, 0, 0)
+End Sub
+
+Sub LowEmitLoadVarVal(list As *IrList, off As Long, ty As Long, isByRef As Long, isGlob As Long)
+    If ty = TY_DOUBLE And TyIs32() <> 0 Then
+        LowEmitLoadDbl(list, off, isByRef, isGlob)
+        Exit Sub
+    End If
+    LowEmitLoadOff(list, off, isGlob)
+    If isByRef <> 0 Then
+        IrEmit(list, OP_LOAD_QWORD_RAX, 0, 0)
+    End If
+End Sub
+
+Sub LowEmitStoreDblGlob(list As *IrList, off As Long)
+    IrEmit(list, OP_PUSH_DBL, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, off, 0)
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_POP_DBL, 0, 0)
+    IrEmit(list, OP_STORE_DBL_MEM, 0, 0)
+End Sub
+
+Sub LowEmitStoreDbl(list As *IrList, off As Long, isGlob As Long)
+    If isGlob <> 0 Then
+        LowEmitStoreDblGlob(list, off)
+        Exit Sub
+    End If
+    IrEmit(list, OP_STORE_DBL, off, 0)
+End Sub
+
+Sub LowEmitStoreByRefDbl(list As *IrList, off As Long, isGlob As Long)
+    IrEmit(list, OP_PUSH_DBL, 0, 0)
+    LowEmitDblAddr(list, off, 1, isGlob)
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_POP_DBL, 0, 0)
+    IrEmit(list, OP_STORE_DBL_MEM, 0, 0)
+End Sub
+
+Function LowEmitStoreIfDbl(list As *IrList, off As Long, ty As Long, isByRef As Long, isGlob As Long) As Long
+    LowEmitStoreIfDbl = 0
+    If ty <> TY_DOUBLE Or TyIs32() = 0 Then Exit Function
+    If isByRef <> 0 Then
+        LowEmitStoreByRefDbl(list, off, isGlob)
+    Else
+        LowEmitStoreDbl(list, off, isGlob)
+    End If
+    LowEmitStoreIfDbl = 1
+End Function
+
+Sub LowEmitFuncRet(list As *IrList, off As Long, retTy As Long)
+    If retTy = TY_DOUBLE And TyIs32() <> 0 Then
+        IrEmit(list, OP_LOAD_DBL, off, 0)
+        Exit Sub
+    End If
+    IrEmit(list, OP_LOAD_LOCAL, off, 0)
+End Sub
+
+Sub LowEmitZeroSlot(list As *IrList, off As Long, ty As Long)
+    IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+    If ty = TY_DOUBLE And TyIs32() <> 0 Then
+        IrEmit(list, OP_XOR_EDX, 0, 0)
+        IrEmit(list, OP_STORE_DBL, off, 0)
+        Exit Sub
+    End If
+    IrEmit(list, OP_STORE_LOCAL, off, 0)
+End Sub
+
 Function LowPromoteType(a As Long, b As Long) As Long
     If a = TY_DOUBLE Or b = TY_DOUBLE Then
         LowPromoteType = TY_DOUBLE
