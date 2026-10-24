@@ -186,3 +186,33 @@ actba64 <src.abp|.pj> [-actba32] [-o <out>]
 | ほぼ全テストが `build failed (exit=1)`・コンパイラ出力が空 | `Include` が見えていない／読み込み中に異常終了。`.\build.ps1`（コピー込み）をやり直すか、`Test-Path bin\stage1\Include\default\default.idx` を確認 |
 | 途中まで PASS のあと大量に `build failed (exit=0)`、または PowerShell が `actba64.exe` を「認識できない」 | 実行中に `bin\<stage>\actba64.exe` が消えていることが多い（Windows Defender 等の隔離）。`Test-Path bin\stage1\actba64.exe` を確認し、リポジトリまたは `src\actba64\bin` を除外リストへ追加してから `.\build.ps1` → `.\run_test2.ps1` をやり直す |
 | `warning: not found: Include\default\default.idx` | 上記 Include 検索パスを確認。正本欠落か、カレントが想定外 |
+| AB4.20 で `すでに定義されています`（`WM_*` / `WS_*` / `LB_*` など） | その定数は [`src/Include/default/WinConsts.sbp`](../src/Include/default/WinConsts.sbp) に置く。エディタの `.sbp` へ再 `Const` しない（AB4.20 の標準ヘッダと重なる） |
+
+---
+
+## 5. ProjectEditor
+
+配布物の `release\ProjectEditor.exe` は MDI エディタです。ソースは子ウィンドウで、同時に最大 8 枚開いたままにします。**Window** メニューは Cascade / Tile Horizontal / Tile Vertical です。
+
+標準ヘッダの正本は [`src/Include`](../src/Include) です。`release_build.ps1` が `release\Include` へコピーします。ProjectEditor 専用の Include コピーはリポジトリに置きません。
+
+### プロジェクトウィンドウ
+
+`.pj` を開くと（File → Open、または起動時の引数）、ソースは開かずプロジェクトウィンドウが出ます。`#SOURCE` の次の行から、次の `#` 指令の手前までを一覧します。空行と `'` コメントは除きます（最大 128 件）。行をクリックするとそのファイルを開き、既に開いていれば前面にします。別の `.pj` を開くと一覧が差し替わります。プロジェクトウィンドウを閉じると、プロジェクトは解除されます。
+
+MDI の見本は [`src/actba64/samples/mdi/mdi.pj`](../src/actba64/samples/mdi/mdi.pj) です。
+
+### コンパイルと実行
+
+Basic メニューの **64bit**（既定）は、エディタと同じディレクトリの `actba64.exe` を呼びます。見つからなければパス上の同名です。**32bit** は同じ `actba64.exe` に `-actba32` を付けて呼びます。
+
+| 状態 | 渡す入力 | 出力 |
+|---|---|---|
+| プロジェクトウィンドウが開いている | その `.pj` | `#OUTPUT_RELEASE`（`.pj` のあるディレクトリ基準）。無ければ `.pj` の拡張子を `.exe` にしたもの |
+| プロジェクトを開いていない | 前面のソース 1 ファイル | そのパスの拡張子を `.exe` にしたもの |
+
+呼び方は `actba64 <入力> -o <出力>` です。32bit のときは `actba64 -actba32 <入力> -o <出力>` です。コンパイル前に、プロジェクトなら開いているメンバーのうち未保存のファイルを、単体なら前面のファイルを保存します。プロジェクトを開いているあいだは、前面が別ファイルでも Compile / Run はその `.pj` を渡します。
+
+**Run** はコンパイルに成功したあと起動します。プロジェクトでは `#USEWINDOW` が 0 のとき `cmd /k` でコンソールを残し、1 以上なら exe を直接起動します（未指定は 0）。単体ファイルでは、先頭 120 行に `#console` があるときだけ `cmd /k` です。
+
+AB 4.20 と actba64 の両方で組むソースでは、AB 4.20 の標準ヘッダが既に持つ Win32 定数を `.sbp` に書きません。actba64 向けの共有定義は `WinConsts.sbp` に置き、`default.idx` が自動挿入します。

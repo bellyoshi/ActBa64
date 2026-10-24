@@ -57,7 +57,7 @@ Print a +_
 
 ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`・`StrUtils.abp`・`Memory.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -521,7 +521,7 @@ memcpy(dst, src, n)
 
 ### 7.3 自動 Include
 
-`Include\default\default.idx`（Win32 型・定数・`Math.abp`・`Sleep.abp`・`Space.abp`・`DoubleStr.abp`・`BasicFile.abp`・`StrUtils.abp`・`Memory.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Memory.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
 続けて Preproc が `api.idx`（主要 Win32 の `Declare Lib`）と `UnicodeApi.sbp`（Unicode 版 API）を挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
