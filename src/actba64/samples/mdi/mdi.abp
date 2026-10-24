@@ -1,0 +1,122 @@
+' MDI sample (frame + MDICLIENT + child windows)
+' Build from src\actba64:
+'   .\bin\stage2\actba64.exe .\samples\mdi\mdi.pj
+'   .\samples\mdi\mdi.exe
+
+#USEWINDOW=1
+
+Const IDM_NEW = 1001
+Const IDM_CLOSE = 1002
+Const IDM_EXIT = 1003
+Const IDM_CASCADE = 2001
+Const IDM_TILEHORZ = 2002
+Const IDM_TILEVERT = 2003
+Const IDM_ARRANGE = 2004
+Const IDM_FIRSTCHILD = 4000
+
+Const WM_MDICREATE = &H0220
+Const WM_MDICASCADE = &H0227
+Const WM_MDITILE = &H0226
+Const WM_MDIICONARRANGE = &H0228
+Const WM_MDIGETACTIVE = &H0229
+Const MDITILE_VERTICAL = 0
+Const MDITILE_HORIZONTAL = 1
+
+Const COLOR_WINDOW = 5
+Const COLOR_APPWORKSPACE = 12
+Const WS_CHILD = &H40000000
+Const WS_CLIPCHILDREN = &H02000000
+Const WS_HSCROLL = &H00100000
+Const MDI_FRAME_STYLE = &H12CF0000
+
+Type CLIENTCREATESTRUCT
+    hWindowMenu As HMENU
+    idFirstChild As DWord
+End Type
+
+Type MDICREATESTRUCT
+    szClass As LPCSTR
+    szTitle As LPCSTR
+    hOwner As HINSTANCE
+    x As Long
+    y As Long
+    cx As Long
+    cy As Long
+    style As DWord
+    lParam As LPARAM
+End Type
+
+Declare Function DefFrameProc Lib "user32.dll" Alias "DefFrameProcA" (ByVal hWnd As HWND, ByVal hWndMDIClient As HWND, ByVal uMsg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+Declare Function DefMDIChildProc Lib "user32.dll" Alias "DefMDIChildProcA" (ByVal hWnd As HWND, ByVal uMsg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+Declare Function TranslateMDISysAccel Lib "user32.dll" (ByVal hWndClient As HWND, ByRef lpMsg As MSG) As Long
+Declare Function GetSubMenu Lib "user32.dll" (ByVal hMenu As HMENU, ByVal nPos As Long) As HMENU
+Declare Function DrawMenuBar Lib "user32.dll" (ByVal hWnd As HWND) As Long
+Declare Function CreateWindowExPtr Lib "user32.dll" Alias "CreateWindowExA" (ByVal dwExStyle As DWord, ByVal lpClassName As *Byte, ByVal lpWindowName As *Byte, ByVal dwStyle As DWord, ByVal x As Long, ByVal y As Long, ByVal nWidth As Long, ByVal nHeight As Long, ByVal hWndParent As HWND, ByVal hMenu As HMENU, ByVal hInstance As HINSTANCE, ByVal lpParam As VoidPtr) As HWND
+
+Dim g_hInst As HINSTANCE
+Dim g_hFrame As HWND
+Dim g_hClient As HWND
+Dim g_hMenu As HMENU
+Dim g_childNo As Long
+Dim g_childTitle As String
+Dim g_childClass As String
+Dim g_wc As WNDCLASSEX
+Dim g_ccs As CLIENTCREATESTRUCT
+Dim g_mcs As MDICREATESTRUCT
+
+Sub MdiStartup()
+    g_hInst = GetModuleHandle(0)
+    g_childClass = "MdiChild"
+    MdiBuildMenu()
+    MdiRegClass("MdiFrame", AddressOf(FrameProc), COLOR_APPWORKSPACE)
+    MdiRegClass(g_childClass, AddressOf(ChildProc), COLOR_WINDOW)
+    MdiCreateFrame()
+    MdiNewChild()
+    MdiNewChild()
+End Sub
+
+Sub MdiCreateFrame()
+    g_hFrame = CreateWindowEx(0, "MdiFrame", "MDI Sample", MDI_FRAME_STYLE, -2147483648, -2147483648, 800, 600, 0, 0, g_hInst, 0)
+    If g_hFrame = 0 Then ExitProcess(1)
+    ShowWindow(g_hFrame, SW_SHOW)
+    DrawMenuBar(g_hFrame)
+    UpdateWindow(g_hFrame)
+End Sub
+
+Function MdiRegClass(cls As String, proc As VoidPtr, color As Long) As Long
+    FillMemory(VarPtr(g_wc), SizeOf(WNDCLASSEX), 0)
+    g_wc.cbSize = SizeOf(WNDCLASSEX)
+    g_wc.hInstance = g_hInst
+    g_wc.style = CS_HREDRAW Or CS_VREDRAW
+    MdiRegClass = MdiRegFinish(cls, proc, color)
+End Function
+
+Function MdiRegFinish(cls As String, proc As VoidPtr, color As Long) As Long
+    g_wc.hCursor = LoadCursor(NULL, MAKEINTRESOURCE(IDC_ARROW))
+    g_wc.hIcon = LoadIcon(NULL, MAKEINTRESOURCE(IDI_APPLICATION))
+    g_wc.lpszClassName = StrPtr(cls)
+    g_wc.lpfnWndProc = proc
+    g_wc.hbrBackground = CreateSolidBrush(GetSysColor(color))
+    MdiRegFinish = RegisterClassEx(g_wc)
+End Function
+
+Sub MdiLoop()
+    Dim msg As MSG
+    Dim r As Long
+    Do
+        r = GetMessage(msg, 0, 0, 0)
+        If r = 0 Then Exit Do
+        If r = -1 Then Exit Do
+        MdiDispatch(msg)
+    Loop
+End Sub
+
+Sub MdiDispatch(ByRef msg As MSG)
+    If TranslateMDISysAccel(g_hClient, msg) <> 0 Then Exit Sub
+    TranslateMessage(msg)
+    DispatchMessage(msg)
+End Sub
+
+MdiStartup()
+MdiLoop()
+End
