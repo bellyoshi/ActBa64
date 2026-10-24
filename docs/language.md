@@ -456,6 +456,8 @@ Asc(s)
 Left$(s, n) / Right$(s, n) / Mid$(s, start[, len])
 Chr$(n) / Chr(n)
 Str$(n)
+Hex$(n) / Oct$(n)        ' 16進（小文字）と 8進。0 は "0"（StrUtils.abp）
+ZeroString(n)            ' 長さ n のゼロ埋め。n が負なら空（StrUtils.abp）
 StrD$(d)                 ' Double → 文字列（Include\default\DoubleStr.abp）
 Date$() / Time$()        ' yyyy/mm/dd と hh:mm:ss（BasicCmd.abp）
 Inkey$() / Input$(n)     ' #n88basic のみ（n88key.abp）
@@ -523,7 +525,7 @@ memcpy(dst, src, n)
   - UDT 内の String メンバは型表で区別できないため precise root 未登録（conservative 走査に依存）
 - `InStr` / `Lower$` などは **言語組み込みではなく** ライブラリ `.abp` として提供される場合がある
 
-`Chr$` / `Right$` は組み込み。`Hex$` / `Val` / `InStr` などはライブラリ側。
+`Chr$` / `Right$` は組み込み。`Hex$` / `Oct$` / `ZeroString` / `Val` / `InStr` などはライブラリ側。`Oct$` は 32bit のビット列を 8 進にし、先頭の 0 は付けない。`ZeroString(n)` の `Len` は `n` で、中身は 0（埋め込み NUL）。`n` が負のときは空文字。
 
 ---
 

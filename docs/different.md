@@ -185,8 +185,6 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
 | `CDbl` / `CInt` / `CSng` | 型変換関数 | `As` キャストは可 |
-| `Oct$` | 8 進文字列 | |
-| `ZeroString` | ゼロ埋め文字列 | 未（`Hex$` / `Val` / `Trim$` / `InStr` は `StrUtils.abp` で済。`Date$` / `Time$` は済） |
 | `SetDouble` / `GetDouble` / `GetSingle` 等 | メモリ読み書き | **`Memory.abp`** は Byte〜DWord まで。浮動 Get/Set は未 |
 | `realloc` | C ヒープ | `calloc`（→ `HeapAlloc` ゼロ埋め）は済。`realloc` 未 |
 

@@ -37,7 +37,7 @@
 - **`Single` IEEE 演算**（格納と Input 変換が中心。汎用 SSE は未）
 - **`Double` 配列要素・UDT フィールド @ `-actba32`** — 要素とフィールドのロード／ストアは `OP_LOAD_QWORD` / `OP_STORE_QWORD` のまま（32bit では 4 バイト）
 - **符号無し演算**の AB 4.20 ルール完全化
-- **BASIC 命令の残り**: `Oct$` / `ZeroString` 等
+- **BASIC 命令の残り**: `_splitpath`
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
 - **Win32 `api_*.sbp` 増分**: 需要に応じ `Declare` / idx 追加
@@ -85,8 +85,7 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Oct$` | `StrUtils.abp` 未 |
-| `ZeroString` / `_splitpath` | `system\string.sbp`（4.20） |
+| `_splitpath` | `system\string.sbp`（4.20） |
 | `GetSingle` / `SetSingle` / `GetDouble` / `SetDouble` | `Memory.abp` は Byte〜DWord まで。浮動小数 Get/Set は未 |
 | `realloc` | 4.20 C ヒープ。未 |
 
