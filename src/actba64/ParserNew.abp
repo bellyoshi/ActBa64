@@ -1,0 +1,118 @@
+' ParserNew - New 式と Delete 文
+
+Function ParseFactorOrNew(p As *Parser) As Long
+    Dim n As Long
+    n = ParseTryNew(p)
+    ParseFactorOrNew = n
+    If n <> -2 Then Exit Function
+    ParseFactorOrNew = ParseFactorIdent(p)
+End Function
+
+Function ParseTryNew(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseTryNew = -2
+    lstrcpy(VarPtr(kw), "new")
+    If ParseIdentIs(p, VarPtr(kw)) = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseTryNew = ParseNewExpr(p)
+End Function
+
+Function ParseNewCount(p As *Parser, ByRef count As Long) As Long
+    count = -1
+    ParseNewCount = 1
+    If ParseTokKind(p) <> TK_LBRACK Then Exit Function
+    p->pos = p->pos + 1
+    count = ParseExpr(p)
+    If count < 0 Then ParseNewCount = 0
+    If count < 0 Then Exit Function
+    If Not ParseExpect(p, TK_RBRACK) Then ParseNewCount = 0
+End Function
+
+Function ParseNewLookup(p As *Parser, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    ast = p->ast
+    types = ast->types
+    ParseNewLookup = TyFind(types, name)
+    If ParseNewLookup < 0 Then ParseFail(p, "unknown class")
+End Function
+
+Function ParseNewIsClass(p As *Parser, ti As Long) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    ast = p->ast
+    types = ast->types
+    ParseNewIsClass = TyIsClass(types, ti)
+    If ParseNewIsClass = 0 Then ParseFail(p, "not a class")
+End Function
+
+Function ParseNewClassTi(p As *Parser, ByRef ti As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseNewClassTi = 0
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    ti = ParseNewLookup(p, VarPtr(name))
+    If ti < 0 Then Exit Function
+    ParseNewClassTi = ParseNewIsClass(p, ti)
+End Function
+
+Function ParseNewArgs(p As *Parser, ByRef args As Long, ByRef nArgs As Long) As Long
+    args = -1
+    nArgs = 0
+    ParseNewArgs = 1
+    If ParseTokKind(p) <> TK_LPAREN Then Exit Function
+    p->pos = p->pos + 1
+    ParseNewArgs = ParseArgList(p, args, nArgs)
+End Function
+
+Sub ParseFillNew(nodes As *AstNode, n As Long, ti As Long, count As Long, args As Long, nArgs As Long)
+    nodes[n].extra = ti
+    nodes[n].left = count
+    nodes[n].right = args
+    nodes[n].num = nArgs
+End Sub
+
+Function ParseNewNode(p As *Parser, ti As Long, count As Long, args As Long, nArgs As Long) As Long
+    Dim ast As *Ast
+    Dim n As Long
+    ast = p->ast
+    n = AstAddNode(ast, AST_NEW)
+    ParseNewNode = n
+    If n < 0 Then Exit Function
+    ParseFillNew(ast->nodes, n, ti, count, args, nArgs)
+End Function
+
+Function ParseNewTail(p As *Parser, ti As Long, count As Long) As Long
+    Dim args As Long
+    Dim nArgs As Long
+    ParseNewTail = -1
+    If ParseNewArgs(p, args, nArgs) = 0 Then Exit Function
+    ParseNewTail = ParseNewNode(p, ti, count, args, nArgs)
+End Function
+
+Function ParseNewExpr(p As *Parser) As Long
+    Dim ti As Long
+    Dim count As Long
+    ParseNewExpr = -1
+    If ParseNewCount(p, count) = 0 Then Exit Function
+    If ParseNewClassTi(p, ti) = 0 Then Exit Function
+    ParseNewExpr = ParseNewTail(p, ti, count)
+End Function
+
+Function ParseDeleteNode(ast As *Ast, e As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    n = AstAddNode(ast, AST_DELETE)
+    ParseDeleteNode = n
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].left = e
+End Function
+
+Function ParseDeleteStmt(p As *Parser) As Long
+    Dim e As Long
+    p->pos = p->pos + 1
+    e = ParseExpr(p)
+    ParseDeleteStmt = -1
+    If e < 0 Then Exit Function
+    ParseDeleteStmt = ParseDeleteNode(p->ast, e)
+End Function

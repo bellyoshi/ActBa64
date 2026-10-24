@@ -1,0 +1,131 @@
+' BasicCmd - MsgBox / Window / Cls / Beep / パス / Date$ / Time$
+' Inkey$ / Input$ は N88BASIC モードのみ（Include\N88BASIC\n88key.abp）
+
+Dim g_basicWndOk As Long
+Dim g_basicClsName As String
+Dim g_clsInfo(31) As Byte
+Dim g_st(15) As Byte
+
+Const BASIC_STD_OUT = &HFFFFFFF5
+
+Sub BasicBeep()
+    MessageBeep(0)
+End Sub
+
+Function BasicMsgBox(hWnd As HWND, text As String, title As String, typ As DWord) As Long
+    BasicMsgBox = MessageBoxA(hWnd, StrPtr(text), StrPtr(title), typ)
+End Function
+
+Function BasicDelWnd(hWnd As HWND) As Long
+    BasicDelWnd = DestroyWindow(hWnd)
+End Function
+
+Function BasicChDir(path As String) As Long
+    BasicChDir = SetCurrentDirectoryA(StrPtr(path))
+End Function
+
+Function BasicMkDir(path As String) As Long
+    BasicMkDir = CreateDirectoryA(StrPtr(path), 0)
+End Function
+
+Function BasicKill(path As String) As Long
+    BasicKill = DeleteFileA(StrPtr(path))
+End Function
+
+Function BasicExec(path As String, cmd As String) As Long
+    Dim op(7) As Byte
+    lstrcpy(VarPtr(op), "open")
+    BasicExec = ShellExecuteA(0, VarPtr(op), StrPtr(path), StrPtr(cmd), 0, SW_SHOWNORMAL)
+End Function
+
+Function BasicWndProc(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    BasicWndProc = DefWindowProc(hWnd, msg, wParam, lParam)
+End Function
+
+Sub BasicInitClsName()
+    If Len(g_basicClsName) <> 0 Then Exit Sub
+    g_basicClsName = "ActBa64Wnd"
+End Sub
+
+Sub BasicFillWnd(ByRef wc As WNDCLASSEX)
+    FillMemory(VarPtr(wc), Len(wc), 0)
+    wc.cbSize = Len(wc)
+    wc.lpfnWndProc = AddressOf(BasicWndProc)
+    wc.hInstance = GetModuleHandle(0)
+    wc.style = CS_HREDRAW Or CS_VREDRAW
+    wc.lpszClassName = StrPtr(g_basicClsName)
+End Sub
+
+Sub BasicEnsureWnd()
+    Dim wc As WNDCLASSEX
+    If g_basicWndOk <> 0 Then Exit Sub
+    BasicInitClsName()
+    BasicFillWnd(wc)
+    If RegisterClassEx(wc) <> 0 Then g_basicWndOk = 1
+End Sub
+
+Function BasicWndClass$(className As String) As String
+    If Len(className) <> 0 Then BasicWndClass$ = className
+    If Len(className) <> 0 Then Exit Function
+    BasicEnsureWnd()
+    BasicWndClass$ = g_basicClsName
+End Function
+
+Function BasicWindow(ByRef hWnd As HWND, hOwner As HWND, x As Long, y As Long, w As Long, h As Long, title As String, style As DWord, className As String, id As HMENU, proc As Long, exStyle As DWord) As HWND
+    Dim wndCls As String
+    wndCls = BasicWndClass$(className)
+    hWnd = CreateWindowEx(exStyle, StrPtr(wndCls), StrPtr(title), style, x, y, w, h, hOwner, id, GetModuleHandle(0), proc)
+    BasicWindow = hWnd
+End Function
+
+Function BasicClsWord(off As Long) As Long
+    BasicClsWord = g_clsInfo[off] + g_clsInfo[off + 1] * 256
+End Function
+
+Function BasicClsCells() As Long
+    BasicClsCells = BasicClsWord(0) * BasicClsWord(2)
+End Function
+
+Function BasicClsFill(h As HANDLE, cells As Long) As Long
+    Dim wrote As DWord
+    FillConsoleOutputCharacterA(h, 32, cells, 0, wrote)
+    BasicClsFill = SetConsoleCursorPosition(h, 0)
+End Function
+
+Function BasicClsGo(h As HANDLE) As Long
+    BasicClsGo = 0
+    If GetConsoleScreenBufferInfo(h, VarPtr(g_clsInfo)) = 0 Then Exit Function
+    BasicClsGo = BasicClsFill(h, BasicClsCells())
+End Function
+
+Function BasicCls(n As Long) As Long
+    BasicCls = 0
+    If n < 0 Then Exit Function
+    BasicCls = BasicClsGo(GetStdHandle(BASIC_STD_OUT))
+End Function
+
+Function BasicDig$(n As Long, place As Long) As String
+    BasicDig$ = Chr$(48 + ((n \ place) Mod 10))
+End Function
+
+Function Basic2$(n As Long) As String
+    Basic2$ = BasicDig$(n, 10) + BasicDig$(n, 1)
+End Function
+
+Function Basic4$(n As Long) As String
+    Basic4$ = BasicDig$(n, 1000) + BasicDig$(n, 100) + Basic2$(n)
+End Function
+
+Function BasicStWord(off As Long) As Long
+    BasicStWord = g_st[off] + g_st[off + 1] * 256
+End Function
+
+Function Date$() As String
+    GetLocalTime(VarPtr(g_st))
+    Date$ = Basic4$(BasicStWord(0)) + "/" + Basic2$(BasicStWord(2)) + "/" + Basic2$(BasicStWord(6))
+End Function
+
+Function Time$() As String
+    GetLocalTime(VarPtr(g_st))
+    Time$ = Basic2$(BasicStWord(8)) + ":" + Basic2$(BasicStWord(10)) + ":" + Basic2$(BasicStWord(12))
+End Function

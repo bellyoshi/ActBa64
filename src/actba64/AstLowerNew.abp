@@ -1,0 +1,491 @@
+' AstLowerNew - New 式 / Delete 文
+' ブロック先頭 8 バイトに要素数。ユーザーポインタはその直後。
+
+Dim g_nwUser As Long
+Dim g_nwCount As Long
+Dim g_nwIdx As Long
+Dim g_nwArg As Long
+Dim g_nwSz As Long
+Dim g_nwLab As Long
+Dim g_nwNUser As Long
+Dim g_nwNArgs As Long
+Dim g_nwCallBytes As Long
+Dim g_nwPs As Long
+
+Function LowNodeKind(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowNodeKind = nodes[idx].kind
+End Function
+
+Function LowNodeLeft(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowNodeLeft = nodes[idx].left
+End Function
+
+Function LowNodeRight(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowNodeRight = nodes[idx].right
+End Function
+
+Function LowNodeExtra(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowNodeExtra = nodes[idx].extra
+End Function
+
+Function LowArgNext(ctx As *LowerCtx, arg As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    n = nodes[arg].nxt
+    LowArgNext = n
+End Function
+
+Function LowArgCount(ctx As *LowerCtx, arg As Long) As Long
+    LowArgCount = 0
+    If arg < 0 Then Exit Function
+    LowArgCount = 1 + LowArgCount(ctx, LowArgNext(ctx, arg))
+End Function
+
+Function LowNewOff(ctx As *LowerCtx, depth As Long) As Long
+    LowNewOff = 0 - (ctx->frameUsed + 32 + depth * 256)
+End Function
+
+Sub LowNewSlots(ctx As *LowerCtx, depth As Long)
+    Dim b As Long
+    b = LowNewOff(ctx, depth)
+    g_nwUser = b
+    g_nwCount = b - 8
+    g_nwIdx = b - 16
+    g_nwArg = b - 24
+End Sub
+
+Function LowNewSize(ctx As *LowerCtx, typeIdx As Long) As Long
+    Dim ast As *Ast
+    Dim t As *TypeTable
+    Dim sizes As *Long
+    ast = ctx->ast
+    t = ast->types
+    sizes = t->typeSizes
+    LowNewSize = sizes[typeIdx]
+End Function
+
+Function LowNewCtorLab(ctx As *LowerCtx, typeIdx As Long) As Long
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ast = ctx->ast
+    LowNewCtorLab = LowFindCtorLab(ctx, ast->types, typeIdx, VarPtr(name))
+End Function
+
+Function LowFindDtorLab(ctx As *LowerCtx, typeTable As *TypeTable, typeIdx As Long, dst As *Byte) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    Dim names As *Byte
+    Dim j As Long
+    j = typeIdx * TYNAME_LEN
+    lstrcpy(VarPtr(k), "Dtor")
+    names = typeTable->typeNames
+    LowMangleClass(VarPtr(names[j]), VarPtr(k), dst)
+    LowFindDtorLab = LowFindFunc(ctx, dst)
+End Function
+
+Function LowDelDtorLab(ctx As *LowerCtx, ti As Long) As Long
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ast = ctx->ast
+    LowDelDtorLab = LowFindDtorLab(ctx, ast->types, ti, VarPtr(name))
+End Function
+
+Sub LowNewMissing(ctx As *LowerCtx)
+    Print "error: missing ctor"
+    ctx->err = 1
+End Sub
+
+Sub LowDelMissing(ctx As *LowerCtx)
+    Print "error: missing dtor"
+    ctx->err = 1
+End Sub
+
+Function LowNewArgLeft(ctx As *LowerCtx, arg As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim e As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    e = nodes[arg].left
+    LowNewArgLeft = e
+End Function
+
+Function LowNewSaveOneArg(ctx As *LowerCtx, arg As Long, off As Long) As Long
+    Dim e As Long
+    e = LowNewArgLeft(ctx, arg)
+    LowNewSaveOneArg = 0
+    If e < 0 Then Exit Function
+    If LowExprArg(ctx, e) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_STORE_LOCAL, off, 0)
+    LowNewSaveOneArg = 1
+End Function
+
+Function LowNewSaveFrom(ctx As *LowerCtx, arg As Long, off As Long) As Long
+    LowNewSaveFrom = 0
+    If arg < 0 Then LowNewSaveFrom = 1
+    If arg < 0 Then Exit Function
+    If LowNewSaveOneArg(ctx, arg, off) = 0 Then Exit Function
+    LowNewSaveFrom = LowNewSaveFrom(ctx, LowArgNext(ctx, arg), off - 8)
+End Function
+
+Function LowNewLoadCount(ctx As *LowerCtx, left As Long) As Long
+    LowNewLoadCount = 1
+    If left < 0 Then IrEmit(ctx->list, OP_MOV_EAX_IMM, 1, 0)
+    If left < 0 Then Exit Function
+    LowNewLoadCount = LowExpr(ctx, left)
+End Function
+
+Function LowNewSaveCount(ctx As *LowerCtx, idx As Long) As Long
+    LowNewSaveCount = LowNewLoadCount(ctx, LowNodeLeft(ctx, idx))
+    If LowNewSaveCount = 0 Then Exit Function
+    IrEmit(ctx->list, OP_STORE_LOCAL, g_nwCount, 0)
+End Function
+
+Sub LowDelSetCall(ctx As *LowerCtx)
+    g_nwNArgs = 1
+    g_nwNUser = 0
+    g_nwPs = TyPtrSize()
+    g_nwCallBytes = LowCallBytes(1)
+End Sub
+
+Sub LowNewSetArgs(ctx As *LowerCtx, idx As Long)
+    g_nwNUser = LowArgCount(ctx, LowNodeRight(ctx, idx))
+    g_nwNArgs = g_nwNUser + 1
+    g_nwPs = TyPtrSize()
+    g_nwCallBytes = LowCallBytes(g_nwNArgs)
+End Sub
+
+Function LowNewMeta(ctx As *LowerCtx, idx As Long) As Long
+    Dim ti As Long
+    ti = LowNodeExtra(ctx, idx)
+    LowNewSetArgs(ctx, idx)
+    g_nwSz = LowNewSize(ctx, ti)
+    g_nwLab = LowNewCtorLab(ctx, ti)
+    LowNewMeta = 0
+    If g_nwLab < 0 Then LowNewMissing(ctx)
+    If g_nwLab >= 0 Then LowNewMeta = 1
+End Function
+
+Function LowNewPrep(ctx As *LowerCtx, idx As Long) As Long
+    LowNewPrep = 0
+    If LowNewSaveCount(ctx, idx) = 0 Then Exit Function
+    If LowNewSaveFrom(ctx, LowNodeRight(ctx, idx), g_nwArg) = 0 Then Exit Function
+    LowNewPrep = LowNewMeta(ctx, idx)
+End Function
+
+Sub LowMulSize(list As *IrList, size As Long)
+    IrEmit(list, OP_MOV_ECX, size, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, 8, 0)
+End Sub
+
+Function LowNewAlloc(ctx As *LowerCtx, offCount As Long, sz As Long) As Long
+    Dim list As *IrList
+    list = ctx->list
+    IrEmit(list, OP_LOAD_LOCAL, offCount, 0)
+    LowMulSize(list, sz)
+    LowEmitHeapAllocRax(list, LOW_HEAP_ZERO)
+    LowNewAlloc = 1
+End Function
+
+Sub LowNewStoreCount(list As *IrList, offCount As Long, offBlk As Long)
+    IrEmit(list, OP_STORE_LOCAL, offBlk, 0)
+    IrEmit(list, OP_LOAD_LOCAL, offCount, 0)
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, offBlk, 0)
+    IrEmit(list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+End Sub
+
+Sub LowNewUserPtr(list As *IrList, offUser As Long)
+    IrEmit(list, OP_ADD_RAX_IMM, 8, 0)
+    IrEmit(list, OP_STORE_LOCAL, offUser, 0)
+End Sub
+
+Sub LowNewNullBr(ctx As *LowerCtx, labFail As Long)
+    IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
+    IrEmit(ctx->list, OP_JZ, labFail, 0)
+End Sub
+
+Sub LowNewMe(ctx As *LowerCtx)
+    Dim list As *IrList
+    list = ctx->list
+    IrEmit(list, OP_LOAD_LOCAL, g_nwIdx, 0)
+    IrEmit(list, OP_MOV_ECX, g_nwSz, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_LOAD_LOCAL, g_nwUser, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+End Sub
+
+Sub LowNewOpenCall(ctx As *LowerCtx)
+    If g_nwCallBytes > 0 Then IrEmit(ctx->list, OP_SUB_RSP, g_nwCallBytes, 0)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+End Sub
+
+Function LowNewReloadFrom(ctx As *LowerCtx, off As Long, slot As Long, nLeft As Long, ps As Long) As Long
+    LowNewReloadFrom = 1
+    If nLeft <= 0 Then Exit Function
+    IrEmit(ctx->list, OP_LOAD_LOCAL, off, 0)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, slot, 0)
+    LowNewReloadFrom = LowNewReloadFrom(ctx, off - 8, slot + ps, nLeft - 1, ps)
+End Function
+
+Sub LowNewCallCtor(ctx As *LowerCtx)
+    LowEmitLoadRegArgs(ctx->list, g_nwNArgs)
+    IrEmit(ctx->list, OP_CALL_LAB, g_nwLab, 0)
+    LowEmitCallFinish(ctx->list, g_nwCallBytes)
+End Sub
+
+Function LowNewOneCtor(ctx As *LowerCtx) As Long
+    LowNewMe(ctx)
+    LowNewOpenCall(ctx)
+    LowNewOneCtor = LowNewReloadFrom(ctx, g_nwArg, g_nwPs, g_nwNUser, g_nwPs)
+    If LowNewOneCtor = 0 Then Exit Function
+    LowNewCallCtor(ctx)
+End Function
+
+Sub LowNewCmpIdx(ctx As *LowerCtx, labDone As Long)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwIdx, 0)
+    IrEmit(ctx->list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwCount, 0)
+    IrEmit(ctx->list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(ctx->list, OP_JGE, labDone, 0)
+End Sub
+
+Sub LowNewIncIdx(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwIdx, 0)
+    IrEmit(ctx->list, OP_ADD_RAX_IMM, 1, 0)
+    IrEmit(ctx->list, OP_STORE_LOCAL, g_nwIdx, 0)
+End Sub
+
+Sub LowNewLoopHead(ctx As *LowerCtx, labTop As Long, labDone As Long)
+    IrEmit(ctx->list, OP_LABEL, labTop, 0)
+    LowNewCmpIdx(ctx, labDone)
+End Sub
+
+Function LowNewLoopTail(ctx As *LowerCtx, labTop As Long, labDone As Long) As Long
+    LowNewLoopTail = LowNewOneCtor(ctx)
+    If LowNewLoopTail = 0 Then Exit Function
+    LowNewIncIdx(ctx)
+    IrEmit(ctx->list, OP_JMP, labTop, 0)
+    IrEmit(ctx->list, OP_LABEL, labDone, 0)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwUser, 0)
+End Function
+
+Function LowNewDoLoop(ctx As *LowerCtx) As Long
+    Dim labTop As Long
+    Dim labDone As Long
+    labTop = LowNewLabel(ctx)
+    labDone = LowNewLabel(ctx)
+    IrEmit(ctx->list, OP_MOV_EAX_IMM, 0, 0)
+    IrEmit(ctx->list, OP_STORE_LOCAL, g_nwIdx, 0)
+    LowNewLoopHead(ctx, labTop, labDone)
+    LowNewDoLoop = LowNewLoopTail(ctx, labTop, labDone)
+End Function
+
+Function LowNewEmit(ctx As *LowerCtx, labEnd As Long) As Long
+    LowNewEmit = 0
+    If LowNewAlloc(ctx, g_nwCount, g_nwSz) = 0 Then Exit Function
+    LowNewNullBr(ctx, labEnd)
+    LowNewStoreCount(ctx->list, g_nwCount, g_nwUser)
+    LowNewUserPtr(ctx->list, g_nwUser)
+    LowNewEmit = LowNewDoLoop(ctx)
+End Function
+
+Function LowNewRun(ctx As *LowerCtx, idx As Long, labEnd As Long) As Long
+    LowNewRun = LowNewPrep(ctx, idx)
+    If LowNewRun = 0 Then Exit Function
+    LowNewRun = LowNewEmit(ctx, labEnd)
+    IrEmit(ctx->list, OP_LABEL, labEnd, 0)
+End Function
+
+Function LowExprNew(ctx As *LowerCtx, idx As Long) As Long
+    Dim depth As Long
+    Dim labEnd As Long
+    depth = g_newDepth
+    g_newDepth = depth + 1
+    LowNewSlots(ctx, depth)
+    labEnd = LowNewLabel(ctx)
+    LowExprNew = LowNewRun(ctx, idx, labEnd)
+    g_newDepth = depth
+End Function
+
+Function LowDelLookup(ctx As *LowerCtx, name As *Byte, ByRef vTy As Long, ByRef vTypeIdx As Long) As Long
+    Dim vOff As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    LowDelLookup = 0
+    If Not LowLookupVar(ctx, name, VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+    LowDelLookup = 1
+End Function
+
+Function LowDelClassOk(ctx As *LowerCtx, ti As Long) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    ast = ctx->ast
+    types = ast->types
+    LowDelClassOk = -1
+    If TyIsClass(types, ti) = 0 Then Exit Function
+    LowDelClassOk = ti
+End Function
+
+Function LowDelVarTi(ctx As *LowerCtx, name As *Byte) As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    LowDelVarTi = -1
+    If LowDelLookup(ctx, name, vTy, vTypeIdx) = 0 Then Exit Function
+    If vTy <> TY_PTR_UDT Then Exit Function
+    LowDelVarTi = LowDelClassOk(ctx, vTypeIdx)
+End Function
+
+Function LowDelNamedTi(ctx As *LowerCtx, expr As Long) As Long
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ast = ctx->ast
+    AstCopyStr(ast, expr, VarPtr(name))
+    LowDelNamedTi = LowDelVarTi(ctx, VarPtr(name))
+End Function
+
+Function LowDelTi(ctx As *LowerCtx, expr As Long) As Long
+    LowDelTi = -1
+    If LowNodeKind(ctx, expr) <> AST_VAR Then Exit Function
+    LowDelTi = LowDelNamedTi(ctx, expr)
+End Function
+
+Sub LowDelBad(ctx As *LowerCtx, idx As Long)
+    LowerDiagError(ctx, idx, "Delete needs a class pointer")
+End Sub
+
+Function LowDelPrep(ctx As *LowerCtx, ti As Long) As Long
+    g_nwSz = LowNewSize(ctx, ti)
+    g_nwLab = LowDelDtorLab(ctx, ti)
+    LowDelSetCall(ctx)
+    LowDelPrep = 0
+    If g_nwLab < 0 Then LowDelMissing(ctx)
+    If g_nwLab >= 0 Then LowDelPrep = 1
+End Function
+
+Function LowDelBind(ctx As *LowerCtx, idx As Long, expr As Long) As Long
+    Dim ti As Long
+    ti = LowDelTi(ctx, expr)
+    LowDelBind = 0
+    If ti < 0 Then LowDelBad(ctx, idx)
+    If ti < 0 Then Exit Function
+    LowDelBind = LowDelPrep(ctx, ti)
+End Function
+
+Sub LowDelReadCount(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwUser, 0)
+    IrEmit(ctx->list, OP_ADD_RAX_IMM, -8, 0)
+    IrEmit(ctx->list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(ctx->list, OP_STORE_LOCAL, g_nwCount, 0)
+End Sub
+
+Sub LowDelInitIdx(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwCount, 0)
+    IrEmit(ctx->list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(ctx->list, OP_STORE_LOCAL, g_nwIdx, 0)
+End Sub
+
+Sub LowDelTest(ctx As *LowerCtx, labFree As Long)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwIdx, 0)
+    IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
+    IrEmit(ctx->list, OP_JL, labFree, 0)
+End Sub
+
+Sub LowDelDec(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwIdx, 0)
+    IrEmit(ctx->list, OP_ADD_RAX_IMM, -1, 0)
+    IrEmit(ctx->list, OP_STORE_LOCAL, g_nwIdx, 0)
+End Sub
+
+Function LowDelOne(ctx As *LowerCtx) As Long
+    LowNewMe(ctx)
+    LowNewOpenCall(ctx)
+    LowNewCallCtor(ctx)
+    LowDelOne = 1
+End Function
+
+Sub LowDelFree(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_LOAD_LOCAL, g_nwUser, 0)
+    IrEmit(ctx->list, OP_ADD_RAX_IMM, -8, 0)
+    LowEmitHeapFreeRax(ctx->list)
+End Sub
+
+Sub LowDelLoopHead(ctx As *LowerCtx, labTop As Long, labFree As Long)
+    IrEmit(ctx->list, OP_LABEL, labTop, 0)
+    LowDelTest(ctx, labFree)
+End Sub
+
+Function LowDelLoopTail(ctx As *LowerCtx, labTop As Long, labFree As Long) As Long
+    LowDelLoopTail = LowDelOne(ctx)
+    If LowDelLoopTail = 0 Then Exit Function
+    LowDelDec(ctx)
+    IrEmit(ctx->list, OP_JMP, labTop, 0)
+    IrEmit(ctx->list, OP_LABEL, labFree, 0)
+    LowDelFree(ctx)
+End Function
+
+Function LowDelLoop(ctx As *LowerCtx) As Long
+    Dim labTop As Long
+    Dim labFree As Long
+    labTop = LowNewLabel(ctx)
+    labFree = LowNewLabel(ctx)
+    LowDelLoopHead(ctx, labTop, labFree)
+    LowDelLoop = LowDelLoopTail(ctx, labTop, labFree)
+End Function
+
+Sub LowDelBranch(ctx As *LowerCtx, labEnd As Long)
+    IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
+    IrEmit(ctx->list, OP_JZ, labEnd, 0)
+    IrEmit(ctx->list, OP_STORE_LOCAL, g_nwUser, 0)
+End Sub
+
+Function LowDelAfter(ctx As *LowerCtx, labEnd As Long) As Long
+    LowDelReadCount(ctx)
+    LowDelInitIdx(ctx)
+    LowDelAfter = LowDelLoop(ctx)
+    IrEmit(ctx->list, OP_LABEL, labEnd, 0)
+End Function
+
+Function LowDelEmit(ctx As *LowerCtx, expr As Long, labEnd As Long) As Long
+    LowDelEmit = 0
+    If LowExpr(ctx, expr) = 0 Then Exit Function
+    LowDelBranch(ctx, labEnd)
+    LowDelEmit = LowDelAfter(ctx, labEnd)
+End Function
+
+Function LowDelGo(ctx As *LowerCtx, idx As Long, expr As Long) As Long
+    LowDelGo = 0
+    If LowDelBind(ctx, idx, expr) = 0 Then Exit Function
+    LowDelGo = LowDelEmit(ctx, expr, LowNewLabel(ctx))
+End Function
+
+Function LowStmtDelete(ctx As *LowerCtx, idx As Long) As Long
+    Dim expr As Long
+    Dim depth As Long
+    depth = g_newDepth
+    g_newDepth = depth + 1
+    LowNewSlots(ctx, depth)
+    expr = LowNodeLeft(ctx, idx)
+    LowStmtDelete = LowDelGo(ctx, idx, expr)
+    g_newDepth = depth
+End Function
