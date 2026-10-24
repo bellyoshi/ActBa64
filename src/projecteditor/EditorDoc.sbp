@@ -12,26 +12,30 @@ Function EditorDoc_EncodingLabel$() As String
     End If
 End Function
 
+Function EditorDoc_BaseTitle$() As String
+    If Len(g_docPath) = 0 Then
+        EditorDoc_BaseTitle$ = "editor - (untitled)"
+    Else
+        EditorDoc_BaseTitle$ = "editor - " + g_docPath
+    End If
+End Function
+
 Sub EditorDoc_UpdateTitle(hWnd As HWND)
     Dim title As String
-    If Len(g_docPath) = 0 Then
-        title = "editor - (untitled)"
-    Else
-        title = "editor - " + g_docPath
-    End If
+    title = EditorDoc_BaseTitle$()
     title = title + " [" + EditorBuild_TargetLabel$() + ", " + EditorDoc_EncodingLabel$() + "]"
     If g_docDirty <> 0 Then title = title + " *"
-    SetWindowText(hWnd, title)
+    MdiSetDocTitle(hWnd, title)
 End Sub
 
 Sub EditorDoc_MarkDirty()
     g_docDirty = 1
-    If hMainWnd <> 0 Then EditorDoc_UpdateTitle(hMainWnd)
+    If g_activeChild <> 0 Then EditorDoc_UpdateTitle(g_activeChild)
 End Sub
 
 Sub EditorDoc_ClearDirty()
     g_docDirty = 0
-    If hMainWnd <> 0 Then EditorDoc_UpdateTitle(hMainWnd)
+    If g_activeChild <> 0 Then EditorDoc_UpdateTitle(g_activeChild)
 End Sub
 
 Function EditorDoc_LoadTextFile$(path As String) As String
@@ -104,46 +108,33 @@ Sub EditorDoc_New(hWnd As HWND)
     InvalidateRect(hWnd, ByVal 0, TRUE)
 End Sub
 
-Sub EditorDoc_InitFilter(ByVal dst As *Byte)
-    Dim s As String
+Sub EditorDoc_PutFilt(dst As *Byte, ByRef o As Long, s As String)
     Dim p As *Byte
     Dim i As Long
-    Dim n As Long
-    Dim o As Long
+    p = StrPtr(s)
+    For i = 0 To Len(s) - 1
+        dst[o + i] = p[i]
+    Next
+    o = o + Len(s) + 1
+End Sub
 
+Sub EditorDoc_FiltSrc(dst As *Byte, ByRef o As Long)
+    EditorDoc_PutFilt(dst, o, "Source (*.sbp;*.abp;*.bas)")
+    EditorDoc_PutFilt(dst, o, "*.sbp;*.abp;*.bas")
+    EditorDoc_PutFilt(dst, o, "Project (*.pj)")
+    EditorDoc_PutFilt(dst, o, "*.pj")
+End Sub
+
+Sub EditorDoc_FiltRest(dst As *Byte, ByRef o As Long)
+    EditorDoc_PutFilt(dst, o, "All (*.*)")
+    EditorDoc_PutFilt(dst, o, "*.*")
+End Sub
+
+Sub EditorDoc_InitFilter(ByVal dst As *Byte)
+    Dim o As Long
     FillMemory(dst, 128, 0)
-    o = 0
-    s = "Source (*.sbp;*.abp;*.bas)"
-    p = StrPtr(s)
-    n = Len(s)
-    For i = 0 To n - 1
-        dst[o] = p[i]
-        o = o + 1
-    Next
-    o = o + 1
-    s = "*.sbp;*.abp;*.bas"
-    p = StrPtr(s)
-    n = Len(s)
-    For i = 0 To n - 1
-        dst[o] = p[i]
-        o = o + 1
-    Next
-    o = o + 1
-    s = "All (*.*)"
-    p = StrPtr(s)
-    n = Len(s)
-    For i = 0 To n - 1
-        dst[o] = p[i]
-        o = o + 1
-    Next
-    o = o + 1
-    s = "*.*"
-    p = StrPtr(s)
-    n = Len(s)
-    For i = 0 To n - 1
-        dst[o] = p[i]
-        o = o + 1
-    Next
+    EditorDoc_FiltSrc(dst, o)
+    EditorDoc_FiltRest(dst, o)
 End Sub
 
 Function EditorDoc_BrowseOpen$(hWnd As HWND) As String
@@ -281,7 +272,7 @@ Sub EditorDoc_DropFiles(hWnd As HWND, ByVal hDrop As HDROP)
     If n <= 0 Then Exit Sub
     path = MakeStr(fileName)
     If Len(path) = 0 Then Exit Sub
-    EditorDoc_OpenPath(hWnd, path)
+    MdiOpenPath(path)
 End Sub
 
 
@@ -355,24 +346,31 @@ Function EditorDoc_CopyOneArg(cmd As *Byte, ByRef i As Long, ByVal n As Long, ou
     EditorDoc_CopyOneArg = m
 End Function
 
+Function EditorDoc_CmdExists(path As String) As Long
+    Dim attr As Long
+    EditorDoc_CmdExists = 0
+    If Len(path) = 0 Then Exit Function
+    attr = GetFileAttributes(StrPtr(path))
+    If attr = -1 Then Exit Function
+    If (attr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then Exit Function
+    EditorDoc_CmdExists = 1
+End Function
+
+Function EditorDoc_ResolveCmd$() As String
+    Dim path As String
+    path = EditorDoc_CmdArg$(1)
+    EditorDoc_ResolveCmd$ = ""
+    If EditorDoc_CmdExists(path) <> 0 Then EditorDoc_ResolveCmd$ = path
+    If Len(EditorDoc_ResolveCmd$) > 0 Then Exit Function
+    path = EditorBuild_ExeDir$() + path
+    If EditorDoc_CmdExists(path) <> 0 Then EditorDoc_ResolveCmd$ = path
+End Function
+
 Sub EditorDoc_OpenFromCommandLine(hWnd As HWND)
     Dim path As String
-    Dim dir As String
-    Dim attr As Long
-
-    path = EditorDoc_CmdArg$(1)
+    path = EditorDoc_ResolveCmd$()
     If Len(path) = 0 Then Exit Sub
-
-    attr = GetFileAttributes(StrPtr(path))
-    If attr = -1 Then
-        dir = EditorBuild_ExeDir$()
-        If Len(dir) > 0 Then
-            path = dir + path
-            attr = GetFileAttributes(StrPtr(path))
-        End If
-    End If
-    If attr = -1 Then Exit Sub
-    If (attr And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then Exit Sub
-
+    If ProjIsPj(path) <> 0 Then ProjOpen(path)
+    If ProjIsPj(path) <> 0 Then Exit Sub
     EditorDoc_OpenPath(hWnd, path)
 End Sub

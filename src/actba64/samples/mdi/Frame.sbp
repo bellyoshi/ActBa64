@@ -1,0 +1,92 @@
+' フレームは未処理メッセージを DefFrameProc へ渡す。
+
+Function FrameProc(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    If FrameHandled(hWnd, message, wParam) <> 0 Then
+        FrameProc = 0
+        Exit Function
+    End If
+    FrameProc = DefFrameProc(hWnd, g_hClient, message, wParam, lParam)
+End Function
+
+Function FrameHandled(hWnd As HWND, message As DWord, wParam As WPARAM) As Long
+    FrameHandled = 0
+    If message = WM_CREATE Then FrameOnCreate(hWnd)
+    If message = WM_CREATE Then FrameHandled = 1
+    If message = WM_DESTROY Then PostQuitMessage(0)
+    If message = WM_DESTROY Then FrameHandled = 1
+    If message = WM_COMMAND Then FrameHandled = MdiCommand(wParam)
+End Function
+
+Sub FrameOnCreate(hWnd As HWND)
+    FillMemory(VarPtr(g_ccs), SizeOf(CLIENTCREATESTRUCT), 0)
+    g_hFrame = hWnd
+    SetMenu(hWnd, g_hMenu)
+    g_ccs.hWindowMenu = GetSubMenu(g_hMenu, 1)
+    g_ccs.idFirstChild = IDM_FIRSTCHILD
+    g_hClient = MdiCreateClient(hWnd)
+End Sub
+
+Function MdiCreateClient(hWnd As HWND) As HWND
+    Dim style As DWord
+    style = WS_CHILD Or WS_CLIPCHILDREN Or WS_VISIBLE Or WS_HSCROLL Or WS_VSCROLL
+    MdiCreateClient = CreateWindowExPtr(0, "MDICLIENT", 0, style, 0, 0, 0, 0, hWnd, 1, g_hInst, VarPtr(g_ccs))
+End Function
+
+Function MdiCommand(wParam As WPARAM) As Long
+    Dim id As Long
+    id = LOWORD(wParam)
+    MdiCommand = MdiCmdKind(id)
+    If MdiCommand = 0 Then Exit Function
+    MdiRunCmd(id)
+End Function
+
+Function MdiCmdKind(id As Long) As Long
+    MdiCmdKind = 0
+    If id = IDM_NEW Or id = IDM_CLOSE Or id = IDM_EXIT Then MdiCmdKind = 1
+    If id = IDM_CASCADE Or id = IDM_TILEHORZ Then MdiCmdKind = 1
+    If id = IDM_TILEVERT Or id = IDM_ARRANGE Then MdiCmdKind = 1
+End Function
+
+Sub MdiRunCmd(id As Long)
+    If id = IDM_NEW Then MdiNewChild()
+    If id = IDM_CLOSE Then MdiCloseActive()
+    If id = IDM_EXIT Then SendMessage(g_hFrame, WM_CLOSE, 0, 0)
+    If id = IDM_CASCADE Then SendMessage(g_hClient, WM_MDICASCADE, 0, 0)
+    MdiRunTile(id)
+End Sub
+
+Sub MdiRunTile(id As Long)
+    If id = IDM_TILEHORZ Then SendMessage(g_hClient, WM_MDITILE, MDITILE_HORIZONTAL, 0)
+    If id = IDM_TILEVERT Then SendMessage(g_hClient, WM_MDITILE, MDITILE_VERTICAL, 0)
+    If id = IDM_ARRANGE Then SendMessage(g_hClient, WM_MDIICONARRANGE, 0, 0)
+End Sub
+
+Sub MdiCloseActive()
+    Dim h As HWND
+    h = SendMessage(g_hClient, WM_MDIGETACTIVE, 0, 0) As HWND
+    If h <> 0 Then SendMessage(h, WM_CLOSE, 0, 0)
+End Sub
+
+Sub MdiNewChild()
+    If g_hClient = 0 Then Exit Sub
+    g_childNo = g_childNo + 1
+    g_childTitle = "Document " + Trim$(Str$(g_childNo))
+    MdiFillCreate()
+    SendMessage(g_hClient, WM_MDICREATE, 0, VarPtr(g_mcs))
+End Sub
+
+Sub MdiFillCreate()
+    FillMemory(VarPtr(g_mcs), SizeOf(MDICREATESTRUCT), 0)
+    g_mcs.szClass = StrPtr(g_childClass)
+    g_mcs.szTitle = StrPtr(g_childTitle)
+    g_mcs.hOwner = g_hInst
+    MdiFillPos()
+End Sub
+
+Sub MdiFillPos()
+    g_mcs.x = -2147483648
+    g_mcs.y = -2147483648
+    g_mcs.cx = -2147483648
+    g_mcs.cy = -2147483648
+    g_mcs.style = WS_VISIBLE
+End Sub

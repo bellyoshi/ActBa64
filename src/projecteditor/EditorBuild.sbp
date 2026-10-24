@@ -135,7 +135,7 @@ Sub EditorBuild_SetTarget32(ByVal is32 As Long)
     End If
     EditorBuild_SaveTarget()
     EditorBuild_UpdateTargetMenu()
-    If hMainWnd <> 0 Then EditorDoc_UpdateTitle(hMainWnd)
+    If g_activeChild <> 0 Then EditorDoc_UpdateTitle(g_activeChild)
 End Sub
 
 Sub EditorBuild_Init(hWnd As HWND)
@@ -145,20 +145,23 @@ Sub EditorBuild_Init(hWnd As HWND)
     If hWnd <> 0 Then EditorDoc_UpdateTitle(hWnd)
 End Sub
 
-Function EditorBuild_ExePathFromDoc$() As String
-    Dim exePath As String
+Function EditorBuild_ExeFromPath$(path As String) As String
     Dim dotPos As Long
-
-    exePath = g_docPath
-    dotPos = Len(exePath)
+    dotPos = Len(path)
     While dotPos > 0
-        If Mid$(exePath, dotPos, 1) = "." Then
-            EditorBuild_ExePathFromDoc$ = Left$(exePath, dotPos - 1) + ".exe"
-            Exit Function
-        End If
+        If Mid$(path, dotPos, 1) = "." Then Exit While
         dotPos = dotPos - 1
     Wend
-    EditorBuild_ExePathFromDoc$ = g_docPath + ".exe"
+    If dotPos > 0 Then EditorBuild_ExeFromPath$ = Left$(path, dotPos - 1) + ".exe"
+    If dotPos = 0 Then EditorBuild_ExeFromPath$ = path + ".exe"
+End Function
+
+Function EditorBuild_ExePathFromDoc$() As String
+    If Len(g_projectPath) > 0 Then
+        EditorBuild_ExePathFromDoc$ = ProjOutputExe$()
+        Exit Function
+    End If
+    EditorBuild_ExePathFromDoc$ = EditorBuild_ExeFromPath$(g_docPath)
 End Function
 
 Function EditorBuild_QuoteArg$(s As String) As String
@@ -181,6 +184,10 @@ End Function
 
 Function EditorBuild_CompileArgs$() As String
     Dim outExe As String
+    If Len(g_projectPath) > 0 Then
+        EditorBuild_CompileArgs$ = ProjCompileArgs$()
+        Exit Function
+    End If
     outExe = EditorBuild_ExePathFromDoc$()
     EditorBuild_CompileArgs$ = EditorBuild_QuoteArg$(g_docPath) + " -o " + EditorBuild_QuoteArg$(outExe)
 End Function
@@ -299,7 +306,7 @@ Function EditorBuild_DoCompile(hWnd As HWND) As Long
     EditorBuild_DoCompile = 0
     toolName = EditorBuild_CompilerName$()
     actba = EditorBuild_CompilerPath$()
-    If EditorDoc_Save(hWnd) = 0 Then Exit Function
+    If ProjSaveForBuild(hWnd) = 0 Then Exit Function
 
     MessageWnd_Open(hWnd)
     MessageWnd_SetText("Compiling (" + EditorBuild_TargetLabel$() + ") with " + toolName + "..." + Chr$(13) + Chr$(10))
@@ -388,10 +395,19 @@ Function EditorBuild_DocHasConsole() As Long
     Next
 End Function
 
+Function EditorBuild_WantConsole() As Long
+    EditorBuild_WantConsole = 0
+    If Len(g_projectPath) > 0 Then
+        If g_projUseWindow = 0 Then EditorBuild_WantConsole = 1
+        Exit Function
+    End If
+    EditorBuild_WantConsole = EditorBuild_DocHasConsole()
+End Function
+
 Function EditorBuild_LaunchExe(hWnd As HWND, exePath As String) As Long
     Dim params As String
     EditorBuild_LaunchExe = 0
-    If EditorBuild_DocHasConsole() <> 0 Then
+    If EditorBuild_WantConsole() <> 0 Then
         params = "/k " + Chr$(34) + exePath + Chr$(34)
         If ShellExecute(hWnd, "open", "cmd.exe", params, "", SW_SHOWNORMAL) > 32 Then
             EditorBuild_LaunchExe = 1

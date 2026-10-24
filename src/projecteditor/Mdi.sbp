@@ -1,0 +1,340 @@
+' MDI frame, child windows, and per-document slots.
+' The live editor state is the active child. Other children keep text in slots.
+
+Const IDM_CASCADE = 1101
+Const IDM_TILEHORZ = 1102
+Const IDM_TILEVERT = 1103
+Const IDM_FIRSTCHILD = 3000
+Const WM_MDICREATE = &H0220
+Const WM_MDIACTIVATE = &H0222
+Const WM_MDICASCADE = &H0227
+Const WM_MDITILE = &H0226
+Const MDITILE_VERTICAL = 0
+Const MDITILE_HORIZONTAL = 1
+Const WS_CHILD = &H40000000
+Const WS_CLIPCHILDREN = &H02000000
+Const WS_HSCROLL = &H00100000
+
+Type CLIENTCREATESTRUCT
+    hWindowMenu As HMENU
+    idFirstChild As DWord
+End Type
+
+Type MDICREATESTRUCT
+    szClass As LPCSTR
+    szTitle As LPCSTR
+    hOwner As HINSTANCE
+    x As Long
+    y As Long
+    cx As Long
+    cy As Long
+    style As DWord
+    lParam As LPARAM
+End Type
+
+Declare Function DefMDIChildProc Lib "user32.dll" Alias "DefMDIChildProcA" (ByVal hWnd As HWND, ByVal uMsg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+Declare Function TranslateMDISysAccel Lib "user32.dll" (ByVal hWndClient As HWND, ByRef lpMsg As MSG) As Long
+Declare Function CreateWindowExPtr Lib "user32.dll" Alias "CreateWindowExA" (ByVal dwExStyle As DWord, ByVal lpClassName As *Byte, ByVal lpWindowName As *Byte, ByVal dwStyle As DWord, ByVal x As Long, ByVal y As Long, ByVal nWidth As Long, ByVal nHeight As Long, ByVal hWndParent As HWND, ByVal hMenu As HMENU, ByVal hInstance As HINSTANCE, ByVal lpParam As VoidPtr) As HWND
+
+Dim g_hMenuWindow As HMENU
+Dim g_hInst As HINSTANCE
+Dim g_activeChild As HWND
+Dim g_childClass As String
+Dim g_childTitle As String
+Dim g_childRegistered As Long
+Dim g_childRet As Long
+Dim g_wc As WNDCLASSEX
+Dim g_ccs As CLIENTCREATESTRUCT
+Dim g_mcs As MDICREATESTRUCT
+Dim g_docUsed(7) As Long
+Dim g_docHwnd(7) As HWND
+Dim g_docPathSlot(7) As String
+Dim g_docText(7) As String
+Dim g_docDirtySlot(7) As Long
+Dim g_docEncSlot(7) As Long
+Dim g_docCursor(7) As Long
+Dim g_docTopLine(7) As Long
+Dim g_docSel(7) As Long
+
+Function MdiFrameProc(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    MdiFrameProc = EventCall_MainWnd(hWnd, message, wParam, lParam)
+End Function
+
+Function MdiFrameCommand(wParam As WPARAM) As Long
+    Dim id As Long
+    id = LOWORD(wParam)
+    If MdiWindowCmd(id) <> 0 Then
+        MdiFrameCommand = 1
+        Exit Function
+    End If
+    MdiFrameCommand = EditorMenu_OnCommand(id)
+End Function
+
+Function MdiWindowCmd(id As Long) As Long
+    MdiWindowCmd = 1
+    If id = IDM_CASCADE Then SendMessage(g_hClient, WM_MDICASCADE, 0, 0)
+    If id = IDM_TILEHORZ Then SendMessage(g_hClient, WM_MDITILE, MDITILE_HORIZONTAL, 0)
+    If id = IDM_TILEVERT Then SendMessage(g_hClient, WM_MDITILE, MDITILE_VERTICAL, 0)
+    If MdiWindowIs(id) = 0 Then MdiWindowCmd = 0
+End Function
+
+Function MdiWindowIs(id As Long) As Long
+    MdiWindowIs = 0
+    If id = IDM_CASCADE Or id = IDM_TILEHORZ Or id = IDM_TILEVERT Then MdiWindowIs = 1
+End Function
+
+Sub MdiBuildWindowMenu()
+    g_hMenuWindow = CreatePopupMenu()
+    InsMenu g_hMenuWindow, -1, MF_BYPOSITION, Ex"Cascade(&C)", IDM_CASCADE, 0, 0
+    InsMenu g_hMenuWindow, -1, MF_BYPOSITION, Ex"Tile Horizontal(&H)", IDM_TILEHORZ, 0, 0
+    InsMenu g_hMenuWindow, -1, MF_BYPOSITION, Ex"Tile Vertical(&V)", IDM_TILEVERT, 0, 0
+    InsMenu g_hMenuWindow, -1, MF_BYPOSITION
+    InsMenu hMenu_M_MAIN, -1, MF_BYPOSITION, Ex"Window(&W)", 0, g_hMenuWindow, 0
+End Sub
+
+Sub MdiSetDocTitle(hWnd As HWND, title As String)
+    SetWindowText(hWnd, title)
+    If hMainWnd <> 0 And hWnd <> hMainWnd Then SetWindowText(hMainWnd, title)
+End Sub
+
+Function MdiFindFree() As Long
+    Dim i As Long
+    MdiFindFree = -1
+    For i = 0 To 7
+        If g_docUsed(i) = 0 Then MdiFindFree = i
+        If g_docUsed(i) = 0 Then Exit Function
+    Next
+End Function
+
+Sub MdiClearSlot(s As Long)
+    g_docPathSlot(s) = ""
+    g_docText(s) = ""
+    g_docDirtySlot(s) = 0
+    g_docEncSlot(s) = ENC_UTF8
+    g_docCursor(s) = 0
+    g_docTopLine(s) = 1
+    g_docSel(s) = -1
+    g_docHwnd(s) = 0
+End Sub
+
+Function MdiAllocSlot() As Long
+    MdiAllocSlot = MdiFindFree()
+    If MdiAllocSlot < 0 Then Exit Function
+    g_docUsed(MdiAllocSlot) = 1
+    MdiClearSlot(MdiAllocSlot)
+End Function
+
+Function MdiSlotOf(hWnd As HWND) As Long
+    Dim i As Long
+    MdiSlotOf = -1
+    For i = 0 To 7
+        If g_docUsed(i) <> 0 And g_docHwnd(i) = hWnd Then MdiSlotOf = i
+        If g_docUsed(i) <> 0 And g_docHwnd(i) = hWnd Then Exit Function
+    Next
+End Function
+
+Sub MdiSaveView(s As Long)
+    g_docDirtySlot(s) = g_docDirty
+    g_docEncSlot(s) = g_docEncoding
+    g_docCursor(s) = TextBuf_CursorIndex()
+    g_docTopLine(s) = g_viewTopLine
+    g_docSel(s) = g_selAnchor
+End Sub
+
+Sub MdiSave(hWnd As HWND)
+    Dim s As Long
+    s = MdiSlotOf(hWnd)
+    If s < 0 Then Exit Sub
+    g_docPathSlot(s) = g_docPath
+    g_docText(s) = TextBuf_GetConfirmed$()
+    MdiSaveView(s)
+End Sub
+
+Sub MdiLoadText(s As Long, hWnd As HWND)
+    TextBuf_SetText(g_docText(s))
+    TextBuf_MoveCursorTo(g_docCursor(s))
+    g_viewTopLine = g_docTopLine(s)
+    g_selAnchor = g_docSel(s)
+    EditorUndo_Reset()
+    TextBuf_SyncPreferredCol()
+    EditorDoc_UpdateTitle(hWnd)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+Sub MdiLoad(hWnd As HWND)
+    Dim s As Long
+    s = MdiSlotOf(hWnd)
+    If s < 0 Then Exit Sub
+    g_docPath = g_docPathSlot(s)
+    g_docDirty = g_docDirtySlot(s)
+    g_docEncoding = g_docEncSlot(s)
+    MdiLoadText(s, hWnd)
+End Sub
+
+Sub MdiOnActivate(hWnd As HWND, wParam As WPARAM, lParam As LPARAM)
+    Dim act As HWND
+    act = lParam As HWND
+    If hWnd = g_hProject Then Exit Sub
+    If hWnd <> act Then Exit Sub
+    If g_activeChild = hWnd Then Exit Sub
+    If g_activeChild <> 0 Then MdiSave(g_activeChild)
+    MdiLoad(hWnd)
+    g_activeChild = hWnd
+End Sub
+
+Function MdiSlotFromCreate(lParam As LPARAM) As Long
+    Dim cs As *CREATESTRUCT
+    Dim mcs As *MDICREATESTRUCT
+    MdiSlotFromCreate = -1
+    cs = lParam As *CREATESTRUCT
+    If cs = 0 Then Exit Function
+    mcs = cs->lpCreateParams As *MDICREATESTRUCT
+    If mcs = 0 Then Exit Function
+    MdiSlotFromCreate = mcs->lParam As Long
+End Function
+
+Sub MdiChildCreate(hWnd As HWND, lParam As LPARAM)
+    Dim s As Long
+    s = MdiSlotFromCreate(lParam)
+    If s < 0 Or s > 7 Then Exit Sub
+    g_docHwnd(s) = hWnd
+    DragAcceptFiles(hWnd, TRUE)
+End Sub
+
+Sub MdiChildGone(hWnd As HWND)
+    Dim s As Long
+    If hWnd = g_activeChild Then g_activeChild = 0
+    EditorCaret_Destroy()
+    s = MdiSlotOf(hWnd)
+    If s < 0 Then Exit Sub
+    g_docUsed(s) = 0
+    MdiClearSlot(s)
+End Sub
+
+Sub MdiChildLife(hWnd As HWND, dwMsg As DWord, lParam As LPARAM)
+    If dwMsg = WM_CREATE Then MdiChildCreate(hWnd, lParam)
+    If dwMsg = WM_DESTROY Then MdiChildGone(hWnd)
+End Sub
+
+Sub MdiChildSize(hWnd As HWND)
+    VirtualScroll_Clamp(hWnd)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+Sub MdiRegClass()
+    FillMemory(VarPtr(g_wc), SizeOf(WNDCLASSEX), 0)
+    g_wc.cbSize = SizeOf(WNDCLASSEX)
+    g_wc.hInstance = g_hInst
+    g_wc.style = CS_HREDRAW Or CS_VREDRAW Or CS_DBLCLKS
+    MdiRegProc()
+End Sub
+
+Sub MdiRegProc()
+    g_wc.lpfnWndProc = AddressOf(MainWndProc)
+    g_wc.hCursor = LoadCursor(NULL, MAKEINTRESOURCE(IDC_ARROW))
+    g_wc.hbrBackground = h3DFaceBrush
+    g_wc.lpszClassName = StrPtr(g_childClass)
+    g_wc.hIcon = LoadIcon(NULL, MAKEINTRESOURCE(IDI_APPLICATION))
+    RegisterClassEx(g_wc)
+End Sub
+
+Sub MdiRegisterChild()
+    If g_childRegistered <> 0 Then Exit Sub
+    g_hInst = GetModuleHandle(0)
+    g_childClass = "EditorChild"
+    g_childRegistered = 1
+    MdiRegClass()
+End Sub
+
+Sub MdiFillPos(s As Long)
+    g_mcs.x = 24 + s * 22
+    g_mcs.y = 24 + s * 22
+    g_mcs.cx = 560
+    g_mcs.cy = 380
+    g_mcs.style = WS_VSCROLL Or WS_VISIBLE
+    g_mcs.lParam = s As LPARAM
+End Sub
+
+Sub MdiFillMcs(s As Long)
+    FillMemory(VarPtr(g_mcs), SizeOf(MDICREATESTRUCT), 0)
+    g_mcs.szClass = StrPtr(g_childClass)
+    g_mcs.szTitle = StrPtr(g_childTitle)
+    g_mcs.hOwner = g_hInst
+    MdiFillPos(s)
+End Sub
+
+Function MdiCreateChild(s As Long) As HWND
+    MdiRegisterChild()
+    MdiFillMcs(s)
+    MdiCreateChild = SendMessage(g_hClient, WM_MDICREATE, 0, VarPtr(g_mcs)) As HWND
+    g_docHwnd(s) = MdiCreateChild
+    If MdiCreateChild <> 0 Then ShowWindow(MdiCreateChild, SW_SHOWNORMAL)
+End Function
+
+Function MdiCreateClient(hWnd As HWND) As HWND
+    Dim style As DWord
+    FillMemory(VarPtr(g_ccs), SizeOf(CLIENTCREATESTRUCT), 0)
+    g_ccs.hWindowMenu = g_hMenuWindow
+    g_ccs.idFirstChild = IDM_FIRSTCHILD
+    style = WS_CHILD Or WS_CLIPCHILDREN Or WS_VISIBLE Or WS_HSCROLL Or WS_VSCROLL
+    g_hClient = CreateWindowExPtr(0, "MDICLIENT", 0, style, 0, 0, 0, 0, hWnd, 1, g_hInst, VarPtr(g_ccs))
+    MdiCreateClient = g_hClient
+End Function
+
+Sub MdiNewDoc()
+    Dim s As Long
+    s = MdiAllocSlot()
+    If s < 0 Then Exit Sub
+    g_childTitle = "untitled"
+    MdiCreateChild(s)
+End Sub
+
+Function MdiStorePrepared(path As String, text As String, enc As Long) As Long
+    Dim s As Long
+    s = MdiAllocSlot()
+    MdiStorePrepared = s
+    If s < 0 Then Exit Function
+    g_docPathSlot(s) = path
+    g_docText(s) = text
+    g_docEncSlot(s) = enc
+    g_docDirtySlot(s) = 0
+End Function
+
+Function MdiPrepareOpen(path As String) As Long
+    Dim text As String
+    Dim enc As Long
+    Dim saved As Long
+    saved = g_docEncoding
+    text = EditorDoc_LoadTextFile$(path)
+    enc = g_docEncoding
+    g_docEncoding = saved
+    MdiPrepareOpen = MdiStorePrepared(path, text, enc)
+End Function
+
+Sub MdiOpenPath(path As String)
+    Dim s As Long
+    If Len(path) = 0 Then Exit Sub
+    If ProjIsPj(path) <> 0 Then ProjOpen(path)
+    If ProjIsPj(path) <> 0 Then Exit Sub
+    s = MdiPrepareOpen(path)
+    If s < 0 Then Exit Sub
+    g_childTitle = path
+    MdiCreateChild(s)
+End Sub
+
+Sub MdiOpenDoc()
+    Dim path As String
+    path = EditorDoc_BrowseOpen$(hMainWnd)
+    If Len(path) = 0 Then Exit Sub
+    MdiOpenPath(path)
+End Sub
+
+Sub MdiOpenStartup()
+    Dim path As String
+    path = EditorDoc_ResolveCmd$()
+    If ProjIsPj(path) <> 0 Then ProjOpen(path)
+    If ProjIsPj(path) <> 0 Then Exit Sub
+    MdiNewDoc()
+    If g_activeChild = 0 Then Exit Sub
+    If Len(path) > 0 Then EditorDoc_OpenPath(g_activeChild, path)
+End Sub

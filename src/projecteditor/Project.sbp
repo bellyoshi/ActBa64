@@ -1,0 +1,470 @@
+' Project window: #SOURCE list, and pj-vs-file compile targets.
+
+Const LBS_NOTIFY = 1
+Const LBS_NOINTEGRALHEIGHT = &H100
+Const LB_ADDSTRING = &H180
+Const LB_RESETCONTENT = &H184
+Const LB_GETCURSEL = &H188
+Const LBN_SELCHANGE = 1
+Const ID_PROJLIST = 401
+Const WS_BORDER = &H00800000
+
+Dim g_hProject As HWND
+Dim g_hProjList As HWND
+Dim g_projectPath As String
+Dim g_projTitle As String
+Dim g_projClass As String
+Dim g_projRegistered As Long
+Dim g_projCount As Long
+Dim g_projInSrc As Long
+Dim g_projUseWindow As Long
+Dim g_projOutRel As String
+Dim g_pjBody As String
+Dim g_pjPos As Long
+Dim g_pjDir As String
+Dim g_projRel(127) As String
+Dim g_projFull(127) As String
+
+Function ProjLowCh$(c As String) As String
+    Dim n As Long
+    ProjLowCh$ = c
+    If Len(c) <> 1 Then Exit Function
+    n = Asc(c)
+    If n >= 65 And n <= 90 Then ProjLowCh$ = Chr$(n + 32)
+End Function
+
+Function ProjNorm$(s As String) As String
+    Dim i As Long
+    Dim c As String
+    ProjNorm$ = ""
+    For i = 1 To Len(s)
+        c = Mid$(s, i, 1)
+        If c = "/" Then c = "\"
+        ProjNorm$ = ProjNorm$ + ProjLowCh$(c)
+    Next
+End Function
+
+Function ProjAtCr(i As Long) As Long
+    Dim c As String
+    ProjAtCr = 1
+    If i > Len(g_pjBody) Then Exit Function
+    If i < 1 Then Exit Function
+    c = Mid$(g_pjBody, i, 1)
+    If c <> Chr$(10) And c <> Chr$(13) Then ProjAtCr = 0
+End Function
+
+Function ProjScanLine(ByRef i As Long) As Long
+    While ProjAtCr(i) = 0
+        i = i + 1
+    Wend
+    ProjScanLine = i
+End Function
+
+Sub ProjSkipBreak()
+    Dim c As String
+    If g_pjPos > Len(g_pjBody) Then Exit Sub
+    c = Mid$(g_pjBody, g_pjPos, 1)
+    If c = Chr$(13) Then g_pjPos = g_pjPos + 1
+    If g_pjPos > Len(g_pjBody) Then Exit Sub
+    c = Mid$(g_pjBody, g_pjPos, 1)
+    If c = Chr$(10) Then g_pjPos = g_pjPos + 1
+End Sub
+
+Function ProjTakeLine$() As String
+    Dim a As Long
+    Dim b As Long
+    ProjTakeLine$ = ""
+    If g_pjPos > Len(g_pjBody) Then Exit Function
+    a = g_pjPos
+    b = ProjScanLine(g_pjPos)
+    If b > a Then ProjTakeLine$ = Mid$(g_pjBody, a, b - a)
+    ProjSkipBreak()
+End Function
+
+Function ProjTrimR$(s As String) As String
+    ProjTrimR$ = s
+    While Len(ProjTrimR$) > 0
+        If Right$(ProjTrimR$, 1) <> " " And Right$(ProjTrimR$, 1) <> Chr$(9) Then Exit While
+        ProjTrimR$ = Left$(ProjTrimR$, Len(ProjTrimR$) - 1)
+    Wend
+End Function
+
+Function ProjTrim$(s As String) As String
+    ProjTrim$ = ProjTrimR$(s)
+    While Len(ProjTrim$) > 0
+        If Left$(ProjTrim$, 1) <> " " And Left$(ProjTrim$, 1) <> Chr$(9) Then Exit While
+        ProjTrim$ = Mid$(ProjTrim$, 2)
+    Wend
+End Function
+
+Function ProjAfterKey(t As String, n As Long) As Long
+    Dim c As String
+    ProjAfterKey = 0
+    If Len(t) = n Then ProjAfterKey = 1
+    If Len(t) <= n Then Exit Function
+    c = Mid$(t, n + 1, 1)
+    If c = "=" Or c = " " Or c = Chr$(9) Then ProjAfterKey = 1
+End Function
+
+Function ProjKeyIs(t As String, key As String) As Long
+    Dim n As Long
+    ProjKeyIs = 0
+    n = Len(key)
+    If Len(t) < n Then Exit Function
+    If Left$(ProjNorm$(t), n) <> key Then Exit Function
+    ProjKeyIs = ProjAfterKey(t, n)
+End Function
+
+Function ProjIsSource(t As String) As Long
+    Dim u As String
+    ProjIsSource = 0
+    u = ProjNorm$(t)
+    If Len(u) < 7 Then Exit Function
+    If Left$(u, 7) <> "#source" Then Exit Function
+    ProjIsSource = ProjAfterKey(t, 7)
+End Function
+
+Function ProjIsHash(t As String) As Long
+    ProjIsHash = 0
+    If Len(t) > 0 Then If Left$(t, 1) = "#" Then ProjIsHash = 1
+End Function
+
+Function ProjSkipLine(t As String) As Long
+    ProjSkipLine = 0
+    If Len(t) = 0 Then ProjSkipLine = 1
+    If Len(t) > 0 Then If Left$(t, 1) = "'" Then ProjSkipLine = 1
+End Function
+
+Function ProjEqVal$(t As String) As String
+    Dim i As Long
+    ProjEqVal$ = ""
+    i = 1
+    While i <= Len(t)
+        If Mid$(t, i, 1) = "=" Then Exit While
+        i = i + 1
+    Wend
+    If i < Len(t) Then ProjEqVal$ = ProjTrim$(Mid$(t, i + 1))
+End Function
+
+Function ProjParseInt(s As String) As Long
+    Dim i As Long
+    Dim c As Long
+    ProjParseInt = 0
+    For i = 1 To Len(s)
+        c = Asc(Mid$(s, i, 1))
+        If c < 48 Or c > 57 Then Exit Function
+        ProjParseInt = ProjParseInt * 10 + (c - 48)
+    Next
+End Function
+
+Function ProjDirOf$(path As String) As String
+    Dim i As Long
+    ProjDirOf$ = ""
+    i = Len(path)
+    While i > 0
+        If Mid$(path, i, 1) = "\" Or Mid$(path, i, 1) = "/" Then Exit While
+        i = i - 1
+    Wend
+    If i > 0 Then ProjDirOf$ = Left$(path, i)
+End Function
+
+Function ProjAbs(rel As String) As Long
+    ProjAbs = 0
+    If Len(rel) = 0 Then Exit Function
+    If Mid$(rel, 1, 1) = "\" Or Mid$(rel, 1, 1) = "/" Then ProjAbs = 1
+    If Len(rel) >= 2 Then If Mid$(rel, 2, 1) = ":" Then ProjAbs = 1
+End Function
+
+Function ProjJoin$(rel As String) As String
+    If ProjAbs(rel) <> 0 Then
+        ProjJoin$ = rel
+    Else
+        ProjJoin$ = g_pjDir + rel
+    End If
+End Function
+
+Sub ProjAddSrc(t As String)
+    If g_projCount >= 128 Then Exit Sub
+    g_projRel(g_projCount) = t
+    g_projFull(g_projCount) = ProjJoin$(t)
+    g_projCount = g_projCount + 1
+End Sub
+
+Sub ProjTakeOpt(t As String)
+    If ProjKeyIs(t, "#output_release") <> 0 Then g_projOutRel = ProjEqVal$(t)
+    If ProjKeyIs(t, "#usewindow") <> 0 Then g_projUseWindow = ProjParseInt(ProjEqVal$(t))
+End Sub
+
+Sub ProjTakeSrc(t As String)
+    If ProjIsSource(t) <> 0 Then g_projInSrc = 1
+    If ProjIsSource(t) <> 0 Then Exit Sub
+    If g_projInSrc = 0 Then Exit Sub
+    If ProjIsHash(t) <> 0 Then g_projInSrc = 0
+    If g_projInSrc = 0 Then Exit Sub
+    If ProjSkipLine(t) = 0 Then ProjAddSrc(t)
+End Sub
+
+Sub ProjReadLine(raw As String)
+    Dim t As String
+    t = ProjTrim$(raw)
+    ProjTakeOpt(t)
+    ProjTakeSrc(t)
+End Sub
+
+Sub ProjReset()
+    g_projCount = 0
+    g_projInSrc = 0
+    g_projOutRel = ""
+    g_projUseWindow = 0
+    g_pjDir = ProjDirOf$(g_projectPath)
+    g_pjPos = 1
+End Sub
+
+Sub ProjParseAll()
+    Dim raw As String
+    While g_pjPos <= Len(g_pjBody)
+        raw = ProjTakeLine$()
+        ProjReadLine(raw)
+    Wend
+End Sub
+
+Function ProjLoadBody$(path As String) As String
+    Dim saved As Long
+    saved = g_docEncoding
+    ProjLoadBody$ = EditorDoc_LoadTextFile$(path)
+    g_docEncoding = saved
+End Function
+
+Function ProjIsPj(path As String) As Long
+    Dim n As Long
+    Dim t As String
+    ProjIsPj = 0
+    n = Len(path)
+    If n < 3 Then Exit Function
+    t = ProjNorm$(Right$(path, 3))
+    If t = ".pj" Then ProjIsPj = 1
+End Function
+
+Function ProjSamePath(a As String, b As String) As Long
+    ProjSamePath = 0
+    If Len(a) = 0 Or Len(b) = 0 Then Exit Function
+    If ProjNorm$(a) = ProjNorm$(b) Then ProjSamePath = 1
+End Function
+
+Function ProjHas(path As String) As Long
+    Dim i As Long
+    ProjHas = 0
+    For i = 0 To g_projCount - 1
+        If ProjSamePath(g_projFull(i), path) <> 0 Then ProjHas = 1
+        If ProjHas <> 0 Then Exit Function
+    Next
+End Function
+
+Function ProjSlotHit(i As Long, path As String) As Long
+    ProjSlotHit = 0
+    If g_docUsed(i) = 0 Then Exit Function
+    ProjSlotHit = ProjSamePath(g_docPathSlot(i), path)
+End Function
+
+Function ProjFindOpen(path As String) As HWND
+    Dim i As Long
+    ProjFindOpen = 0
+    If ProjSamePath(g_docPath, path) <> 0 Then ProjFindOpen = g_activeChild
+    If ProjFindOpen <> 0 Then Exit Function
+    For i = 0 To 7
+        If ProjSlotHit(i, path) <> 0 Then ProjFindOpen = g_docHwnd(i)
+        If ProjFindOpen <> 0 Then Exit Function
+    Next
+End Function
+
+Sub ProjOpenIndex(i As Long)
+    Dim h As HWND
+    If i < 0 Or i >= g_projCount Then Exit Sub
+    h = ProjFindOpen(g_projFull(i))
+    If h <> 0 Then SendMessage(g_hClient, WM_MDIACTIVATE, h As WPARAM, 0)
+    If h = 0 Then MdiOpenPath(g_projFull(i))
+End Sub
+
+Sub ProjOnSelect()
+    Dim i As Long
+    i = SendMessage(g_hProjList, LB_GETCURSEL, 0, 0)
+    ProjOpenIndex(i)
+End Sub
+
+Sub ProjOnCommand(wParam As WPARAM)
+    If HIWORD(wParam) <> LBN_SELCHANGE Then Exit Sub
+    If LOWORD(wParam) <> ID_PROJLIST Then Exit Sub
+    ProjOnSelect()
+End Sub
+
+Sub ProjOnSize(hWnd As HWND)
+    Dim rc As RECT
+    If g_hProjList = 0 Then Exit Sub
+    GetClientRect(hWnd, rc)
+    MoveWindow(g_hProjList, 0, 0, rc.right, rc.bottom, 1)
+End Sub
+
+Sub ProjFillList()
+    Dim i As Long
+    SendMessage(g_hProjList, LB_RESETCONTENT, 0, 0)
+    i = 0
+    While i < g_projCount
+        SendMessage(g_hProjList, LB_ADDSTRING, 0, StrPtr(g_projRel(i)) As LPARAM)
+        i = i + 1
+    Wend
+End Sub
+
+Sub ProjMakeList(hWnd As HWND)
+    Dim style As DWord
+    style = WS_CHILD Or WS_VISIBLE Or WS_VSCROLL Or WS_BORDER Or LBS_NOTIFY Or LBS_NOINTEGRALHEIGHT
+    g_hProjList = CreateWindowEx(0, "LISTBOX", "", style, 0, 0, 100, 100, hWnd, ID_PROJLIST As HMENU, g_hInst, 0)
+End Sub
+
+Sub ProjOnCreate(hWnd As HWND)
+    g_hProject = hWnd
+    ProjMakeList(hWnd)
+    ProjFillList()
+    ProjOnSize(hWnd)
+End Sub
+
+Sub ProjOnDestroy(hWnd As HWND)
+    If hWnd <> g_hProject Then Exit Sub
+    g_hProject = 0
+    g_hProjList = 0
+    g_projectPath = ""
+    g_projCount = 0
+    g_projOutRel = ""
+    g_projUseWindow = 0
+End Sub
+
+Function ProjProc(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    If message = WM_CREATE Then ProjOnCreate(hWnd)
+    If message = WM_SIZE Then ProjOnSize(hWnd)
+    If message = WM_COMMAND Then ProjOnCommand(wParam)
+    If message = WM_DESTROY Then ProjOnDestroy(hWnd)
+    ProjProc = DefMDIChildProc(hWnd, message, wParam, lParam)
+End Function
+
+Sub ProjRegProc()
+    g_projClass = "EditorProject"
+    g_wc.lpfnWndProc = AddressOf(ProjProc)
+    g_wc.hCursor = LoadCursor(NULL, MAKEINTRESOURCE(IDC_ARROW))
+    g_wc.hbrBackground = h3DFaceBrush
+    g_wc.lpszClassName = StrPtr(g_projClass)
+    g_wc.hIcon = LoadIcon(NULL, MAKEINTRESOURCE(IDI_APPLICATION))
+    RegisterClassEx(g_wc)
+End Sub
+
+Sub ProjRegClass()
+    FillMemory(VarPtr(g_wc), SizeOf(WNDCLASSEX), 0)
+    g_wc.cbSize = SizeOf(WNDCLASSEX)
+    g_wc.hInstance = g_hInst
+    g_wc.style = CS_HREDRAW Or CS_VREDRAW
+    ProjRegProc()
+End Sub
+
+Sub ProjEnsureClass()
+    If g_projRegistered <> 0 Then Exit Sub
+    g_hInst = GetModuleHandle(0)
+    g_projRegistered = 1
+    ProjRegClass()
+End Sub
+
+Sub ProjFillCreate()
+    g_mcs.x = 12
+    g_mcs.y = 12
+    g_mcs.cx = 240
+    g_mcs.cy = 420
+    g_mcs.style = WS_VISIBLE Or WS_VSCROLL
+    g_mcs.lParam = 0
+    SendMessage(g_hClient, WM_MDICREATE, 0, VarPtr(g_mcs))
+    ShowWindow(g_hProject, SW_SHOWNORMAL)
+End Sub
+
+Sub ProjCreateWnd()
+    ProjEnsureClass()
+    g_projTitle = g_projectPath
+    FillMemory(VarPtr(g_mcs), SizeOf(MDICREATESTRUCT), 0)
+    g_mcs.szClass = StrPtr(g_projClass)
+    g_mcs.szTitle = StrPtr(g_projTitle)
+    g_mcs.hOwner = g_hInst
+    ProjFillCreate()
+End Sub
+
+Sub ProjShow()
+    If g_hProject <> 0 Then ProjFillList()
+    If g_hProject <> 0 Then SetWindowText(g_hProject, g_projectPath)
+    If g_hProject = 0 Then ProjCreateWnd()
+End Sub
+
+Sub ProjOpen(path As String)
+    If Len(path) = 0 Then Exit Sub
+    g_projectPath = path
+    g_pjBody = ProjLoadBody$(path)
+    ProjReset()
+    ProjParseAll()
+    ProjShow()
+    g_pjBody = ""
+End Sub
+
+Function ProjSaveActive() As Long
+    ProjSaveActive = 1
+    If g_activeChild = 0 Then Exit Function
+    If ProjHas(g_docPath) = 0 Then Exit Function
+    ProjSaveActive = EditorDoc_Save(g_activeChild)
+End Function
+
+Function ProjSlotNeedsSave(i As Long) As Long
+    ProjSlotNeedsSave = 0
+    If g_docUsed(i) = 0 Then Exit Function
+    If g_docHwnd(i) = g_activeChild Then Exit Function
+    If g_docDirtySlot(i) = 0 Then Exit Function
+    ProjSlotNeedsSave = ProjHas(g_docPathSlot(i))
+End Function
+
+Function ProjWriteSlot(i As Long) As Long
+    Dim saved As Long
+    saved = g_docEncoding
+    g_docEncoding = g_docEncSlot(i)
+    ProjWriteSlot = EditorDoc_WriteTextFile(g_docPathSlot(i), g_docText(i))
+    g_docEncoding = saved
+    If ProjWriteSlot <> 0 Then g_docDirtySlot(i) = 0
+    If ProjWriteSlot = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED), "editor")
+End Function
+
+Function ProjSaveSlot(i As Long) As Long
+    ProjSaveSlot = 1
+    If ProjSlotNeedsSave(i) = 0 Then Exit Function
+    ProjSaveSlot = ProjWriteSlot(i)
+End Function
+
+Function ProjSaveMembers() As Long
+    Dim i As Long
+    ProjSaveMembers = 1
+    If ProjSaveActive() = 0 Then ProjSaveMembers = 0
+    If ProjSaveMembers = 0 Then Exit Function
+    For i = 0 To 7
+        If ProjSaveSlot(i) = 0 Then ProjSaveMembers = 0
+    Next
+End Function
+
+Function ProjSaveForBuild(hWnd As HWND) As Long
+    ProjSaveForBuild = 1
+    If Len(g_projectPath) = 0 Then ProjSaveForBuild = EditorDoc_Save(hWnd)
+    If Len(g_projectPath) = 0 Then Exit Function
+    ProjSaveForBuild = ProjSaveMembers()
+End Function
+
+Function ProjOutputExe$() As String
+    If Len(g_projOutRel) = 0 Then
+        ProjOutputExe$ = EditorBuild_ExeFromPath$(g_projectPath)
+    Else
+        ProjOutputExe$ = ProjJoin$(g_projOutRel)
+    End If
+End Function
+
+Function ProjCompileArgs$() As String
+    Dim outExe As String
+    outExe = ProjOutputExe$()
+    ProjCompileArgs$ = EditorBuild_QuoteArg$(g_projectPath) + " -o " + EditorBuild_QuoteArg$(outExe)
+End Function
