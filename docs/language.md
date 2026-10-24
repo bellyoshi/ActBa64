@@ -143,6 +143,7 @@ PAINT (x, y), color1 [, color2]
 - `LOCATE` 後の `Print` は窓上の文字位置へ描画（`;` なしなら次行へ）
 - 数値の `Print` は `Str$`（Long）／`StrD$`（Double、64bit）で文字列化してから描画
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
+- `Inkey$()` は窓の `WM_KEYDOWN` を 1 文字取り、無ければ `""`。`Input$(n)` は同じキーを `n` 文字そろうまで待つ。`#n88basic` / `#prompt` のときだけ使える
 
 色番号（0..7、N88 8 色）:
 
@@ -289,9 +290,14 @@ Class Counter
     End Function
 End Class
 
-Dim c As Counter(10)            ' 領域確保 + ctor 呼出
+Dim c As Counter(10)            ' スタック上で ctor
 c.Add(32)
 x = c.GetValue()
+
+Dim p As *Counter
+p = New Counter(10)             ' ヒープ。失敗時は 0 で ctor は呼ばない
+p = New [3] Counter(10)         ' 同じ引数で 3 要素
+Delete p                        ' dtor を逆順に呼び、塊を解放。Delete 0 は何もしない
 ```
 
 - `Class` / `End Class`。メンバ変数は `Type` と同様のオフセット配置
@@ -303,8 +309,9 @@ x = c.GetValue()
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=Me`、32bit は stdcall の第1引数）
 - `Inherits` / `Virtual` / vtable 呼び出しは **部分対応**（COM / D3D11 向け。本体なし `Virtual Function|Sub` と継承先へのスロットコピー）
 - `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
+- `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。`Delete` は変数のクラスポインタ型から `Class_Dtor` を呼び、ヘッダごと `HeapFree` する。クラスは使用箇所より前に定義する。ポインタのクラス型が取れない `Delete` はコンパイルエラー
 
-**未対応:** `New` / `Delete` 演算子、`Super.Method`、メンバ実体クラスの自動 ctor・dtor、アクセス制御の厳密検査
+**未対応:** `Super.Method`、メンバ実体クラスの自動 ctor・dtor、アクセス制御の厳密検査
 
 ---
 
@@ -361,6 +368,16 @@ Get #番号, レコード, 文字列変数
 Put #番号, レコード, 式
 Write [#番号,] [式 [, ...]] [;]  ' カンマ区切り。番号省略は標準出力
 Sleep(ミリ秒)       ' 待ち中もウインドウメッセージを処理
+Beep
+Cls [n]             ' コンソールをクリア。n は受け取るが画面種別は見ない
+MsgBox hWnd, text$ [, title$ [, type [, ans]]]
+DelWnd hWnd
+Window hWnd, hOwner, x, y, w, h, title$, style [, class$ [, id [, proc [, exStyle]]]]
+ChDir path$
+MkDir path$
+Kill path$
+Exec path$ [, cmd$]
+Delete p            ' クラスポインタ。§3.3
 End
 ExitProcess(式)
 ```
@@ -384,6 +401,11 @@ ExitProcess(式)
 | `Sleep(ms)` | ○（メッセージポンプ付き・default） |
 | `InsMenu` | ○（内部で `InsertMenuA`） |
 | `LINE` / `CIRCLE` / `LOCATE` / `PAINT`（N88 文） | ○（`#n88basic`） |
+| `Beep` / `Cls` / `MsgBox` / `Window` / `DelWnd` | ○（`BasicCmd.abp`。`Cls` はコンソール。`Window` はメッセージループを作らない） |
+| `ChDir` / `MkDir` / `Kill` / `Exec` | ○（`BasicCmd.abp`） |
+| `Delete` | ○（クラスポインタ） |
+| `Date$` / `Time$` | ○（`yyyy/mm/dd` と `hh:mm:ss`。月日時刻は 2 桁） |
+| `Inkey$` / `Input$(n)` | ○（`#n88basic` のみ。窓の `WM_KEYDOWN`） |
 
 ---
 
@@ -729,7 +751,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 
 ## 10. 非対応（意図的）
 
-- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` / `Super` は未対応）
+- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` は対応。`Super` は未対応）
 - `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は IEEE Double（64bit と `-actba32`。32bit の配列要素・UDT フィールド転送と、`Print` の Double 変換は未）
 - `GoTo` / `GoSub` / `ReDim`
 - ネスト手続き

@@ -38,7 +38,7 @@
 |---|---|---|
 | `Enum` … `End Enum` | 列挙型（`DWord` 値、省略時は前値+1） | ○（初回省略時は **1**、`Dim x As EnumName` は 4 バイト） |
 | `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
-| `New` / `Delete` | `New [[num]] Class[(params)]`、`Delete pObj` | 非対応（`Dim As Class(args)` で ctor は呼べる） |
+| `New` / `Delete` | `New [[num]] Class[(params)]`、`Delete pObj` | **対応**。戻りはオブジェクト先頭。塊の先頭 8 バイトが要素数。`Delete 0` は何もしない。`Super` とメンバ Class の自動 ctor/dtor は未 |
 | 3 次元以上の配列 | `Dim a(N, M, L)` | 非対応（2 次元まで） |
 | 関数ポインタ型 | `Dim As *Function(...)` / `*Sub(...)`、`TypeDef`、`AddressOf`、間接呼び出し | **対応**（引数型の厳密照合は未。詳細は [language.md §5.2.1](./language.md)） |
 
@@ -52,12 +52,12 @@
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `Window` | `Window hNewWnd, hOwnerWnd, x, y, w, h, title$, style [, ...]` | 非対応（Win32 API で代替） |
-| `DelWnd` | `DelWnd hWnd` | 非対応 |
-| `MsgBox` | BASIC 命令 | 非対応（`MessageBoxA` API は可） |
-| `Cls` / `Beep` | コンソール制御 | 非対応 |
-| `Inkey$` | `Inkey$()` — 非同期 1 文字 | 非対応 |
-| `Input$(Length)` | 同期、指定長読み取り | 非対応 |
+| `Window` | `Window hNewWnd, hOwnerWnd, x, y, w, h, title$, style [, ...]` | **対応**（`BasicCmd.abp`）。`hWnd` は `ByRef HWND`。`class$` 省略時は `ActBa64Wnd` を一度登録。メッセージループは作らない。`proc` は `CreateWindowEx` の `lpParam` |
+| `DelWnd` | `DelWnd hWnd` | **対応**（`DestroyWindow`） |
+| `MsgBox` | BASIC 命令 | **対応**（`MessageBoxA`）。第5引数があるときだけ戻り値を代入 |
+| `Cls` / `Beep` | コンソール制御 | **対応**。`Beep` は `MessageBeep(0)`。`Cls` はコンソール全面クリア（AB の Prompt 窓ではない。引数は受け取るが常にテキスト画面） |
+| `Inkey$` | `Inkey$()` — 非同期 1 文字 | **`#n88basic` / `#prompt` のみ**（`n88key.abp`）。窓の `WM_KEYDOWN`。無ければ `""` |
+| `Input$(Length)` | 同期、指定長読み取り | **`#n88basic` / `#prompt` のみ**。同じキーを `Length` 文字待つ |
 | RAD / `#RESOURCE` | Project Editor・リソース | `#resource` 埋め込みは部分対応。RAD / `.pj` `#RESOURCE=` は未 |
 
 ---
@@ -71,7 +71,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | **変数同士の代入**で型不一致を warning（`As` で抑制）。リテラル代入は対象外。`Include\default` は抑制 |
 | `Single` / `Double` | IEEE 浮動小数点演算 | **`Double`**: 加減乗除・比較・`Function As Double` / Double 仮引数・小数リテラルは AST 上 IEEE ビット（千分率は不使用）。`Math.abp` も IEEE Double。64bit と `-actba32` の両方（32bit の値は `edx:eax`。配列要素と UDT フィールドの 8 バイト転送は 64bit のみ）。**`Single`**: 格納と Input 変換が中心（汎用演算は未）。N88 `CIRCLE` 角度・aspect は `Double` |
 | `Const` | `Const name = expr` および `Const name(arglist) = expr`（マクロ関数） | 整数・文字列リテラル中心。複雑な定数式・マクロ関数は制限あり |
-| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New`/`Delete` / `Super` 演算子なし。`Private` / `Public` / `Protected` は**受理のみ**（アクセス制御なし）。メソッドはマングル名 + 暗黙 `Me` |
+| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。`Super` 演算子なし。`Private` / `Public` / `Protected` は**受理のみ**（アクセス制御なし）。メソッドはマングル名 + 暗黙 `Me` |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` / `Trim$` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |
@@ -171,7 +171,7 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 | `Let` | 明示代入（省略可） | 優先度低 |
 | 3 次元以上の配列 | `Dim a(N, M, L)` | 2 次元まで |
 | DLL `.reloc` | ベース再配置 | 出力は済。優先ベースが塞がるとロード失敗 |
-| `Class` 拡張 | `New`/`Delete`、`Super`、厳密な `Private`/`Protected`、メンバ Class の自動 ctor/dtor | `Inherits`/`Virtual` は COM/vtable 向けに部分対応済。アクセス修飾子は受理のみ |
+| `Class` 拡張 | `Super`、厳密な `Private`/`Protected`、メンバ Class の自動 ctor/dtor | `New`/`Delete` は済。`Inherits`/`Virtual` は COM/vtable 向けに部分対応済。アクセス修飾子は受理のみ |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の一致検査 | `*Function` / 間接 call 自体は済 |
 
 ### ファイル I/O
@@ -180,33 +180,13 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 |---|---|---|
 | `rc` / `#resource` | リソースファイル取り込み | ファイル→RCDATA(1) は済。`.rc` 直接 / ICON・MENU は未 |
 
-### 入出力・対話
-
-| 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
-|---|---|---|
-| `Cls` | 画面クリア | |
-| `MsgBox` | BASIC 命令 | `MessageBoxA` で代替 |
-| `Beep` | ビープ音 | |
-| `Inkey$` | 非同期 1 キー | |
-| `Input$(Length)` | 同期・固定長読み取り | |
-
-### パス・プロセス
-
-| 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
-|---|---|---|
-| `ChDir` | カレントディレクトリ変更 | |
-| `Exec` | 外部プログラム実行 | `CreateProcessA` で代替可 |
-| `Kill` | ファイル削除 | |
-| `MkDir` | ディレクトリ作成 | |
-
 ### 数値・変換・文字列関数
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
 | `CDbl` / `CInt` / `CSng` | 型変換関数 | `As` キャストは可 |
 | `Oct$` | 8 進文字列 | |
-| `Date$` / `Time$` | 日付・時刻文字列 | |
-| `ZeroString` | ゼロ埋め文字列 | 未（`Hex$` / `Val` / `Trim$` / `InStr` は `StrUtils.abp` で済） |
+| `ZeroString` | ゼロ埋め文字列 | 未（`Hex$` / `Val` / `Trim$` / `InStr` は `StrUtils.abp` で済。`Date$` / `Time$` は済） |
 | `SetDouble` / `GetDouble` / `GetSingle` 等 | メモリ読み書き | **`Memory.abp`** は Byte〜DWord まで。浮動 Get/Set は未 |
 | `realloc` | C ヒープ | `calloc`（→ `HeapAlloc` ゼロ埋め）は済。`realloc` 未 |
 

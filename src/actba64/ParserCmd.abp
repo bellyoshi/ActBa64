@@ -1,0 +1,470 @@
+' ParserCmd - BASIC 命令（実体は BasicCmd.abp）
+
+Dim g_cmdArg0 As Long
+Dim g_cmdPrev As Long
+Dim g_cmdN As Long
+Dim g_cmdFn(SYM_NAME_LEN - 1) As Byte
+
+Sub ParseCmdReset()
+    g_cmdArg0 = -1
+    g_cmdPrev = -1
+    g_cmdN = 0
+End Sub
+
+Sub ParseFillCall(ast As *Ast, n As Long, arg0 As Long, nArgs As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].num = nArgs
+    nodes[n].right = -1
+End Sub
+
+Function ParseMakeCall(ast As *Ast, name As *Byte, arg0 As Long, nArgs As Long) As Long
+    Dim n As Long
+    n = AstAddNode(ast, AST_CALL)
+    ParseMakeCall = n
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, name)
+    ParseFillCall(ast, n, arg0, nArgs)
+End Function
+
+Function ParseMakeAssign(ast As *Ast, lhs As Long, rhs As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    n = AstAddNode(ast, AST_ASSIGN)
+    ParseMakeAssign = n
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].left = lhs
+    nodes[n].right = rhs
+End Function
+
+Function ParseCallFn(p As *Parser) As Long
+    ParseCallFn = ParseMakeCall(p->ast, VarPtr(g_cmdFn), g_cmdArg0, g_cmdN)
+End Function
+
+Function ParseEmptyStr(ast As *Ast) As Long
+    Dim z(1) As Byte
+    Dim n As Long
+    z[0] = 0
+    n = AstAddNode(ast, AST_STRING)
+    If n >= 0 Then AstSetStr(ast, n, VarPtr(z))
+    ParseEmptyStr = n
+End Function
+
+Function ParsePadOne(ast As *Ast, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    Dim e As Long
+    e = ParseMakeNum(ast, 0)
+    ParsePadOne = 0
+    If e < 0 Then Exit Function
+    ParsePadOne = ParseLinkArg(ast, arg0, nPrev, nArgs, e)
+End Function
+
+Function ParsePadEmpty(ast As *Ast, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    Dim e As Long
+    e = ParseEmptyStr(ast)
+    ParsePadEmpty = 0
+    If e < 0 Then Exit Function
+    ParsePadEmpty = ParseLinkArg(ast, arg0, nPrev, nArgs, e)
+End Function
+
+Function ParsePadNum(ast As *Ast, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long, target As Long) As Long
+    ParsePadNum = 1
+    If nArgs >= target Then Exit Function
+    If ParsePadOne(ast, arg0, nPrev, nArgs) = 0 Then ParsePadNum = 0
+    If ParsePadNum = 0 Then Exit Function
+    ParsePadNum = ParsePadNum(ast, arg0, nPrev, nArgs, target)
+End Function
+
+Function ParseCmdKw(p As *Parser, lit As *Byte) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kw), lit)
+    ParseCmdKw = ParseIdentIs(p, VarPtr(kw))
+End Function
+
+Function ParseCmdIsA(p As *Parser) As Long
+    ParseCmdIsA = 1
+    If ParseCmdKw(p, "beep") <> 0 Then Exit Function
+    If ParseCmdKw(p, "cls") <> 0 Then Exit Function
+    If ParseCmdKw(p, "msgbox") <> 0 Then Exit Function
+    ParseCmdIsA = 0
+End Function
+
+Function ParseCmdIsB(p As *Parser) As Long
+    ParseCmdIsB = 1
+    If ParseCmdKw(p, "delwnd") <> 0 Then Exit Function
+    If ParseCmdKw(p, "window") <> 0 Then Exit Function
+    If ParseCmdKw(p, "chdir") <> 0 Then Exit Function
+    ParseCmdIsB = 0
+End Function
+
+Function ParseCmdIsC(p As *Parser) As Long
+    ParseCmdIsC = 1
+    If ParseCmdKw(p, "mkdir") <> 0 Then Exit Function
+    If ParseCmdKw(p, "kill") <> 0 Then Exit Function
+    If ParseCmdKw(p, "exec") <> 0 Then Exit Function
+    ParseCmdIsC = 0
+End Function
+
+Function ParseCmdIsD(p As *Parser) As Long
+    ParseCmdIsD = 1
+    If ParseCmdKw(p, "delete") <> 0 Then Exit Function
+    If ParseCmdKw(p, "print") <> 0 Then Exit Function
+    If ParseCmdKw(p, "input") <> 0 Then Exit Function
+    ParseCmdIsD = 0
+End Function
+
+Function ParseCmdIsE(p As *Parser) As Long
+    ParseCmdIsE = 1
+    If ParseCmdKw(p, "dim") <> 0 Then Exit Function
+    If ParseCmdKw(p, "const") <> 0 Then Exit Function
+    If ParseCmdKw(p, "if") <> 0 Then Exit Function
+    ParseCmdIsE = 0
+End Function
+
+Function ParseCmdIsF(p As *Parser) As Long
+    ParseCmdIsF = 1
+    If ParseCmdKw(p, "for") <> 0 Then Exit Function
+    If ParseCmdKw(p, "while") <> 0 Then Exit Function
+    If ParseCmdKw(p, "do") <> 0 Then Exit Function
+    ParseCmdIsF = 0
+End Function
+
+Function ParseCmdIsG(p As *Parser) As Long
+    ParseCmdIsG = 1
+    If ParseCmdKw(p, "end") <> 0 Then Exit Function
+    If ParseCmdKw(p, "exit") <> 0 Then Exit Function
+    If ParseCmdKw(p, "open") <> 0 Then Exit Function
+    ParseCmdIsG = 0
+End Function
+
+Function ParseCmdIsH(p As *Parser) As Long
+    ParseCmdIsH = 1
+    If ParseCmdKw(p, "close") <> 0 Then Exit Function
+    If ParseCmdKw(p, "sub") <> 0 Then Exit Function
+    If ParseCmdKw(p, "function") <> 0 Then Exit Function
+    ParseCmdIsH = 0
+End Function
+
+Function ParseCmdIsI(p As *Parser) As Long
+    ParseCmdIsI = 1
+    If ParseCmdKw(p, "class") <> 0 Then Exit Function
+    If ParseCmdKw(p, "type") <> 0 Then Exit Function
+    If ParseCmdKw(p, "select") <> 0 Then Exit Function
+    ParseCmdIsI = 0
+End Function
+
+Function ParseCmdIsJ(p As *Parser) As Long
+    ParseCmdIsJ = 1
+    If ParseCmdKw(p, "continue") <> 0 Then Exit Function
+    If ParseCmdKw(p, "declare") <> 0 Then Exit Function
+    If ParseCmdKw(p, "enum") <> 0 Then Exit Function
+    ParseCmdIsJ = 0
+End Function
+
+Function ParseCmdIsK(p As *Parser) As Long
+    ParseCmdIsK = 1
+    If ParseCmdKw(p, "else") <> 0 Then Exit Function
+    If ParseCmdKw(p, "wend") <> 0 Then Exit Function
+    If ParseCmdKw(p, "next") <> 0 Then Exit Function
+    ParseCmdIsK = 0
+End Function
+
+Function ParseCmdIsKw(p As *Parser) As Long
+    ParseCmdIsKw = ParseCmdIsA(p)
+    If ParseCmdIsKw <> 0 Then Exit Function
+    ParseCmdIsKw = ParseCmdIsB(p)
+    If ParseCmdIsKw <> 0 Then Exit Function
+    ParseCmdIsKw = ParseCmdIsRest(p)
+End Function
+
+Function ParseCmdIsRest(p As *Parser) As Long
+    ParseCmdIsRest = ParseCmdIsC(p)
+    If ParseCmdIsRest <> 0 Then Exit Function
+    ParseCmdIsRest = ParseCmdIsD(p)
+    If ParseCmdIsRest <> 0 Then Exit Function
+    ParseCmdIsRest = ParseCmdIsRest2(p)
+End Function
+
+Function ParseCmdIsRest2(p As *Parser) As Long
+    ParseCmdIsRest2 = ParseCmdIsE(p)
+    If ParseCmdIsRest2 <> 0 Then Exit Function
+    ParseCmdIsRest2 = ParseCmdIsF(p)
+    If ParseCmdIsRest2 <> 0 Then Exit Function
+    ParseCmdIsRest2 = ParseCmdIsRest3(p)
+End Function
+
+Function ParseCmdIsRest3(p As *Parser) As Long
+    ParseCmdIsRest3 = ParseCmdIsG(p)
+    If ParseCmdIsRest3 <> 0 Then Exit Function
+    ParseCmdIsRest3 = ParseCmdIsH(p)
+    If ParseCmdIsRest3 <> 0 Then Exit Function
+    ParseCmdIsRest3 = ParseCmdIsRest4(p)
+End Function
+
+Function ParseCmdIsRest4(p As *Parser) As Long
+    ParseCmdIsRest4 = ParseCmdIsI(p)
+    If ParseCmdIsRest4 <> 0 Then Exit Function
+    ParseCmdIsRest4 = ParseCmdIsJ(p)
+    If ParseCmdIsRest4 <> 0 Then Exit Function
+    ParseCmdIsRest4 = ParseCmdIsK(p)
+End Function
+
+Function ParseCmdStop(p As *Parser, srcLn As Long) As Long
+    ParseCmdStop = 1
+    If ParseTokKind(p) = TK_EOF Then Exit Function
+    If ParseTokLine(p) <> srcLn Then Exit Function
+    ParseCmdStop = ParseCmdIsKw(p)
+End Function
+
+Function ParseCmdComma(p As *Parser, nArgs As Long) As Long
+    ParseCmdComma = 1
+    If nArgs = 0 Then Exit Function
+    ParseCmdComma = 0
+    If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    ParseCmdComma = 1
+End Function
+
+Function ParseOneCmdArg(p As *Parser, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    Dim e As Long
+    e = ParseExpr(p)
+    ParseOneCmdArg = 0
+    If e < 0 Then Exit Function
+    If ParseLinkArg(p->ast, arg0, nPrev, nArgs, e) = 0 Then Exit Function
+    ParseOneCmdArg = 1
+End Function
+
+Function ParseCmdArgsLoop(p As *Parser, srcLn As Long, maxN As Long, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    ParseCmdArgsLoop = 1
+    If nArgs >= maxN Then Exit Function
+    If ParseCmdStop(p, srcLn) <> 0 Then Exit Function
+    If ParseCmdComma(p, nArgs) = 0 Then Exit Function
+    ParseCmdArgsLoop = ParseOneCmdArg(p, arg0, nPrev, nArgs)
+    If ParseCmdArgsLoop = 0 Then Exit Function
+    ParseCmdArgsLoop = ParseCmdArgsLoop(p, srcLn, maxN, arg0, nPrev, nArgs)
+End Function
+
+Function ParseCmdGather(p As *Parser, srcLn As Long, maxN As Long) As Long
+    ParseCmdReset()
+    ParseCmdGather = ParseCmdArgsLoop(p, srcLn, maxN, g_cmdArg0, g_cmdPrev, g_cmdN)
+End Function
+
+Function ParseNeed(p As *Parser, minN As Long) As Long
+    ParseNeed = 1
+    If g_cmdN >= minN Then Exit Function
+    ParseFail(p, "too few arguments")
+    ParseNeed = 0
+End Function
+
+Function ParsePadCls(ast As *Ast, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    Dim e As Long
+    e = ParseMakeNum(ast, 1)
+    ParsePadCls = 0
+    If e < 0 Then Exit Function
+    ParsePadCls = ParseLinkArg(ast, arg0, nPrev, nArgs, e)
+End Function
+
+Function ParseClsPad(p As *Parser) As Long
+    ParseClsPad = 1
+    If g_cmdN <> 0 Then Exit Function
+    ParseClsPad = ParsePadCls(p->ast, g_cmdArg0, g_cmdPrev, g_cmdN)
+End Function
+
+Function ParseClsBody(p As *Parser) As Long
+    Dim srcLn As Long
+    srcLn = ParseTokLine(p)
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(g_cmdFn), "BasicCls")
+    ParseClsBody = -1
+    If ParseCmdGather(p, srcLn, 1) = 0 Then Exit Function
+    If ParseClsPad(p) = 0 Then Exit Function
+    ParseClsBody = ParseCallFn(p)
+End Function
+
+Function ParseCmdCls(p As *Parser) As Long
+    ParseCmdCls = -2
+    If ParseCmdKw(p, "cls") = 0 Then Exit Function
+    ParseCmdCls = ParseClsBody(p)
+End Function
+
+Function ParseCmdBeep(p As *Parser) As Long
+    ParseCmdBeep = -2
+    If ParseCmdKw(p, "beep") = 0 Then Exit Function
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(g_cmdFn), "BasicBeep")
+    ParseCmdReset()
+    ParseCmdBeep = ParseCallFn(p)
+End Function
+
+Function ParseCmdDelete(p As *Parser) As Long
+    ParseCmdDelete = -2
+    If ParseCmdKw(p, "delete") = 0 Then Exit Function
+    ParseCmdDelete = ParseDeleteStmt(p)
+End Function
+
+Function ParseOneBody(p As *Parser, lit As *Byte, minN As Long) As Long
+    Dim srcLn As Long
+    srcLn = ParseTokLine(p)
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(g_cmdFn), lit)
+    ParseOneBody = -1
+    If ParseCmdGather(p, srcLn, 1) = 0 Then Exit Function
+    If ParseNeed(p, minN) = 0 Then Exit Function
+    ParseOneBody = ParseCallFn(p)
+End Function
+
+Function ParseCmdDelWnd(p As *Parser) As Long
+    ParseCmdDelWnd = -2
+    If ParseCmdKw(p, "delwnd") = 0 Then Exit Function
+    ParseCmdDelWnd = ParseOneBody(p, "BasicDelWnd", 1)
+End Function
+
+Function ParseCmdChDir(p As *Parser) As Long
+    ParseCmdChDir = -2
+    If ParseCmdKw(p, "chdir") = 0 Then Exit Function
+    ParseCmdChDir = ParseOneBody(p, "BasicChDir", 1)
+End Function
+
+Function ParseCmdMkDir(p As *Parser) As Long
+    ParseCmdMkDir = -2
+    If ParseCmdKw(p, "mkdir") = 0 Then Exit Function
+    ParseCmdMkDir = ParseOneBody(p, "BasicMkDir", 1)
+End Function
+
+Function ParseCmdKill(p As *Parser) As Long
+    ParseCmdKill = -2
+    If ParseCmdKw(p, "kill") = 0 Then Exit Function
+    ParseCmdKill = ParseOneBody(p, "BasicKill", 1)
+End Function
+
+Function ParseExecPad(p As *Parser) As Long
+    ParseExecPad = 0
+    If ParseNeed(p, 1) = 0 Then Exit Function
+    ParseExecPad = 1
+    If g_cmdN >= 2 Then Exit Function
+    ParseExecPad = ParsePadEmpty(p->ast, g_cmdArg0, g_cmdPrev, g_cmdN)
+End Function
+
+Function ParseExecBody(p As *Parser) As Long
+    Dim srcLn As Long
+    srcLn = ParseTokLine(p)
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(g_cmdFn), "BasicExec")
+    ParseExecBody = -1
+    If ParseCmdGather(p, srcLn, 2) = 0 Then Exit Function
+    If ParseExecPad(p) = 0 Then Exit Function
+    ParseExecBody = ParseCallFn(p)
+End Function
+
+Function ParseCmdExec(p As *Parser) As Long
+    ParseCmdExec = -2
+    If ParseCmdKw(p, "exec") = 0 Then Exit Function
+    ParseCmdExec = ParseExecBody(p)
+End Function
+
+Function ParseMsgPad(p As *Parser) As Long
+    ParseMsgPad = 0
+    If ParseNeed(p, 2) = 0 Then Exit Function
+    If g_cmdN = 2 Then
+        If ParsePadEmpty(p->ast, g_cmdArg0, g_cmdPrev, g_cmdN) = 0 Then Exit Function
+    End If
+    ParseMsgPad = ParsePadNum(p->ast, g_cmdArg0, g_cmdPrev, g_cmdN, 4)
+End Function
+
+Function ParseMsgAns(p As *Parser, srcLn As Long) As Long
+    ParseMsgAns = -2
+    If ParseCmdStop(p, srcLn) <> 0 Then Exit Function
+    If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    ParseMsgAns = ParseExpr(p)
+End Function
+
+Function ParseMsgFinish(p As *Parser, ans As Long) As Long
+    Dim callN As Long
+    callN = ParseCallFn(p)
+    ParseMsgFinish = callN
+    If ans < 0 Then Exit Function
+    If callN < 0 Then Exit Function
+    ParseMsgFinish = ParseMakeAssign(p->ast, ans, callN)
+End Function
+
+Function ParseMsgRest(p As *Parser, srcLn As Long) As Long
+    Dim ans As Long
+    ParseMsgRest = -1
+    If ParseCmdGather(p, srcLn, 4) = 0 Then Exit Function
+    If ParseMsgPad(p) = 0 Then Exit Function
+    ans = ParseMsgAns(p, srcLn)
+    If ans = -1 Then Exit Function
+    ParseMsgRest = ParseMsgFinish(p, ans)
+End Function
+
+Function ParseMsgBoxBody(p As *Parser) As Long
+    Dim srcLn As Long
+    srcLn = ParseTokLine(p)
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(g_cmdFn), "BasicMsgBox")
+    ParseMsgBoxBody = ParseMsgRest(p, srcLn)
+End Function
+
+Function ParseCmdMsgBox(p As *Parser) As Long
+    ParseCmdMsgBox = -2
+    If ParseCmdKw(p, "msgbox") = 0 Then Exit Function
+    ParseCmdMsgBox = ParseMsgBoxBody(p)
+End Function
+
+Function ParseWinPad(p As *Parser) As Long
+    ParseWinPad = 0
+    If ParseNeed(p, 8) = 0 Then Exit Function
+    If g_cmdN = 8 Then
+        If ParsePadEmpty(p->ast, g_cmdArg0, g_cmdPrev, g_cmdN) = 0 Then Exit Function
+    End If
+    ParseWinPad = ParsePadNum(p->ast, g_cmdArg0, g_cmdPrev, g_cmdN, 12)
+End Function
+
+Function ParseWinBody(p As *Parser) As Long
+    Dim srcLn As Long
+    srcLn = ParseTokLine(p)
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(g_cmdFn), "BasicWindow")
+    ParseWinBody = -1
+    If ParseCmdGather(p, srcLn, 12) = 0 Then Exit Function
+    If ParseWinPad(p) = 0 Then Exit Function
+    ParseWinBody = ParseCallFn(p)
+End Function
+
+Function ParseCmdWindow(p As *Parser) As Long
+    ParseCmdWindow = -2
+    If ParseCmdKw(p, "window") = 0 Then Exit Function
+    ParseCmdWindow = ParseWinBody(p)
+End Function
+
+Function ParseStmtKwCmd(p As *Parser) As Long
+    ParseStmtKwCmd = ParseCmdDelete(p)
+    If ParseStmtKwCmd <> -2 Then Exit Function
+    ParseStmtKwCmd = ParseCmdBeep(p)
+    If ParseStmtKwCmd <> -2 Then Exit Function
+    ParseStmtKwCmd = ParseCmdCls(p)
+    If ParseStmtKwCmd <> -2 Then Exit Function
+    ParseStmtKwCmd = ParseStmtKwCmdB(p)
+End Function
+
+Function ParseStmtKwCmdB(p As *Parser) As Long
+    ParseStmtKwCmdB = ParseCmdMsgBox(p)
+    If ParseStmtKwCmdB <> -2 Then Exit Function
+    ParseStmtKwCmdB = ParseCmdDelWnd(p)
+    If ParseStmtKwCmdB <> -2 Then Exit Function
+    ParseStmtKwCmdB = ParseCmdWindow(p)
+    If ParseStmtKwCmdB <> -2 Then Exit Function
+    ParseStmtKwCmdB = ParseStmtKwCmdC(p)
+End Function
+
+Function ParseStmtKwCmdC(p As *Parser) As Long
+    ParseStmtKwCmdC = ParseCmdChDir(p)
+    If ParseStmtKwCmdC <> -2 Then Exit Function
+    ParseStmtKwCmdC = ParseCmdMkDir(p)
+    If ParseStmtKwCmdC <> -2 Then Exit Function
+    ParseStmtKwCmdC = ParseCmdKill(p)
+    If ParseStmtKwCmdC <> -2 Then Exit Function
+    ParseStmtKwCmdC = ParseCmdExec(p)
+End Function

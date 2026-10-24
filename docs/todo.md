@@ -31,14 +31,14 @@
 
 ### P2 — OOP・メディア・規模
 
-- **`New` / `Delete` 演算子**、**`Super.*`**、メンバ Class の自動 ctor/dtor（`Sub ~ClassName` は済）
+- **`Super.*`**、メンバ Class の自動 ctor/dtor（`New` / `Delete` と `Sub ~ClassName` は済）
 - **厳密 `Protected` / `Private`**（受理のみ。Public と同等）
 - **`ReDim`**, **`Const` マクロ関数**, **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術（64bit ポインタは済）
 - **`Single` IEEE 演算**（格納・変換中心。汎用 SSE は未。`Double` / `Math.abp` は 64bit / `-actba32` とも済）
 - **`Double` 配列要素・UDT フィールド @ `-actba32`** — スカラーの演算・比較・仮引数・戻り値は済。要素とフィールドのロード／ストアは `OP_LOAD_QWORD` / `OP_STORE_QWORD` のまま（32bit では 4 バイト）
 - **符号無し演算**の AB 4.20 ルール完全化
-- **BASIC 命令**: `Window` / `MsgBox` / `Inkey$` 等（API 代替で足りるなら Include のみ）
+- **BASIC 命令の残り**: `Oct$` / `ZeroString` 等（`MsgBox` / `Window` / `Cls` / `Date$` / `ChDir` 等は `BasicCmd.abp`。`Inkey$` / `Input$` は `#n88basic` のみ）
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
 - **Win32 `api_*.sbp` 増分**: 需要に応じ `Declare` / idx 追加
@@ -57,7 +57,7 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `New` / `Delete` | `New [num] Class[(params)]` / `Delete pObj`（4.20）。`Dim As Class(args)` で ctor は呼べる。演算子は未 |
+| `New` / `Delete` | 済。`New [num] Class[(params)]` / `Delete pObj`。塊先頭 8 バイトが要素数 |
 | `Super.Method` | スーパークラス ctor/dtor 呼び出し（4.20 Class 章）。`Inherits` / `Virtual` は COM/vtable 向けに部分対応済 |
 | 厳密な `Protected` / `Private` | 受理するが Public と同等 |
 | メンバ Class の自動 ctor/dtor | 親 Class 内のメンバ Class 生成・破棄（4.20） |
@@ -96,11 +96,8 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Window` / `DelWnd` | `basic\prompt.sbp`（4.20）。Win32 API で代替 |
-| `MsgBox` / `Cls` / `Beep` | BASIC 命令（4.20）。`MessageBoxA` 等で代替 |
-| `Inkey$` / `Input$(n)` | 4.20 対話入出力 |
-| `ChDir` / `Exec` / `Kill` / `MkDir` | 4.20。`CreateProcessA` 等で代替可 |
-| `Date$` / `Time$` | 4.20 |
+| `Inkey$` / `Input$(n)` | 済（`#n88basic` のみ。窓の `WM_KEYDOWN`） |
+| `Window` / `MsgBox` / `Cls` / `Beep` / `Date$` / `Time$` / `ChDir` / `Exec` / `Kill` / `MkDir` | 済（`BasicCmd.abp`。`Cls` はコンソール） |
 | Project Editor / RAD | MDI・`.pj` のプロジェクトウィンドウ・コンパイル切替は済（[build.md §5](./build.md#5-projecteditor)）。4.20 のウィンドウ RAD・`MainWnd.sbp` 雛形の全面再現は未 |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
