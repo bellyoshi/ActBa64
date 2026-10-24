@@ -26,7 +26,7 @@
 
 ### P1 — 言語・相互運用
 
-- **D3D11**: `dx_SetProjection` / `dx_SetCamera` 相当 — `dxxform` 以上のカメラ・射影の共通化
+（当面なし。次は P2）
 
 ### P2 — OOP・メディア・規模
 
@@ -79,12 +79,6 @@
 | `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |
 | `CDbl` / `CInt` / `CSng` 等 | 4.20 変換関数。`As` キャストは可 |
 
-## 文字列・メモリ・ファイル
-
-| 項目 | メモ（AB 4.20 参照） |
-|---|---|
-| `realloc` | 4.20 C ヒープ。未 |
-
 ## GUI・Win32・マルチメディア
 
 | 項目 | メモ（AB 4.20 参照） |
@@ -98,7 +92,7 @@
 
 | 4.20（D3D9 系） | ActBa64 | メモ |
 |---|---|---|
-| `dx_SetProjection` / `dx_SetCamera` / `dx_SetCullMode` | 未（サンプル側に個別実装あり） | カメラ・射影の共通化は P1 |
+| `dx_SetCullMode` | 未 | カリング |
 | `dx_SetDefaultLight` / `dx_SetLightOff` | 未 | ライト |
 | `CImage2D` / `CMeshModel` / `CRectPolygon` | 未 | 高レベル描画 |
 | `CInputKeyboard` / `CInputMouse` | 未 | `dx_input.sbp`（DirectInput） |

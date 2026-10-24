@@ -1,0 +1,244 @@
+' dx_camera.sbp - dx_SetProjection / dx_SetCamera
+' 行列は D3DX の行優先（D3DMATRIX）。aspect は幅/高さ。
+' 計算は Double。結果の 16 個の Single が g_dxProj / g_dxView。
+
+Type D3DVECTOR
+	x As Single
+	y As Single
+	z As Single
+End Type
+
+Dim D3DX_PI As Double
+Dim g_dxProj[15] As Single
+Dim g_dxView[15] As Single
+Dim g_dxEx As Double
+Dim g_dxEy As Double
+Dim g_dxEz As Double
+Dim g_dxAx As Double
+Dim g_dxAy As Double
+Dim g_dxAz As Double
+Dim g_dxUx As Double
+Dim g_dxUy As Double
+Dim g_dxUz As Double
+Dim g_dxXx As Double
+Dim g_dxXy As Double
+Dim g_dxXz As Double
+Dim g_dxYx As Double
+Dim g_dxYy As Double
+Dim g_dxYz As Double
+Dim g_dxZx As Double
+Dim g_dxZy As Double
+Dim g_dxZz As Double
+
+Sub DxZero16(p As BytePtr)
+	FillMemory(p, 64, 0)
+End Sub
+
+Sub DxPutM(which As Long, i As Long, v As Double)
+	If which = 0 Then g_dxProj[i] = v
+	If which <> 0 Then g_dxView[i] = v
+End Sub
+
+Sub DxIdentOne(which As Long)
+	If which = 0 Then DxZero16(VarPtr(g_dxProj[0]))
+	If which <> 0 Then DxZero16(VarPtr(g_dxView[0]))
+	DxPutM(which, 0, 1)
+	DxPutM(which, 5, 1)
+	DxPutM(which, 10, 1)
+	DxPutM(which, 15, 1)
+End Sub
+
+Function DxProjYs(fov As Double) As Double
+	Dim h As Double
+	h = fov / 2
+	DxProjYs = 0
+	If Sin(h) = 0 Then Exit Function
+	DxProjYs = Cos(h) / Sin(h)
+End Function
+
+Function DxProjXs(ys As Double, asp As Double) As Double
+	DxProjXs = ys
+	If asp <> 0 Then DxProjXs = ys / asp
+End Function
+
+Function DxProjM33(zn As Double, zf As Double) As Double
+	Dim d As Double
+	d = zf - zn
+	DxProjM33 = 0
+	If d = 0 Then Exit Function
+	DxProjM33 = zf / d
+End Function
+
+Function DxProjM43(zn As Double, zf As Double) As Double
+	Dim d As Double
+	d = zf - zn
+	DxProjM43 = 0
+	If d = 0 Then Exit Function
+	DxProjM43 = 0 - (zn * zf / d)
+End Function
+
+Sub DxWriteProj(xs As Double, ys As Double, m33 As Double, m43 As Double)
+	DxZero16(VarPtr(g_dxProj[0]))
+	DxPutM(0, 0, xs)
+	DxPutM(0, 5, ys)
+	DxPutM(0, 10, m33)
+	DxPutM(0, 11, 1)
+	DxPutM(0, 14, m43)
+End Sub
+
+Sub DxApplyProj(fov As Double, asp As Double, zn As Double, zf As Double)
+	Dim ys As Double
+	ys = DxProjYs(fov)
+	DxWriteProj(DxProjXs(ys, asp), ys, DxProjM33(zn, zf), DxProjM43(zn, zf))
+End Sub
+
+Sub dx_SetProjection(angle As Single, aspect As Single, nearclip As Single, backclip As Single)
+	DxApplyProj(angle, aspect, nearclip, backclip)
+End Sub
+
+Function DxWiden(s As Single) As Double
+	Dim d As Double
+	d = s
+	DxWiden = d
+End Function
+
+Function DxVecX(p As *D3DVECTOR) As Double
+	Dim s As Single
+	s = 0
+	If p <> 0 Then s = GetSingle(VarPtr(p->x))
+	DxVecX = DxWiden(s)
+End Function
+
+Function DxVecY(p As *D3DVECTOR) As Double
+	Dim s As Single
+	s = 0
+	If p <> 0 Then s = GetSingle(VarPtr(p->y))
+	DxVecY = DxWiden(s)
+End Function
+
+Function DxVecZ(p As *D3DVECTOR) As Double
+	Dim s As Single
+	s = 0
+	If p <> 0 Then s = GetSingle(VarPtr(p->z))
+	DxVecZ = DxWiden(s)
+End Function
+
+Sub DxCamVec(p As *D3DVECTOR, ByRef x As Double, ByRef y As Double, ByRef z As Double)
+	x = DxVecX(p)
+	y = DxVecY(p)
+	z = DxVecZ(p)
+End Sub
+
+Function DxCamOk(eye As *D3DVECTOR, at As *D3DVECTOR, up As *D3DVECTOR) As Long
+	DxCamOk = 0
+	If eye = 0 Then Exit Function
+	If at = 0 Then Exit Function
+	If up = 0 Then Exit Function
+	DxCamOk = 1
+End Function
+
+Function DxLen3(x As Double, y As Double, z As Double) As Double
+	DxLen3 = Sqr(x * x + y * y + z * z)
+End Function
+
+Sub DxNorm3(ByRef x As Double, ByRef y As Double, ByRef z As Double)
+	Dim n As Double
+	n = DxLen3(x, y, z)
+	If n = 0 Then Exit Sub
+	x = x / n
+	y = y / n
+	z = z / n
+End Sub
+
+Sub DxCross(ax As Double, ay As Double, az As Double, bx As Double, by As Double, bz As Double, ByRef ox As Double, ByRef oy As Double, ByRef oz As Double)
+	ox = ay * bz - az * by
+	oy = az * bx - ax * bz
+	oz = ax * by - ay * bx
+End Sub
+
+Function DxDot3(ax As Double, ay As Double, az As Double, bx As Double, by As Double, bz As Double) As Double
+	DxDot3 = ax * bx + ay * by + az * bz
+End Function
+
+Sub DxSetZ(ex As Double, ey As Double, ez As Double, ax As Double, ay As Double, az As Double)
+	g_dxZx = ax - ex
+	g_dxZy = ay - ey
+	g_dxZz = az - ez
+	DxNorm3(g_dxZx, g_dxZy, g_dxZz)
+End Sub
+
+Sub DxSetX(ux As Double, uy As Double, uz As Double)
+	DxCross(ux, uy, uz, g_dxZx, g_dxZy, g_dxZz, g_dxXx, g_dxXy, g_dxXz)
+	DxNorm3(g_dxXx, g_dxXy, g_dxXz)
+End Sub
+
+Sub DxSetY()
+	DxCross(g_dxZx, g_dxZy, g_dxZz, g_dxXx, g_dxXy, g_dxXz, g_dxYx, g_dxYy, g_dxYz)
+End Sub
+
+Sub DxViewRow0()
+	DxPutM(1, 0, g_dxXx)
+	DxPutM(1, 1, g_dxYx)
+	DxPutM(1, 2, g_dxZx)
+	DxPutM(1, 3, 0)
+End Sub
+
+Sub DxViewRow1()
+	DxPutM(1, 4, g_dxXy)
+	DxPutM(1, 5, g_dxYy)
+	DxPutM(1, 6, g_dxZy)
+	DxPutM(1, 7, 0)
+End Sub
+
+Sub DxViewRow2()
+	DxPutM(1, 8, g_dxXz)
+	DxPutM(1, 9, g_dxYz)
+	DxPutM(1, 10, g_dxZz)
+	DxPutM(1, 11, 0)
+End Sub
+
+Function DxViewTx(ex As Double, ey As Double, ez As Double) As Double
+	DxViewTx = 0 - DxDot3(g_dxXx, g_dxXy, g_dxXz, ex, ey, ez)
+End Function
+
+Function DxViewTy(ex As Double, ey As Double, ez As Double) As Double
+	DxViewTy = 0 - DxDot3(g_dxYx, g_dxYy, g_dxYz, ex, ey, ez)
+End Function
+
+Function DxViewTz(ex As Double, ey As Double, ez As Double) As Double
+	DxViewTz = 0 - DxDot3(g_dxZx, g_dxZy, g_dxZz, ex, ey, ez)
+End Function
+
+Sub DxViewRow3(ex As Double, ey As Double, ez As Double)
+	DxPutM(1, 12, DxViewTx(ex, ey, ez))
+	DxPutM(1, 13, DxViewTy(ex, ey, ez))
+	DxPutM(1, 14, DxViewTz(ex, ey, ez))
+	DxPutM(1, 15, 1)
+End Sub
+
+Sub DxWriteView(ex As Double, ey As Double, ez As Double)
+	DxZero16(VarPtr(g_dxView[0]))
+	DxViewRow0()
+	DxViewRow1()
+	DxViewRow2()
+	DxViewRow3(ex, ey, ez)
+End Sub
+
+Sub DxBuildAxes(eye As *D3DVECTOR, at As *D3DVECTOR, up As *D3DVECTOR)
+	DxCamVec(eye, g_dxEx, g_dxEy, g_dxEz)
+	DxCamVec(at, g_dxAx, g_dxAy, g_dxAz)
+	DxCamVec(up, g_dxUx, g_dxUy, g_dxUz)
+	DxSetZ(g_dxEx, g_dxEy, g_dxEz, g_dxAx, g_dxAy, g_dxAz)
+	DxSetX(g_dxUx, g_dxUy, g_dxUz)
+	DxSetY()
+End Sub
+
+Sub dx_SetCamera(pVectorEye As *D3DVECTOR, pVectorAt As *D3DVECTOR, pVectorUp As *D3DVECTOR)
+	If DxCamOk(pVectorEye, pVectorAt, pVectorUp) = 0 Then Exit Sub
+	DxBuildAxes(pVectorEye, pVectorAt, pVectorUp)
+	DxWriteView(g_dxEx, g_dxEy, g_dxEz)
+End Sub
+
+D3DX_PI = MathPi()
+DxIdentOne(0)
+DxIdentOne(1)
