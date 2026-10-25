@@ -1,7 +1,58 @@
 ' ParserDeclare - Declare と InsertMenu
 
-' Declare Function|Sub Name Lib "dll" [Alias "api"] (params) [As Type]
+' Declare Function|Sub Name [cdecl|stdcall] Lib "dll" [Alias "api"] (params) [As Type]
+' x64 では cdecl と stdcall の呼び出し側は同じなので、語は読み飛ばす。
 ' 戻り値 true : 正常終了  false : エラーあり
+Function ParseDeclareIsKw(p As *Parser, kw As *Byte) As Long
+    ParseDeclareIsKw = 0
+    If ParseIdentIs(p, kw) = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseDeclareIsKw = 1
+End Function
+
+Function ParseDeclareNeedKw(p As *Parser, kw As *Byte) As boolean
+    ParseDeclareNeedKw = false
+    If ParseDeclareIsKw(p, kw) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    ParseDeclareNeedKw = true
+End Function
+
+Function ParseDeclareConv(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseDeclareConv = 0
+    lstrcpy(VarPtr(kw), "cdecl")
+    If ParseDeclareIsKw(p, VarPtr(kw)) <> 0 Then
+        ParseDeclareConv = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(kw), "stdcall")
+    ParseDeclareIsKw(p, VarPtr(kw))
+End Function
+
+Function ParseDeclareAlias(p As *Parser, name As *Byte, apiName As *Byte) As boolean
+    Dim kw(KW_LEN - 1) As Byte
+    ParseDeclareAlias = false
+    lstrcpy(VarPtr(kw), "alias")
+    If ParseDeclareIsKw(p, VarPtr(kw)) <> 0 Then
+        If Not ParseStringArg(p, apiName) Then Exit Function
+    Else
+        lstrcpy(apiName, name)
+    End If
+    ParseDeclareAlias = true
+End Function
+
+Function ParseDeclareLib(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte) As boolean
+    Dim kw(KW_LEN - 1) As Byte
+    ParseDeclareLib = false
+    ParseDeclareConv(p)
+    lstrcpy(VarPtr(kw), "lib")
+    If Not ParseDeclareNeedKw(p, VarPtr(kw)) Then Exit Function
+    If Not ParseStringArg(p, libName) Then Exit Function
+    ParseDeclareLib = ParseDeclareAlias(p, name, apiName)
+End Function
+
 Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte, ByRef isSub As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
 
@@ -21,20 +72,7 @@ Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName 
         End If
     End If
     If Not ParseCopyIdent(p, name) Then Exit Function
-    lstrcpy(VarPtr(kw), "lib")
-    If ParseIdentIs(p, VarPtr(kw)) = 0 Then
-        p->err = 1
-        Exit Function
-    End If
-    p->pos = p->pos + 1
-    If Not ParseStringArg(p, libName) Then Exit Function
-    lstrcpy(VarPtr(kw), "alias")
-    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
-        p->pos = p->pos + 1
-        If Not ParseStringArg(p, apiName) Then Exit Function
-    Else
-        lstrcpy(apiName, name)
-    End If
+    If Not ParseDeclareLib(p, name, libName, apiName) Then Exit Function
     If Not ParseExpect(p, TK_LPAREN) Then Exit Function
     ParseDeclareHdr = true
 End Function

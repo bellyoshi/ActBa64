@@ -1,0 +1,340 @@
+' AstLowerStrict - #strict の暗黙変換警告
+' VoidPtr 仮引数は extra=TY_LONG のまま、right=LOW_PTI_VOID
+
+Const LOW_PTI_VOID = -2
+
+Function LowStrictTyName$(ty As Long) As String
+    LowStrictTyName$ = "Long"
+    If ty = TY_BYTE Then LowStrictTyName$ = "Byte"
+    If ty = TY_STRING Then LowStrictTyName$ = "String"
+    If ty = TY_PTR_BYTE Then LowStrictTyName$ = "VoidPtr"
+End Function
+
+Function LowStrictFnIs(ctx As *LowerCtx, stmt As Long, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim nm(SYM_NAME_LEN - 1) As Byte
+    ast = ctx->ast
+    nodes = ast->nodes
+    If (nodes[stmt].kind <> AST_FUNC) Or ((nodes[stmt].num And AST_FUNC_SUB) <> 0) Then Exit Function
+    AstCopyStr(ast, stmt, VarPtr(nm))
+    LowStrictFnIs = LowNameEqExact(VarPtr(nm), name)
+End Function
+
+Function LowStrictFnScan(ctx As *LowerCtx, nodes As *AstNode, stmt As Long, name As *Byte) As Long
+    LowStrictFnScan = -1
+    While stmt >= 0
+        If LowStrictFnIs(ctx, stmt, name) <> 0 Then
+            LowStrictFnScan = nodes[stmt].extra
+            Exit Function
+        End If
+        stmt = nodes[stmt].nxt
+    Wend
+End Function
+
+Function LowStrictFnExtra(ctx As *LowerCtx, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim stmt As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    stmt = nodes[ast->root].left
+    LowStrictFnExtra = LowStrictFnScan(ctx, nodes, stmt, name)
+End Function
+
+Function LowStrictPick(ex As Long) As Long
+    LowStrictPick = TY_LONG
+    If ex < 0 Then Exit Function
+    If ex = TY_BYTE Or ex = TY_STRING Or ex = TY_PTR_BYTE Then LowStrictPick = ex
+End Function
+
+Function LowStrictMethTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowStrictMethTi = LowRecvClassTi(ctx, nodes[idx].right)
+End Function
+
+Sub LowStrictMangle(ctx As *LowerCtx, idx As Long, ti As Long, dst As *Byte)
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim names As *Byte
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ast = ctx->ast
+    types = ast->types
+    names = types->typeNames
+    AstCopyStr(ast, idx, VarPtr(name))
+    LowMangleClass(VarPtr(names[ti * TYNAME_LEN]), VarPtr(name), dst)
+End Sub
+
+Function LowStrictMethName(ctx As *LowerCtx, idx As Long, dst As *Byte) As Long
+    Dim ti As Long
+    ti = LowStrictMethTi(ctx, idx)
+    LowStrictMethName = 0
+    If ti < 0 Then Exit Function
+    LowStrictMangle(ctx, idx, ti, dst)
+    LowStrictMethName = 1
+End Function
+
+Function LowStrictMethEx(ctx As *LowerCtx, idx As Long) As Long
+    Dim buf(MANGLED_LEN - 1) As Byte
+    LowStrictMethEx = -1
+    If LowStrictMethName(ctx, idx, VarPtr(buf)) = 0 Then Exit Function
+    LowStrictMethEx = LowStrictFnExtra(ctx, VarPtr(buf))
+End Function
+
+Function LowStrictPlainEx(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    LowStrictPlainEx = LowStrictFnExtra(ctx, VarPtr(name))
+End Function
+
+Function LowStrictNamedEx(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].extra = -3 Then
+        LowStrictNamedEx = LowStrictMethEx(ctx, idx)
+        Exit Function
+    End If
+    LowStrictNamedEx = LowStrictPlainEx(ctx, idx)
+End Function
+
+Function LowStrictCallRet(ctx As *LowerCtx, idx As Long) As Long
+    LowStrictCallRet = LowStrictPick(LowStrictNamedEx(ctx, idx))
+End Function
+
+Function LowStrictLhsByte(ctx As *LowerCtx, idx As Long, lhsTy As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowStrictLhsByte = lhsTy
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, nodes[idx].left, VarPtr(name))
+    If LowStrictFnExtra(ctx, VarPtr(name)) = TY_BYTE Then LowStrictLhsByte = TY_BYTE
+End Function
+
+Sub LowStrictWarnNarrow(ctx As *LowerCtx, idx As Long)
+    Dim msg As String
+    msg = "implicit conversion from Long to Byte may lose data (#strict)"
+    LowerDiagWarn(ctx, idx, msg)
+End Sub
+
+Function LowStrictRhs(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowStrictRhs = -1
+    If nodes[idx].right < 0 Then Exit Function
+    If nodes[nodes[idx].right].kind <> AST_CALL Then Exit Function
+    LowStrictRhs = nodes[idx].right
+End Function
+
+Sub LowStrictCheckVal(ctx As *LowerCtx, idx As Long, lhsTy As Long)
+    Dim useTy As Long
+    Dim rhs As Long
+    If g_compileStrict = 0 Then Exit Sub
+    If LowStrictSkipInclude(ctx, idx) Then Exit Sub
+    rhs = LowStrictRhs(ctx, idx)
+    If rhs < 0 Then Exit Sub
+    useTy = LowStrictLhsByte(ctx, idx, lhsTy)
+    If useTy <> TY_BYTE Then Exit Sub
+    If LowStrictCallRet(ctx, rhs) <> TY_LONG Then Exit Sub
+    LowStrictWarnNarrow(ctx, idx)
+End Sub
+
+Function LowStrictSurfVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+    LowStrictSurfVar = TY_LONG
+    ast = ctx->ast
+    AstCopyStr(ast, idx, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+    If vTy = TY_STRING Or vTy = TY_BYTE Then LowStrictSurfVar = vTy
+End Function
+
+Function LowStrictKind(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    LowStrictKind = -1
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind = AST_CAST Or nodes[idx].kind = AST_NUM Then Exit Function
+    LowStrictKind = nodes[idx].kind
+End Function
+
+Function LowStrictSurfBi(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowStrictSurfBi = -1
+    If nodes[idx].num = BIK_VARPTR Or nodes[idx].num = BIK_STRPTR Then LowStrictSurfBi = TY_PTR_BYTE
+End Function
+
+Function LowStrictSurf(ctx As *LowerCtx, idx As Long) As Long
+    Dim kind As Long
+    kind = LowStrictKind(ctx, idx)
+    LowStrictSurf = -1
+    If kind < 0 Then Exit Function
+    If kind = AST_STRING Then LowStrictSurf = TY_STRING
+    If kind = AST_VAR Then LowStrictSurf = LowStrictSurfVar(ctx, idx)
+    If kind = AST_CALL Then LowStrictSurf = LowStrictCallRet(ctx, idx)
+    If kind = AST_BUILTIN Then LowStrictSurf = LowStrictSurfBi(ctx, idx)
+End Function
+
+Function LowStrictMemEq(name As *Byte) As Long
+    Dim buf(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(buf), "memcpy")
+    If LowIntrinNameEq(name, VarPtr(buf)) <> 0 Then
+        LowStrictMemEq = 1
+        Exit Function
+    End If
+    lstrcpy(VarPtr(buf), "fillmemory")
+    LowStrictMemEq = LowIntrinNameEq(name, VarPtr(buf))
+End Function
+
+Function LowStrictMemName(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    LowStrictMemName = LowStrictMemEq(VarPtr(name))
+End Function
+
+Function LowStrictMemFormal(argIndex As Long, ByRef pti As Long) As Long
+    pti = -1
+    LowStrictMemFormal = TY_LONG
+    If argIndex >= 2 Then Exit Function
+    pti = LOW_PTI_VOID
+End Function
+
+Function LowStrictArgAt(nodes As *AstNode, param As Long, argIndex As Long, ByRef pti As Long) As Long
+    Dim i As Long
+    LowStrictArgAt = -1
+    i = 0
+    While param >= 0
+        If i = argIndex Then
+            pti = nodes[param].right
+            LowStrictArgAt = nodes[param].extra
+            Exit Function
+        End If
+        i = i + 1
+        param = nodes[param].nxt
+    Wend
+End Function
+
+Function LowStrictDeclHit(nodes As *AstNode, stmt As Long) As Long
+    LowStrictDeclHit = 0
+    If nodes[stmt].kind = AST_FUNC Then LowStrictDeclHit = 1
+    If nodes[stmt].kind = AST_DECLARE Then LowStrictDeclHit = 1
+End Function
+
+Function LowStrictFormalOne(ctx As *LowerCtx, nodes As *AstNode, stmt As Long, name As *Byte, argIndex As Long, ByRef pti As Long) As Long
+    Dim nm(SYM_NAME_LEN - 1) As Byte
+    LowStrictFormalOne = -2
+    If LowStrictDeclHit(nodes, stmt) = 0 Then Exit Function
+    AstCopyStr(ctx->ast, stmt, VarPtr(nm))
+    If LowNameEqExact(VarPtr(nm), name) = 0 Then Exit Function
+    LowStrictFormalOne = LowStrictArgAt(nodes, nodes[stmt].left, argIndex, pti)
+End Function
+
+Function LowStrictFormalScan(ctx As *LowerCtx, name As *Byte, argIndex As Long, ByRef pti As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim stmt As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    stmt = nodes[ast->root].left
+    LowStrictFormalScan = -1
+    While stmt >= 0
+        LowStrictFormalScan = LowStrictFormalOne(ctx, nodes, stmt, name, argIndex, pti)
+        If LowStrictFormalScan <> -2 Then Exit Function
+        stmt = nodes[stmt].nxt
+    Wend
+    LowStrictFormalScan = -1
+End Function
+
+Function LowStrictFormal(ctx As *LowerCtx, idx As Long, argIndex As Long, ByRef pti As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    pti = -1
+    If LowStrictMemName(ctx, idx) <> 0 Then
+        LowStrictFormal = LowStrictMemFormal(argIndex, pti)
+        Exit Function
+    End If
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    LowStrictFormal = LowStrictFormalScan(ctx, VarPtr(name), argIndex, pti)
+End Function
+
+Sub LowStrictWarnArg(ctx As *LowerCtx, idx As Long, argNo As Long, fromTy As Long, toTy As Long)
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim msg As String
+    ast = ctx->ast
+    AstCopyStr(ast, idx, VarPtr(name))
+    msg = "implicit conversion of argument " + Str$(argNo) + " of '" + MakeStr(VarPtr(name))
+    msg = msg + "' from " + LowStrictTyName$(fromTy) + " to " + LowStrictTyName$(toTy) + " (#strict)"
+    LowerDiagWarn(ctx, idx, msg)
+End Sub
+
+Sub LowStrictEmitArg(ctx As *LowerCtx, idx As Long, userIndex As Long, surf As Long, pty As Long, pti As Long)
+    If pti = LOW_PTI_VOID And surf = TY_STRING Then
+        LowStrictWarnArg(ctx, idx, userIndex + 1, TY_STRING, TY_PTR_BYTE)
+        Exit Sub
+    End If
+    If pty = TY_LONG And pti <> LOW_PTI_VOID And surf = TY_PTR_BYTE Then
+        LowStrictWarnArg(ctx, idx, userIndex + 1, TY_PTR_BYTE, TY_LONG)
+    End If
+End Sub
+
+Sub LowStrictOneArg(ctx As *LowerCtx, idx As Long, expr As Long, userIndex As Long, meth As Long)
+    Dim surf As Long
+    Dim pty As Long
+    Dim pti As Long
+    Dim slot As Long
+    surf = LowStrictSurf(ctx, expr)
+    If surf < 0 Then Exit Sub
+    slot = userIndex
+    If meth <> 0 Then slot = userIndex + 1
+    pty = LowStrictFormal(ctx, idx, slot, pti)
+    If pty < 0 Then Exit Sub
+    LowStrictEmitArg(ctx, idx, userIndex, surf, pty, pti)
+End Sub
+
+Sub LowStrictArgWalk(ctx As *LowerCtx, idx As Long, meth As Long)
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim arg As Long
+    Dim i As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    arg = nodes[idx].left
+    i = 0
+    While arg >= 0
+        LowStrictOneArg(ctx, idx, nodes[arg].left, i, meth)
+        i = i + 1
+        arg = nodes[arg].nxt
+    Wend
+End Sub
+
+Function LowStrictIsMeth(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].extra = -3 Then LowStrictIsMeth = 1
+End Function
+
+Sub LowStrictCheckArgs(ctx As *LowerCtx, idx As Long)
+    If g_compileStrict = 0 Then Exit Sub
+    If LowStrictSkipInclude(ctx, idx) Then Exit Sub
+    LowStrictArgWalk(ctx, idx, LowStrictIsMeth(ctx, idx))
+End Sub

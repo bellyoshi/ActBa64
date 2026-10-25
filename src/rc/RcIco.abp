@@ -1,0 +1,164 @@
+' RcIco - ICO の画像を取り出す
+
+Function RcNextCap(need As Long) As Long
+    Dim cap As Long
+    cap = g_blobCap
+    If cap < 4096 Then cap = 4096
+    While cap < need
+        cap = cap + cap
+    Wend
+    RcNextCap = cap
+End Function
+
+Function RcBlobGrow(need As Long) As Long
+    Dim p As *Byte
+    If g_blob = 0 Then p = malloc(RcNextCap(need))
+    If g_blob <> 0 Then p = realloc(g_blob, RcNextCap(need))
+    If p = 0 Then Exit Function
+    g_blobCap = RcNextCap(need)
+    g_blob = p
+    RcBlobGrow = 1
+End Function
+
+Function RcEnsure(need As Long) As Long
+    RcEnsure = 1
+    If need <= g_blobCap Then Exit Function
+    RcEnsure = RcBlobGrow(need)
+End Function
+
+Sub RcAppendAt(off As Long, src As *Byte, n As Long)
+    memcpy(RcAt(g_blob, off), src, n)
+    g_blobN = off + n
+End Sub
+
+Function RcAppend(src As *Byte, n As Long) As Long
+    Dim off As Long
+    RcAppend = -1
+    If RcEnsure(g_blobN + n) = 0 Then Exit Function
+    off = g_blobN
+    RcAppendAt(off, src, n)
+    RcAppend = off
+End Function
+
+Function RcLastSep(path As *Byte) As Long
+    Dim i As Long
+    i = 0
+    RcLastSep = -1
+    While path[i] <> 0
+        If path[i] = 92 Or path[i] = 47 Then RcLastSep = i
+        i = i + 1
+    Wend
+End Function
+
+Sub RcDirCopy(path As *Byte, last As Long)
+    Dim i As Long
+    i = 0
+    While i <= last And i < 259
+        g_rcDir(i) = path[i]
+        i = i + 1
+    Wend
+    g_rcDir(i) = 0
+End Sub
+
+Sub RcDirFrom(path As *Byte)
+    RcDirCopy(path, RcLastSep(path))
+End Sub
+
+Sub RcJoin(rel As *Byte, dst As *Byte)
+    If rel[1] = 58 Then lstrcpy(dst, rel)
+    If rel[1] = 58 Then Exit Sub
+    lstrcpy(dst, VarPtr(g_rcDir))
+    lstrcat(dst, rel)
+End Sub
+
+Sub RcKeepMeta(p As *Byte, ent As Long, ix As Long)
+    g_imgW(ix) = RcU8(p, ent)
+    g_imgH(ix) = RcU8(p, ent + 1)
+    g_imgColors(ix) = RcU8(p, ent + 2)
+    g_imgPlanes(ix) = RcU16(p, ent + 4)
+    g_imgBits(ix) = RcU16(p, ent + 6)
+End Sub
+
+Function RcStoreImg(p As *Byte, ent As Long) As Long
+    Dim ix As Long
+    ix = g_nImg
+    RcKeepMeta(p, ent, ix)
+    g_imgLen(ix) = RcU32(p, ent + 8)
+    g_imgAt(ix) = RcAppend(RcAt(p, RcU32(p, ent + 12)), g_imgLen(ix))
+    g_nImg = ix + 1
+    If g_imgAt(ix) >= 0 Then RcStoreImg = 1
+End Function
+
+Function RcImgRange(p As *Byte, n As Long, ent As Long) As Long
+    Dim at As Long
+    Dim ln As Long
+    at = RcU32(p, ent + 12)
+    ln = RcU32(p, ent + 8)
+    If at < 0 Or ln <= 0 Or at + ln > n Then Print "error: bad ico"
+    If at >= 0 And ln > 0 And at + ln <= n Then RcImgRange = 1
+End Function
+
+Function RcTakeImg(p As *Byte, n As Long, i As Long) As Long
+    Dim ent As Long
+    ent = 6 + i * 16
+    If ent + 16 > n Then Print "error: bad ico"
+    If ent + 16 > n Then Exit Function
+    If RcImgRange(p, n, ent) = 0 Then Exit Function
+    RcTakeImg = RcStoreImg(p, ent)
+End Function
+
+Function RcImgCountOk(cnt As Long) As Long
+    RcImgCountOk = 0
+    If cnt <= 0 Or g_nImg + cnt > 16 Then Print "error: bad icon count"
+    If cnt > 0 And g_nImg + cnt <= 16 Then RcImgCountOk = 1
+End Function
+
+Function RcTakeImgs(p As *Byte, n As Long, cnt As Long) As Long
+    Dim i As Long
+    i = 0
+    If RcImgCountOk(cnt) = 0 Then Exit Function
+    While i < cnt
+        If RcTakeImg(p, n, i) = 0 Then Exit Function
+        i = i + 1
+    Wend
+    RcTakeImgs = 1
+End Function
+
+Function RcTakeIco(gi As Long, p As *Byte, n As Long) As Long
+    Dim cnt As Long
+    If n < 6 Then Print "error: bad ico"
+    If n < 6 Then Exit Function
+    If RcU16(p, 2) <> 1 Then Print "error: bad ico"
+    If RcU16(p, 2) <> 1 Then Exit Function
+    cnt = RcU16(p, 4)
+    g_grpCnt(gi) = cnt
+    RcTakeIco = RcTakeImgs(p, n, cnt)
+End Function
+
+Function RcLoadOne(gi As Long) As Long
+    Dim full(511) As Byte
+    Dim p As *Byte
+    Dim n As Long
+    RcJoin(RcIcoSlot(gi), VarPtr(full))
+    p = RcLoad(VarPtr(full), n)
+    If p = 0 Then Print "error: cannot open " + MakeStr(VarPtr(full))
+    If p = 0 Then Exit Function
+    RcLoadOne = RcTakeIco(gi, p, n)
+End Function
+
+Function RcLoadAllGrp() As Long
+    Dim i As Long
+    i = 0
+    While i < g_nGrp
+        If RcLoadOne(i) = 0 Then Exit Function
+        i = i + 1
+    Wend
+    RcLoadAllGrp = 1
+End Function
+
+Function RcLoadIcons(rcPath As *Byte) As Long
+    RcDirFrom(rcPath)
+    If g_nGrp = 0 Then Print "error: no ICON line"
+    If g_nGrp = 0 Then Exit Function
+    RcLoadIcons = RcLoadAllGrp()
+End Function

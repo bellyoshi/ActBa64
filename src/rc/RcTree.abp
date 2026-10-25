@@ -1,0 +1,287 @@
+' RcTree - RT_ICON / RT_GROUP_ICON と ABRS
+
+Function RcAlign4(n As Long) As Long
+    Dim t As Long
+    t = n + 3
+    RcAlign4 = t And (0 - 4)
+End Function
+
+Function RcDirBytes(nId As Long) As Long
+    Dim n As Long
+    n = 16
+    n = n + nId * 8
+    RcDirBytes = n
+End Function
+
+Sub RcPutDirHdr(p As *Byte, off As Long, nId As Long)
+    RcPut16(p, off + 14, nId)
+End Sub
+
+Sub RcPutDirEnt(p As *Byte, off As Long, id As Long, child As Long, isDir As Long)
+    Dim o As Long
+    RcPut32(p, off, id)
+    o = child
+    If isDir <> 0 Then o = o Or &H80000000
+    RcPut32(p, off + 4, o)
+End Sub
+
+Sub RcPlaceOne(i As Long, ByRef o As Long)
+    g_imgDir(i) = o
+    o = o + 24
+    g_imgData(i) = o
+    o = o + 16
+End Sub
+
+Sub RcPlaceImgs(ByRef o As Long)
+    Dim i As Long
+    i = 0
+    While i < g_nImg
+        RcPlaceOne(i, o)
+        i = i + 1
+    Wend
+End Sub
+
+Function RcLayoutHead() As Long
+    Dim o As Long
+    g_iconType = 32
+    o = 32 + RcDirBytes(g_nImg)
+    RcPlaceImgs(o)
+    RcLayoutHead = o
+End Function
+
+Sub RcPlaceGrpOne(i As Long, ByRef o As Long)
+    g_grpDir(i) = o
+    o = o + 24
+    g_grpData(i) = o
+    o = o + 16
+End Sub
+
+Sub RcPlaceGrps(ByRef o As Long)
+    Dim i As Long
+    i = 0
+    While i < g_nGrp
+        RcPlaceGrpOne(i, o)
+        i = i + 1
+    Wend
+End Sub
+
+Function RcLayoutMid(o As Long) As Long
+    g_grpType = o
+    o = o + RcDirBytes(g_nGrp)
+    RcPlaceGrps(o)
+    RcLayoutMid = o
+End Function
+
+Sub RcPlacePay(ByRef o As Long)
+    Dim i As Long
+    i = 0
+    While i < g_nImg
+        g_imgPay(i) = o
+        o = RcAlign4(o + g_imgLen(i))
+        i = i + 1
+    Wend
+End Sub
+
+Function RcGrpBytes(gi As Long) As Long
+    Dim n As Long
+    n = 6
+    n = n + g_grpCnt(gi) * 14
+    RcGrpBytes = n
+End Function
+
+Sub RcPlaceGrpPay(ByRef o As Long)
+    Dim i As Long
+    i = 0
+    While i < g_nGrp
+        g_grpPay(i) = o
+        o = RcAlign4(o + RcGrpBytes(i))
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcLayout()
+    Dim o As Long
+    o = RcLayoutHead()
+    o = RcLayoutMid(o)
+    RcPlacePay(o)
+    RcPlaceGrpPay(o)
+    g_paySize = o
+End Sub
+
+Function RcIdsSorted() As Long
+    Dim i As Long
+    RcIdsSorted = 1
+    i = 1
+    While i < g_nGrp
+        If g_grpId(i) <= g_grpId(i - 1) Then RcIdsSorted = 0
+        i = i + 1
+    Wend
+End Function
+
+Sub RcEmitIconType(buf As *Byte)
+    Dim i As Long
+    RcPutDirHdr(buf, g_iconType, g_nImg)
+    i = 0
+    While i < g_nImg
+        RcPutDirEnt(buf, g_iconType + 16 + i * 8, i + 1, g_imgDir(i), 1)
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcEmitImgNode(buf As *Byte, i As Long)
+    RcPutDirHdr(buf, g_imgDir(i), 1)
+    RcPutDirEnt(buf, g_imgDir(i) + 16, 0, g_imgData(i), 0)
+    RcPut32(buf, g_imgData(i), g_imgPay(i))
+    RcPut32(buf, g_imgData(i) + 4, g_imgLen(i))
+End Sub
+
+Sub RcCopyImg(buf As *Byte, i As Long)
+    memcpy(RcAt(buf, g_imgPay(i)), RcAt(g_blob, g_imgAt(i)), g_imgLen(i))
+End Sub
+
+Sub RcEmitGrpType(buf As *Byte)
+    Dim i As Long
+    RcPutDirHdr(buf, g_grpType, g_nGrp)
+    i = 0
+    While i < g_nGrp
+        RcPutDirEnt(buf, g_grpType + 16 + i * 8, g_grpId(i), g_grpDir(i), 1)
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcEmitGrpEnt(buf As *Byte, off As Long, ix As Long)
+    RcPut8(buf, off, g_imgW(ix))
+    RcPut8(buf, off + 1, g_imgH(ix))
+    RcPut8(buf, off + 2, g_imgColors(ix))
+    RcPut8(buf, off + 3, 0)
+    RcPut16(buf, off + 4, g_imgPlanes(ix))
+    RcPut16(buf, off + 6, g_imgBits(ix))
+    RcPut32(buf, off + 8, g_imgLen(ix))
+    RcPut16(buf, off + 12, ix + 1)
+End Sub
+
+Sub RcEmitGrpHead(buf As *Byte, gi As Long)
+    Dim base As Long
+    base = g_grpPay(gi)
+    RcPut16(buf, base, 0)
+    RcPut16(buf, base + 2, 1)
+    RcPut16(buf, base + 4, g_grpCnt(gi))
+End Sub
+
+Sub RcEmitGrpBody(buf As *Byte, gi As Long)
+    Dim i As Long
+    RcEmitGrpHead(buf, gi)
+    i = 0
+    While i < g_grpCnt(gi)
+        RcEmitGrpEnt(buf, g_grpPay(gi) + 6 + i * 14, g_grpFirst(gi) + i)
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcEmitGrpNode(buf As *Byte, gi As Long)
+    Dim sz As Long
+    sz = RcGrpBytes(gi)
+    RcPutDirHdr(buf, g_grpDir(gi), 1)
+    RcPutDirEnt(buf, g_grpDir(gi) + 16, 0, g_grpData(gi), 0)
+    RcPut32(buf, g_grpData(gi), g_grpPay(gi))
+    RcPut32(buf, g_grpData(gi) + 4, sz)
+End Sub
+
+Sub RcEmitDirs(buf As *Byte)
+    RcPutDirHdr(buf, 0, 2)
+    RcPutDirEnt(buf, 16, 3, g_iconType, 1)
+    RcPutDirEnt(buf, 24, 14, g_grpType, 1)
+    RcEmitIconType(buf)
+    RcEmitGrpType(buf)
+End Sub
+
+Sub RcEmitGrps(buf As *Byte)
+    Dim i As Long
+    i = 0
+    While i < g_nGrp
+        RcEmitGrpNode(buf, i)
+        RcEmitGrpBody(buf, i)
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcEmitImgs(buf As *Byte)
+    Dim i As Long
+    i = 0
+    While i < g_nImg
+        RcEmitImgNode(buf, i)
+        RcCopyImg(buf, i)
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcEmitAll(buf As *Byte)
+    RcEmitDirs(buf)
+    RcEmitImgs(buf)
+    RcEmitGrps(buf)
+End Sub
+
+Function RcHdrBytes() As Long
+    Dim n As Long
+    n = g_nImg + g_nGrp
+    n = n * 4
+    RcHdrBytes = 16 + n
+End Function
+
+Sub RcMagic(buf As *Byte)
+    RcPut8(buf, 0, 65)
+    RcPut8(buf, 1, 66)
+    RcPut8(buf, 2, 82)
+    RcPut8(buf, 3, 83)
+End Sub
+
+Sub RcFillOffs(buf As *Byte)
+    Dim i As Long
+    i = 0
+    While i < g_nImg
+        RcPut32(buf, 16 + i * 4, g_imgData(i))
+        i = i + 1
+    Wend
+    RcFillGrpOffs(buf)
+End Sub
+
+Sub RcFillGrpOffs(buf As *Byte)
+    Dim i As Long
+    i = 0
+    While i < g_nGrp
+        RcPut32(buf, 16 + (g_nImg + i) * 4, g_grpData(i))
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcFillBody(buf As *Byte)
+    RcEmitAll(RcAt(buf, RcHdrBytes()))
+End Sub
+
+Sub RcFill(buf As *Byte)
+    RcMagic(buf)
+    RcPut32(buf, 4, 1)
+    RcPut32(buf, 8, g_paySize)
+    RcPut32(buf, 12, g_nImg + g_nGrp)
+    RcFillOffs(buf)
+    RcFillBody(buf)
+End Sub
+
+Function RcReady() As Long
+    If g_nImg <= 0 Then Print "error: no icon image"
+    If g_nImg <= 0 Then Exit Function
+    If RcIdsSorted() = 0 Then Print "error: ICON ids must increase"
+    If RcIdsSorted() = 0 Then Exit Function
+    RcReady = 1
+End Function
+
+Function RcWriteRes(path As *Byte) As Long
+    Dim buf As *Byte
+    If RcReady() = 0 Then Exit Function
+    RcLayout()
+    buf = calloc(RcHdrBytes() + g_paySize)
+    If buf = 0 Then Print "error: out of memory"
+    If buf = 0 Then Exit Function
+    RcFill(buf)
+    RcWriteRes = RcSave(path, buf, RcHdrBytes() + g_paySize)
+End Function

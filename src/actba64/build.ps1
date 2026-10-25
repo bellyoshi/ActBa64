@@ -263,7 +263,34 @@ if ($SkipStage1) {
     Invoke-Actba64Build -driverStage "stage0" -outStage "stage1"
 }
 
+function Publish-RcExe([string]$driverStage) {
+    $driver = Join-Path (Get-StageDir $driverStage) $ExeName
+    $rcDir = Join-Path $Root "..\rc"
+    $rcPj = Join-Path $rcDir "rc.pj"
+    $rcOut = Join-Path $rcDir "rc.exe"
+    if (-not (Test-Path -LiteralPath $rcPj)) {
+        Write-Error "rc project not found: $rcPj"
+        exit 2
+    }
+    if (Test-Path -LiteralPath $rcOut) {
+        Remove-Item -LiteralPath $rcOut -Force
+    }
+    Write-Host ""
+    Write-Host "=== rc.pj ($driverStage) ==="
+    & $driver $rcPj -o $rcOut
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $rcOut)) {
+        Write-Error "rc.pj build failed exit=$LASTEXITCODE"
+        exit 1
+    }
+    foreach ($stage in $IncludeStages) {
+        $dir = Get-StageDir $stage
+        Ensure-Dir $dir
+        Copy-Item -LiteralPath $rcOut -Destination (Join-Path $dir "rc.exe") -Force
+    }
+}
+
 if ($Stage1Only) {
+    Publish-RcExe "stage1"
     Write-Host ""
     Write-Host "build done (stage1 only)."
     exit 0
@@ -274,6 +301,8 @@ Invoke-Actba64Build -driverStage "stage1" -outStage "stage2"
 if (-not $SkipCompare) {
     Compare-StageExes "stage1" "stage2"
 }
+
+Publish-RcExe "stage2"
 
 Write-Host ""
 Write-Host "build done."

@@ -51,7 +51,7 @@ Print a +_
 | `#console` | `Include\console\console.idx` を自動挿入 |
 | `#n88basic` / `#N88BASIC` / `#prompt` | N88BASIC 互換モード（[§1.6](#16-n88basic-モード)）。`#prompt` は完全別名 |
 | `#USEWINDOW=0\|1` | 0=CUI / 1=GUI。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
-| `#strict` | 変数代入の型不一致を warning（`As` で抑制） |
+| `#strict` | 型の暗黙変換を warning（`As` で抑制）。`Long`→`Byte` はデータ欠落、引数の `String`→`VoidPtr` と `VoidPtr`→`Long` も含む |
 | `#include "path"` / `#include <path>` | ファイル挿入（深さ上限あり）。`"..."` はソース相対（絶対パス可）、`<...>` は `Include\` 配下を検索 |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
@@ -305,11 +305,11 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 
 - `Class` / `End Class`。メンバ変数は `Type` と同様のオフセット配置
 - `Private` / `Public`（未指定は Private）。`Protected` は受理し Public 扱い
-- メソッドは暗黙の第1引数 `Me`（オブジェクトポインタ）。呼び出しは `obj.Method(args)`
+- メソッドは暗黙の第1引数 `This`（オブジェクトポインタ）。呼び出しは `obj.Method(args)`。メソッド内は `This.Method(args)`
 - コンストラクタ `Sub ClassName(...)` → `Dim obj As ClassName(args)` で自動呼出
 - デストラクタ `Sub ~ClassName()` → 局所は手続き末尾、モジュール大域は終了前に呼出
 - ctor/dtor 省略時は空の無引数版を暗黙生成
-- メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=Me`、32bit は stdcall の第1引数）
+- メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=This`、32bit は stdcall の第1引数）
 - `Inherits` / `Virtual` / vtable 呼び出しは **部分対応**（COM / D3D11 向け。本体なし `Virtual Function|Sub` と継承先へのスロットコピー）
 - `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
 - `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。個数を省略したときは 1。コンストラクタ引数は一度だけ評価し、各要素へ同じ値を渡す。確保に失敗したときは 0 を返し、コンストラクタは呼ばない
@@ -445,7 +445,7 @@ ExitProcess(式)
 | `++` / `--` | ○ |
 
 文字列の関係演算は辞書順（`lstrcmpA`）。長さが違い途中まで一致したら短い方が小さい。  
-`As` は例: `&H12345678 As Word` → `&H5678`。`#strict` 時は異なる型の変数代入が warning（`As` キャストで抑制）。
+`As` は例: `&H12345678 As Word` → `&H5678`。`#strict` 時は異なる型の変数代入、`Long` から `Byte` への代入（呼び出し結果を含む）、引数の `String`→`VoidPtr` と `VoidPtr`→`Long` が warning（`As` キャストで抑制）。
 
 ### 5.2 アドレス・サイズ・組込
 
@@ -497,8 +497,8 @@ s(r)
 
 - ソース相対パスのファイル全体を PE `.rsrc` に **RCDATA（型 10）ID=1** として埋め込む
 - 実行時: `FindResourceA(GetModuleHandleA(0), MAKEINTRESOURCE(1), MAKEINTRESOURCE(10))`
-- `.rc` はそのままでは不可（`rc.exe` で `.res` 等へ落としてから指定）。ICON/MENU 型リソースは未
-- `.pj` の `#RESOURCE=0` は当面無視
+- `#resource "file.rc"` は `actba64.exe` の隣にある `rc.exe`（`src/rc/rc.pj`）を起動する。対応するのは `#define 名前 数値` と `ICON` 文だけ。MENU / DIALOG / VERSIONINFO は未
+- `.pj` の `#RESOURCE=` は当面無視
 
 ### 5.3 メモリ
 
@@ -793,7 +793,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 - `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は IEEE Double（64bit と `-actba32`。32bit の配列要素・UDT フィールド転送と、`Print` の Double 変換は未）
 - `GoTo` / `GoSub`
 - ネスト手続き
-- `#resource` の `.rc` 直接コンパイル、ICON/MENU など型付きリソース（ファイル全体の RCDATA 埋め込みは対応）
+- `#resource` の MENU / DIALOG / VERSIONINFO（ICON 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化
 
 ---

@@ -1,0 +1,269 @@
+' AstLowerCFold - Const 右辺の整数式を登録前に畳む
+Dim g_cfoldBad As Long
+
+Function LowCFoldNum(nodes As *AstNode, idx As Long) As Long
+    LowCFoldNum = nodes[idx].num
+    If nodes[idx].extra > 0 Then g_cfoldBad = 1
+    If g_cfoldBad <> 0 Then LowCFoldNum = 0
+End Function
+
+Function LowCFoldVarAt(ctx As *LowerCtx, ci As Long) As Long
+    Dim vals As *Long
+    LowCFoldVarAt = 0
+    If ci < 0 Then g_cfoldBad = 1
+    If g_cfoldBad <> 0 Then Exit Function
+    vals = ctx->constVals
+    LowCFoldVarAt = vals[ci]
+End Function
+
+Function LowCFoldVar(ctx As *LowerCtx, ast As *Ast, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim ci As Long
+    LowCFoldVar = 0
+    AstCopyStr(ast, idx, VarPtr(name))
+    ci = LowFindConst(ctx, VarPtr(name))
+    LowCFoldVar = LowCFoldVarAt(ctx, ci)
+End Function
+
+Function LowCFoldUnaryOp(op As Long, v As Long) As Long
+    LowCFoldUnaryOp = 0
+    If op = UOP_NEG Then LowCFoldUnaryOp = 0 - v
+    If op = UOP_NOT Then LowCFoldUnaryOp = Not v
+    If op <> UOP_NEG And op <> UOP_NOT Then g_cfoldBad = 1
+End Function
+
+Function LowCFoldUnary(ctx As *LowerCtx, nodes As *AstNode, idx As Long) As Long
+    Dim v As Long
+    LowCFoldUnary = 0
+    v = LowCFold(ctx, nodes[idx].left)
+    If g_cfoldBad <> 0 Then Exit Function
+    LowCFoldUnary = LowCFoldUnaryOp(nodes[idx].num, v)
+End Function
+
+Function LowCFoldIf(ctx As *LowerCtx, idx As Long) As Long
+    LowCFoldIf = 0
+    If g_cfoldBad <> 0 Then Exit Function
+    LowCFoldIf = LowCFold(ctx, idx)
+End Function
+
+Function LowCFoldAdd(op As Long, lv As Long, rv As Long) As Long
+    LowCFoldAdd = lv + rv
+    If op = BOP_SUB Then LowCFoldAdd = lv - rv
+    If op = BOP_MUL Then LowCFoldAdd = lv * rv
+End Function
+
+Function LowCFoldIsAdd(op As Long) As Long
+    LowCFoldIsAdd = 0
+    If op = BOP_ADD Or op = BOP_SUB Or op = BOP_MUL Then LowCFoldIsAdd = 1
+End Function
+
+Function LowCFoldBit(op As Long, lv As Long, rv As Long) As Long
+    LowCFoldBit = lv Or rv
+    If op = BOP_AND Then LowCFoldBit = lv And rv
+    If op = BOP_XOR Then LowCFoldBit = (lv Or rv) - (lv And rv)
+End Function
+
+Function LowCFoldIsBit(op As Long) As Long
+    LowCFoldIsBit = 0
+    If op = BOP_OR Or op = BOP_AND Or op = BOP_XOR Then LowCFoldIsBit = 1
+End Function
+
+Function LowCFoldDiv(op As Long, lv As Long, rv As Long) As Long
+    LowCFoldDiv = 0
+    If rv = 0 Then g_cfoldBad = 1
+    If g_cfoldBad <> 0 Then Exit Function
+    LowCFoldDiv = lv \ rv
+    If op = BOP_MOD Then LowCFoldDiv = lv - (lv \ rv) * rv
+End Function
+
+Function LowCFoldIsDiv(op As Long) As Long
+    LowCFoldIsDiv = 0
+    If op = BOP_IDIV Or op = BOP_DIV Or op = BOP_MOD Then LowCFoldIsDiv = 1
+End Function
+
+Function LowCFoldShr1(acc As Long) As Long
+    Dim mag As Long
+    mag = acc And &H7FFFFFFF
+    LowCFoldShr1 = mag \ 2
+    If (acc And &H80000000) <> 0 Then LowCFoldShr1 = LowCFoldShr1 Or &HC0000000
+End Function
+
+Function LowCFoldShAcc(op As Long, lv As Long, rv As Long) As Long
+    LowCFoldShAcc = lv
+    While rv > 0
+        If op = BOP_SHL Then LowCFoldShAcc = LowCFoldShAcc * 2
+        If op = BOP_SHR Then LowCFoldShAcc = LowCFoldShr1(LowCFoldShAcc)
+        rv = rv - 1
+    Wend
+End Function
+
+Function LowCFoldSh(op As Long, lv As Long, rv As Long) As Long
+    LowCFoldSh = 0
+    If rv < 0 Then g_cfoldBad = 1
+    If g_cfoldBad <> 0 Then Exit Function
+    LowCFoldSh = LowCFoldShAcc(op, lv, rv And 31)
+End Function
+
+Function LowCFoldIsSh(op As Long) As Long
+    LowCFoldIsSh = 0
+    If op = BOP_SHL Or op = BOP_SHR Then LowCFoldIsSh = 1
+End Function
+
+Function LowCFoldPow(lv As Long, rv As Long) As Long
+    LowCFoldPow = 1
+    If rv < 0 Then g_cfoldBad = 1
+    While rv > 0 And g_cfoldBad = 0
+        LowCFoldPow = LowCFoldPow * lv
+        rv = rv - 1
+    Wend
+End Function
+
+Function LowCFoldOpOk(op As Long) As Long
+    LowCFoldOpOk = LowCFoldIsAdd(op)
+    If LowCFoldIsBit(op) <> 0 Then LowCFoldOpOk = 1
+    If LowCFoldIsDiv(op) <> 0 Then LowCFoldOpOk = 1
+    If LowCFoldIsSh(op) <> 0 Then LowCFoldOpOk = 1
+    If op = BOP_POW Then LowCFoldOpOk = 1
+End Function
+
+Function LowCFoldBinOp(op As Long, lv As Long, rv As Long) As Long
+    LowCFoldBinOp = LowCFoldAdd(op, lv, rv)
+    If LowCFoldIsBit(op) <> 0 Then LowCFoldBinOp = LowCFoldBit(op, lv, rv)
+    If LowCFoldIsDiv(op) <> 0 Then LowCFoldBinOp = LowCFoldDiv(op, lv, rv)
+    If LowCFoldIsSh(op) <> 0 Then LowCFoldBinOp = LowCFoldSh(op, lv, rv)
+    If op = BOP_POW Then LowCFoldBinOp = LowCFoldPow(lv, rv)
+    If LowCFoldOpOk(op) = 0 Then g_cfoldBad = 1
+End Function
+
+Function LowCFoldBinIf(op As Long, lv As Long, rv As Long) As Long
+    LowCFoldBinIf = 0
+    If g_cfoldBad <> 0 Then Exit Function
+    LowCFoldBinIf = LowCFoldBinOp(op, lv, rv)
+End Function
+
+Function LowCFoldBin(ctx As *LowerCtx, nodes As *AstNode, idx As Long) As Long
+    Dim lv As Long
+    Dim rv As Long
+    lv = LowCFold(ctx, nodes[idx].left)
+    rv = LowCFoldIf(ctx, nodes[idx].right)
+    LowCFoldBin = LowCFoldBinIf(nodes[idx].num, lv, rv)
+End Function
+
+Function LowCFoldSeen(k As Long) As Long
+    LowCFoldSeen = 0
+    If k = AST_NUM Or k = AST_VAR Then LowCFoldSeen = 1
+    If k = AST_UNARY Or k = AST_BINOP Then LowCFoldSeen = 1
+End Function
+
+Function LowCFoldOp(ctx As *LowerCtx, nodes As *AstNode, idx As Long, k As Long) As Long
+    LowCFoldOp = 0
+    If k = AST_UNARY Then LowCFoldOp = LowCFoldUnary(ctx, nodes, idx)
+    If k = AST_BINOP Then LowCFoldOp = LowCFoldBin(ctx, nodes, idx)
+End Function
+
+Function LowCFoldKind(ctx As *LowerCtx, nodes As *AstNode, idx As Long) As Long
+    Dim k As Long
+    k = nodes[idx].kind
+    LowCFoldKind = 0
+    If k = AST_NUM Then LowCFoldKind = LowCFoldNum(nodes, idx)
+    If k = AST_VAR Then LowCFoldKind = LowCFoldVar(ctx, ctx->ast, idx)
+    If k = AST_UNARY Or k = AST_BINOP Then LowCFoldKind = LowCFoldOp(ctx, nodes, idx, k)
+    If LowCFoldSeen(k) = 0 Then g_cfoldBad = 1
+End Function
+
+Function LowCFold(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowCFold = 0
+    If idx < 0 Then g_cfoldBad = 1
+    If g_cfoldBad <> 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowCFold = LowCFoldKind(ctx, nodes, idx)
+End Function
+
+Function LowCFoldFail(ctx As *LowerCtx, name As *Byte) As Long
+    Print "error: bad const expression for '" + MakeStr(name) + "'"
+    ctx->err = 1
+    LowCFoldFail = 0
+End Function
+
+Function LowRegConstNum(ctx As *LowerCtx, name As *Byte, v As Long) As Long
+    LowRegConstNum = 0
+    If LowAddConst(ctx, name, v) Then LowRegConstNum = 1
+End Function
+
+Function LowRegConstStr(ctx As *LowerCtx, nodes As *AstNode, stmt As Long, name As *Byte) As Long
+    Dim sConst(TEXT_LEN - 1) As Byte
+    Dim ast As *Ast
+    LowRegConstStr = 0
+    sConst[0] = 0
+    ast = ctx->ast
+    If nodes[stmt].left >= 0 Then AstCopyStr(ast, nodes[stmt].left, VarPtr(sConst))
+    If LowAddStrConst(ctx, name, VarPtr(sConst)) Then LowRegConstStr = 1
+End Function
+
+Function LowRegConstFold(ctx As *LowerCtx, nodes As *AstNode, stmt As Long, name As *Byte) As Long
+    Dim v As Long
+    g_cfoldBad = 0
+    v = LowCFold(ctx, nodes[stmt].left)
+    LowRegConstFold = 0
+    If g_cfoldBad <> 0 Then LowRegConstFold = LowCFoldFail(ctx, name)
+    If g_cfoldBad = 0 Then LowRegConstFold = LowRegConstNum(ctx, name, v)
+End Function
+
+Function LowRegConstEx(ctx As *LowerCtx, nodes As *AstNode, stmt As Long, name As *Byte, ex As Long) As Long
+    LowRegConstEx = 0
+    If ex = AST_CONST_EXTRA_STR Then LowRegConstEx = LowRegConstStr(ctx, nodes, stmt, name)
+    If ex = 0 Then LowRegConstEx = LowRegConstNum(ctx, name, nodes[stmt].num)
+    If ex = AST_CONST_EXTRA_EXPR Then LowRegConstEx = LowRegConstFold(ctx, nodes, stmt, name)
+End Function
+
+Function LowRegConstVal(ctx As *LowerCtx, stmt As Long, name As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim ex As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    ex = nodes[stmt].extra
+    LowRegConstVal = LowRegConstEx(ctx, nodes, stmt, name, ex)
+End Function
+
+Function LowRegConstNode(ctx As *LowerCtx, stmt As Long) As Long
+    Dim namePtr(SYM_NAME_LEN - 1) As Byte
+    Dim ast As *Ast
+    LowRegConstNode = 0
+    ast = ctx->ast
+    AstCopyStr(ast, stmt, VarPtr(namePtr))
+    If LowRegConstVal(ctx, stmt, VarPtr(namePtr)) <> 0 Then LowRegConstNode = 1
+End Function
+
+Function LowRegEnumNode(ctx As *LowerCtx, stmt As Long) As Long
+    LowRegEnumNode = 0
+    If AstToIrRegEnum(ctx, stmt) Then LowRegEnumNode = 1
+End Function
+
+Function LowRegConstOne(ctx As *LowerCtx, nodes As *AstNode, stmt As Long) As Long
+    LowRegConstOne = 1
+    If nodes[stmt].kind = AST_CONST Then LowRegConstOne = LowRegConstNode(ctx, stmt)
+    If nodes[stmt].kind = AST_ENUM Then LowRegConstOne = LowRegEnumNode(ctx, stmt)
+End Function
+
+Function LowRegConstWalk(ctx As *LowerCtx, nodes As *AstNode, stmt As Long) As Long
+    LowRegConstWalk = 0
+    While stmt >= 0
+        If LowRegConstOne(ctx, nodes, stmt) = 0 Then Exit Function
+        stmt = nodes[stmt].nxt
+    Wend
+    LowRegConstWalk = 1
+End Function
+
+Function LowRegConstList(ctx As *LowerCtx, prog As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim stmt As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    stmt = nodes[prog].left
+    LowRegConstList = LowRegConstWalk(ctx, nodes, stmt)
+End Function

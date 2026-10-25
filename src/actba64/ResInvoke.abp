@@ -1,0 +1,197 @@
+' ResInvoke - #resource .rc は隣の rc.exe を起動する
+
+Function ResRcPath(dst As *Byte) As Long
+    Dim exe(7) As Byte
+    ResRcPath = 0
+    If Not PpToolDir(dst) Then Exit Function
+    lstrcpy(VarPtr(exe), "rc.exe")
+    lstrcat(dst, VarPtr(exe))
+    ResRcPath = 1
+End Function
+
+Function ResTmpPath(src As *Byte, dst As *Byte) As Long
+    Dim n As Long
+    Dim tag(7) As Byte
+    n = lstrlen(src)
+    If n <= 0 Or n > 500 Then Exit Function
+    lstrcpy(dst, src)
+    lstrcpy(VarPtr(tag), ".abres")
+    lstrcat(dst, VarPtr(tag))
+    ResTmpPath = 1
+End Function
+
+Sub ResQuote(dst As *Byte, src As *Byte)
+    Dim q(1) As Byte
+    q[0] = CH_DQUOTE
+    q[1] = CH_NUL
+    lstrcat(dst, VarPtr(q))
+    lstrcat(dst, src)
+    lstrcat(dst, VarPtr(q))
+End Sub
+
+Function ResCmdTail(dst As *Byte, sp As *Byte, opt As *Byte, rc As *Byte, tmp As *Byte) As Long
+    lstrcat(dst, sp)
+    ResQuote(dst, rc)
+    lstrcat(dst, sp)
+    lstrcat(dst, opt)
+    lstrcat(dst, sp)
+    ResQuote(dst, tmp)
+    ResCmdTail = 1
+End Function
+
+Function ResBuildCmd(dst As *Byte, exe As *Byte, rc As *Byte, tmp As *Byte) As Long
+    Dim sp(1) As Byte
+    Dim opt(3) As Byte
+    dst[0] = CH_NUL
+    sp[0] = CH_SP
+    sp[1] = CH_NUL
+    lstrcpy(VarPtr(opt), "-o")
+    ResQuote(dst, exe)
+    ResBuildCmd = ResCmdTail(dst, VarPtr(sp), VarPtr(opt), rc, tmp)
+End Function
+
+Sub ResZeroSi(ByRef si As STARTUPINFO, ByRef pi As PROCESS_INFORMATION)
+    ZeroMem(VarPtr(si), SizeOf(STARTUPINFO))
+    si.cb = SizeOf(STARTUPINFO)
+    ZeroMem(VarPtr(pi), SizeOf(PROCESS_INFORMATION))
+End Sub
+
+Function ResWait(ByRef pi As PROCESS_INFORMATION) As Long
+    Dim code As DWord
+    ResWait = 0
+    WaitForSingleObject(pi.hProcess, INFINITE)
+    GetExitCodeProcess(pi.hProcess, code)
+    CloseHandle(pi.hThread)
+    CloseHandle(pi.hProcess)
+    If code = 0 Then ResWait = 1
+End Function
+
+#ifdef _ACTBA64
+Function ResCreate(cmd As *Byte, ByRef si As STARTUPINFO, ByRef pi As PROCESS_INFORMATION) As Long
+    ResCreate = CreateProcess(0, cmd, 0, 0, 0, 0, 0, 0, si, pi)
+End Function
+#else
+Function ResCreate(cmd As *Byte, ByRef si As STARTUPINFO, ByRef pi As PROCESS_INFORMATION) As Long
+    Dim sa As SECURITY_ATTRIBUTES
+    sa.nLength = SizeOf(SECURITY_ATTRIBUTES)
+    sa.lpSecurityDescriptor = 0
+    sa.bInheritHandle = 0
+    ResCreate = CreateProcess(NULL, cmd, sa, sa, 0, 0, NULL, NULL, si, pi)
+End Function
+#endif
+
+Function ResSpawn(cmd As *Byte) As Long
+    Dim si As STARTUPINFO
+    Dim pi As PROCESS_INFORMATION
+    ResSpawn = -1
+    ResZeroSi(si, pi)
+    If ResCreate(cmd, si, pi) = 0 Then Exit Function
+    ResSpawn = ResWait(pi)
+End Function
+
+Sub ResSpawnMsg(ok As Long)
+    If ok < 0 Then Print "error: put rc.exe from src/rc next to actba64.exe"
+    If ok = 0 Then Print "error: rc.exe failed"
+End Sub
+
+Function ResMagic(p As *Byte, n As Long) As Long
+    ResMagic = 0
+    If n < 16 Then Exit Function
+    If p[0] <> CH_A Or p[1] <> CH_B Then Exit Function
+    If p[2] <> CH_R Or p[3] <> CH_S Then Exit Function
+    ResMagic = 1
+End Function
+
+Sub ResCopyFrom(src As *Byte, off As Long, n As Long)
+    Dim q As *Byte
+    PtrAddTo(src, off, q)
+    memcpy(g_rsrcBuf, q, n)
+End Sub
+
+Sub ResKeepOffs(p As *Byte, cnt As Long)
+    Dim i As Long
+    i = 0
+    ResFixClear()
+    While i < cnt
+        ResFixAdd(ResDwAt(p, 16 + i * 4))
+        i = i + 1
+    Wend
+End Sub
+
+Function ResCommit(p As *Byte, hdr As Long, psz As Long, cnt As Long) As Long
+    g_rsrcBuf = calloc(psz)
+    ResCommit = 0
+    If g_rsrcBuf = NULL Then Exit Function
+    g_rsrcSize = psz
+    ResCopyFrom(p, hdr, psz)
+    ResKeepOffs(p, cnt)
+    ResCommit = 1
+End Function
+
+Function ResCopyPay(p As *Byte, n As Long, psz As Long, cnt As Long) As Long
+    Dim hdr As Long
+    hdr = 16 + cnt * 4
+    ResCopyPay = 0
+    If cnt <= 0 Or cnt > RES_FIX_MAX Then Exit Function
+    If psz <= 0 Or hdr + psz > n Then Exit Function
+    ResCopyPay = ResCommit(p, hdr, psz, cnt)
+End Function
+
+Function ResTakeAbrs(p As *Byte, n As Long) As Long
+    Dim psz As Long
+    Dim cnt As Long
+    ResTakeAbrs = 0
+    If ResDwAt(p, 4) <> 1 Then Exit Function
+    psz = ResDwAt(p, 8)
+    cnt = ResDwAt(p, 12)
+    ResTakeAbrs = ResCopyPay(p, n, psz, cnt)
+End Function
+
+Function ResAccept(data As *Byte, sz As Long) As Long
+    ResAccept = 0
+    If ResMagic(data, sz) = 0 Then Print "error: .res is not from src/rc"
+    If ResMagic(data, sz) = 0 Then Exit Function
+    ResAccept = ResTakeAbrs(data, sz)
+    If ResAccept = 0 Then Print "error: bad .res from rc.exe"
+End Function
+
+Function ResReadTmp(path As *Byte) As Long
+    Dim data As *Byte
+    Dim sz As Long
+    ResReadTmp = 0
+    data = LoadFile(path, sz)
+    If data = NULL Then Print "error: rc.exe wrote no .res"
+    If data = NULL Then Exit Function
+    ResReadTmp = ResAccept(data, sz)
+    free(data)
+End Function
+
+Function ResRunRc(exe As *Byte, rc As *Byte, tmp As *Byte) As Long
+    Dim cmd(2047) As Byte
+    Dim ok As Long
+    ResRunRc = 0
+    If ResBuildCmd(VarPtr(cmd), exe, rc, tmp) = 0 Then Exit Function
+    ok = ResSpawn(VarPtr(cmd))
+    ResSpawnMsg(ok)
+    If ok > 0 Then ResRunRc = ResReadTmp(tmp)
+    ResKillTmp(tmp)
+End Function
+
+Sub ResKillTmp(tmp As *Byte)
+#ifdef _ACTBA64
+    DeleteFileA(tmp)
+#else
+    DeleteFile(tmp)
+#endif
+End Sub
+
+Function ResCompileRc(path As *Byte) As Long
+    Dim exe(511) As Byte
+    Dim tmp(511) As Byte
+    ResCompileRc = 0
+    If ResRcPath(VarPtr(exe)) = 0 Then Exit Function
+    If Not PpFileExists(VarPtr(exe)) Then Print "error: put rc.exe from src/rc next to actba64.exe"
+    If Not PpFileExists(VarPtr(exe)) Then Exit Function
+    If ResTmpPath(path, VarPtr(tmp)) = 0 Then Exit Function
+    ResCompileRc = ResRunRc(VarPtr(exe), path, VarPtr(tmp))
+End Function

@@ -66,6 +66,7 @@ if (-not $SkipSelfHost) {
 }
 
 Assert-File $Actba64Exe "actba64 stage2 missing (run without -SkipSelfHost; need src\actba64\bin\stage0\actba64.exe from AB4.20)"
+Assert-File (Join-Path $Actba64Stage2 "rc.exe") "rc.exe missing next to stage2 (build.ps1 compiles src\rc\rc.pj)"
 Assert-File $IncludeSrc "Include missing"
 Assert-File $EditorPj "ProjectEditor project missing"
 Assert-File $HelpSrc "help missing"
