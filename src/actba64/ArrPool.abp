@@ -1,0 +1,177 @@
+' ===================================================
+'  ArrPool - stride pool for rank >= 3 arrays
+'  rank 2 keeps len0 in the symbol typeIdx
+' ===================================================
+
+Const ARR_POOL_MAX = 128
+Dim g_arrN As Long
+Dim g_arrRank(127) As Long
+Dim g_arrStr(1023) As Long
+Dim g_dimLen(7) As Long
+Dim g_dimRank As Long
+Dim g_dimPool As Long
+
+Sub ArrPoolReset()
+    g_arrN = 0
+    g_dimRank = 0
+    g_dimPool = -1
+End Sub
+
+Function LowArrStrideMul(id As Long, k As Long, s As Long) As Long
+    g_arrStr(id * ARR_RANK_MAX + k) = s
+    LowArrStrideMul = s * g_dimLen(k)
+End Function
+
+Function LowArrFill(id As Long) As Long
+    Dim k As Long, s As Long
+    s = 1
+    g_arrRank(id) = g_dimRank
+    For k = 0 To g_dimRank - 1
+        s = LowArrStrideMul(id, k, s)
+    Next
+    LowArrFill = 1
+End Function
+
+Function LowArrPush() As Long
+    LowArrPush = -1
+    If g_arrN >= ARR_POOL_MAX Then Exit Function
+    LowArrFill(g_arrN)
+    LowArrPush = g_arrN
+    g_arrN = g_arrN + 1
+End Function
+
+Function LowDimPushLen(b As Long) As Long
+    LowDimPushLen = 0
+    If b < 0 Or g_dimRank >= ARR_RANK_MAX Then Exit Function
+    g_dimLen(g_dimRank) = b + 1
+    g_dimRank = g_dimRank + 1
+    LowDimPushLen = 1
+End Function
+
+Function LowDimStep(ctx As *LowerCtx, arg As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim b As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    b = LowConstEval(ctx, nodes[arg].left)
+    LowDimStep = LowDimPushLen(b)
+End Function
+
+Function LowDimMore(ctx As *LowerCtx, arg As Long) As Long
+    Dim nodes As *AstNode, ast As *Ast
+    LowDimMore = 1
+    If arg < 0 Then Exit Function
+    LowDimMore = 0
+    ast = ctx->ast: nodes = ast->nodes
+    If LowDimStep(ctx, arg) = 0 Then Exit Function
+    LowDimMore = LowDimMore(ctx, nodes[arg].nxt)
+End Function
+
+Function LowDimWalk(ctx As *LowerCtx, arg As Long) As Long
+    g_dimRank = 0
+    LowDimWalk = LowDimMore(ctx, arg)
+End Function
+
+Function LowDimProd() As Long
+    Dim i As Long, p As Long
+    p = 1
+    For i = 0 To g_dimRank - 1
+        p = p * g_dimLen(i)
+    Next
+    LowDimProd = p
+End Function
+
+Function LowDimUseRank(ByRef nElems As Long, ByRef arrLen0 As Long) As Long
+    nElems = LowDimProd()
+    arrLen0 = -1
+    g_dimPool = -1
+    LowDimUseRank = 1
+    If g_dimRank = 2 Then arrLen0 = g_dimLen(0)
+    If g_dimRank < 3 Then Exit Function
+    g_dimPool = LowArrPush()
+    If g_dimPool < 0 Then LowDimUseRank = 0
+End Function
+
+Function LowArrStrideAt(id As Long, k As Long) As Long
+    LowArrStrideAt = g_arrStr(id * ARR_RANK_MAX + k)
+End Function
+
+Sub LowArrScale(list As *IrList, stride As Long)
+    If stride = 1 Then Exit Sub
+    IrEmit(list, OP_MOV_ECX, stride, 0)
+    IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
+End Sub
+
+Function LowArrFirst(ctx As *LowerCtx, list As *IrList, expr As Long) As Long
+    LowArrFirst = 0
+    If LowExpr(ctx, expr) = 0 Then Exit Function
+    LowEmitZxEax(list)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    LowArrFirst = 1
+End Function
+
+Function LowArrAdd(ctx As *LowerCtx, list As *IrList, expr As Long, stride As Long) As Long
+    LowArrAdd = 0
+    If LowExpr(ctx, expr) = 0 Then Exit Function
+    LowEmitZxEax(list)
+    LowArrScale(list, stride)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    LowArrAdd = 1
+End Function
+
+Function LowArrRest(ctx As *LowerCtx, list As *IrList, arg As Long, id As Long, k As Long) As Long
+    Dim ast As *Ast, nodes As *AstNode
+    LowArrRest = 1
+    If arg < 0 Then Exit Function
+    ast = ctx->ast: nodes = ast->nodes
+    LowArrRest = LowArrAdd(ctx, list, nodes[arg].left, LowArrStrideAt(id, k))
+    If LowArrRest = 0 Then Exit Function
+    LowArrRest = LowArrRest(ctx, list, nodes[arg].nxt, id, k + 1)
+End Function
+
+Function LowEmitFlatN(ctx As *LowerCtx, list As *IrList, arg As Long, id As Long) As boolean
+    Dim ast As *Ast, nodes As *AstNode
+    LowEmitFlatN = false
+    ast = ctx->ast: nodes = ast->nodes
+    If LowArrFirst(ctx, list, nodes[arg].left) = 0 Then Exit Function
+    If LowArrRest(ctx, list, nodes[arg].nxt, id, 1) = 0 Then Exit Function
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    LowEmitFlatN = true
+End Function
+
+Function LowArrPoolRank(ti As Long) As Long
+    LowArrPoolRank = g_arrRank(ti - ARR_POOL_BIT)
+End Function
+
+Function LowArrRankOf(ti As Long) As Long
+    LowArrRankOf = 2
+    If ti < 0 Then
+        LowArrRankOf = 1
+        Exit Function
+    End If
+    If (ti And ARR_POOL_BIT) <> 0 Then LowArrRankOf = LowArrPoolRank(ti)
+End Function
+
+Function LowArrUdtOk(vTy As Long, nArgs As Long) As Long
+    LowArrUdtOk = -1
+    If vTy <> TY_UDT_ARR Then Exit Function
+    LowArrUdtOk = 0
+    If nArgs = 1 Then LowArrUdtOk = 1
+End Function
+
+Function LowArrMatch(ti As Long, nArgs As Long) As Long
+    LowArrMatch = 0
+    If nArgs = 1 Or nArgs = LowArrRankOf(ti) Then LowArrMatch = 1
+End Function
+
+Function LowArrIdxOk(vTy As Long, ti As Long, nArgs As Long) As Long
+    Dim u As Long
+    LowArrIdxOk = 0
+    If nArgs < 1 Or nArgs > ARR_RANK_MAX Then Exit Function
+    u = LowArrUdtOk(vTy, nArgs)
+    If u < 0 Then u = LowArrMatch(ti, nArgs)
+    LowArrIdxOk = u
+End Function

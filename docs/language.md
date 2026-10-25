@@ -59,7 +59,7 @@ Print a +_
 
 ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`CvtNum.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -189,22 +189,26 @@ Dim a(N) As T           ' 1D: 添字 0..N（要素数 N+1）
 Dim a[N] As T           ' 同上（バッファ記法）
 Dim a(N, M) As T        ' 2D: 添字 (0..N, 0..M)
 Dim a[N, M] As T        ' 同上（バッファ記法）
+Dim a(N, M, L) As T     ' 3 次元以上。最大 8 次元
 ```
 
 境界は定数式可（例: `Dim Board(BOARD_SIZE - 1, BOARD_SIZE - 1) As Long`）。  
 `ELM(n)` は要素数 `n` に対する上限で、値は `n - 1`。`Dim a[ELM(10)]` は `Dim a[9]` と同じ（添字 0..9）。  
-要素型は `Byte` / `Long` / `Single` / `Double` / `String` / UDT。3 次元以上は非対応。
+要素型は `Byte` / `Long` / `Single` / `Double` / `String` / UDT。UDT 配列は添字 1 個（平坦な通し番号）だけ。
 
-**レイアウト（first-index-fastest）:** 先頭添字が連続する。
+**レイアウト（first-index-fastest）:** 先頭添字が連続する。各次元の長さは上限+1。
 
 ```
-flat = i0 + i1 * (N + 1)     ' Dim a(N, M) の a(i0, i1)
+flat = i0 + i1 * (N + 1)          ' Dim a(N, M) の a(i0, i1)
+L0 = N + 1
+L1 = M + 1
+flat = i0 + i1 * L0 + i2 * L0 * L1   ' Dim a(N, M, L) の a(i0, i1, i2)
 ```
 
-要素数は `(N+1)*(M+1)`。読み書きは `a(i, j)` / `a[i, j]`（括弧・角括弧とも可）。  
+3 次元以上も同じで、k 番目の刻みはそれより前の長さの積。添字は括弧・角括弧とも可。個数は 1（平坦な通し番号）か、その配列の次元数。要素数は各長さの積。  
 境界は `Dim` のときに決まり、実行中には変えない。`ReDim` は Visual Basic の機能で、ActiveBasic 4.20 にも ActBa64 にも無い。
 
-回帰: `test/t_arr2d_rw.abp`、`test/t_arr2d_const.abp`。サンプル: `samples/reversi.abp`。
+回帰: `test/t_arr2d_rw.abp`、`test/t_arr2d_const.abp`、`test/t_arr3d_rw.abp`。サンプル: `samples/reversi.abp`。
 
 ### 2.2 ユーザ定義型
 
@@ -597,7 +601,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 
 ### 7.3 自動 Include
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`CvtNum.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
 続けて Preproc が `api.idx`（主要 Win32 の `Declare Lib`）と `UnicodeApi.sbp`（Unicode 版 API）を挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
@@ -623,7 +627,8 @@ Print Log(MathE())    ' ≒ 1
 
 主な関数: `MathDiv` / `MathMod`（整数ヘルパ） / `Abs` / `Sgn` / `Min` / `Max` / `Sqr` /
 `Sin` / `Cos` / `Tan` / `SinDeg` / `CosDeg` / `Atn` / `Exp` / `Log` / `Log10` /
-`Fix` / `Int` / `Rnd` / `Randomize` / `DegToRad` / `RadToDeg`
+`Fix` / `Int` / `Rnd` / `Randomize` / `DegToRad` / `RadToDeg`。
+`CDbl` / `CSng` / `CInt` は `CvtNum.abp`（`CDbl` は Double、`CSng` は Single、`CInt` は四捨五入した Long。0.5 は 0 から遠い側）。
 
 - 小数リテラル・`Function As Double` / Double 仮引数はすべて IEEE Double ビット
 - N88 `CIRCLE` の角度・aspect も `Double`（内部の千分率表現は廃止）

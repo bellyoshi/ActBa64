@@ -1,0 +1,96 @@
+' ===================================================
+'  ArrParse - comma-separated index and Dim bounds
+' ===================================================
+
+Function ParseIdxArg(p As *Parser, expr As Long) As Long
+    Dim ast As *Ast, nodes As *AstNode, n As Long
+    ParseIdxArg = -1
+    ast = p->ast
+    n = AstAddNode(ast, AST_ARG)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].left = expr: nodes[n].nxt = -1
+    ParseIdxArg = n
+End Function
+
+Function ParseIdxLink(p As *Parser, prev As Long, expr As Long) As Long
+    Dim ast As *Ast, nodes As *AstNode, n As Long
+    ParseIdxLink = -1
+    n = ParseIdxArg(p, expr)
+    If n < 0 Then Exit Function
+    ast = p->ast: nodes = ast->nodes
+    nodes[prev].nxt = n
+    ParseIdxLink = n
+End Function
+
+Function ParseIdxTake(p As *Parser) As Long
+    p->pos = p->pos + 1
+    ParseIdxTake = ParseExpr(p)
+End Function
+
+Function ParseIdxNext(p As *Parser, ByRef prev As Long, ByRef nArgs As Long) As Long
+    Dim e As Long
+    ParseIdxNext = 0
+    e = ParseIdxTake(p)
+    If e < 0 Then Exit Function
+    prev = ParseIdxLink(p, prev, e)
+    If prev < 0 Then Exit Function
+    nArgs = nArgs + 1
+    ParseIdxNext = 1
+End Function
+
+Function ParseIdxCap(p As *Parser, nArgs As Long) As Long
+    ParseIdxCap = 1
+    If nArgs < ARR_RANK_MAX Then Exit Function
+    ParseFail(p, "array rank exceeds " + Str$(ARR_RANK_MAX))
+    ParseIdxCap = 0
+End Function
+
+Function ParseIdxGrow(p As *Parser, ByRef prev As Long, ByRef nArgs As Long) As Long
+    ParseIdxGrow = 0
+    While ParseTokKind(p) = TK_COMMA
+        If ParseIdxCap(p, nArgs) = 0 Then Exit Function
+        If ParseIdxNext(p, prev, nArgs) = 0 Then Exit Function
+    Wend
+    ParseIdxGrow = 1
+End Function
+
+Function ParseIdxRun(p As *Parser, ByRef nArgs As Long, head As Long) As Long
+    Dim prev As Long
+    ParseIdxRun = -1
+    prev = head
+    nArgs = 1
+    If ParseIdxGrow(p, prev, nArgs) = 0 Then Exit Function
+    ParseIdxRun = head
+End Function
+
+Function ParseIdxExprs(p As *Parser, ByRef nArgs As Long) As Long
+    Dim e As Long, head As Long
+    ParseIdxExprs = -1
+    nArgs = 0
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    head = ParseIdxArg(p, e)
+    If head < 0 Then Exit Function
+    ParseIdxExprs = ParseIdxRun(p, nArgs, head)
+End Function
+
+Function ParseIdxCall(ast As *Ast, name As *Byte, head As Long, nArgs As Long) As Long
+    Dim nodes As *AstNode, n As Long
+    ParseIdxCall = -1
+    n = AstAddNode(ast, AST_CALL)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, name)
+    nodes = ast->nodes
+    nodes[n].left = head: nodes[n].num = nArgs
+    ParseIdxCall = n
+End Function
+
+Function ParseIdxSecond(ast As *Ast, head As Long) As Long
+    Dim nodes As *AstNode, nxt As Long
+    nodes = ast->nodes
+    nxt = nodes[head].nxt
+    ParseIdxSecond = -1
+    If nxt < 0 Then Exit Function
+    ParseIdxSecond = nodes[nxt].left
+End Function

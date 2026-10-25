@@ -143,32 +143,35 @@ Function ParseAssignIndexLhs(p As *Parser, name As *Byte) As Long
     Dim nVar As Long
     Dim nIdx As Long
     Dim nCall As Long
-    Dim ix As Long
-    Dim ix2 As Long
+    Dim head As Long
+    Dim nArgs As Long
+    Dim idLine As Long
     Dim mem(SYM_NAME_LEN - 1) As Byte
 
     ParseAssignIndexLhs = -1
     ast = p->ast
-    nVar = AstAddNode(ast, AST_VAR)
-    If nVar < 0 Then Exit Function
-    AstSetStr(ast, nVar, name)
+    idLine = ParseTokLine(p)
     p->pos = p->pos + 1
-    ix = ParseExpr(p)
-    If ix < 0 Then Exit Function
-    ix2 = -1
-    If ParseTokKind(p) = TK_COMMA Then
-        p->pos = p->pos + 1
-        ix2 = ParseExpr(p)
-        If ix2 < 0 Then Exit Function
-    End If
+    head = ParseIdxExprs(p, nArgs)
+    If head < 0 Then Exit Function
     If Not ParseExpect(p, TK_RBRACK) Then Exit Function
-    nIdx = AstAddNode(ast, AST_INDEX)
-    If nIdx < 0 Then Exit Function
-    nodes = ast->nodes
-    nodes[nIdx].left = nVar
-    nodes[nIdx].right = ix
-    nodes[nIdx].extra = ix2
-    nodes[nIdx].num = 1
+    If nArgs >= 3 Then
+        nIdx = ParseIdxCall(ast, name, head, nArgs)
+        If nIdx < 0 Then Exit Function
+    Else
+        nVar = AstAddNode(ast, AST_VAR)
+        If nVar < 0 Then Exit Function
+        AstSetStr(ast, nVar, name)
+        nIdx = AstAddNode(ast, AST_INDEX)
+        If nIdx < 0 Then Exit Function
+        nodes = ast->nodes
+        nodes[nIdx].left = nVar
+        nodes[nIdx].right = nodes[head].left
+        nodes[nIdx].extra = -1
+        If nArgs = 2 Then nodes[nIdx].extra = ParseIdxSecond(ast, head)
+        nodes[nIdx].num = 1
+    End If
+    AstSetSrcLine(ast, nIdx, idLine)
     If ParseTokKind(p) = TK_DOT Then
         p->pos = p->pos + 1
         If Not ParseCopyIdent(p, VarPtr(mem)) Then Exit Function
@@ -178,6 +181,7 @@ Function ParseAssignIndexLhs(p As *Parser, name As *Byte) As Long
         nodes = ast->nodes
         nodes[nCall].left = nIdx
         nodes[nCall].num = 0
+        AstSetSrcLine(ast, nCall, idLine)
         nIdx = nCall
     End If
     ParseAssignIndexLhs = ParseAssignOpRhs(p, nIdx)
@@ -191,17 +195,23 @@ Function ParseAssignParen(p As *Parser, name As *Byte) As Long
     Dim nCall As Long
     Dim arg0 As Long
     Dim nArgs As Long
+    Dim idLine As Long
 
     ParseAssignParen = -1
     ast = p->ast
+    idLine = ParseTokLine(p)
     p->pos = p->pos + 1
     If ParseArgList(p, arg0, nArgs) = 0 Then Exit Function
     If ParseIsAssignOpAhead(p) Then
-        If nArgs < 1 Or nArgs > 2 Then
-            p->err = 1
+        If nArgs < 1 Or nArgs > ARR_RANK_MAX Then
+            If nArgs > ARR_RANK_MAX Then
+                ParseFail(p, "array rank exceeds " + Str$(ARR_RANK_MAX))
+            Else
+                ParseFail(p, "bad array index count")
+            End If
             Exit Function
         End If
-        If nArgs = 2 Then
+        If nArgs >= 2 Then
             nCall = AstAddNode(ast, AST_CALL)
             If nCall < 0 Then Exit Function
             AstSetStr(ast, nCall, name)
@@ -210,6 +220,7 @@ Function ParseAssignParen(p As *Parser, name As *Byte) As Long
             nodes[nCall].right = -1
             nodes[nCall].extra = -1
             nodes[nCall].num = nArgs
+            AstSetSrcLine(ast, nCall, idLine)
             ParseAssignParen = ParseAssignOpRhs(p, nCall)
             Exit Function
         End If
@@ -222,6 +233,7 @@ Function ParseAssignParen(p As *Parser, name As *Byte) As Long
         nodes[nIdx].left = nVar
         nodes[nIdx].right = nodes[arg0].left
         nodes[nIdx].num = 0
+        AstSetSrcLine(ast, nIdx, idLine)
         ParseAssignParen = ParseAssignOpRhs(p, nIdx)
         Exit Function
     End If
@@ -232,6 +244,7 @@ Function ParseAssignParen(p As *Parser, name As *Byte) As Long
     nodes[nCall].left = arg0
     nodes[nCall].right = -1
     nodes[nCall].num = nArgs
+    AstSetSrcLine(ast, nCall, idLine)
     ParseAssignParen = nCall
 End Function
 
