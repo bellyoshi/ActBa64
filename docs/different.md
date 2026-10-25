@@ -123,10 +123,9 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| Win32API 全量 | `api_*.sbp` 382 関数超 | 主要 API は `api.idx` Declare。不足分・自作 DLL はソース側 `Declare` |
-| DirectX | D3D9 + `dx_graphics.sbp` 等 | **D3D11 基盤はサンプルで動作**。`dx_input`・`dx_music` 等の D3D11 版は未整備 |
+| 共通ダイアログ / コモンコントロール | `ChooseColor` / `ChooseFont` / `PageSetupDlg` / `PrintDlg` / `InitCommonControlsEx` | 型（`CHOOSECOLOR` 等）と `InitCommonControls` はある。上記 5 つの `Declare` は無い。`FillMemory` / `memcpy` / `Sleep` は組込 |
+| DirectX 9 Include | `Include\directx9\`（`d3d9` / `d3dx9*` / `dinput` / `dsound` / `dmusic*`） | **未移植**。D3D11 基盤はサンプルで動作。`dx_input`・`dx_music` 相当は未 |
 | RAD | Project Editor | 機能拡充予定 |
+| Prompt 窓 | `basic\prompt.sbp`（`PromptProc` / `DrawPromptBuffer`） | 未移植。`Print` / `Input` はコンソール。`Inkey$` / `Input$` は `#n88basic` のみ |
+| デバッガランタイム | `system\debug.sbp` の `_DebugSys_*` | IDE デバッガ用。未移植 |
 
-### 標準ライブラリ
-
-- **`Include` の拡充** — BasicHelp の `basic\*.sbp` / `system\*.sbp` 相当を `.abp` として増やし、再利用しやすくする。

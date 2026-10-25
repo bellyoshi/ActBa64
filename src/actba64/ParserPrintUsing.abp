@@ -1,0 +1,137 @@
+' ParserPrintUsing - Print Using fmt; expr を Using$ / UsingStr$ の Print にする
+
+Function ParseAddArg(ast As *Ast, e As Long, prev As Long) As Long
+    Dim nodes As *AstNode
+    Dim arg1 As Long
+    arg1 = AstAddNode(ast, AST_ARG)
+    ParseAddArg = arg1
+    If arg1 < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[arg1].left = e
+    If prev >= 0 Then nodes[prev].nxt = arg1
+End Function
+
+Sub ParseCall2Set(ast As *Ast, n As Long, a0 As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].left = a0
+    nodes[n].num = 2
+    nodes[n].right = -1
+    nodes[n].extra = -1
+End Sub
+
+Function ParseCall2(ast As *Ast, name As *Byte, a0 As Long) As Long
+    Dim n As Long
+    n = AstAddNode(ast, AST_CALL)
+    ParseCall2 = n
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, name)
+    ParseCall2Set(ast, n, a0)
+End Function
+
+Sub ParseUsingPick(ast As *Ast, val As Long, name As *Byte)
+    Dim nodes As *AstNode
+    lstrcpy(name, "Using$")
+    nodes = ast->nodes
+    If nodes[val].kind = AST_STRING Then lstrcpy(name, "UsingStr$")
+End Sub
+
+Function ParseUsingCall(p As *Parser, fmt As Long, val As Long) As Long
+    Dim ast As *Ast
+    Dim a0 As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ast = p->ast
+    ParseUsingPick(ast, val, VarPtr(name))
+    a0 = ParseAddArg(ast, fmt, -1)
+    ParseAddArg(ast, val, a0)
+    ParseUsingCall = ParseCall2(ast, VarPtr(name), a0)
+End Function
+
+Sub ParsePrintSet(ast As *Ast, nPrint As Long, nFile As Long, nArg As Long, stay As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[nPrint].left = nFile
+    nodes[nPrint].right = nArg
+    nodes[nPrint].num = stay
+End Sub
+
+Function ParsePrintNode(ast As *Ast, nFile As Long, nArg As Long, stay As Long) As Long
+    Dim nPrint As Long
+    nPrint = AstAddNode(ast, AST_PRINT)
+    ParsePrintNode = -1
+    If nArg < 0 Or nPrint < 0 Then Exit Function
+    ParsePrintSet(ast, nPrint, nFile, nArg, stay)
+    ParsePrintNode = nPrint
+End Function
+
+Function ParsePrintWrap(p As *Parser, nFile As Long, expr As Long, stay As Long) As Long
+    Dim ast As *Ast
+    Dim nArg As Long
+    ast = p->ast
+    nArg = ParseAddArg(ast, expr, -1)
+    ParsePrintWrap = ParsePrintNode(ast, nFile, nArg, stay)
+End Function
+
+Function ParseUsingSep(p As *Parser) As Long
+    Dim k As Long
+    k = ParseTokKind(p)
+    ParseUsingSep = 0
+    If k <> TK_SEMI And k <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    ParseUsingSep = 1
+End Function
+
+Function ParseUsingStay(p As *Parser) As Long
+    ParseUsingStay = 0
+    If ParseTokKind(p) <> TK_SEMI Then Exit Function
+    p->pos = p->pos + 1
+    ParseUsingStay = 1
+End Function
+
+Function ParsePrintUsingFinish(p As *Parser, nFile As Long, fmt As Long, val As Long) As Long
+    Dim callN As Long
+    Dim stay As Long
+    stay = ParseUsingStay(p)
+    callN = ParseUsingCall(p, fmt, val)
+    ParsePrintUsingFinish = -1
+    If callN < 0 Then Exit Function
+    ParsePrintUsingFinish = ParsePrintWrap(p, nFile, callN, stay)
+End Function
+
+Function ParsePrintUsingBody(p As *Parser, nFile As Long) As Long
+    Dim fmt As Long
+    Dim val As Long
+    fmt = ParseExpr(p)
+    ParsePrintUsingBody = -1
+    If fmt < 0 Or ParseUsingSep(p) = 0 Then Exit Function
+    val = ParseExpr(p)
+    If val < 0 Then Exit Function
+    ParsePrintUsingBody = ParsePrintUsingFinish(p, nFile, fmt, val)
+End Function
+
+Function ParseUsingLead(p As *Parser, ByRef nFile As Long) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseUsingLead = 0
+    If Not ParseHashFilePrefix(p, nFile) Then Exit Function
+    lstrcpy(VarPtr(kw), "using")
+    If ParseIdentIs(p, VarPtr(kw)) = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseUsingLead = 1
+End Function
+
+Function ParsePrintUsingTry(p As *Parser, atPrint As Long) As Long
+    Dim nFile As Long
+    If ParseUsingLead(p, nFile) = 0 Then
+        p->pos = atPrint
+        ParsePrintUsingTry = ParsePrintStmt(p)
+        Exit Function
+    End If
+    ParsePrintUsingTry = ParsePrintUsingBody(p, nFile)
+End Function
+
+Function ParsePrintOrUsing(p As *Parser) As Long
+    Dim atPrint As Long
+    atPrint = p->pos
+    p->pos = p->pos + 1
+    ParsePrintOrUsing = ParsePrintUsingTry(p, atPrint)
+End Function

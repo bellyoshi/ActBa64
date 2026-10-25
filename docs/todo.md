@@ -44,7 +44,7 @@
 ### P3 — 保留・非推奨に近い
 
 - **`On Error` / `Resume`** — 現代コードでは優先低。デバッガ・明示チェックを推奨
-- **`Let`**, **`Print Using`** — 糖衣。`Print` / `Format` 系 Include で足りる
+- **`Let`** — 糖衣。`=` 代入で足りる
 
 ---
 
@@ -60,7 +60,6 @@
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
-| `Print Using "fmt"` | 書式付き出力（4.20 関数ポインタサンプル等） |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
 | `Char` / `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は `Byte`/`Long`/`DWord` 中心 |
 
