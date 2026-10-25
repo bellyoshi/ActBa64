@@ -1,0 +1,122 @@
+' AstLowerLab - *名前 の GoTo / GoSub。飛び先のときだけラベルにする
+
+Dim g_lbAt(255) As Long
+Dim g_lbCnt(255) As Long
+Dim g_lbUse(255) As Long
+Dim g_lbLab(255) As Long
+Dim g_lbN As Long
+
+Sub LbReset()
+    g_lbN = 0
+End Sub
+
+Function LbEq(ctx As *LowerCtx, a As Long, b As Long) As Long
+    Dim ast As *Ast
+    Dim na(SYM_NAME_LEN - 1) As Byte
+    Dim nb(SYM_NAME_LEN - 1) As Byte
+    ast = ctx->ast
+    AstCopyStr(ast, a, VarPtr(na))
+    AstCopyStr(ast, b, VarPtr(nb))
+    LbEq = 0
+    If LowNameEqExact(VarPtr(na), VarPtr(nb)) Then LbEq = 1
+End Function
+
+Function LbFind(ctx As *LowerCtx, idx As Long) As Long
+    Dim i As Long
+    LbFind = -1
+    i = 0
+    While i < g_lbN
+        If LbEq(ctx, g_lbAt(i), idx) <> 0 Then LbFind = i
+        If LbFind >= 0 Then Exit Function
+        i = i + 1
+    Wend
+End Function
+
+Sub LbClear(i As Long, at As Long)
+    g_lbAt(i) = at
+    g_lbCnt(i) = 0
+    g_lbUse(i) = 0
+    g_lbLab(i) = -1
+End Sub
+
+Function LbPush(at As Long) As Long
+    LbPush = -1
+    If g_lbN >= 256 Then Print "error: too many labels"
+    If g_lbN >= 256 Then Exit Function
+    LbClear(g_lbN, at)
+    LbPush = g_lbN
+    g_lbN = g_lbN + 1
+End Function
+
+Function LbEnsure(ctx As *LowerCtx, idx As Long) As Long
+    LbEnsure = LbFind(ctx, idx)
+    If LbEnsure >= 0 Then Exit Function
+    LbEnsure = LbPush(idx)
+End Function
+
+Function LbSeeDef(ctx As *LowerCtx, idx As Long) As Long
+    Dim i As Long
+    i = LbEnsure(ctx, idx)
+    LbSeeDef = 0
+    If i < 0 Then Exit Function
+    g_lbCnt(i) = g_lbCnt(i) + 1
+    LbSeeDef = 1
+End Function
+
+Function LbSeeJump(ctx As *LowerCtx, idx As Long) As Long
+    Dim i As Long
+    i = LbEnsure(ctx, idx)
+    LbSeeJump = 0
+    If i < 0 Then Exit Function
+    g_lbUse(i) = 1
+    LbSeeJump = 1
+End Function
+
+Function LbBindBad(ctx As *LowerCtx, i As Long) As Long
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ast = ctx->ast
+    AstCopyStr(ast, g_lbAt(i), VarPtr(name))
+    LbBindBad = 0
+    If g_lbCnt(i) = 0 Then Print "error: undefined label " + MakeStr(VarPtr(name))
+    If g_lbCnt(i) > 1 Then Print "error: duplicate label " + MakeStr(VarPtr(name))
+End Function
+
+Function LbBindOne(ctx As *LowerCtx, i As Long) As Long
+    LbBindOne = 1
+    If g_lbUse(i) = 0 Then Exit Function
+    If g_lbCnt(i) <> 1 Then LbBindOne = LbBindBad(ctx, i)
+    If g_lbCnt(i) <> 1 Then Exit Function
+    g_lbLab(i) = LowNewLabel(ctx)
+End Function
+
+Function LbBindStep(ctx As *LowerCtx, i As Long) As Long
+    LbBindStep = LbBindOne(ctx, i)
+    If LbBindStep = 0 Then ctx->err = 1
+End Function
+
+Function LbBind(ctx As *LowerCtx) As Long
+    Dim i As Long
+    LbBind = 1
+    i = 0
+    While i < g_lbN
+        If LbBindStep(ctx, i) = 0 Then LbBind = 0
+        If LbBind = 0 Then Exit Function
+        i = i + 1
+    Wend
+End Function
+
+Function LbLabOf(ctx As *LowerCtx, idx As Long) As Long
+    Dim i As Long
+    i = LbFind(ctx, idx)
+    LbLabOf = -1
+    If i < 0 Then Exit Function
+    LbLabOf = g_lbLab(i)
+End Function
+
+Sub LbEmitDef(ctx As *LowerCtx, idx As Long)
+    Dim lab As Long
+    lab = LbLabOf(ctx, idx)
+    If lab < 0 Then Exit Sub
+    IrEmit(ctx->list, OP_LABEL, lab, 0)
+End Sub

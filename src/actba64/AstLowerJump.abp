@@ -1,0 +1,321 @@
+' AstLowerJump - 行番号への GoTo / GoSub。Return は GoSub の復帰
+
+Dim g_lnNum(255) As Long
+Dim g_lnCnt(255) As Long
+Dim g_lnUse(255) As Long
+Dim g_lnLab(255) As Long
+Dim g_lnN As Long
+Dim g_gosubOff As Long
+
+Sub LnReserveDepth()
+    g_gosubOff = g_globDataSize
+    g_globDataSize = g_globDataSize + 4
+End Sub
+
+Sub LnReset()
+    g_lnN = 0
+    LbReset()
+End Sub
+
+Function LnFind(num As Long) As Long
+    Dim i As Long
+    LnFind = -1
+    i = 0
+    While i < g_lnN
+        If g_lnNum(i) = num Then LnFind = i
+        If LnFind >= 0 Then Exit Function
+        i = i + 1
+    Wend
+End Function
+
+Sub LnClearSlot(i As Long, num As Long)
+    g_lnNum(i) = num
+    g_lnCnt(i) = 0
+    g_lnUse(i) = 0
+    g_lnLab(i) = -1
+End Sub
+
+Function LnPush(num As Long) As Long
+    LnPush = -1
+    If g_lnN >= 256 Then Print "error: too many line numbers"
+    If g_lnN >= 256 Then Exit Function
+    LnClearSlot(g_lnN, num)
+    LnPush = g_lnN
+    g_lnN = g_lnN + 1
+End Function
+
+Function LnEnsure(num As Long) As Long
+    LnEnsure = LnFind(num)
+    If LnEnsure >= 0 Then Exit Function
+    LnEnsure = LnPush(num)
+End Function
+
+Function LnSeeLine(num As Long) As Long
+    Dim i As Long
+    i = LnEnsure(num)
+    LnSeeLine = 0
+    If i < 0 Then Exit Function
+    g_lnCnt(i) = g_lnCnt(i) + 1
+    LnSeeLine = 1
+End Function
+
+Function LnSeeJump(num As Long) As Long
+    Dim i As Long
+    i = LnEnsure(num)
+    LnSeeJump = 0
+    If i < 0 Then Exit Function
+    g_lnUse(i) = 1
+    LnSeeJump = 1
+End Function
+
+Function LnKind(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LnKind = nodes[idx].kind
+End Function
+
+Function LnNum(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LnNum = nodes[idx].num
+End Function
+
+Function LnNext(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LnNext = nodes[idx].nxt
+End Function
+
+Function LnStr(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LnStr = nodes[idx].strId
+End Function
+
+Function LnSeeGo(ctx As *LowerCtx, idx As Long) As Long
+    If LnStr(ctx, idx) >= 0 Then LnSeeGo = LbSeeJump(ctx, idx)
+    If LnStr(ctx, idx) >= 0 Then Exit Function
+    LnSeeGo = LnSeeJump(LnNum(ctx, idx))
+End Function
+
+Function LnWalkLine(ctx As *LowerCtx, idx As Long, kind As Long) As Long
+    LnWalkLine = 1
+    If kind = AST_LINE Then LnWalkLine = LnSeeLine(LnNum(ctx, idx))
+    If kind = AST_LAB Then LnWalkLine = LbSeeDef(ctx, idx)
+    If kind = AST_GOTO Or kind = AST_GOSUB Then LnWalkLine = LnSeeGo(ctx, idx)
+End Function
+
+Function LnWalkList(ctx As *LowerCtx, idx As Long) As Long
+    LnWalkList = 1
+    While idx >= 0
+        If LnWalkStmt(ctx, idx) = 0 Then LnWalkList = 0
+        If LnWalkList = 0 Then Exit Function
+        idx = LnNext(ctx, idx)
+    Wend
+End Function
+
+Function LnWalkIf(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LnWalkIf = LnWalkList(ctx, nodes[idx].right)
+    If LnWalkIf = 0 Then Exit Function
+    LnWalkIf = LnWalkList(ctx, nodes[idx].extra)
+End Function
+
+Function LnWalkFor(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LnWalkFor = LnWalkList(ctx, nodes[idx].num)
+End Function
+
+Function LnWalkRight(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LnWalkRight = LnWalkList(ctx, nodes[idx].right)
+End Function
+
+Function LnWalkNest(ctx As *LowerCtx, idx As Long, kind As Long) As Long
+    LnWalkNest = 1
+    If kind = AST_FUNC Then Exit Function
+    If kind = AST_IF Then LnWalkNest = LnWalkIf(ctx, idx)
+    If kind = AST_FOR Then LnWalkNest = LnWalkFor(ctx, idx)
+    If kind = AST_WHILE Or kind = AST_DO Or kind = AST_WITH Then LnWalkNest = LnWalkRight(ctx, idx)
+End Function
+
+Function LnWalkStmt(ctx As *LowerCtx, idx As Long) As Long
+    Dim kind As Long
+    kind = LnKind(ctx, idx)
+    LnWalkStmt = LnWalkLine(ctx, idx, kind)
+    If LnWalkStmt = 0 Then Exit Function
+    LnWalkStmt = LnWalkNest(ctx, idx, kind)
+End Function
+
+Function LnBindBad(i As Long) As Long
+    LnBindBad = 0
+    If g_lnCnt(i) = 0 Then Print "error: undefined line " + Str$(g_lnNum(i))
+    If g_lnCnt(i) > 1 Then Print "error: duplicate line " + Str$(g_lnNum(i))
+End Function
+
+Function LnBindOne(ctx As *LowerCtx, i As Long) As Long
+    LnBindOne = 1
+    If g_lnUse(i) = 0 Then Exit Function
+    If g_lnCnt(i) <> 1 Then LnBindOne = LnBindBad(i)
+    If g_lnCnt(i) <> 1 Then Exit Function
+    g_lnLab(i) = LowNewLabel(ctx)
+End Function
+
+Function LnBindStep(ctx As *LowerCtx, i As Long) As Long
+    LnBindStep = LnBindOne(ctx, i)
+    If LnBindStep = 0 Then ctx->err = 1
+End Function
+
+Function LnBind(ctx As *LowerCtx) As Long
+    Dim i As Long
+    LnBind = 1
+    i = 0
+    While i < g_lnN
+        If LnBindStep(ctx, i) = 0 Then LnBind = 0
+        If LnBind = 0 Then Exit Function
+        i = i + 1
+    Wend
+End Function
+
+Function LnPrepareBind(ctx As *LowerCtx) As Long
+    LnPrepareBind = LnBind(ctx)
+    If LnPrepareBind = 0 Then Exit Function
+    LnPrepareBind = LbBind(ctx)
+    If LnPrepareBind = 0 Then ctx->err = 1
+End Function
+
+Function LnPrepare(ctx As *LowerCtx, idx As Long) As Long
+    LnReset()
+    LnPrepare = 0
+    If LnWalkList(ctx, idx) = 0 Then ctx->err = 1
+    If ctx->err <> 0 Then Exit Function
+    LnPrepare = LnPrepareBind(ctx)
+End Function
+
+Function LnLabOf(num As Long) As Long
+    Dim i As Long
+    i = LnFind(num)
+    LnLabOf = -1
+    If i < 0 Then Exit Function
+    LnLabOf = g_lnLab(i)
+End Function
+
+Function LnGoLab(ctx As *LowerCtx, idx As Long) As Long
+    LnGoLab = LbLabOf(ctx, idx)
+    If LnStr(ctx, idx) >= 0 Then Exit Function
+    LnGoLab = LnLabOf(LnNum(ctx, idx))
+End Function
+
+Sub LnEmitLine(ctx As *LowerCtx, idx As Long)
+    Dim lab As Long
+    lab = LnLabOf(LnNum(ctx, idx))
+    If lab < 0 Then Exit Sub
+    IrEmit(ctx->list, OP_LABEL, lab, 0)
+End Sub
+
+Function LnEmitGoto(ctx As *LowerCtx, idx As Long) As Long
+    Dim lab As Long
+    lab = LnGoLab(ctx, idx)
+    LnEmitGoto = 0
+    If lab < 0 Then Exit Function
+    IrEmit(ctx->list, OP_JMP, lab, 0)
+    LnEmitGoto = 1
+End Function
+
+Sub LnReadDepth(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_LEA_RAX_GLOB, g_gosubOff, 0)
+    IrEmit(ctx->list, OP_LOAD_DWORD_RAX, 0, 0)
+End Sub
+
+Sub LnWriteEax(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(ctx->list, OP_LEA_RAX_GLOB, g_gosubOff, 0)
+    IrEmit(ctx->list, OP_STORE_DWORD_RAX_ECX, 0, 0)
+End Sub
+
+Sub LnIncDepth(ctx As *LowerCtx)
+    LnReadDepth(ctx)
+    IrEmit(ctx->list, OP_MOV_ECX, 1, 0)
+    IrEmit(ctx->list, OP_ADD_EAX_ECX, 0, 0)
+    LnWriteEax(ctx)
+End Sub
+
+Sub LnDecDepth(ctx As *LowerCtx)
+    LnReadDepth(ctx)
+    IrEmit(ctx->list, OP_MOV_ECX, 1, 0)
+    IrEmit(ctx->list, OP_SUB_EAX_ECX, 0, 0)
+    LnWriteEax(ctx)
+End Sub
+
+Sub LnCallLab(ctx As *LowerCtx, lab As Long)
+    IrEmit(ctx->list, OP_SUB_RSP, 8, 0)
+    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    IrEmit(ctx->list, OP_ADD_RSP, 8, 0)
+End Sub
+
+Function LnEmitGosub(ctx As *LowerCtx, idx As Long) As Long
+    Dim lab As Long
+    lab = LnGoLab(ctx, idx)
+    LnEmitGosub = 0
+    If lab < 0 Then Exit Function
+    LnIncDepth(ctx)
+    LnCallLab(ctx, lab)
+    LnEmitGosub = 1
+End Function
+
+Sub LnEmitRetFail(ctx As *LowerCtx, labBad As Long)
+    IrEmit(ctx->list, OP_LABEL, labBad, 0)
+    LowEmitExitImm(ctx, 1)
+End Sub
+
+Sub LnEmitRetTest(ctx As *LowerCtx, labBad As Long)
+    LnReadDepth(ctx)
+    IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
+    IrEmit(ctx->list, OP_JZ, labBad, 0)
+    LnDecDepth(ctx)
+    IrEmit(ctx->list, OP_RET, 0, 0)
+    LnEmitRetFail(ctx, labBad)
+End Sub
+
+Sub LnEmitRet(ctx As *LowerCtx)
+    Dim labBad As Long
+    labBad = LowNewLabel(ctx)
+    LnEmitRetTest(ctx, labBad)
+End Sub
+
+Function LnIsJump(kind As Long) As Long
+    LnIsJump = 0
+    If kind = AST_LINE Or kind = AST_LAB Or kind = AST_GOTO Or kind = AST_GOSUB Or kind = AST_GSRET Then LnIsJump = 1
+End Function
+
+Function LnEmitMark(ctx As *LowerCtx, idx As Long, kind As Long) As Long
+    LnEmitMark = 1
+    If kind = AST_LINE Then LnEmitLine(ctx, idx)
+    If kind = AST_LAB Then LbEmitDef(ctx, idx)
+End Function
+
+Function LnEmit(ctx As *LowerCtx, idx As Long) As Long
+    Dim kind As Long
+    kind = LnKind(ctx, idx)
+    LnEmit = LnEmitMark(ctx, idx, kind)
+    If kind = AST_GOTO Then LnEmit = LnEmitGoto(ctx, idx)
+    If kind = AST_GOSUB Then LnEmit = LnEmitGosub(ctx, idx)
+    If kind = AST_GSRET Then LnEmitRet(ctx)
+End Function

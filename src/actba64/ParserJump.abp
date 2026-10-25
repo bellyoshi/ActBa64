@@ -1,0 +1,176 @@
+' ParserJump - 行番号と GoTo / GoSub / Return
+
+Function ParseLineNoFill(ast As *Ast, n As Long, v As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].num = v
+    ParseLineNoFill = n
+End Function
+
+Function ParseLineNoNode(p As *Parser, v As Long) As Long
+    Dim n As Long
+    n = AstAddNode(p->ast, AST_LINE)
+    ParseLineNoNode = -1
+    If n < 0 Then Exit Function
+    ParseLineNoNode = ParseLineNoFill(p->ast, n, v)
+End Function
+
+Function ParseLineNoStmt(p As *Parser) As Long
+    Dim v As Long
+    v = ParseTokNum(p)
+    p->pos = p->pos + 1
+    ParseLineNoStmt = ParseLineNoNode(p, v)
+End Function
+
+Function ParseStarSame(p As *Parser) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim i As Long
+    lx = p->lx
+    toks = lx->toks
+    i = p->pos
+    ParseStarSame = toks[i].join
+    If toks[i].srcLine <= toks[i - 1].srcLine Then ParseStarSame = 1
+End Function
+
+Function ParseStarMul(p As *Parser) As Long
+    ParseStarMul = 0
+    If ParseTokKind(p) <> TK_STAR Then Exit Function
+    If p->pos <= 0 Then ParseStarMul = 1
+    If p->pos <= 0 Then Exit Function
+    ParseStarMul = ParseStarSame(p)
+End Function
+
+Sub ParseLabCopy(p As *Parser, n As Long)
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lx = p->lx
+    toks = lx->toks
+    LexCopyText(lx, toks[p->pos].textSlot, VarPtr(name))
+    AstSetStr(p->ast, n, VarPtr(name))
+End Sub
+
+Function ParseLabNode(p As *Parser) As Long
+    Dim n As Long
+    n = AstAddNode(p->ast, AST_LAB)
+    ParseLabNode = -1
+    If n < 0 Then p->err = 1
+    If n < 0 Then Exit Function
+    ParseLabCopy(p, n)
+    p->pos = p->pos + 1
+    ParseLabNode = n
+End Function
+
+Function ParseLabStmt(p As *Parser) As Long
+    ParseLabStmt = -2
+    If ParseTokKind(p) <> TK_STAR Then Exit Function
+    p->pos = p->pos + 1
+    ParseLabStmt = -1
+    If ParseTokKind(p) <> TK_IDENT Then p->err = 1
+    If p->err <> 0 Then Exit Function
+    ParseLabStmt = ParseLabNode(p)
+End Function
+
+Function ParseStmtOpen(p As *Parser) As Long
+    ParseStmtOpen = ParseStmtKwJump(p)
+    If ParseStmtOpen <> -2 Then Exit Function
+    ParseStmtOpen = ParseLabStmt(p)
+    If ParseStmtOpen <> -2 Then Exit Function
+    If ParseTokKind(p) <> TK_NUMBER Then Exit Function
+    ParseStmtOpen = ParseLineNoStmt(p)
+End Function
+
+Function ParseJumpTarget(p As *Parser) As Long
+    ParseJumpTarget = -1
+    If ParseTokKind(p) <> TK_NUMBER Then p->err = 1
+    If p->err <> 0 Then Exit Function
+    ParseJumpTarget = ParseTokNum(p)
+    p->pos = p->pos + 1
+End Function
+
+Function ParseGoFill(ast As *Ast, n As Long, v As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].num = v
+    ParseGoFill = n
+End Function
+
+Function ParseGoNode(p As *Parser, kind As Long, v As Long) As Long
+    Dim n As Long
+    n = AstAddNode(p->ast, kind)
+    ParseGoNode = -1
+    If n < 0 Then Exit Function
+    ParseGoNode = ParseGoFill(p->ast, n, v)
+End Function
+
+Function ParseGoNum(p As *Parser, kind As Long) As Long
+    Dim v As Long
+    v = ParseJumpTarget(p)
+    ParseGoNum = -1
+    If p->err <> 0 Then Exit Function
+    ParseGoNum = ParseGoNode(p, kind, v)
+End Function
+
+Function ParseGoStarNode(p As *Parser, kind As Long) As Long
+    Dim n As Long
+    n = AstAddNode(p->ast, kind)
+    ParseGoStarNode = -1
+    If n < 0 Then p->err = 1
+    If n < 0 Then Exit Function
+    ParseLabCopy(p, n)
+    p->pos = p->pos + 1
+    ParseGoStarNode = n
+End Function
+
+Function ParseGoStar(p As *Parser, kind As Long) As Long
+    p->pos = p->pos + 1
+    ParseGoStar = -1
+    If ParseTokKind(p) <> TK_IDENT Then p->err = 1
+    If p->err <> 0 Then Exit Function
+    ParseGoStar = ParseGoStarNode(p, kind)
+End Function
+
+Function ParseGoStmt(p As *Parser, kind As Long) As Long
+    p->pos = p->pos + 1
+    ParseGoStmt = -1
+    If ParseTokKind(p) = TK_STAR Then ParseGoStmt = ParseGoStar(p, kind)
+    If p->err <> 0 Then Exit Function
+    If ParseGoStmt >= 0 Then Exit Function
+    ParseGoStmt = ParseGoNum(p, kind)
+End Function
+
+Function ParseGsRet(p As *Parser) As Long
+    Dim ast As *Ast
+    p->pos = p->pos + 1
+    ast = p->ast
+    ParseGsRet = AstAddNode(ast, AST_GSRET)
+End Function
+
+Function ParseJumpGo(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseJumpGo = 0
+    lstrcpy(VarPtr(kw), "goto")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParseJumpGo = AST_GOTO
+    If ParseJumpGo <> 0 Then Exit Function
+    lstrcpy(VarPtr(kw), "gosub")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParseJumpGo = AST_GOSUB
+End Function
+
+Function ParseJumpKind(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseJumpKind = ParseJumpGo(p)
+    If ParseJumpKind <> 0 Then Exit Function
+    lstrcpy(VarPtr(kw), "return")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParseJumpKind = AST_GSRET
+End Function
+
+Function ParseStmtKwJump(p As *Parser) As Long
+    Dim kind As Long
+    ParseStmtKwJump = -2
+    kind = ParseJumpKind(p)
+    If kind = 0 Then Exit Function
+    If kind = AST_GSRET Then ParseStmtKwJump = ParseGsRet(p)
+    If kind = AST_GSRET Then Exit Function
+    ParseStmtKwJump = ParseGoStmt(p, kind)
+End Function

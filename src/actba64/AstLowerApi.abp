@@ -4,115 +4,43 @@
 
 Function LowFindFunc(ctx As *LowerCtx, name As *Byte) As Long
     Dim i As Long
-    Dim names As *Byte
     Dim labs As *Long
-    Dim off As Long
+    i = NhFind(VarPtr(g_nhFunc(0)), ctx->funcNames, name)
     LowFindFunc = -1
-    names = ctx->funcNames
+    If i < 0 Then Exit Function
     labs = ctx->funcLabs
-    i = 0
-    While i < ctx->funcCount
-        off = i * SYM_NAME_LEN
-        If LowNameEqExact(VarPtr(names[off]), name) Then
-            LowFindFunc = labs[i]
-            Exit Function
-        End If
-        i = i + 1
-    Wend
+    LowFindFunc = labs[i]
 End Function
 
 ' AST_FUNC.extra に Parser が書いた戻り型
 Function LowFindFuncRetTy(ctx As *LowerCtx, name As *Byte) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim stmt As Long
-    Dim namePtr(SYM_NAME_LEN - 1) As Byte
-    Dim typeKind As Long
-
+    Dim i As Long
+    Dim rets As *Long
+    i = LowFuncIndex(ctx, name)
     LowFindFuncRetTy = TY_LONG
-    If ctx = NULL Then Exit Function
-    ast = ctx->ast
-    If ast = NULL Then Exit Function
-    If ast->root < 0 Then Exit Function
-    nodes = ast->nodes
-    stmt = nodes[ast->root].left
-    While stmt >= 0
-        If nodes[stmt].kind = AST_FUNC Then
-            AstCopyStr(ast, stmt, VarPtr(namePtr))
-            If LowNameEqExact(VarPtr(namePtr), name) Then
-                typeKind = nodes[stmt].extra
-                If typeKind = TY_DOUBLE Or typeKind = TY_SINGLE Or typeKind = TY_STRING Then
-                    LowFindFuncRetTy = typeKind
-                ElseIf typeKind = TY_PTR_BYTE Or typeKind = TY_PTR_LONG Or typeKind = TY_PTR_UDT Then
-                    LowFindFuncRetTy = typeKind
-                Else
-                    LowFindFuncRetTy = TY_LONG
-                End If
-                Exit Function
-            End If
-        End If
-        stmt = nodes[stmt].nxt
-    Wend
+    If i < 0 Then Exit Function
+    rets = g_freeFuncRet As *Long
+    LowFindFuncRetTy = LowNormRet(rets[i])
 End Function
 
 ' 仮引数 argIndex の型（見つからなければ TY_LONG）
 Function LowFindFuncParamTy(ctx As *LowerCtx, name As *Byte, argIndex As Long) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim stmt As Long
-    Dim param As Long
-    Dim namePtr(SYM_NAME_LEN - 1) As Byte
     Dim i As Long
-    Dim typeKind As Long
-
     LowFindFuncParamTy = TY_LONG
-    If ctx = NULL Then Exit Function
-    If argIndex < 0 Then Exit Function
-    ast = ctx->ast
-    If ast = NULL Then Exit Function
-    If ast->root < 0 Then Exit Function
-    nodes = ast->nodes
-    stmt = nodes[ast->root].left
-    While stmt >= 0
-        If nodes[stmt].kind = AST_FUNC Then
-            AstCopyStr(ast, stmt, VarPtr(namePtr))
-            If LowNameEqExact(VarPtr(namePtr), name) Then
-                param = nodes[stmt].left
-                i = 0
-                While param >= 0
-                    If i = argIndex Then
-                        typeKind = nodes[param].extra
-                        If typeKind < 0 Then typeKind = TY_LONG
-                        LowFindFuncParamTy = typeKind
-                        Exit Function
-                    End If
-                    i = i + 1
-                    param = nodes[param].nxt
-                Wend
-                Exit Function
-            End If
-        End If
-        stmt = nodes[stmt].nxt
-    Wend
+    If argIndex < 0 Or argIndex >= LOW_MAX_ARGS Then Exit Function
+    i = LowFuncIndex(ctx, name)
+    If i < 0 Then Exit Function
+    LowFindFuncParamTy = LowSigTy(g_freeFuncPty As *Long, g_freeFuncNArgs As *Long, i, argIndex)
 End Function
 
 Function LowFindFuncByRefs(ctx As *LowerCtx, name As *Byte) As Long
     Dim i As Long
-    Dim names As *Byte
     Dim bys As *Long
-    Dim off As Long
+    i = NhFind(VarPtr(g_nhFunc(0)), ctx->funcNames, name)
     LowFindFuncByRefs = 0
-    names = ctx->funcNames
+    If i < 0 Then Exit Function
     bys = ctx->funcByRefs
-    i = 0
-    While i < ctx->funcCount
-        off = i * SYM_NAME_LEN
-        If LowNameEqExact(VarPtr(names[off]), name) Then
-            LowFindFuncByRefs = bys[i]
-            Exit Function
-        End If
-        i = i + 1
-    Wend
+    LowFindFuncByRefs = bys[i]
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
@@ -144,26 +72,14 @@ Function LowAddFunc(ctx As *LowerCtx, name As *Byte, lab As Long, byRefBits As L
     labs[i] = lab
     bys[i] = byRefBits
     ctx->funcCount = i + 1
+    NhPut(VarPtr(g_nhFunc(0)), name, i)
     LowAddFunc = true
 End Function
 
 ' ---- Declare Lib テーブル ----
 
 Function LowFindDecl(ctx As *LowerCtx, name As *Byte) As Long
-    Dim i As Long
-    Dim names As *Byte
-    Dim off As Long
-    LowFindDecl = -1
-    names = ctx->declNames
-    i = 0
-    While i < ctx->declCount
-        off = i * SYM_NAME_LEN
-        If LowNameEqExact(VarPtr(names[off]), name) Then
-            LowFindDecl = i
-            Exit Function
-        End If
-        i = i + 1
-    Wend
+    LowFindDecl = NhFind(VarPtr(g_nhDecl(0)), ctx->declNames, name)
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
@@ -208,6 +124,7 @@ Function LowAddDecl(ctx As *LowerCtx, name As *Byte, api As *Byte, dllName As *B
     dlls[off + j] = 0
     bys[i] = byRefBits
     ctx->declCount = i + 1
+    NhPut(VarPtr(g_nhDecl(0)), name, i)
     LowAddDecl = true
 End Function
 
@@ -265,6 +182,14 @@ Sub LowFreeAstBufs()
     LowFreePtr(g_freeFuncNames)
     LowFreePtr(g_freeFuncLabs)
     LowFreePtr(g_freeFuncByRefs)
+    LowFreePtr(g_freeFuncRet)
+    LowFreePtr(g_freeFuncPty)
+    LowFreePtr(g_freeFuncPti)
+    LowFreePtr(g_freeFuncNArgs)
+    LowFreePtr(g_freeFuncIsFn)
+    LowFreePtr(g_freeDeclPty)
+    LowFreePtr(g_freeDeclPti)
+    LowFreePtr(g_freeDeclNArgs)
     LowFreePtr(g_freeConstNames)
     LowFreePtr(g_freeConstVals)
     LowFreePtr(g_freeConstStrNames)
@@ -282,6 +207,14 @@ Sub LowFreeAstBufs()
     g_freeFuncNames = NULL
     g_freeFuncLabs = NULL
     g_freeFuncByRefs = NULL
+    g_freeFuncRet = NULL
+    g_freeFuncPty = NULL
+    g_freeFuncPti = NULL
+    g_freeFuncNArgs = NULL
+    g_freeFuncIsFn = NULL
+    g_freeDeclPty = NULL
+    g_freeDeclPti = NULL
+    g_freeDeclNArgs = NULL
     g_freeConstNames = NULL
     g_freeConstVals = NULL
     g_freeConstStrNames = NULL

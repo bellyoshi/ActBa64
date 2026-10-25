@@ -114,53 +114,116 @@ Sub PpCopyMarkName(dst As *Byte, src As *Byte)
     dst[k] = CH_NUL
 End Sub
 
-Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) As String
-    Dim i As Long
-    Dim start As Long
-    Dim n As Long
-    Dim cur As Long
-    Dim nestSp As Long
-    Dim off As Long
-    Dim name(PJ_PATH_LEN - 1) As Byte
-    Dim names(PP_MAX_DEPTH * PJ_PATH_LEN - 1) As Byte
-    Dim locs(PP_MAX_DEPTH - 1) As Long
+Dim g_mapSrc As *Byte
+Dim g_mapI As Long
+Dim g_mapCur As Long
+Dim g_mapNest As Long
+Dim g_mapHit As Long
+Dim g_mapLocal As Long
+Dim g_mapNames(4159) As Byte
+Dim g_mapLocs(15) As Long
+Dim g_mapOut(259) As Byte
 
+Sub PpMapReset()
+    g_mapSrc = NULL
+    g_mapI = 0
+    g_mapCur = 1
+    g_mapNest = 0
+    g_mapHit = 0
+    g_mapLocal = 1
+    g_mapOut(0) = 0
+End Sub
+
+Sub PpMapPush(name As *Byte)
+    Dim off As Long
+    If g_mapNest >= PP_MAX_DEPTH Then Exit Sub
+    off = g_mapNest * PJ_PATH_LEN
+    PpCopyMarkName(VarPtr(g_mapNames(off)), name)
+    g_mapLocs(g_mapNest) = 0
+    g_mapNest = g_mapNest + 1
+End Sub
+
+Sub PpMapMark(name As *Byte)
+    If PpNameIsEnd(name) <> 0 Then
+        If g_mapNest > 0 Then g_mapNest = g_mapNest - 1
+    Else
+        PpMapPush(name)
+    End If
+End Sub
+
+Sub PpMapNoteLine(src As *Byte, start As Long, n As Long)
+    Dim name(PJ_PATH_LEN - 1) As Byte
+    If PpLineIsFileMark(VarPtr(src[start]), n, VarPtr(name), PJ_PATH_LEN) Then
+        PpMapMark(VarPtr(name))
+    ElseIf g_mapNest > 0 Then
+        g_mapLocs(g_mapNest - 1) = g_mapLocs(g_mapNest - 1) + 1
+    End If
+End Sub
+
+Sub PpMapAdvance(src As *Byte)
+    If src[g_mapI] = CH_CR Then g_mapI = g_mapI + 1
+    If src[g_mapI] = CH_NL Then g_mapI = g_mapI + 1
+    g_mapCur = g_mapCur + 1
+End Sub
+
+Function PpMapStep(src As *Byte) As Long
+    Dim start As Long
+    PpMapStep = 0
+    If src[g_mapI] = CH_NUL Then Exit Function
+    start = g_mapI
+    g_mapI = PpLineEndAt(src, g_mapI)
+    PpMapNoteLine(src, start, g_mapI - start)
+    PpMapStep = 1
+End Function
+
+Sub PpMapCopyOut(off As Long)
+    Dim k As Long
+    k = 0
+    While g_mapNames(off + k) <> 0 And k < PJ_PATH_LEN - 1
+        g_mapOut(k) = g_mapNames(off + k)
+        k = k + 1
+    Wend
+    g_mapOut(k) = 0
+End Sub
+
+Sub PpMapLocal()
+    g_mapLocal = 1
+    If g_mapNest <= 0 Then Exit Sub
+    g_mapLocal = g_mapLocs(g_mapNest - 1)
+    If g_mapLocal < 1 Then g_mapLocal = 1
+End Sub
+
+Sub PpMapStore()
+    Dim off As Long
+    g_mapHit = g_mapCur
+    g_mapOut(0) = 0
+    PpMapLocal()
+    off = 0
+    If g_mapNest > 0 Then off = (g_mapNest - 1) * PJ_PATH_LEN
+    If g_mapNest > 0 Then PpMapCopyOut(off)
+End Sub
+
+Function PpMapSrcName$(src As *Byte, combLine As Long, ByRef localLine As Long) As String
     PpMapSrcName$ = ""
     localLine = combLine
     If src = 0 Then Exit Function
     If combLine <= 0 Then combLine = 1
-    i = 0
-    cur = 1
-    nestSp = 0
-    While src[i] <> CH_NUL
-        start = i
-        i = PpLineEndAt(src, i)
-        n = i - start
-        If PpLineIsFileMark(VarPtr(src[start]), n, VarPtr(name), PJ_PATH_LEN) Then
-            If PpNameIsEnd(VarPtr(name)) Then
-                If nestSp > 0 Then nestSp = nestSp - 1
-            Else
-                If nestSp < PP_MAX_DEPTH Then
-                    off = nestSp * PJ_PATH_LEN
-                    PpCopyMarkName(VarPtr(names[off]), VarPtr(name))
-                    locs[nestSp] = 0
-                    nestSp = nestSp + 1
-                End If
-            End If
-        Else
-            If nestSp > 0 Then locs[nestSp - 1] = locs[nestSp - 1] + 1
-        End If
-        If cur >= combLine Then Exit While
-        If src[i] = CH_CR Then i = i + 1
-        If src[i] = CH_NL Then i = i + 1
-        cur = cur + 1
-    Wend
-    If nestSp > 0 Then
-        off = (nestSp - 1) * PJ_PATH_LEN
-        localLine = locs[nestSp - 1]
-        If localLine < 1 Then localLine = 1
-        PpMapSrcName$ = MakeStr(VarPtr(names[off]))
+    If src <> g_mapSrc Or (combLine < g_mapCur And combLine <> g_mapHit) Then PpMapReset()
+    g_mapSrc = src
+    If combLine = g_mapHit Then
+        localLine = g_mapLocal
+        PpMapSrcName$ = MakeStr(VarPtr(g_mapOut(0)))
+        Exit Function
     End If
+    While src[g_mapI] <> CH_NUL
+        If PpMapStep(src) = 0 Then Exit While
+        If g_mapCur >= combLine Then Exit While
+        PpMapAdvance(src)
+    Wend
+    PpMapStore()
+    PpMapAdvance(src)
+    localLine = g_mapLocal
+    PpMapSrcName$ = MakeStr(VarPtr(g_mapOut(0)))
 End Function
 
 Function PpErrLoc$(src As *Byte, combLine As Long) As String

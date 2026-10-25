@@ -19,6 +19,7 @@ Function AstToIrEmitFuncFinish(ctx As *LowerCtx, stmt As Long, retBuf As *Byte, 
     offs = ctx->offs
     savedErr = ctx->err
     ctx->err = 0
+    If LnPrepare(ctx, nodes[stmt].right) = 0 Then Exit Function
     If LowStmtList(ctx, nodes[stmt].right) = 0 Then
         If ctx->err = 0 Then
             AstCopyStr(ast, stmt, VarPtr(namePtr))
@@ -108,6 +109,14 @@ Function AstToIrAlloc() As boolean
     g_freeFuncNames = calloc(BytesN(DYN_INIT, SYM_NAME_LEN))
     g_freeFuncLabs = calloc(BytesN(DYN_INIT, SizeOf(Long)))
     g_freeFuncByRefs = calloc(BytesN(DYN_INIT, SizeOf(Long)))
+    g_freeFuncRet = calloc(BytesN(DYN_INIT, SizeOf(Long)))
+    g_freeFuncNArgs = calloc(BytesN(DYN_INIT, SizeOf(Long)))
+    g_freeFuncIsFn = calloc(BytesN(DYN_INIT, SizeOf(Long)))
+    g_freeFuncPty = calloc(BytesN(DYN_INIT * LOW_MAX_ARGS, SizeOf(Long)))
+    g_freeFuncPti = calloc(BytesN(DYN_INIT * LOW_MAX_ARGS, SizeOf(Long)))
+    g_freeDeclPty = calloc(BytesN(DYN_INIT * LOW_MAX_ARGS, SizeOf(Long)))
+    g_freeDeclPti = calloc(BytesN(DYN_INIT * LOW_MAX_ARGS, SizeOf(Long)))
+    g_freeDeclNArgs = calloc(BytesN(DYN_INIT, SizeOf(Long)))
     g_freeConstNames = calloc(BytesN(DYN_INIT, SYM_NAME_LEN))
     g_freeConstVals = calloc(BytesN(DYN_INIT, SizeOf(Long)))
     g_freeConstStrNames = calloc(BytesN(DYN_INIT, SYM_NAME_LEN))
@@ -128,6 +137,9 @@ Function AstToIrAlloc() As boolean
     If g_freeFuncNames = NULL Or g_freeFuncLabs = NULL Or g_freeFuncByRefs = NULL Then
         Exit Function
     End If
+    If g_freeFuncRet = NULL Or g_freeFuncPty = NULL Or g_freeFuncPti = NULL Then Exit Function
+    If g_freeFuncNArgs = NULL Or g_freeFuncIsFn = NULL Then Exit Function
+    If g_freeDeclPty = NULL Or g_freeDeclPti = NULL Or g_freeDeclNArgs = NULL Then Exit Function
     If g_freeConstNames = NULL Or g_freeConstVals = NULL Or g_freeConstStrNames = NULL Or g_freeConstStrVals = NULL Then
         Exit Function
     End If
@@ -211,6 +223,7 @@ Sub AstToIrInitCtx(ctx As *LowerCtx, list As *IrList, ast As *Ast)
     ctx->declDllNames = g_freeDeclDlls
     ctx->declByRefs = g_freeDeclByRefs As *Long
     ctx->declCount = 0
+    NhClearAll()
     AstToIrInitLabs()
     g_gcBaseOff = 0
     g_preciseRootCount = 0
@@ -231,6 +244,7 @@ Function AstToIrBindMod(ctx As *LowerCtx, prog As Long, list As *IrList) As bool
     If Not LowInjectStrGcStubs(ctx) Then Exit Function
     ' module-level Dim -> globals (before any function emit; nested Dims in main too)
     If Not LowCollectDimsInList(ctx, nodes[prog].left, 1) Then Exit Function
+    LnReserveDepth()
     LowCollectPreciseGlobRoots()
     g_gcBaseOff = g_globDataSize
     g_globDataSize = g_globDataSize + GC_REGION_SIZE

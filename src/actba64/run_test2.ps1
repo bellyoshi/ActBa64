@@ -30,6 +30,7 @@
 # Print はコンソール WriteFile（上記ルール以外の GUI 自動判定なし）
 # .pj の #SOURCE に載る .abp は単独ビルドしない
 # CompileFail: 隣接 test/<base>.err.txt の各行がコンパイラ出力のどこかに含まれること（部分一致）
+# 診断は UTF-8。コンソールのコードページでは読まない（.err.txt も UTF-8）
 
 param(
     [Parameter(Position = 0)]
@@ -131,6 +132,40 @@ function Add-Result([string]$name, [string]$status, [string]$detail) {
     }
 }
 
+function Format-CcArg([string]$arg) {
+    if ($arg -notmatch '[\s"]') { return $arg }
+    return '"' + ($arg.Replace('"', '\"')) + '"'
+}
+
+# コンパイラの Print はソースと同じ UTF-8。CP932 のコンソールだと日本語診断が .err.txt と一致しない。
+function Get-CompilerLog([string[]]$ccArgs) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Linker
+    $psi.WorkingDirectory = $Root
+    $psi.Arguments = (($ccArgs | ForEach-Object { Format-CcArg $_ }) -join " ")
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    $psi.StandardOutputEncoding = $utf8
+    $psi.StandardErrorEncoding = $utf8
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    [void]$proc.WaitForExit()
+    $global:LASTEXITCODE = $proc.ExitCode
+    $text = $outTask.Result + $errTask.Result
+    $proc.Dispose()
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($text -split "`r?`n")) {
+        if ($line -ne "") { [void]$lines.Add($line) }
+    }
+    return ,$lines.ToArray()
+}
+
 function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     if ($meta.Gui -eq 1 -and -not $IncludeGui) {
         $stats.skip++
@@ -162,7 +197,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         $preArgs = @($preSrc)
         if ($Actba32) { $preArgs += "-actba32" }
         $preArgs += @("-o", $preDll)
-        $preLog = & $Linker @preArgs 2>&1 | ForEach-Object { "$_" }
+        $preLog = Get-CompilerLog $preArgs
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $preDll)) {
             $stats.fail++
             $hint = ($preLog | Select-Object -Last 3) -join " / "
@@ -183,7 +218,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     }
     $ccArgs += "-o"
     $ccArgs += $exePath
-    $log = & $Linker @ccArgs 2>&1 | ForEach-Object { "$_" }
+    $log = Get-CompilerLog $ccArgs
     $logText = ($log -join "`n")
 
     if ($meta.CompileFail) {
