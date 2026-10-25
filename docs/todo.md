@@ -1,12 +1,11 @@
 # 未実装・今後の作業
 
-実装状況の正本は [language.md](./language.md)。ActiveBasic との差分の詳細は [different.md](./different.md)。
+実装状況の正本は [language.md](./language.md)。ActiveBasic との差分の詳細は [different.md](./different.md)。AB 4.20 と同じ挙動の既知の問題は [known.md](./known.md)。
 
 **AB 4.20 ヘルプ（テキスト）:** ローカル参照 `docs/ActiveBasic4.20.md`（gitignore）。本書は BasicHelp.html の抽出であり、以下はその記載と ActBa64 実装の差分メモ。
 
 **意図的に対応しない（todo 対象外）**
 
-- 行番号付きソース、`Goto` / `GoSub` の行番号参照（ラベル `*` 分岐も未対応）
 - DirectX 9 / `d3d9types.sbp` / `dx_graphics.sbp`（D3D9）— 代わりに **D3D11**（`Include/d3d11/`・サンプル `dx_d3d11.sbp`）
 
 ## 実装優先度
@@ -32,7 +31,7 @@
 
 - **`Super.*`**、メンバ Class の自動 ctor/dtor
 - **厳密 `Protected` / `Private`**（受理のみ。Public と同等）
-- **`Const` マクロ関数**, **ネスト手続き**
+- **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術
 - **`Single` IEEE 演算**（格納と Input 変換が中心。汎用 SSE は未）
 - **`Double` 配列要素・UDT フィールド @ `-actba32`** — 要素とフィールドのロード／ストアは `OP_LOAD_QWORD` / `OP_STORE_QWORD` のまま（32bit では 4 バイト）
@@ -44,7 +43,6 @@
 
 ### P3 — 保留・非推奨に近い
 
-- **`GoTo` / `GoSub` / `Return`（`*ラベル`）** — 方針上導入しない。エディタ変換は別件
 - **`On Error` / `Resume`** — 現代コードでは優先低。デバッガ・明示チェックを推奨
 - **`Let`**, **`Print Using`** — 糖衣。`Print` / `Format` 系 Include で足りる
 - **`CDbl` / `CInt` 関数群** — `As` キャストで代替可
@@ -58,12 +56,10 @@
 | `Super.Method` | スーパークラス ctor/dtor 呼び出し（4.20 Class 章） |
 | 厳密な `Protected` / `Private` | 受理するが Public と同等 |
 | メンバ Class の自動 ctor/dtor | 親 Class 内のメンバ Class 生成・破棄（4.20） |
-| `GoTo` / `GoSub` / `Return`（`*ラベル`） | 行番号は非対応方針。ラベル付き分岐・復帰も未 |
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
-| `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章） |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | `Print Using "fmt"` | 書式付き出力（4.20 関数ポインタサンプル等） |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
@@ -92,7 +88,6 @@
 
 | 4.20（D3D9 系） | ActBa64 | メモ |
 |---|---|---|
-| `dx_SetCullMode` | 済 | `D3DCULL_*` をラスタライザへ。`dx_graphics.sbp` |
 | `dx_SetDefaultLight` / `dx_SetLightOff` | 未 | ライト |
 | `CImage2D` / `CMeshModel` / `CRectPolygon` | 未 | 高レベル描画 |
 | `CInputKeyboard` / `CInputMouse` | 未 | `dx_input.sbp`（DirectInput） |

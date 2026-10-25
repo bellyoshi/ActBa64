@@ -1,0 +1,176 @@
+' FuncSig - 関数 / Declare の戻り値と仮引数型
+
+Function LowGrowLongs(buf As *Byte, oldN As Long, newN As Long) As *Byte
+    LowGrowLongs = MemGrow(buf, BytesN(oldN, SizeOf(Long)), BytesN(newN, SizeOf(Long)))
+End Function
+
+Function LowTake(ByRef slot As *Byte, p As *Byte) As Long
+    LowTake = 0
+    If p = NULL Then Exit Function
+    slot = p
+    LowTake = 1
+End Function
+
+Function LowGrowFuncMeta(oldCap As Long, newCap As Long) As Long
+    LowGrowFuncMeta = 0
+    If LowTake(g_freeFuncRet, LowGrowLongs(g_freeFuncRet, oldCap, newCap)) = 0 Then Exit Function
+    If LowTake(g_freeFuncNArgs, LowGrowLongs(g_freeFuncNArgs, oldCap, newCap)) = 0 Then Exit Function
+    If LowTake(g_freeFuncIsFn, LowGrowLongs(g_freeFuncIsFn, oldCap, newCap)) = 0 Then Exit Function
+    LowGrowFuncMeta = 1
+End Function
+
+Function LowGrowFuncParams(oldCap As Long, newCap As Long) As Long
+    Dim n0 As Long
+    Dim n1 As Long
+    n0 = oldCap * LOW_MAX_ARGS
+    n1 = newCap * LOW_MAX_ARGS
+    LowGrowFuncParams = 0
+    If LowTake(g_freeFuncPty, LowGrowLongs(g_freeFuncPty, n0, n1)) = 0 Then Exit Function
+    If LowTake(g_freeFuncPti, LowGrowLongs(g_freeFuncPti, n0, n1)) = 0 Then Exit Function
+    LowGrowFuncParams = 1
+End Function
+
+Function LowGrowFuncSig(oldCap As Long, newCap As Long) As Long
+    LowGrowFuncSig = 0
+    If LowGrowFuncMeta(oldCap, newCap) = 0 Then Exit Function
+    If LowGrowFuncParams(oldCap, newCap) = 0 Then Exit Function
+    LowGrowFuncSig = 1
+End Function
+
+Function LowGrowDeclSig(oldCap As Long, newCap As Long) As Long
+    Dim n0 As Long, n1 As Long
+    n0 = oldCap * LOW_MAX_ARGS
+    n1 = newCap * LOW_MAX_ARGS
+    LowGrowDeclSig = 0
+    If LowTake(g_freeDeclNArgs, LowGrowLongs(g_freeDeclNArgs, oldCap, newCap)) = 0 Then Exit Function
+    If LowTake(g_freeDeclPty, LowGrowLongs(g_freeDeclPty, n0, n1)) = 0 Then Exit Function
+    If LowTake(g_freeDeclPti, LowGrowLongs(g_freeDeclPti, n0, n1)) = 0 Then Exit Function
+    LowGrowDeclSig = 1
+End Function
+
+Function LowFuncIndex(ctx As *LowerCtx, name As *Byte) As Long
+    LowFuncIndex = -1
+    If ctx = NULL Then Exit Function
+    LowFuncIndex = NhFind(VarPtr(g_nhFunc(0)), ctx->funcNames, name)
+End Function
+
+Function LowDeclIndex(ctx As *LowerCtx, name As *Byte) As Long
+    LowDeclIndex = -1
+    If ctx = NULL Then Exit Function
+    LowDeclIndex = NhFind(VarPtr(g_nhDecl(0)), ctx->declNames, name)
+End Function
+
+Function LowNormRet(typeKind As Long) As Long
+    LowNormRet = TY_LONG
+    If typeKind = TY_DOUBLE Or typeKind = TY_SINGLE Or typeKind = TY_STRING Then
+        LowNormRet = typeKind
+    ElseIf typeKind = TY_PTR_BYTE Or typeKind = TY_PTR_LONG Or typeKind = TY_PTR_UDT Then
+        LowNormRet = typeKind
+    End If
+End Function
+
+Function LowSigTy(pty As *Long, nargs As *Long, i As Long, argIndex As Long) As Long
+    Dim ty As Long
+    LowSigTy = TY_LONG
+    If argIndex >= nargs[i] Then Exit Function
+    ty = pty[i * LOW_MAX_ARGS + argIndex]
+    If ty < 0 Then ty = TY_LONG
+    LowSigTy = ty
+End Function
+
+Sub SigStore(pty As *Long, pti As *Long, nargs As *Long, i As Long, argIndex As Long, extra As Long, rightv As Long)
+    pty[i * LOW_MAX_ARGS + argIndex] = extra
+    pti[i * LOW_MAX_ARGS + argIndex] = rightv
+    nargs[i] = argIndex + 1
+End Sub
+
+Sub SigFill(nodes As *AstNode, param As Long, pty As *Long, pti As *Long, nargs As *Long, i As Long)
+    Dim argIndex As Long
+    argIndex = 0
+    nargs[i] = 0
+    While param >= 0 And argIndex < LOW_MAX_ARGS
+        SigStore(pty, pti, nargs, i, argIndex, nodes[param].extra, nodes[param].right)
+        argIndex = argIndex + 1
+        param = nodes[param].nxt
+    Wend
+End Sub
+
+Sub LowSigFuncRet(stmtExtra As Long, nFlags As Long, i As Long)
+    Dim rets As *Long
+    Dim isFn As *Long
+    rets = g_freeFuncRet As *Long
+    isFn = g_freeFuncIsFn As *Long
+    rets[i] = stmtExtra
+    isFn[i] = 1
+    If (nFlags And AST_FUNC_SUB) <> 0 Then isFn[i] = 0
+End Sub
+
+Sub LowSigFuncParams(nodes As *AstNode, stmt As Long, i As Long)
+    Dim pty As *Long
+    Dim pti As *Long
+    Dim nargs As *Long
+    pty = g_freeFuncPty As *Long
+    pti = g_freeFuncPti As *Long
+    nargs = g_freeFuncNArgs As *Long
+    SigFill(nodes, nodes[stmt].left, pty, pti, nargs, i)
+End Sub
+
+Sub LowRegFuncSig(nodes As *AstNode, stmt As Long, i As Long)
+    LowSigFuncRet(nodes[stmt].extra, nodes[stmt].num, i)
+    LowSigFuncParams(nodes, stmt, i)
+End Sub
+
+Sub LowRegDeclSig(nodes As *AstNode, stmt As Long, i As Long)
+    Dim pty As *Long
+    Dim pti As *Long
+    Dim nargs As *Long
+    pty = g_freeDeclPty As *Long
+    pti = g_freeDeclPti As *Long
+    nargs = g_freeDeclNArgs As *Long
+    SigFill(nodes, nodes[stmt].left, pty, pti, nargs, i)
+End Sub
+
+Function LowStrictAt(pty As *Long, pti As *Long, nargs As *Long, i As Long, argIndex As Long, ByRef outPti As Long) As Long
+    LowStrictAt = -1
+    If argIndex < 0 Or argIndex >= nargs[i] Then Exit Function
+    outPti = pti[i * LOW_MAX_ARGS + argIndex]
+    LowStrictAt = pty[i * LOW_MAX_ARGS + argIndex]
+End Function
+
+Function LowStrictFuncAt(i As Long, argIndex As Long, ByRef outPti As Long) As Long
+    Dim pty As *Long
+    Dim pti As *Long
+    Dim nargs As *Long
+    pty = g_freeFuncPty As *Long
+    pti = g_freeFuncPti As *Long
+    nargs = g_freeFuncNArgs As *Long
+    LowStrictFuncAt = LowStrictAt(pty, pti, nargs, i, argIndex, outPti)
+End Function
+
+Function LowStrictDeclAt(i As Long, argIndex As Long, ByRef outPti As Long) As Long
+    Dim pty As *Long
+    Dim pti As *Long
+    Dim nargs As *Long
+    pty = g_freeDeclPty As *Long
+    pti = g_freeDeclPti As *Long
+    nargs = g_freeDeclNArgs As *Long
+    LowStrictDeclAt = LowStrictAt(pty, pti, nargs, i, argIndex, outPti)
+End Function
+
+Function LowStrictFnRaw(i As Long) As Long
+    Dim isFn As *Long
+    Dim rets As *Long
+    LowStrictFnRaw = -1
+    isFn = g_freeFuncIsFn As *Long
+    If isFn[i] = 0 Then Exit Function
+    rets = g_freeFuncRet As *Long
+    LowStrictFnRaw = rets[i]
+End Function
+
+Function LowStrictDeclScan(ctx As *LowerCtx, name As *Byte, argIndex As Long, ByRef pti As Long) As Long
+    Dim i As Long
+    i = LowDeclIndex(ctx, name)
+    LowStrictDeclScan = -1
+    If i < 0 Then Exit Function
+    LowStrictDeclScan = LowStrictDeclAt(i, argIndex, pti)
+End Function

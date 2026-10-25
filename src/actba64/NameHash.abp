@@ -1,0 +1,101 @@
+' ===================================================
+'  NameHash - open-address names (const / Declare / func)
+' ===================================================
+
+Dim g_nhConst(8191) As Long
+Dim g_nhDecl(8191) As Long
+Dim g_nhFunc(8191) As Long
+
+Function NhMix(h As Long, c As Long) As Long
+    NhMix = ((h And 16777215) * 33) Xor c
+End Function
+
+Function NhHash(name As *Byte) As Long
+    Dim h As Long, i As Long
+    h = 0
+    i = 0
+    While name[i] <> 0
+        h = NhMix(h, name[i])
+        i = i + 1
+    Wend
+    NhHash = h And 8191
+End Function
+
+Function NhStep(h As Long) As Long
+    NhStep = (h + 1) And 8191
+End Function
+
+Function NhEq(names As *Byte, idx As Long, name As *Byte) As Long
+    Dim off As Long
+    off = idx * SYM_NAME_LEN
+    NhEq = 0
+    If LowNameEqExact(VarPtr(names[off]), name) Then NhEq = 1
+End Function
+
+Function NhHit(slots As *Long, names As *Byte, name As *Byte, h As Long) As Long
+    Dim slot As Long
+    slot = slots[h]
+    NhHit = -2
+    If slot = 0 Then Exit Function
+    NhHit = -1
+    If NhEq(names, slot - 1, name) <> 0 Then NhHit = slot - 1
+End Function
+
+Function NhProbe(slots As *Long, names As *Byte, name As *Byte, h As *Long, n As *Long) As Long
+    NhProbe = NhHit(slots, names, name, h[0])
+    h[0] = NhStep(h[0])
+    n[0] = n[0] + 1
+End Function
+
+Function NhDone(hit As Long) As Long
+    NhDone = hit
+    If hit = -2 Then NhDone = -1
+End Function
+
+Function NhFind(slots As *Long, names As *Byte, name As *Byte) As Long
+    Dim h As Long, n As Long, hit As Long
+    h = NhHash(name)
+    n = 0
+    hit = -1
+    While (n < 8192) And (hit = -1)
+        hit = NhProbe(slots, names, name, VarPtr(h), VarPtr(n))
+    Wend
+    NhFind = NhDone(hit)
+End Function
+
+Function NhSlot(slots As *Long, h As Long, idx As Long) As Long
+    If slots[h] = 0 Then slots[h] = idx + 1
+    NhSlot = 0
+    If slots[h] = idx + 1 Then NhSlot = 1
+End Function
+
+Function NhPutStep(slots As *Long, idx As Long, h As *Long, n As *Long) As Long
+    NhPutStep = NhSlot(slots, h[0], idx)
+    h[0] = NhStep(h[0])
+    n[0] = n[0] + 1
+End Function
+
+Function NhPut(slots As *Long, name As *Byte, idx As Long) As Long
+    Dim h As Long, n As Long
+    h = NhHash(name)
+    n = 0
+    NhPut = 0
+    While (n < 8192) And (NhPut = 0)
+        NhPut = NhPutStep(slots, idx, VarPtr(h), VarPtr(n))
+    Wend
+End Function
+
+Sub NhClear(slots As *Long)
+    Dim i As Long
+    i = 0
+    While i < 8192
+        slots[i] = 0
+        i = i + 1
+    Wend
+End Sub
+
+Sub NhClearAll()
+    NhClear(VarPtr(g_nhConst(0)))
+    NhClear(VarPtr(g_nhDecl(0)))
+    NhClear(VarPtr(g_nhFunc(0)))
+End Sub

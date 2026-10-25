@@ -23,6 +23,7 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 - [コーディング規約](docs/coding.md)（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**）
 - [言語仕様](docs/language.md)（ファイル I/O: Open / Close / Input # / Write / Field / Get # / Put #）
 - [ActiveBasic との相違](docs/different.md)
+- [既知の問題](docs/known.md)（AB 4.20 と同じ挙動）
 - [未実装メモ](docs/todo.md)
 - エディタ向けリファレンス: [src/projecteditor/help/actba64_ref.html](src/projecteditor/help/actba64_ref.html)（F1）
 

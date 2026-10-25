@@ -41,7 +41,7 @@ Print a +_
     c
 ```
 
-行末の `_`（直後の空白・`'注釈` 可）で次行と 1 文に結合する。  
+行末の `_`（直後の空白・`'注釈` 可）で次行と 1 文に結合する。継続の先にある整数は式の一部で、行番号にはならない。  
 `( )` / `[ ]` 内では、`(` `[` `,` の直後や閉じ括弧前など、パラメータ単位の改行も可（改行は空白扱い）。
 
 ### 1.3 ディレクティブ行
@@ -53,6 +53,8 @@ Print a +_
 | `#USEWINDOW=0\|1` | 0=CUI / 1=GUI。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
 | `#strict` | 型の暗黙変換を warning（`As` で抑制）。`Long`→`Byte` はデータ欠落、引数の `String`→`VoidPtr` と `VoidPtr`→`Long` も含む |
 | `#include "path"` / `#include <path>` | ファイル挿入（深さ上限あり）。`"..."` はソース相対（絶対パス可）、`<...>` は `Include\` 配下を検索 |
+| `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` | 条件付きコンパイル（[§7.7](#77-条件付きコンパイル)） |
+| `#resource` | リソース埋め込み（[§5.2.2](#522-リソース埋め込み)） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
 ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
@@ -172,6 +174,7 @@ PAINT (x, y), color1 [, color2]
 | `Single` | 4 | 4 | サイズと格納。汎用 IEEE 演算は未（`Double` を使う） |
 | `Long` / `DWord` / `Integer` | 4 | 4 | 別名あり |
 | `Double` | 8 | **8** | IEEE 倍精度。加減乗除・比較・`Function As Double` / Double 仮引数は 64bit と `-actba32` の両方。32bit の値は `edx:eax`。配列要素と UDT フィールドの 8 バイト転送は 64bit のみ |
+| `Enum` 名 | 4 | 4 | 列挙。メンバは整数定数（[§3.4](#34-enum)） |
 | `HANDLE` / `HWND` 等 | 4 | **8** | 64bit は `VoidPtr` / `*T`（`HFILE` は 4 のまま） |
 | `*T` | 4 | **8** | ポインタ |
 | `String` | ポインタ相当 (4) | ポインタ相当 (**8**) | 長さプレフィックス付きバイト列（AB4.20 互換） |
@@ -229,6 +232,9 @@ TypeDef PADD = *Function(a As Long, b As Long) As Long
 ```
 Const MAX_PATH = 260
 Const GENERIC_READ = &H80000000
+Const NEXT = GENERIC_READ Or 1
+Const MSG = "ok"
+Const INC(n) = n + 1
 
 Dim a As Long
 Dim b = 3 As Long
@@ -242,7 +248,8 @@ Dim board(7, 7) As Long   ' 2D（§2.1）
 Dim h As COFF_HEADER
 ```
 
-- `Const`: 整数リテラル（符号付き）中心。複雑な定数式は制限あり
+- `Const name = expr`: 整数式（リテラル、先に書いた `Const`、加減乗、整数除算、`Mod`、`And` / `Or` / `Xor` / `Not`、`<<` / `>>`、`^`、`As` の幅マスク）か文字列リテラル。`Double` は置けない
+- `Const name(仮引数) = expr`: 使うたびに仮引数へ実引数の式を埋め込んで展開する（64 個まで、入れ子 16 段まで）
 - `Dim name$`: `As String` 省略可（末尾 `$`）
 - `Include\default` で組み込み定数を自動導入
 
@@ -316,6 +323,24 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 - `Delete` は変数のクラスポインタ型から `Class_Dtor` を逆順に呼び、ヘッダごと `HeapFree` する。クラスは使用箇所より前に定義する。ポインタのクラス型が取れない `Delete` はコンパイルエラー。`Delete 0` は何もしない
 
 **未対応:** `Super.Method`、メンバ実体クラスの自動 ctor・dtor、アクセス制御の厳密検査
+
+### 3.4 Enum
+
+```
+Enum Modes
+    Off          ' 1
+    On = 5       ' 5
+    Max          ' 6（直前 + 1）
+End Enum
+
+Dim x As Modes   ' 4 バイト
+x = On
+```
+
+- `Enum` … `End Enum`。メンバ名は整数定数になる
+- 値を省略したメンバは直前の値 + 1。最初のメンバを省略したときは **1**
+- `= 式` は定数式（例: `B = A Or 2`）
+- `Dim x As EnumName` は 4 バイト
 
 ---
 
@@ -408,6 +433,9 @@ ExitProcess(式)
 | `Beep` / `Cls` / `MsgBox` / `Window` / `DelWnd` | ○（`BasicCmd.abp`。`Cls` はコンソール。`Window` はメッセージループを作らない） |
 | `ChDir` / `MkDir` / `Kill` / `Exec` | ○（`BasicCmd.abp`） |
 | `Delete` | ○（クラスポインタ） |
+| 行番号 | ○（文頭の整数。無くてもよい。`GoTo` / `GoSub` の飛び先だけラベル） |
+| `*名前` | ○（文頭のラベル。`GoTo` / `GoSub` の飛び先だけ。大小は区別する） |
+| `GoTo` / `GoSub` / `Return` | ○（行番号または `*名前`。`Return` は `GoSub` の復帰。`Exit Function` とは別） |
 | `Date$` / `Time$` | ○（`yyyy/mm/dd` と `hh:mm:ss`。月日時刻は 2 桁） |
 | `Inkey$` / `Input$(n)` | ○（関数。`#n88basic` のみ。窓の `WM_KEYDOWN`） |
 
@@ -418,6 +446,8 @@ ExitProcess(式)
 - `Window` の `hWnd` は `ByRef HWND`。`class$` を省略すると `ActBa64Wnd` を一度だけ登録する（ウィンドウ手続きは `DefWindowProc`）。`id` 以降の省略は 0。メッセージループは作らない。`proc` は `CreateWindowEx` の `lpParam` に渡す
 - `Exec` の `cmd$` を省略すると空文字にする
 - `Date$()` / `Time$()` は文ではなく関数（`BasicCmd.abp`）。それぞれ `yyyy/mm/dd` と `hh:mm:ss` で、月日と時刻は 2 桁。`Str$` の先頭空白は付けない
+
+行番号は付けても付けなくてもよい。文の先頭の整数が行番号で、その行に文が無くてもエラーにしない。`100 PRINT A` は 100 の位置から `PRINT` へ落ちる。文の先頭の `*名前` も同じ位置のラベルで、`*start Print 1` は `start` から `Print` へ落ちる。改行して始まる `*名前` はラベルで、`_` で続けた行の `*` は掛け算のまま。同じ行番号や同じ名前が何度あっても、`GoTo` や `GoSub` の飛び先でなければエラーにしない。飛び先が無い、または二つ以上あるときはコンパイルエラー。名前の大小は区別する。`GoTo` と `GoSub` の飛び先は行番号か `*名前`。`GoSub` は戻る場所を覚えて移り、`Return` で戻る。`GoSub` していない `Return` は終了コード 1 でプロセスを終える。
 
 ---
 
@@ -580,7 +610,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 
 ### 7.4 Math（IEEE Double）
 
-角度はラジアン（`Double`）。`Sin` / `Cos` はマクローリン展開。円周率は `MathPi()`、ネイピア数は `MathE()`（`Const` は整数のみのため Function）。
+角度はラジアン（`Double`）。`Sin` / `Cos` はマクローリン展開。円周率は `MathPi()`、ネイピア数は `MathE()`（`Const` は整数と文字列だけで、`Double` は持てないため Function）。
 
 ```
 Dim hpi As Double
@@ -689,6 +719,25 @@ dx_SetCullMode(CullMode)
 - `dx_SetCullMode` は `D3DCULL_NONE` / `D3DCULL_CW` / `D3DCULL_CCW`。デバイスが無いときは何もしない。前面は時計回り（`D3DCULL_CCW` が背面カリング）
 - シェーダの定数バッファへは `VarPtr(g_dxProj[0])` / `VarPtr(g_dxView[0])` を渡す
 
+### 7.7 条件付きコンパイル
+
+```
+#define USE_FOO
+#ifdef USE_FOO
+    Print "on"
+#else
+    Print "off"
+#endif
+
+#ifndef _WIN64
+#endif
+```
+
+- `#define 名前` はその名前を定義する（置換テキストは持たない）。無効な分岐の中では定義しない
+- `#ifdef` / `#ifndef` / `#else` / `#endif`。ネストできる（深さ 32）
+- 名前の比較は大小文字を無視する
+- 自動定義は **`_AB_VER4`** と **`_ACTBA64`**。64bit のときだけ **`_WIN64`**（`-actba32` では定義しない）。**`_DEBUG` は自動定義しない**
+
 ---
 
 ## 8. WinAPI / IAT
@@ -793,7 +842,6 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` は対応。`Super` は未対応）
 - `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は IEEE Double（64bit と `-actba32`。32bit の配列要素・UDT フィールド転送と、`Print` の Double 変換は未）
-- `GoTo` / `GoSub`
 - ネスト手続き
 - `#resource` の MENU / DIALOG / VERSIONINFO（ICON 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化

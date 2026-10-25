@@ -12,6 +12,7 @@ ActiveBasic 互換サブセットコンパイラ（完全互換ではない）�
 | [build.md](./build.md) | ビルド手順（AB4.20 stage0 → 自己ホスト → リリース一式）、回帰テスト、[コンパイラソース分割](./build.md#コンパイラソースの分割)、[ProjectEditor](./build.md#5-projecteditor) |
 | [coding.md](./coding.md) | コーディング規約（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**） |
 | [different.md](./different.md) | ActiveBasic との相違点（非対応・改良点・今後の予定） |
+| [known.md](./known.md) | 既知の問題（AB 4.20 と同じ挙動。`TRUE` と関係演算、識別子の大小区別） |
 | [todo.md](./todo.md) | 未実装・今後の作業メモ |
 
 エディタ向けリファレンス（F1）: [src/projecteditor/help/actba64_ref.html](../src/projecteditor/help/actba64_ref.html)
