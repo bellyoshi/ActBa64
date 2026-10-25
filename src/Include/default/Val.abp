@@ -1,0 +1,119 @@
+' Val.abp — 十進・&H・&O を Double で読む（default 常時読込）
+
+Function ValDig09(c As Long) As Long
+    ValDig09 = -1
+    If c >= Asc("0") And c <= Asc("9") Then ValDig09 = c - Asc("0")
+End Function
+
+Function ValDigAF(c As Long) As Long
+    Dim d As Long
+    d = -1
+    If c >= Asc("A") And c <= Asc("F") Then d = c - Asc("A") + 10
+    If c >= Asc("a") And c <= Asc("f") Then d = c - Asc("a") + 10
+    ValDigAF = d
+End Function
+
+Function ValHexDig(c As Long) As Long
+    Dim d As Long
+    d = ValDig09(c)
+    If d < 0 Then d = ValDigAF(c)
+    ValHexDig = d
+End Function
+
+Function ValSkipSp(p As *Byte, n As Long, i As Long) As Long
+    While i < n And IsSpace(p[i]) <> 0
+        i = i + 1
+    Wend
+    ValSkipSp = i
+End Function
+
+Function ValRadixEat(p As *Byte, n As Long, ByRef i As Long, base As Long, ByRef v As Double) As Long
+    Dim d As Long
+    ValRadixEat = 0
+    If i >= n Then Exit Function
+    d = ValHexDig(p[i])
+    If d < 0 Or d >= base Then Exit Function
+    v = v * base + d
+    i = i + 1
+    ValRadixEat = 1
+End Function
+
+Function ValRadix(p As *Byte, n As Long, ByRef i As Long, base As Long) As Double
+    Dim v As Double
+    v = 0
+    While ValRadixEat(p, n, i, base, v) <> 0
+        v = v
+    Wend
+    ValRadix = v
+End Function
+
+Function ValFracEat(p As *Byte, n As Long, ByRef i As Long, ByRef scale As Double, ByRef v As Double) As Long
+    ValFracEat = 0
+    If i >= n Then Exit Function
+    If ValDig09(p[i]) < 0 Then Exit Function
+    scale = scale * 10
+    v = v + ValDig09(p[i]) / scale
+    i = i + 1
+    ValFracEat = 1
+End Function
+
+Function ValFracAt(p As *Byte, n As Long, i As Long) As Double
+    Dim v As Double
+    Dim scale As Double
+    v = 0
+    scale = 1
+    While ValFracEat(p, n, i, scale, v) <> 0
+        v = v
+    Wend
+    ValFracAt = v
+End Function
+
+Function ValSign(p As *Byte, n As Long, ByRef i As Long) As Double
+    ValSign = 1
+    If i >= n Then Exit Function
+    If p[i] = Asc("-") Then ValSign = -1
+    If p[i] = Asc("-") Or p[i] = Asc("+") Then i = i + 1
+End Function
+
+Function ValAmpBase(c As Long) As Long
+    ValAmpBase = 0
+    If c = Asc("O") Or c = Asc("o") Then ValAmpBase = 8
+    If c = Asc("H") Or c = Asc("h") Then ValAmpBase = 16
+End Function
+
+Function ValAmp(p As *Byte, n As Long, i As Long) As Double
+    Dim base As Long
+    ValAmp = 0
+    i = i + 1
+    If i >= n Then Exit Function
+    base = ValAmpBase(p[i])
+    If base = 0 Then Exit Function
+    i = i + 1
+    ValAmp = ValRadix(p, n, i, base)
+End Function
+
+Function ValDec(p As *Byte, n As Long, i As Long) As Double
+    Dim sign As Double
+    Dim v As Double
+    sign = ValSign(p, n, i)
+    v = ValRadix(p, n, i, 10)
+    If i < n And p[i] = Asc(".") Then v = v + ValFracAt(p, n, i + 1)
+    ValDec = v * sign
+End Function
+
+Function ValAt(p As *Byte, n As Long) As Double
+    Dim i As Long
+    i = ValSkipSp(p, n, 0)
+    ValAt = 0
+    If i >= n Then Exit Function
+    ValAt = ValDec(p, n, i)
+    If p[i] = Asc("&") Then ValAt = ValAmp(p, n, i)
+End Function
+
+Function Val(s As String) As Double
+    Dim n As Long
+    n = Len(s)
+    Val = 0
+    If n = 0 Then Exit Function
+    Val = ValAt(StrPtr(s), n)
+End Function
