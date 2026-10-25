@@ -28,7 +28,6 @@
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
 | UDT 配列の複数添字 | `a(i, j)` / `a(i, j, k)` | 添字 1 個の平坦アクセスのみ（2 次元以上） |
 | 関数ポインタの引数型 | 引数型の一致検査 | 厳密照合は未（呼び出し自体は [language.md §5.2.1](./language.md#521-関数ポインタ型)） |
 
@@ -56,7 +55,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 の動作 |
 |---|---|---|
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 変数代入に加え、`Long`→`Byte`（呼び出し結果を含む）と引数の `String`→`VoidPtr`・`VoidPtr`→`Long` を warning（`As` で抑制）。数値リテラルは対象外。`Include\default` は抑制 |
-| `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の汎用演算は未（格納と `Input` 変換のみ）。**`-actba32`**: `Double` の配列要素と UDT フィールドの 8 バイト転送は未。`Print` の Double 自動変換は 64bit のみ。科学記法（`1.0e10`）は未対応 |
+| `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の汎用演算は未（格納と `Input` 変換のみ）。`Double` の配列要素と UDT フィールドは `-actba32` でも 8 バイト転送。`Print` の Double 自動変換は 64bit のみ。科学記法（`1.0e10`）は未対応 |
 | `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、アクセス制御 | `Inherits` は親フィールドを先頭に置く。`Virtual` 呼び出しは COM vtable。`Super` は親関数の直接呼び出し（基底 ctor/dtor は自動では呼ばない）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。メソッドはマングル名 + 暗黙 `This` |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
@@ -107,7 +106,6 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `Let` | 明示代入（省略可） | 優先度低 |
 | DLL `.reloc` | ベース再配置 | 出力は済。優先ベースが塞がるとロード失敗 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の一致検査 | `*Function` / 間接 call 自体は済 |
 

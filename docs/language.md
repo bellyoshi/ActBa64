@@ -173,7 +173,7 @@ PAINT (x, y), color1 [, color2]
 | `Word` | 2 | 2 | |
 | `Single` | 4 | 4 | サイズと格納。汎用 IEEE 演算は未（`Double` を使う） |
 | `Long` / `DWord` / `Integer` | 4 | 4 | 別名あり |
-| `Double` | 8 | **8** | IEEE 倍精度。加減乗除・比較・`Function As Double` / Double 仮引数は 64bit と `-actba32` の両方。32bit の値は `edx:eax`。配列要素と UDT フィールドの 8 バイト転送は 64bit のみ |
+| `Double` | 8 | **8** | IEEE 倍精度。加減乗除・比較・`Function As Double` / Double 仮引数、配列要素、UDT フィールドは 64bit と `-actba32` の両方。32bit の値は `edx:eax` |
 | `Enum` 名 | 4 | 4 | 列挙。メンバは整数定数（[§3.4](#34-enum)） |
 | `HANDLE` / `HWND` 等 | 4 | **8** | 64bit は `VoidPtr` / `*T`（`HFILE` は 4 のまま） |
 | `*T` | 4 | **8** | ポインタ |
@@ -276,6 +276,7 @@ End Sub
 
 - `ByRef` 対応。呼び出し側の `ByVal` は無視してよい。構造体引数は `ByRef` 必須（`ByVal` と指定なしはエラー）。フィールド代入は呼び出し元に残る
 - 戻り値は `Function名 = 式`
+- 同じ名前の `Sub` / `Function` はコンパイルエラー（大小は区別しない）
 - `Exit Sub` / `Exit Function`
 - ネストした `Sub`/`Function` は不可
 - `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT。任意 DLL・自作可。拡張子省略時は `.dll`。詳細は [§8](#8-winapi--iat)）
@@ -352,6 +353,7 @@ x = On
 
 ```
 左辺 = 式
+Let 左辺 = 式                 ' 省略可。`=` 代入と同じ
 Name(引数...)                    ' Call キーワード不要（可なら無視）
 
 If 式 Then
@@ -417,6 +419,7 @@ ExitProcess(式)
 
 | 文 | 対応 |
 |---|---|
+| `Let` | ○（省略可。`=` 代入と同じ） |
 | `If` / `ElseIf` / 単行 If | ○ |
 | `Select Case` | ○ |
 | `While` / `Wend` | ○ |
@@ -637,7 +640,7 @@ Print Log(MathE())    ' ≒ 1
 - N88 `CIRCLE` の角度・aspect も `Double`（内部の千分率表現は廃止）
 - `Input` / `Input #` の `Double`/`Single` は十進文字列を `ValDouble` で IEEE 化（`Single` はその後 `cvtsd2ss`）
 - `Rnd()` は `[0, 1)` の Double。`Abs` は Double 引数
-- `-actba32` でもスカラーの Double 演算・`Math.abp`・`StrD$` は動く。`Print` の Double 自動変換と、配列要素・UDT フィールドの 8 バイト転送は 64bit のみ
+- `-actba32` でもスカラー、配列要素、UDT フィールドの Double 演算と `Math.abp`・`StrD$` は動く。`Print` の Double 自動変換は 64bit のみ
 
 `Space$(n)` は `Space.abp` から常時利用可。ネストした関数呼び出しは対応する。複雑な入れ子は一時変数経由が安全。
 
@@ -849,7 +852,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 ## 10. 非対応（意図的）
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは COM vtable。`Super` / `New` / `Delete` は対応）
-- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は IEEE Double（64bit と `-actba32`。32bit の配列要素・UDT フィールド転送と、`Print` の Double 変換は未）
+- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールドは IEEE Double（64bit と `-actba32`。`Print` の Double 変換は 64bit のみ）
 - ネスト手続き
 - `#resource` の MENU / DIALOG / VERSIONINFO（ICON 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化
