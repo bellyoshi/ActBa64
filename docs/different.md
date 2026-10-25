@@ -27,7 +27,7 @@
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
 | `Goto` / `GoSub` / `Return` | 行番号または `*ラベル` へ分岐・復帰 | 非対応（キーワードなし） |
-| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | ○（自動定義は **`_WIN64`（64bit 時）と `_AB_VER4` のみ**。`_DEBUG` は自動定義しない） |
+| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | ○（自動定義は **`_WIN64`（64bit 時）、`_AB_VER4`、`_ACTBA64`**。`_DEBUG` は自動定義しない。`_ACTBA64` は AB 4.20 には無い） |
 | `#include` の再取り込み | 同じパスを複数回 `#include` すると、都度展開される | **パス単位で一度だけ**（2 回目以降はスキップ。AB 4.20 の都度展開とは異なる） |
 | `On Error` / `Resume` | エラートラップ | 非対応 |
 
@@ -45,7 +45,7 @@
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `rc` ファイル取り込み | リソース埋め込み | **部分対応**（`#resource "file"` → RCDATA 1。`.rc`/ICON/MENU は未） |
+| `rc` ファイル取り込み | リソース埋め込み | **部分対応**（`#resource "file"` → RCDATA 1。`.rc` の ICON は隣の `rc.exe`。MENU は未） |
 
 ### GUI・対話・マルチメディア命令
 
@@ -67,10 +67,10 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 の動作 |
 |---|---|---|
-| `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | **変数同士の代入**で型不一致を warning（`As` で抑制）。リテラル代入は対象外。`Include\default` は抑制 |
+| `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 変数代入に加え、`Long`→`Byte`（呼び出し結果を含む）と引数の `String`→`VoidPtr`・`VoidPtr`→`Long` を warning（`As` で抑制）。数値リテラルは対象外。`Include\default` は抑制 |
 | `Single` / `Double` | IEEE 浮動小数点演算 | **`Double`**: 加減乗除・比較・`Function As Double` / Double 仮引数・小数リテラルは AST 上 IEEE ビット（千分率は不使用）。`Math.abp` も IEEE Double。64bit と `-actba32` の両方（32bit の値は `edx:eax`。配列要素と UDT フィールドの 8 バイト転送は 64bit のみ）。**`Single`**: 格納と Input 変換が中心（汎用演算は未）。N88 `CIRCLE` 角度・aspect は `Double` |
 | `Const` | `Const name = expr` および `Const name(arglist) = expr`（マクロ関数） | 整数・文字列リテラル中心。複雑な定数式・マクロ関数は制限あり |
-| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。`Super` 演算子なし。`Private` / `Public` / `Protected` は**受理のみ**（アクセス制御なし）。メソッドはマングル名 + 暗黙 `Me` |
+| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。`Super` 演算子なし。`Private` / `Public` / `Protected` は**受理のみ**（アクセス制御なし）。メソッドはマングル名 + 暗黙 `This` |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` / `Trim$` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |
@@ -176,7 +176,7 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `rc` / `#resource` | リソースファイル取り込み | ファイル→RCDATA(1) は済。`.rc` 直接 / ICON・MENU は未 |
+| `rc` / `#resource` | リソースファイル取り込み | ファイル→RCDATA(1) は済。ICON は隣の `rc.exe`。MENU は未 |
 
 ### 数値・変換・文字列関数
 

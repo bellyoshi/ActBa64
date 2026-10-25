@@ -1,0 +1,280 @@
+' RcScan - #define と ICON 文
+
+Sub RcSkipWs()
+    While g_pos < g_srcN
+        If IsSpace(g_src[g_pos]) = 0 Then Exit Sub
+        g_pos = g_pos + 1
+    Wend
+End Sub
+
+Sub RcSkipBom()
+    If g_srcN < 3 Then Exit Sub
+    If g_src[0] <> 239 Or g_src[1] <> 187 Then Exit Sub
+    If g_src[2] = 191 Then g_pos = 3
+End Sub
+
+Function RcEqKw(kw As *Byte) As Long
+    Dim i As Long
+    i = 0
+    While kw[i] <> 0
+        If g_src[g_pos + i] = 0 Then Exit Function
+        If StrU_ToLowerChar(g_src[g_pos + i]) <> StrU_ToLowerChar(kw[i]) Then Exit Function
+        i = i + 1
+    Wend
+    RcEqKw = 1
+End Function
+
+Function RcEatKw(kw As *Byte, n As Long) As Long
+    RcEatKw = 0
+    If RcEqKw(kw) = 0 Then Exit Function
+    If RcIdent1(g_src[g_pos + n]) <> 0 Then Exit Function
+    g_pos = g_pos + n
+    RcEatKw = 1
+End Function
+
+Function RcIdent0(c As Long) As Long
+    RcIdent0 = 0
+    If c >= 65 And c <= 90 Then RcIdent0 = 1
+    If c >= 97 And c <= 122 Then RcIdent0 = 1
+    If c = 95 Then RcIdent0 = 1
+End Function
+
+Function RcIdent1(c As Long) As Long
+    RcIdent1 = RcIdent0(c)
+    If c >= 48 And c <= 57 Then RcIdent1 = 1
+End Function
+
+Sub RcTokCopy(dst As *Byte, ByRef n As Long)
+    While RcIdent1(g_src[g_pos]) <> 0 And n < 31
+        dst[n] = g_src[g_pos]
+        n = n + 1
+        g_pos = g_pos + 1
+    Wend
+    dst[n] = 0
+End Sub
+
+Function RcTok(dst As *Byte) As Long
+    Dim n As Long
+    n = 0
+    If RcIdent0(g_src[g_pos]) = 0 Then Exit Function
+    RcTokCopy(dst, n)
+    RcTok = 1
+End Function
+
+Function RcNeedTok(dst As *Byte) As Long
+    RcNeedTok = RcTok(dst)
+    If RcNeedTok = 0 Then Print "error: expected name"
+End Function
+
+Function RcNumDig(v As Long) As Long
+    While g_src[g_pos] >= 48 And g_src[g_pos] <= 57
+        v = v * 10 + (g_src[g_pos] - 48)
+        g_pos = g_pos + 1
+    Wend
+    RcNumDig = v
+End Function
+
+Function RcNum() As Long
+    RcNum = -1
+    If g_src[g_pos] < 48 Or g_src[g_pos] > 57 Then Exit Function
+    g_num = RcNumDig(0)
+    RcNum = g_num
+End Function
+
+Function RcBytesEq(a As *Byte, b As *Byte) As Long
+    Dim k As Long
+    k = 0
+    While a[k] <> 0 Or b[k] <> 0
+        If a[k] <> b[k] Then Exit Function
+        k = k + 1
+    Wend
+    RcBytesEq = 1
+End Function
+
+Function RcDefSlot(i As Long) As *Byte
+    Dim off As Long
+    off = i * 32
+    RcDefSlot = VarPtr(g_defName(off))
+End Function
+
+Function RcFindDef(name As *Byte) As Long
+    Dim i As Long
+    i = 0
+    RcFindDef = -1
+    While i < g_defN
+        If RcBytesEq(RcDefSlot(i), name) <> 0 Then RcFindDef = i
+        If RcBytesEq(RcDefSlot(i), name) <> 0 Then Exit Function
+        i = i + 1
+    Wend
+End Function
+
+Function RcLookup(name As *Byte) As Long
+    Dim i As Long
+    i = RcFindDef(name)
+    RcLookup = -1
+    If i < 0 Then Print "error: unknown id " + MakeStr(name)
+    If i >= 0 Then RcLookup = g_defVal(i)
+End Function
+
+Function RcDec(name As *Byte) As Long
+    Dim i As Long
+    i = 0
+    RcDec = 0
+    While name[i] >= 48 And name[i] <= 57
+        RcDec = RcDec * 10 + (name[i] - 48)
+        i = i + 1
+    Wend
+End Function
+
+Function RcResolve(name As *Byte) As Long
+    If name[0] >= 48 And name[0] <= 57 Then RcResolve = RcDec(name)
+    If name[0] < 48 Or name[0] > 57 Then RcResolve = RcLookup(name)
+End Function
+
+Sub RcStoreDef(name As *Byte, v As Long)
+    lstrcpy(RcDefSlot(g_defN), name)
+    g_defVal(g_defN) = v
+    g_defN = g_defN + 1
+End Sub
+
+Function RcAddDef(name As *Byte, v As Long) As Long
+    If g_defN >= 16 Then Print "error: too many defines"
+    If g_defN >= 16 Then Exit Function
+    RcStoreDef(name, v)
+    RcAddDef = 1
+End Function
+
+Function RcDefRest() As Long
+    Dim name(31) As Byte
+    RcSkipWs()
+    If RcNeedTok(VarPtr(name)) = 0 Then Exit Function
+    RcSkipWs()
+    g_num = RcNum()
+    If g_num < 0 Then Print "error: expected number"
+    If g_num < 0 Then Exit Function
+    RcDefRest = RcAddDef(VarPtr(name), g_num)
+End Function
+
+Function RcEatDefine() As Long
+    Dim k(7) As Byte
+    lstrcpy(VarPtr(k), "define")
+    RcEatDefine = RcEatKw(VarPtr(k), 6)
+End Function
+
+Function RcDefine() As Long
+    Dim ok As Long
+    g_pos = g_pos + 1
+    RcSkipWs()
+    ok = RcEatDefine()
+    If ok = 0 Then Print "error: unsupported rc directive"
+    If ok = 0 Then Exit Function
+    RcDefine = RcDefRest()
+End Function
+
+Sub RcCopyQuote(dst As *Byte)
+    Dim n As Long
+    n = 0
+    While g_src[g_pos] <> 0 And g_src[g_pos] <> 34 And n < 259
+        dst[n] = g_src[g_pos]
+        n = n + 1
+        g_pos = g_pos + 1
+    Wend
+    dst[n] = 0
+End Sub
+
+Function RcEndQuote() As Long
+    If g_src[g_pos] <> 34 Then Print "error: expected quoted path"
+    If g_src[g_pos] <> 34 Then Exit Function
+    g_pos = g_pos + 1
+    RcEndQuote = 1
+End Function
+
+Function RcQuoted(dst As *Byte) As Long
+    RcSkipWs()
+    If g_src[g_pos] <> 34 Then Print "error: expected quoted path"
+    If g_src[g_pos] <> 34 Then Exit Function
+    g_pos = g_pos + 1
+    RcCopyQuote(dst)
+    RcQuoted = RcEndQuote()
+End Function
+
+Function RcIcoSlot(i As Long) As *Byte
+    Dim off As Long
+    off = i * 260
+    RcIcoSlot = VarPtr(g_icoPath(off))
+End Function
+
+Sub RcKeepIcon(id As Long, path As *Byte)
+    lstrcpy(RcIcoSlot(g_nGrp), path)
+    g_grpId(g_nGrp) = id
+    g_grpFirst(g_nGrp) = g_nImg
+    g_nGrp = g_nGrp + 1
+End Sub
+
+Function RcAddIcon(id As Long, path As *Byte) As Long
+    If g_nGrp >= 4 Then Print "error: too many ICON lines"
+    If g_nGrp >= 4 Then Exit Function
+    RcKeepIcon(id, path)
+    RcAddIcon = 1
+End Function
+
+Function RcIconPath(id As Long) As Long
+    If RcQuoted(VarPtr(g_qpath)) = 0 Then Exit Function
+    RcIconPath = RcAddIcon(id, VarPtr(g_qpath))
+End Function
+
+Function RcIconTail(id As Long) As Long
+    Dim k(7) As Byte
+    Dim ok As Long
+    RcSkipWs()
+    lstrcpy(VarPtr(k), "ICON")
+    ok = RcEatKw(VarPtr(k), 4)
+    If ok = 0 Then Print "error: expected ICON"
+    If ok = 0 Then Exit Function
+    RcIconTail = RcIconPath(id)
+End Function
+
+Function RcIconStmt() As Long
+    Dim name(31) As Byte
+    Dim id As Long
+    If RcNeedTok(VarPtr(name)) = 0 Then Exit Function
+    id = RcResolve(VarPtr(name))
+    If id < 0 Then Exit Function
+    RcIconStmt = RcIconTail(id)
+End Function
+
+Function RcComment() As Long
+    If g_src[g_pos + 1] <> 47 Then Print "error: unsupported rc text"
+    If g_src[g_pos + 1] <> 47 Then Exit Function
+    While g_pos < g_srcN And g_src[g_pos] <> 10
+        g_pos = g_pos + 1
+    Wend
+    RcComment = 1
+End Function
+
+Function RcOne() As Long
+    Dim c As Long
+    c = g_src[g_pos]
+    If c = 35 Then RcOne = RcDefine()
+    If c = 35 Then Exit Function
+    If c = 47 Then RcOne = RcComment()
+    If c = 47 Then Exit Function
+    RcOne = RcIconStmt()
+End Function
+
+Function RcAtEnd() As Long
+    RcSkipWs()
+    RcAtEnd = 0
+    If g_pos >= g_srcN Then RcAtEnd = 1
+End Function
+
+Function RcParse() As Long
+    g_pos = 0
+    RcSkipBom()
+    While g_pos < g_srcN
+        If RcAtEnd() <> 0 Then RcParse = 1
+        If RcAtEnd() <> 0 Then Exit Function
+        If RcOne() = 0 Then Exit Function
+    Wend
+    RcParse = 1
+End Function

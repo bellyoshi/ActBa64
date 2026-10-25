@@ -23,49 +23,49 @@ Function ParseConstString(p As *Parser, name As *Byte) As Long
     ParseConstString = nConst
 End Function
 
-Function ParseConstNumber(p As *Parser, name As *Byte) As Long
-    Dim ast As *Ast
+Function ParseConstExprFill(ast As *Ast, nConst As Long, name As *Byte, e As Long) As Long
     Dim nodes As *AstNode
-    Dim nConst As Long
-    Dim neg As Long
-    Dim v As Long
-
-    ParseConstNumber = -1
-    ast = p->ast
-    neg = 0
-    If ParseTokKind(p) = TK_MINUS Then
-        p->pos = p->pos + 1
-        neg = 1
-    End If
-    If ParseTokKind(p) <> TK_NUMBER Then
-        p->err = 1
-        Exit Function
-    End If
-    v = ParseTokNum(p)
-    If neg <> 0 Then v = 0 - v
-    p->pos = p->pos + 1
-    nConst = AstAddNode(ast, AST_CONST)
-    If nConst < 0 Then Exit Function
     AstSetStr(ast, nConst, name)
     nodes = ast->nodes
-    nodes[nConst].num = v
-    nodes[nConst].left = -1
-    nodes[nConst].extra = 0
-    ParseConstNumber = nConst
+    nodes[nConst].num = 0
+    nodes[nConst].left = e
+    nodes[nConst].extra = AST_CONST_EXTRA_EXPR
+    ParseConstExprFill = nConst
+End Function
+
+Function ParseConstExprNode(p As *Parser, name As *Byte, e As Long) As Long
+    Dim ast As *Ast
+    Dim nConst As Long
+    ParseConstExprNode = -1
+    ast = p->ast
+    nConst = AstAddNode(ast, AST_CONST)
+    If nConst < 0 Then Exit Function
+    ParseConstExprNode = ParseConstExprFill(ast, nConst, name, e)
+End Function
+
+Function ParseConstExpr(p As *Parser, name As *Byte) As Long
+    Dim e As Long
+    ParseConstExpr = -1
+    e = ParseExprNoAs(p)
+    If e < 0 Then Exit Function
+    ParseConstExpr = ParseConstExprNode(p, name, e)
+End Function
+
+Function ParseConstRhs(p As *Parser, name As *Byte) As Long
+    If ParseTokKind(p) = TK_STRING Then
+        ParseConstRhs = ParseConstString(p, name)
+        Exit Function
+    End If
+    ParseConstRhs = ParseConstExpr(p, name)
 End Function
 
 Function ParseConstStmt(p As *Parser) As Long
     Dim name(SYM_NAME_LEN - 1) As Byte
-
     ParseConstStmt = -1
     p->pos = p->pos + 1
     If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
     If Not ParseExpect(p, TK_EQ) Then Exit Function
-    If ParseTokKind(p) = TK_STRING Then
-        ParseConstStmt = ParseConstString(p, VarPtr(name))
-    Else
-        ParseConstStmt = ParseConstNumber(p, VarPtr(name))
-    End If
+    ParseConstStmt = ParseConstRhs(p, VarPtr(name))
 End Function
 
 Function ParseAssignWithDot(p As *Parser) As Long

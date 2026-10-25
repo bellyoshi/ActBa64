@@ -4,13 +4,28 @@ Const RT_RCDATA = 10
 Const RES_DATA_ENTRY_OFF = &H48
 Const RES_PAYLOAD_OFF = &H58
 
+Const RES_FIX_MAX = 32
+
 Dim g_rsrcBuf As *Byte
 Dim g_rsrcSize As Long
+Dim g_resFixN As Long
+Dim g_resFixOff(31) As Long
+
+Sub ResFixClear()
+    g_resFixN = 0
+End Sub
+
+Sub ResFixAdd(off As Long)
+    If g_resFixN >= RES_FIX_MAX Then Exit Sub
+    g_resFixOff(g_resFixN) = off
+    g_resFixN = g_resFixN + 1
+End Sub
 
 Sub ResClear()
     If g_rsrcBuf <> NULL Then free(g_rsrcBuf)
     g_rsrcBuf = NULL
     g_rsrcSize = 0
+    ResFixClear()
 End Sub
 
 Function ResBuf() As *Byte
@@ -51,6 +66,8 @@ Sub ResPutTree(buf As *Byte, dataSize As Long)
     ResPutIdEntry(buf, &H40, 0, RES_DATA_ENTRY_OFF, 0)
     PutDword(buf, RES_DATA_ENTRY_OFF + 0, RES_PAYLOAD_OFF)
     PutDword(buf, RES_DATA_ENTRY_OFF + 4, dataSize)
+    ResFixClear()
+    ResFixAdd(RES_DATA_ENTRY_OFF)
 End Sub
 
 Function ResBuildRcdata(data As *Byte, dataSize As Long) As *Byte
@@ -72,10 +89,31 @@ Function ResBuildRcdata(data As *Byte, dataSize As Long) As *Byte
     ResBuildRcdata = buf
 End Function
 
+Function ResDwAt(p As *Byte, off As Long) As DWord
+    Dim q As *Byte
+    Dim v As DWord
+    v = 0
+    PtrAddTo(p, off, q)
+    memcpy(VarPtr(v), q, 4)
+    ResDwAt = v
+End Function
+
+Sub ResFixOne(rsrcRva As DWord, i As Long)
+    Dim off As Long
+    Dim cur As DWord
+    off = g_resFixOff(i)
+    cur = ResDwAt(g_rsrcBuf, off)
+    PutDword(g_rsrcBuf, off, rsrcRva + cur)
+End Sub
+
 Sub ResFixupRvas(rsrcRva As DWord)
+    Dim i As Long
     If g_rsrcBuf = NULL Then Exit Sub
-    If g_rsrcSize < RES_DATA_ENTRY_OFF + 4 Then Exit Sub
-    PutDword(g_rsrcBuf, RES_DATA_ENTRY_OFF, rsrcRva + RES_PAYLOAD_OFF)
+    i = 0
+    While i < g_resFixN
+        ResFixOne(rsrcRva, i)
+        i = i + 1
+    Wend
 End Sub
 
 ' 戻り値 true : 正常終了  false : エラーあり
@@ -127,10 +165,6 @@ Function ResPrepareFromPp() As Long
     ResClear()
     If PpResHas() = 0 Then Exit Function
     path = PpResPathGet()
-    If ResPathIsRc(path) Then
-        Print "error: #resource .rc: compile with rc.exe to .res, then #resource file.res (file bytes -> RCDATA 1)"
-        ResPrepareFromPp = 0
-        Exit Function
-    End If
-    ResPrepareFromPp = ResLoadFileAsRcdata(path)
+    If ResPathIsRc(path) Then ResPrepareFromPp = ResCompileRc(path)
+    If Not ResPathIsRc(path) Then ResPrepareFromPp = ResLoadFileAsRcdata(path)
 End Function

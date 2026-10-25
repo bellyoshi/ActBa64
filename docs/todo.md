@@ -61,7 +61,7 @@
 | `GoTo` / `GoSub` / `Return`（`*ラベル`） | 行番号は非対応方針。ラベル付き分岐・復帰も未 |
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
-| `#resource` の `.rc` / ICON・MENU | `rc.exe` 連携・型付きリソースは未 |
+| `#resource` の MENU / DIALOG / VERSIONINFO | ICON は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | `Let` | 明示代入（4.20）。優先度低（`=` のみ） |
 | `Const name(arglist) = expr` | マクロ定数関数（4.20 Const 章） |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
