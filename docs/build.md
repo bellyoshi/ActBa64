@@ -21,7 +21,13 @@ ActiveBasic 4.20 で `actba64.pj` をビルドし、`bin\stage0\actba64.exe` に
 
 `#PLATFORM=32` は **AB4.20 が 32bit exe を出すため** だけ。コンパイル対象の切替には使わない（対象は CLI の `-actba32`）。
 
-**注意:** AB4.20 は加算を 16bit 化することがあり、古い stage0 だと出力 PE の `SizeOfImage` が壊れ OS が拒否する（`%1 is not a valid Win32 application`）。現行ソースは `AlignUp` / `PeCalcLayout` を DWord 段階演算に直してあるので、**stage0 を作り直すときはこのツリーで** AB4.20 ビルドすること。`build.ps1` は不正 PE を検知して stage3 等へフォールバックする。
+**注意:** AB4.20 は式の加算・乗算を 16bit 化することがある。古い stage0 では次が壊れる。
+
+- `SizeOfImage` が小さくなり、OS が `%1 is not a valid Win32 application` で拒否する
+- DLL のエクスポート RVA が切れる（例: `0x1000 + 0x11811` → `0x2811`）。呼び出しは終了コード `0xC000001D`（不正命令）になる
+- `-actba32` の絶対アドレス（ラベル、グローバル、文字列、IAT）が連鎖加算のままだと同じ切り捨てになる
+
+現行ソースは `AlignUp`、`PeCalcLayout`、`CgSnapRva`、`CgAbs32Add` を DWord の段階代入にしてある。**stage0 を作り直すときはこのツリーで** AB4.20 ビルドすること。`build.ps1` は不正 PE を検知して stage3 等へフォールバックする。
 
 ---
 

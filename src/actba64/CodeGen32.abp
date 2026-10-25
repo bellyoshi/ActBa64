@@ -7,6 +7,32 @@ Function CgImageBase32() As DWord
     If g_ppModuleDll <> 0 Then CgImageBase32 = IMAGE_BASE_32_DLL
 End Function
 
+' AB4.20 は連鎖加算を 16bit 化することがある。
+Function CgAbs32Add(a As DWord, b As DWord) As DWord
+    Dim s As DWord
+    s = a
+    s = s + b
+    CgAbs32Add = s
+End Function
+
+Function CgAbs32Lab(off As Long) As DWord
+    Dim n As DWord
+    Dim t As DWord
+    Dim a As DWord
+    n = off
+    t = TEXT_RVA
+    a = CgAbs32Add(CgImageBase32(), t)
+    a = CgAbs32Add(a, n)
+    CgAbs32Lab = a
+End Function
+
+Function CgAbs32Glob(dataRva As DWord, globOff As DWord) As DWord
+    Dim a As DWord
+    a = CgAbs32Add(CgImageBase32(), dataRva)
+    a = CgAbs32Add(a, globOff)
+    CgAbs32Glob = a
+End Function
+
 Sub CgApplyFixups32(cb As *CodeBuffer)
     Dim i As Long
     Dim li As Long
@@ -20,7 +46,7 @@ Sub CgApplyFixups32(cb As *CodeBuffer)
         If CgEnsureLabIdx(li) Then
             If g_cgLabOff[li] >= 0 Then
                 If g_cgFix[i].kind = IR_FIX_ABS32 Then
-                    absAddr = CgImageBase32() + TEXT_RVA + g_cgLabOff[li]
+                    absAddr = CgAbs32Lab(g_cgLabOff[li])
                     If at >= 0 And at + 4 <= cb->capacity Then
                         PutDword(cb->buf, at, absAddr)
                     End If
@@ -60,13 +86,13 @@ Function CgTryEmit32A1(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder
         EmitXorEcx(cb)
     ElseIf opv = OP_LEA_RDX_STR Then
         strRva = IbGetStringRva(builder, op->strId)
-        Emit32MovEdxAbs(cb, CgImageBase32() + strRva)
+        Emit32MovEdxAbs(cb, CgAbs32Add(CgImageBase32(), strRva))
     ElseIf opv = OP_LEA_R8_STR Then
         strRva = IbGetStringRva(builder, op->strId)
-        Emit32MovEdxAbs(cb, CgImageBase32() + strRva)
+        Emit32MovEdxAbs(cb, CgAbs32Add(CgImageBase32(), strRva))
     ElseIf opv = OP_LEA_RAX_STR Then
         strRva = IbGetStringRva(builder, op->strId)
-        Emit32MovAbsEax(cb, CgImageBase32() + strRva)
+        Emit32MovAbsEax(cb, CgAbs32Add(CgImageBase32(), strRva))
     ElseIf opv = OP_MOV_RCX_RAX Then
         Emit32MovEcxEax(cb)
     ElseIf opv = OP_MOV_RDX_RAX Then
@@ -221,7 +247,7 @@ Function CgTryEmit32B3(cb As *CodeBuffer, op As *IrOp, dataRva As DWord) As bool
         CgPushFix(at, op->arg1, IR_FIX_ABS32)
     ElseIf opv = OP_LEA_RAX_GLOB Then
         globOff = op->arg1
-        Emit32MovAbsEax(cb, CgImageBase32() + dataRva + globOff)
+        Emit32MovAbsEax(cb, CgAbs32Glob(dataRva, globOff))
     Else
         Exit Function
     End If
@@ -312,7 +338,7 @@ Function CgTryEmit32D(list As *IrList, cb As *CodeBuffer, builder As *ImportBuil
     ElseIf opv = OP_CALL_API Then
         If Not IrResolveApiNames(list, i, VarPtr(dll), VarPtr(api)) Then Exit Function
         iatRva = IbGetIatRva(builder, VarPtr(dll), VarPtr(api))
-        Emit32CallIatAbs(cb, CgImageBase32() + iatRva)
+        Emit32CallIatAbs(cb, CgAbs32Add(CgImageBase32(), iatRva))
     Else
         Exit Function
     End If

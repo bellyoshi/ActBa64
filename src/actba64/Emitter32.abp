@@ -2,13 +2,37 @@
 '  x86 emitters (no REX, abs addressing for IAT/strings)
 ' ===================================================
 
+' 1 ページずつ触らないと、4KB コミットのスタックで 8KB フレームの call が落ちる。
+Sub Emit32ProbePage(cb As *CodeBuffer)
+    EmitByte(cb, &H81)
+    EmitByte(cb, &HEC)
+    EmitDword(cb, &H1000)
+    EmitByte(cb, &H85)
+    EmitByte(cb, &H04)
+    EmitByte(cb, &H24)
+End Sub
+
+Sub Emit32ProbeStep(cb As *CodeBuffer, ByRef left As DWord, page As DWord)
+    Emit32ProbePage(cb)
+    left = left - page
+End Sub
+
+Sub Emit32Probe(cb As *CodeBuffer, frame As DWord)
+    Dim left As DWord
+    Dim page As DWord
+    left = frame
+    page = &H1000
+    While left > page
+        Emit32ProbeStep(cb, left, page)
+    Wend
+    If left <> 0 Then Emit32SubEsp(cb, left)
+End Sub
+
 Sub Emit32Enter(cb As *CodeBuffer, frameSize As DWord)
     EmitByte(cb, &H55)
     EmitByte(cb, &H89)
     EmitByte(cb, &HE5)
-    EmitByte(cb, &H81)
-    EmitByte(cb, &HEC)
-    EmitDword(cb, frameSize)
+    Emit32Probe(cb, frameSize)
 End Sub
 
 Sub Emit32LeaveRet(cb As *CodeBuffer, nPop As DWord)
