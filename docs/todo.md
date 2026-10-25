@@ -92,7 +92,7 @@
 
 | 4.20（D3D9 系） | ActBa64 | メモ |
 |---|---|---|
-| `dx_SetCullMode` | 未 | カリング |
+| `dx_SetCullMode` | 済 | `D3DCULL_*` をラスタライザへ。`dx_graphics.sbp` |
 | `dx_SetDefaultLight` / `dx_SetLightOff` | 未 | ライト |
 | `CImage2D` / `CMeshModel` / `CRectPolygon` | 未 | 高レベル描画 |
 | `CInputKeyboard` / `CInputMouse` | 未 | `dx_input.sbp`（DirectInput） |

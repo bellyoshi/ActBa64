@@ -153,7 +153,7 @@ AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **
   - 行列変換（移動・回転・拡大縮小）+ キーボード操作: [`src/actba64/samples/dxxform/`](../src/actba64/samples/dxxform/)。
   - 6面立方体 + 行列変換: [`src/actba64/samples/dxcube2/`](../src/actba64/samples/dxcube2/)。
   - BasicHelp の DirectX 章の利用パターン（初期化 → メッセージループ内描画 → 終了）を D3D11 上で再現していく。
-  - `dx_SetProjection` / `dx_SetCamera` は [`dx_camera.sbp`](../src/Include/d3d11/dx_camera.sbp)。ビューと射影は `g_dxView` / `g_dxProj`（デバイスの `SetTransform` はない）。
+  - `dx_SetProjection` / `dx_SetCamera` は [`dx_camera.sbp`](../src/Include/d3d11/dx_camera.sbp)。ビューと射影は `g_dxView` / `g_dxProj`（デバイスの `SetTransform` はない）。`dx_SetCullMode` は [`dx_graphics.sbp`](../src/Include/d3d11/dx_graphics.sbp) がラスタライザステートへ渡す。
 
 ---
 

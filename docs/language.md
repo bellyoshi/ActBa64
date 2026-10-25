@@ -680,11 +680,13 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 ```
 dx_SetProjection(angle, aspect, nearclip, backclip)
 dx_SetCamera(pEye, pAt, pUp)
+dx_SetCullMode(CullMode)
 ```
 
 - `angle` は視野角（ラジアン）。`aspect` はビュー空間の幅/高さ。`D3DX_PI` は `MathPi()` と同じ値
 - 射影は `D3DXMatrixPerspectiveFovLH`、カメラは `D3DXMatrixLookAtLH`
 - ポインタが 0 の `dx_SetCamera` は行列を変えない
+- `dx_SetCullMode` は `D3DCULL_NONE` / `D3DCULL_CW` / `D3DCULL_CCW`。デバイスが無いときは何もしない。前面は時計回り（`D3DCULL_CCW` が背面カリング）
 - シェーダの定数バッファへは `VarPtr(g_dxProj[0])` / `VarPtr(g_dxView[0])` を渡す
 
 ---
