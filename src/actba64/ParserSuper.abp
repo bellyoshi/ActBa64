@@ -1,0 +1,126 @@
+' ParserSuper - Super.Method / 継承レイアウト
+
+Dim g_psMeth(SYM_NAME_LEN - 1) As Byte
+Dim g_psKey(SYM_NAME_LEN - 1) As Byte
+Dim g_psDtor As Long
+Dim g_psArg As Long
+Dim g_psN As Long
+Dim g_psParent As Long
+
+Function AccInheritLay(p As *Parser, t As *TypeTable, ti As Long, parent As Long) As Long
+    AccInheritLay = 0
+    If AccCopyFields(t, ti, parent) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    If AccSetParent(ti, parent) = 0 Then p->err = 1
+    AccInheritLay = 1
+    If p->err <> 0 Then AccInheritLay = 0
+End Function
+
+Function AccInheritIface(t As *TypeTable, parent As Long, ByRef isIface As Long) As Long
+    Dim counts As *Long
+    counts = t->typeVirtCount
+    If counts[parent] > 0 Then isIface = 1
+    AccInheritIface = 1
+End Function
+
+Function AccInherit(p As *Parser, t As *TypeTable, ti As Long, parent As Long, ByRef isIface As Long) As Long
+    AccInherit = 0
+    If AccInheritLay(p, t, ti, parent) = 0 Then Exit Function
+    AccInherit = AccInheritIface(t, parent, isIface)
+End Function
+
+Function ParseIsSuper(name As *Byte) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    lstrcpy(VarPtr(k), "super")
+    ParseIsSuper = ByteNameEqCI(name, VarPtr(k))
+End Function
+
+Function ParseSuperCtx(p As *Parser) As Long
+    ParseSuperCtx = 0
+    If p->classTypeIdx >= 0 Then
+        ParseSuperCtx = 1
+        Exit Function
+    End If
+    ParseFail(p, "Super outside class")
+End Function
+
+Function ParseSuperTilde(p As *Parser) As Long
+    ParseSuperTilde = 0
+    If ParseTokKind(p) <> TK_TILDE Then Exit Function
+    p->pos = p->pos + 1
+    ParseSuperTilde = 1
+End Function
+
+Function ParseSuperHead(p As *Parser, meth As *Byte, ByRef isDtor As Long) As Long
+    ParseSuperHead = 0
+    If ParseSuperCtx(p) = 0 Then Exit Function
+    If Not ParseExpect(p, TK_DOT) Then Exit Function
+    isDtor = ParseSuperTilde(p)
+    If Not ParseCopyIdent(p, meth) Then Exit Function
+    If Not ParseExpect(p, TK_LPAREN) Then Exit Function
+    ParseSuperHead = 1
+End Function
+
+Function PsTypes(p As *Parser) As *TypeTable
+    Dim ast As *Ast
+    ast = p->ast
+    PsTypes = ast->types
+End Function
+
+Function AccSuperBind(p As *Parser, parent As Long, meth As *Byte, isDtor As Long, key As *Byte) As Long
+    AccSuperBind = 0
+    If AccSuperKey(PsTypes(p), parent, meth, isDtor, key) = 0 Then
+        ParseFail(p, "Super name is not the base class")
+        Exit Function
+    End If
+    g_psParent = parent
+    AccSuperBind = 1
+End Function
+
+Function AccSuperPrep(p As *Parser, meth As *Byte, isDtor As Long, key As *Byte) As Long
+    Dim parent As Long
+    AccSuperPrep = 0
+    parent = AccParent(p->classTypeIdx)
+    If parent < 0 Then
+        ParseFail(p, "Super without Inherits")
+        Exit Function
+    End If
+    AccSuperPrep = AccSuperBind(p, parent, meth, isDtor, key)
+End Function
+
+Sub ParseSuperFill(ast As *Ast, n As Long, arg0 As Long, nArgs As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].right = g_psParent
+    nodes[n].extra = -4
+    nodes[n].num = nArgs
+End Sub
+
+Function ParseSuperNode(p As *Parser, key As *Byte, arg0 As Long, nArgs As Long) As Long
+    Dim n As Long
+    n = AstAddNode(p->ast, AST_CALL)
+    ParseSuperNode = -1
+    If n < 0 Then Exit Function
+    AstSetStr(p->ast, n, key)
+    ParseSuperFill(p->ast, n, arg0, nArgs)
+    ParseSuperNode = n
+End Function
+
+Function ParseSuperCall(p As *Parser) As Long
+    ParseSuperCall = -1
+    If ParseSuperHead(p, VarPtr(g_psMeth), g_psDtor) = 0 Then Exit Function
+    If ParseArgList(p, g_psArg, g_psN) = 0 Then Exit Function
+    If AccSuperPrep(p, VarPtr(g_psMeth), g_psDtor, VarPtr(g_psKey)) = 0 Then Exit Function
+    ParseSuperCall = ParseSuperNode(p, VarPtr(g_psKey), g_psArg, g_psN)
+End Function
+
+Function ParseFactorSuper(p As *Parser, name As *Byte, idLine As Long) As Long
+    ParseFactorSuper = -2
+    If ParseIsSuper(name) = 0 Then Exit Function
+    If ParseTokKind(p) <> TK_DOT Then Exit Function
+    ParseFactorSuper = ParseSuperCall(p)
+    If ParseFactorSuper >= 0 Then AstSetSrcLine(p->ast, ParseFactorSuper, idLine)
+End Function

@@ -31,7 +31,6 @@
 | `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
 | UDT 配列の複数添字 | `a(i, j)` / `a(i, j, k)` | 添字 1 個の平坦アクセスのみ（2 次元以上） |
 | 関数ポインタの引数型 | 引数型の一致検査 | 厳密照合は未（呼び出し自体は [language.md §5.2.1](./language.md#521-関数ポインタ型)） |
-| `Class` の残り | `Super`、厳密なアクセス制御、メンバ Class の自動 ctor/dtor | `Super` なし。`Private` / `Public` / `Protected` は受理のみ。メンバ Class の自動 ctor/dtor は未（`New` / `Delete` 自体は [language.md §3.3](./language.md#33-class)） |
 
 ### リソース
 
@@ -58,7 +57,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 |---|---|---|
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 変数代入に加え、`Long`→`Byte`（呼び出し結果を含む）と引数の `String`→`VoidPtr`・`VoidPtr`→`Long` を warning（`As` で抑制）。数値リテラルは対象外。`Include\default` は抑制 |
 | `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の汎用演算は未（格納と `Input` 変換のみ）。**`-actba32`**: `Double` の配列要素と UDT フィールドの 8 バイト転送は未。`Print` の Double 自動変換は 64bit のみ。科学記法（`1.0e10`）は未対応 |
-| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、厳密なアクセス制御 | `Inherits` / `Virtual` / vtable 呼び出しは**部分対応**（COM/D3D11 向け）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。`Super` 演算子なし。`Private` / `Public` / `Protected` は**受理のみ**（アクセス制御なし）。メソッドはマングル名 + 暗黙 `This` |
+| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、アクセス制御 | `Inherits` は親フィールドを先頭に置く。`Virtual` 呼び出しは COM vtable。`Super` は親関数の直接呼び出し（基底 ctor/dtor は自動では呼ばない）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。メソッドはマングル名 + 暗黙 `This` |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` / `Trim$` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |
@@ -110,7 +109,6 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 |---|---|---|
 | `Let` | 明示代入（省略可） | 優先度低 |
 | DLL `.reloc` | ベース再配置 | 出力は済。優先ベースが塞がるとロード失敗 |
-| `Class` 拡張 | `Super`、厳密な `Private`/`Protected`、メンバ Class の自動 ctor/dtor | `New`/`Delete` は済。`Inherits`/`Virtual` は COM/vtable 向けに部分対応済。アクセス修飾子は受理のみ |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の一致検査 | `*Function` / 間接 call 自体は済 |
 
 ### ファイル I/O

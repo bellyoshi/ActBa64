@@ -315,18 +315,18 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 ```
 
 - `Class` / `End Class`。メンバ変数は `Type` と同様のオフセット配置
-- `Private` / `Public`（未指定は Private）。`Protected` は受理し Public 扱い
+- `Private` / `Public` / `Protected`（未指定は Private）。`Private` は宣言した Class のメソッドだけ。`Protected` はその Class と、それを `Inherits` した Class。`Public` はどこからでも
 - メソッドは暗黙の第1引数 `This`（オブジェクトポインタ）。呼び出しは `obj.Method(args)`。メソッド内は `This.Method(args)`
 - コンストラクタ `Sub ClassName(...)` → `Dim obj As ClassName(args)` で自動呼出
 - デストラクタ `Sub ~ClassName()` → 局所は手続き末尾、モジュール大域は終了前に呼出
 - ctor/dtor 省略時は空の無引数版を暗黙生成
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=This`、32bit は stdcall の第1引数）
-- `Inherits` / `Virtual` / vtable 呼び出しは **部分対応**（COM / D3D11 向け。本体なし `Virtual Function|Sub` と継承先へのスロットコピー）
+- `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。親に `Virtual` がある Class は COM インターフェースとして空の ctor/dtor を付けない。`Virtual` 呼び出しは vtable
+- `Super.Name(args)` は親の `Name` を `This` 付きで直接呼ぶ。`Super.Parent(args)` は親 ctor、`Super.~Parent()` は親 dtor。基底の ctor/dtor は自動では呼ばない
+- 値のメンバ Class は、そのフィールドを宣言した Class の ctor 先頭でメンバ ctor、dtor 末尾でメンバ dtor を呼ぶ。メンバ ctor にユーザー引数があるときはコンパイルエラー
 - `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
 - `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。個数を省略したときは 1。コンストラクタ引数は一度だけ評価し、各要素へ同じ値を渡す。確保に失敗したときは 0 を返し、コンストラクタは呼ばない
 - `Delete` は変数のクラスポインタ型から `Class_Dtor` を逆順に呼び、ヘッダごと `HeapFree` する。クラスは使用箇所より前に定義する。ポインタのクラス型が取れない `Delete` はコンパイルエラー。`Delete 0` は何もしない
-
-**未対応:** `Super.Method`、メンバ実体クラスの自動 ctor・dtor、アクセス制御の厳密検査
 
 ### 3.4 Enum
 
@@ -848,7 +848,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 
 ## 10. 非対応（意図的）
 
-- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` / `Virtual` は部分対応。`New` / `Delete` は対応。`Super` は未対応）
+- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは COM vtable。`Super` / `New` / `Delete` は対応）
 - `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度は IEEE Double（64bit と `-actba32`。32bit の配列要素・UDT フィールド転送と、`Print` の Double 変換は未）
 - ネスト手続き
 - `#resource` の MENU / DIALOG / VERSIONINFO（ICON 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）

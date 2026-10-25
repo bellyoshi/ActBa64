@@ -1,0 +1,194 @@
+' ClassAcc - アクセス、親クラス、フィールドの継承
+
+Const ACC_PRIVATE = 0
+Const ACC_PUBLIC = 1
+Const ACC_PROTECTED = 2
+
+Dim g_accField As *Long
+Dim g_accOwner As *Long
+Dim g_accFieldCap As Long
+Dim g_accParent As *Long
+Dim g_accParentCap As Long
+Dim g_lowClassTi As Long
+
+Function AccLongAt(p As *Long, i As Long) As Long
+    AccLongAt = p[i]
+End Function
+
+Function AccCapFor(cap As Long, need As Long) As Long
+    AccCapFor = cap
+    If AccCapFor < 16 Then AccCapFor = 16
+    While AccCapFor < need
+        AccCapFor = AccCapFor * 2
+    Wend
+End Function
+
+Sub AccFillNeg(buf As *Long, frm As Long, nto As Long)
+    Dim i As Long
+    i = frm
+    While i < nto
+        buf[i] = -1
+        i = i + 1
+    Wend
+End Sub
+
+Sub AccFreeFields()
+    If g_accField <> NULL Then free(g_accField)
+    If g_accOwner <> NULL Then free(g_accOwner)
+    g_accField = NULL
+    g_accOwner = NULL
+    g_accFieldCap = 0
+End Sub
+
+Sub AccFreeParent()
+    If g_accParent <> NULL Then free(g_accParent)
+    g_accParent = NULL
+    g_accParentCap = 0
+End Sub
+
+Function AccGrowFieldBuf(ncap As Long) As Long
+    Dim p As *Byte
+    AccGrowFieldBuf = 0
+    p = MemGrow(g_accField As BytePtr, BytesN(g_accFieldCap, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_accField = p As *Long
+    AccGrowFieldBuf = 1
+End Function
+
+Function AccGrowOwnerBuf(ncap As Long) As Long
+    Dim p As *Byte
+    AccGrowOwnerBuf = 0
+    p = MemGrow(g_accOwner As BytePtr, BytesN(g_accFieldCap, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_accOwner = p As *Long
+    AccGrowOwnerBuf = 1
+End Function
+
+Function AccGrowFields(ncap As Long) As Long
+    AccGrowFields = 0
+    If AccGrowFieldBuf(ncap) = 0 Then Exit Function
+    If AccGrowOwnerBuf(ncap) = 0 Then Exit Function
+    g_accFieldCap = ncap
+    AccGrowFields = 1
+End Function
+
+Function AccEnsureField(need As Long) As Long
+    Dim ncap As Long
+    AccEnsureField = 1
+    If need <= g_accFieldCap Then Exit Function
+    ncap = AccCapFor(g_accFieldCap, need)
+    AccEnsureField = AccGrowFields(ncap)
+End Function
+
+Function AccSetField(fi As Long, access As Long, owner As Long) As Long
+    AccSetField = 0
+    If fi < 0 Then Exit Function
+    If AccEnsureField(fi + 1) = 0 Then Exit Function
+    g_accField[fi] = access
+    g_accOwner[fi] = owner
+    AccSetField = 1
+End Function
+
+Function AccFieldAcc(fi As Long) As Long
+    AccFieldAcc = ACC_PUBLIC
+    If fi < 0 Or fi >= g_accFieldCap Then Exit Function
+    AccFieldAcc = g_accField[fi]
+End Function
+
+Function AccFieldOwner(fi As Long) As Long
+    AccFieldOwner = -1
+    If fi < 0 Or fi >= g_accFieldCap Then Exit Function
+    AccFieldOwner = g_accOwner[fi]
+End Function
+
+Function AccGrowParentBuf(ncap As Long, old As Long) As Long
+    Dim p As *Byte
+    AccGrowParentBuf = 0
+    p = MemGrow(g_accParent As BytePtr, BytesN(old, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_accParent = p As *Long
+    AccGrowParentBuf = 1
+End Function
+
+Function AccGrowParent(ncap As Long) As Long
+    Dim old As Long
+    old = g_accParentCap
+    AccGrowParent = AccGrowParentBuf(ncap, old)
+    If AccGrowParent = 0 Then Exit Function
+    AccFillNeg(g_accParent, old, ncap)
+    g_accParentCap = ncap
+End Function
+
+Function AccEnsureParent(need As Long) As Long
+    Dim ncap As Long
+    AccEnsureParent = 1
+    If need <= g_accParentCap Then Exit Function
+    ncap = AccCapFor(g_accParentCap, need)
+    AccEnsureParent = AccGrowParent(ncap)
+End Function
+
+Function AccSetParent(ti As Long, parent As Long) As Long
+    AccSetParent = 0
+    If ti < 0 Then Exit Function
+    If AccEnsureParent(ti + 1) = 0 Then Exit Function
+    g_accParent[ti] = parent
+    AccSetParent = 1
+End Function
+
+Function AccParent(ti As Long) As Long
+    AccParent = -1
+    If ti < 0 Or ti >= g_accParentCap Then Exit Function
+    AccParent = g_accParent[ti]
+End Function
+
+Sub AccReadName(t As *TypeTable, fi As Long, name As *Byte)
+    Dim names As *Byte
+    names = t->fieldNames
+    lstrcpy(name, VarPtr(names[fi * TYNAME_LEN]))
+End Sub
+
+Sub AccReadNums(t As *TypeTable, fi As Long, ByRef esz As Long, ByRef cnt As Long, ByRef fty As Long)
+    esz = AccLongAt(t->fieldSizes, fi)
+    cnt = AccLongAt(t->fieldCounts, fi)
+    fty = AccLongAt(t->fieldTypeIdxs, fi)
+End Sub
+
+Function AccCopyAdd(t As *TypeTable, dst As Long, fi As Long, name As *Byte, esz As Long, cnt As Long, fty As Long) As Long
+    AccCopyAdd = 0
+    If Not TyAddField(t, dst, name, esz, cnt, fty) Then Exit Function
+    AccCopyAdd = AccSetField(t->nFields - 1, AccFieldAcc(fi), AccFieldOwner(fi))
+End Function
+
+Function AccCopyOne(t As *TypeTable, dst As Long, fi As Long) As Long
+    Dim name(TYNAME_LEN - 1) As Byte
+    Dim esz As Long
+    Dim cnt As Long
+    Dim fty As Long
+    AccReadName(t, fi, VarPtr(name))
+    AccReadNums(t, fi, esz, cnt, fty)
+    AccCopyOne = AccCopyAdd(t, dst, fi, VarPtr(name), esz, cnt, fty)
+End Function
+
+Function AccNextField(t As *TypeTable, fi As Long) As Long
+    Dim nexts As *Long
+    nexts = t->fieldNext
+    AccNextField = nexts[fi]
+End Function
+
+Function AccCopyFrom(t As *TypeTable, dst As Long, fi As Long) As Long
+    AccCopyFrom = 1
+    If fi < 0 Then Exit Function
+    If AccCopyOne(t, dst, fi) = 0 Then
+        AccCopyFrom = 0
+        Exit Function
+    End If
+    AccCopyFrom = AccCopyFrom(t, dst, AccNextField(t, fi))
+End Function
+
+Function AccCopyFields(t As *TypeTable, dst As Long, src As Long) As Long
+    Dim firsts As *Long
+    AccCopyFields = 0
+    If t = NULL Then Exit Function
+    firsts = t->typeFirst
+    AccCopyFields = AccCopyFrom(t, dst, firsts[src])
+End Function
