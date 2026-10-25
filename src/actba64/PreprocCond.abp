@@ -140,13 +140,73 @@ Function PpCondDirectiveKeyword(line As *Byte, n As Long, ByRef i As Long, word 
     PpCondDirectiveKeyword = true
 End Function
 
+Sub PpCondEmitBlank(dst As *Byte, ByRef dstLen As Long, dstCap As Long)
+    Dim nl(0) As Byte
+    nl[0] = CH_NL
+    If Not PpAppend(dst, dstLen, dstCap, VarPtr(nl), 1) Then Exit Sub
+End Sub
+
 Sub PpCondEmitLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long)
-    Dim nl(1) As Byte
-    If PpCondEmitActive() = 0 Then Exit Sub
+    Dim nl(0) As Byte
+    If PpCondEmitActive() = 0 Then
+        PpCondEmitBlank(dst, dstLen, dstCap)
+        Exit Sub
+    End If
     If Not PpAppend(dst, dstLen, dstCap, line, n) Then Exit Sub
     nl[0] = CH_NL
     If Not PpAppend(dst, dstLen, dstCap, VarPtr(nl), 1) Then Exit Sub
 End Sub
+
+Function PpCondWordKind(word As *Byte) As Long
+    PpCondWordKind = 0
+    If PpStrEqCI(word, "define") Then PpCondWordKind = 1
+    If PpStrEqCI(word, "ifdef") Then PpCondWordKind = 2
+    If PpStrEqCI(word, "ifndef") Then PpCondWordKind = 3
+    If PpStrEqCI(word, "else") Then PpCondWordKind = 4
+    If PpStrEqCI(word, "endif") Then PpCondWordKind = 5
+End Function
+
+Sub PpCondApplyDefine(line As *Byte, n As Long, ByRef i As Long, id As *Byte)
+    If PpCondEmitActive() = 0 Then Exit Sub
+    PpCondCopyIdentFromLine(line, n, i, id)
+    If id[0] <> CH_NUL Then PpCondDefineName(id)
+End Sub
+
+Sub PpCondApplyIf(line As *Byte, n As Long, ByRef i As Long, id As *Byte, want As Long)
+    PpCondCopyIdentFromLine(line, n, i, id)
+    PpCondPushIf(id, want)
+End Sub
+
+Sub PpCondApplyEndif()
+    If g_ppIfDepth > 0 Then g_ppIfDepth = g_ppIfDepth - 1
+End Sub
+
+Sub PpCondRunKind(k As Long, line As *Byte, n As Long, ByRef i As Long, id As *Byte)
+    If k = 1 Then PpCondApplyDefine(line, n, i, id)
+    If k = 2 Then PpCondApplyIf(line, n, i, id, 1)
+    If k = 3 Then PpCondApplyIf(line, n, i, id, 0)
+    If k = 4 Then PpCondHandleElse()
+    If k = 5 Then PpCondApplyEndif()
+End Sub
+
+Function PpCondApplyWord(line As *Byte, n As Long, ByRef i As Long, word As *Byte, id As *Byte) As Long
+    Dim k As Long
+    k = PpCondWordKind(word)
+    PpCondApplyWord = 0
+    If k = 0 Then Exit Function
+    PpCondRunKind(k, line, n, i, id)
+    PpCondApplyWord = 1
+End Function
+
+Function PpCondTookDir(line As *Byte, n As Long) As Long
+    Dim i As Long
+    Dim word(KW_LEN - 1) As Byte
+    Dim id(PP_DEF_NAME - 1) As Byte
+    i = 0
+    PpCondTookDir = 0
+    If PpCondDirectiveKeyword(line, n, i, VarPtr(word)) = 0 Then Exit Function
+    PpCondTookDir = PpCondApplyWord(line, n, i, VarPtr(word), VarPtr(id))
+End Function
 
 ' wantDefined = 1 for #ifdef, 0 for #ifndef
 Sub PpCondPushIf(id As *Byte, wantDefined As Long)
@@ -189,50 +249,23 @@ Sub PpCondHandleElse()
 End Sub
 
 Sub PpCondHandleLine(line As *Byte, n As Long, dst As *Byte, ByRef dstLen As Long, dstCap As Long)
-    Dim i As Long
-    Dim word(KW_LEN - 1) As Byte
-    Dim id(PP_DEF_NAME - 1) As Byte
-
-    i = 0
-    If Not PpCondDirectiveKeyword(line, n, i, VarPtr(word)) Then
+    If PpCondTookDir(line, n) = 0 Then
         PpCondEmitLine(dst, dstLen, dstCap, line, n)
         Exit Sub
     End If
-
-    If PpStrEqCI(VarPtr(word), "define") Then
-        If PpCondEmitActive() <> 0 Then
-            PpCondCopyIdentFromLine(line, n, i, VarPtr(id))
-            If id[0] <> CH_NUL Then PpCondDefineName(VarPtr(id))
-        End If
-        Exit Sub
-    End If
-
-    If PpStrEqCI(VarPtr(word), "ifdef") Then
-        PpCondCopyIdentFromLine(line, n, i, VarPtr(id))
-        PpCondPushIf(VarPtr(id), 1)
-        Exit Sub
-    End If
-
-    If PpStrEqCI(VarPtr(word), "ifndef") Then
-        PpCondCopyIdentFromLine(line, n, i, VarPtr(id))
-        PpCondPushIf(VarPtr(id), 0)
-        Exit Sub
-    End If
-
-    If PpStrEqCI(VarPtr(word), "else") Then
-        PpCondHandleElse()
-        Exit Sub
-    End If
-
-    If PpStrEqCI(VarPtr(word), "endif") Then
-        If g_ppIfDepth > 0 Then
-            g_ppIfDepth = g_ppIfDepth - 1
-        End If
-        Exit Sub
-    End If
-
-    PpCondEmitLine(dst, dstLen, dstCap, line, n)
+    PpCondEmitBlank(dst, dstLen, dstCap)
 End Sub
+
+Function PpBufLen(p As *Byte) As Long
+    Dim n As Long
+    PpBufLen = 0
+    If p = NULL Then Exit Function
+    n = 0
+    While p[n] <> 0
+        n = n + 1
+    Wend
+    PpBufLen = n
+End Function
 
 Function PpCondCopyLine(line As *Byte, src As *Byte, lineStart As Long, cnt As Long) As Long
     Dim ln As Long

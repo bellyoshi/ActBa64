@@ -20,7 +20,7 @@
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | 構文は [language.md §7.7](./language.md#77-条件付きコンパイル)。自動定義は **`_WIN64`（64bit 時）、`_AB_VER4`、`_ACTBA64`**。`_DEBUG` は自動定義しない。`_ACTBA64` は AB 4.20 には無い |
+| `#ifdef` / `#ifndef` | 条件付きコンパイル（`_DEBUG`, `_WIN64`, `_AB_VER4` 等を自動定義） | 構文は [language.md §7.7](./language.md#77-条件付きコンパイル)。`.pj` の各ソースと `#include` にも適用する。自動定義は **`_WIN64`（64bit 時）、`_AB_VER4`、`_ACTBA64`**。`_DEBUG` は自動定義しない。`_ACTBA64` は AB 4.20 には無い |
 | `#include` の再取り込み | 同じパスを複数回 `#include` すると、都度展開される | **パス単位で一度だけ**（2 回目以降はスキップ。AB 4.20 の都度展開とは異なる） |
 | `On Error` / `Resume` | エラートラップ | 非対応 |
 
