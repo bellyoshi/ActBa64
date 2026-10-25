@@ -29,7 +29,7 @@
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
 | `Let` | 代入の明示（通常は省略可） | キーワードなし（`=` 代入のみ） |
-| 3 次元以上の配列 | `Dim a(N, M, L)` | 非対応（2 次元まで） |
+| UDT 配列の複数添字 | `a(i, j)` / `a(i, j, k)` | 添字 1 個の平坦アクセスのみ（2 次元以上） |
 | 関数ポインタの引数型 | 引数型の一致検査 | 厳密照合は未（呼び出し自体は [language.md §5.2.1](./language.md#521-関数ポインタ型)） |
 | `Class` の残り | `Super`、厳密なアクセス制御、メンバ Class の自動 ctor/dtor | `Super` なし。`Private` / `Public` / `Protected` は受理のみ。メンバ Class の自動 ctor/dtor は未（`New` / `Delete` 自体は [language.md §3.3](./language.md#33-class)） |
 
@@ -109,7 +109,6 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
 | `Let` | 明示代入（省略可） | 優先度低 |
-| 3 次元以上の配列 | `Dim a(N, M, L)` | 2 次元まで |
 | DLL `.reloc` | ベース再配置 | 出力は済。優先ベースが塞がるとロード失敗 |
 | `Class` 拡張 | `Super`、厳密な `Private`/`Protected`、メンバ Class の自動 ctor/dtor | `New`/`Delete` は済。`Inherits`/`Virtual` は COM/vtable 向けに部分対応済。アクセス修飾子は受理のみ |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の一致検査 | `*Function` / 間接 call 自体は済 |
@@ -119,12 +118,6 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
 | `rc` / `#resource` | リソースファイル取り込み | ファイル→RCDATA(1) は済。ICON は隣の `rc.exe`。MENU は未 |
-
-### 数値・変換・文字列関数
-
-| 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
-|---|---|---|
-| `CDbl` / `CInt` / `CSng` | 型変換関数 | `As` キャストは可 |
 
 ### GUI・Win32・マルチメディア
 

@@ -309,7 +309,7 @@ Function LowExprCallArrLoad(ctx As *LowerCtx, idx As Long, vTy As Long) As Long
     ast = ctx->ast
     nodes = ast->nodes
     list = ctx->list
-    If nodes[idx].num <> 1 And nodes[idx].num <> 2 Then Exit Function
+    If nodes[idx].num < 1 Or nodes[idx].num > ARR_RANK_MAX Then Exit Function
     If vTy = TY_BYTE_ARR Then
         If LowAddr(ctx, idx) = 0 Then Exit Function
         IrEmit(list, OP_LOADZX_BYTE_RAX, 0, 0)
@@ -341,15 +341,25 @@ Function LowExprCallArr(ctx As *LowerCtx, idx As Long) As Long
     Dim vByRef As Long
     Dim vGlob As Long
     Dim ast As *Ast
+    Dim nodes As *AstNode
     Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim nArgs As Long
 
     LowExprCallArr = 0
     ast = ctx->ast
+    nodes = ast->nodes
+    nArgs = nodes[idx].num
     AstCopyStr(ast, idx, VarPtr(name))
     If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
     If vTy = TY_PTR_FUNC Then
         LowExprCallArr = LowExprCallFnPtr(ctx, idx, vOff, vGlob)
         Exit Function
+    End If
+    If LowIsArrTy(vTy) Then
+        If LowArrIdxOk(vTy, vTypeIdx, nArgs) = 0 Then
+            LowerDiagError(ctx, idx, "bad array index count '" + MakeStr(VarPtr(name)) + "'")
+            Exit Function
+        End If
     End If
     LowExprCallArr = LowExprCallArrLoad(ctx, idx, vTy)
 End Function
