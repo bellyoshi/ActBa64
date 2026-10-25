@@ -1,0 +1,225 @@
+' ParserConstMacro - Const Name(args) = expr を、呼び出し位置の式へ置き換える
+
+Dim g_macAt(63) As Long
+Dim g_macN As Long
+Dim g_macHit As Long
+Dim g_macDepth As Long
+
+Sub MacReset()
+    g_macN = 0
+    g_macDepth = 0
+End Sub
+
+Function MacAdd(idx As Long) As Long
+    MacAdd = 0
+    If g_macN >= 64 Then Print "error: too many const macros"
+    If g_macN >= 64 Then Exit Function
+    g_macAt(g_macN) = idx
+    g_macN = g_macN + 1
+    MacAdd = 1
+End Function
+
+Function MacCharEq(a As Long, b As Long) As Long
+    MacCharEq = 0
+    If ToLowerChar(a) = ToLowerChar(b) Then MacCharEq = 1
+End Function
+
+Function MacNameStep(a As *Byte, b As *Byte, i As Long) As Long
+    MacNameStep = 0
+    If MacCharEq(a[i], b[i]) = 0 Then Exit Function
+    MacNameStep = 1
+    If a[i] = 0 Then MacNameStep = 2
+End Function
+
+Function MacNameEq(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    MacNameEq = 0
+    i = 0
+    While MacNameStep(a, b, i) = 1
+        i = i + 1
+    Wend
+    If MacNameStep(a, b, i) = 2 Then MacNameEq = 1
+End Function
+
+Function MacMatch(ast As *Ast, stmt As Long, name As *Byte) As Long
+    Dim buf(SYM_NAME_LEN - 1) As Byte
+    MacMatch = 0
+    AstCopyStr(ast, stmt, VarPtr(buf))
+    If MacNameEq(VarPtr(buf), name) <> 0 Then MacMatch = 1
+End Function
+
+Function MacFindAt(ast As *Ast, i As Long, name As *Byte) As Long
+    MacFindAt = -1
+    If i < 0 Or i >= g_macN Then Exit Function
+    If MacMatch(ast, g_macAt(i), name) <> 0 Then MacFindAt = g_macAt(i)
+End Function
+
+Function MacFindName(ast As *Ast, name As *Byte) As Long
+    Dim i As Long
+    MacFindName = -1
+    i = 0
+    While i < g_macN
+        If MacFindAt(ast, i, name) >= 0 Then MacFindName = MacFindAt(ast, i, name)
+        If MacFindName >= 0 Then Exit Function
+        i = i + 1
+    Wend
+End Function
+
+Function ParsePeekIdent(p As *Parser, dst As *Byte) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    ParsePeekIdent = 0
+    If ParseTokKind(p) <> TK_IDENT Then Exit Function
+    lx = p->lx
+    toks = lx->toks
+    LexCopyText(lx, toks[p->pos].textSlot, dst)
+    ParsePeekIdent = 1
+End Function
+
+Function ParseMacroName(p As *Parser, name As *Byte) As Long
+    ParseMacroName = 0
+    If ParsePeekIdent(p, name) = 0 Then Exit Function
+    If ParseTokKindAt(p, p->pos + 1) <> TK_LPAREN Then Exit Function
+    g_macHit = MacFindName(p->ast, name)
+    If g_macHit < 0 Then Exit Function
+    ParseMacroName = 1
+End Function
+
+Function ParseFactorTryMacro(p As *Parser) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseFactorTryMacro = -2
+    If ParseMacroName(p, VarPtr(name)) = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseFactorTryMacro = MacExpand(p, g_macHit)
+End Function
+
+Function ParseConstParamNode(p As *Parser) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseConstParamNode = -1
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    ParseConstParamNode = AstAddNode(p->ast, AST_VAR)
+    If ParseConstParamNode < 0 Then Exit Function
+    AstSetStr(p->ast, ParseConstParamNode, VarPtr(name))
+End Function
+
+Function ParseConstLink(ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, n As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    If nFirst < 0 Then nFirst = n
+    If nPrev >= 0 Then nodes[nPrev].nxt = n
+    nPrev = n
+    ParseConstLink = n
+End Function
+
+Function ParseConstTakeParam(p As *Parser, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+    Dim n As Long
+    ParseConstTakeParam = 0
+    n = ParseConstParamNode(p)
+    If n < 0 Then Exit Function
+    ParseConstLink(p->ast, nFirst, nPrev, n)
+    ParseConstTakeParam = 1
+End Function
+
+Function ParseConstParamLoop(p As *Parser, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+    ParseConstParamLoop = 0
+    Do
+        If ParseConstTakeParam(p, nFirst, nPrev) = 0 Then Exit Function
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p->pos = p->pos + 1
+    Loop
+    ParseConstParamLoop = 1
+End Function
+
+Function ParseConstParamList(p As *Parser, ByRef nFirst As Long) As Long
+    Dim nPrev As Long
+    ParseConstParamList = 0
+    nFirst = -1
+    nPrev = -1
+    If ParseConstParamLoop(p, nFirst, nPrev) = 0 Then Exit Function
+    ParseConstParamList = 1
+End Function
+
+Function ParseConstClose(p As *Parser) As Long
+    ParseConstClose = 0
+    If ParseTokKind(p) <> TK_RPAREN Then Exit Function
+    p->pos = p->pos + 1
+    ParseConstClose = 1
+End Function
+
+Function ParseConstParams(p As *Parser, ByRef nFirst As Long) As Long
+    ParseConstParams = 0
+    nFirst = -1
+    If ParseConstClose(p) <> 0 Then ParseConstParams = 1
+    If ParseConstParams <> 0 Then Exit Function
+    If ParseConstParamList(p, nFirst) = 0 Then Exit Function
+    ParseConstParams = ParseConstClose(p)
+End Function
+
+Function ParseConstMacroBody(p As *Parser) As Long
+    ParseConstMacroBody = -1
+    If Not ParseExpect(p, TK_EQ) Then Exit Function
+    ParseConstMacroBody = ParseExpr(p)
+End Function
+
+Function ParseConstMacroFill(ast As *Ast, nConst As Long, name As *Byte, nParam As Long, nBody As Long) As Long
+    Dim nodes As *AstNode
+    AstSetStr(ast, nConst, name)
+    nodes = ast->nodes
+    nodes[nConst].left = nBody
+    nodes[nConst].right = nParam
+    nodes[nConst].extra = AST_CONST_EXTRA_MACRO
+    nodes[nConst].num = 0
+    ParseConstMacroFill = nConst
+End Function
+
+Function ParseConstMacroNode(p As *Parser, name As *Byte, nParam As Long, nBody As Long) As Long
+    Dim nConst As Long
+    ParseConstMacroNode = -1
+    nConst = AstAddNode(p->ast, AST_CONST)
+    If nConst < 0 Then Exit Function
+    If MacAdd(nConst) = 0 Then p->err = 1
+    If p->err <> 0 Then Exit Function
+    ParseConstMacroNode = ParseConstMacroFill(p->ast, nConst, name, nParam, nBody)
+End Function
+
+Function ParseConstMacro(p As *Parser, name As *Byte) As Long
+    Dim nParam As Long
+    Dim nBody As Long
+    ParseConstMacro = -1
+    p->pos = p->pos + 1
+    If ParseConstParams(p, nParam) = 0 Then Exit Function
+    nBody = ParseConstMacroBody(p)
+    If nBody < 0 Then Exit Function
+    ParseConstMacro = ParseConstMacroNode(p, name, nParam, nBody)
+End Function
+
+Function MacCount(nodes As *AstNode, idx As Long) As Long
+    MacCount = 0
+    While idx >= 0
+        MacCount = MacCount + 1
+        idx = nodes[idx].nxt
+    Wend
+End Function
+
+Function MacArgOk(p As *Parser, mac As Long, nArgs As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = p->ast
+    nodes = ast->nodes
+    MacArgOk = 0
+    If MacCount(nodes, nodes[mac].right) <> nArgs Then Print "error: bad const macro arguments"
+    If MacCount(nodes, nodes[mac].right) <> nArgs Then p->err = 1
+    If p->err = 0 Then MacArgOk = 1
+End Function
+
+Function MacEnter() As Long
+    MacEnter = 0
+    If g_macDepth >= 16 Then Print "error: const macro too deep"
+    If g_macDepth >= 16 Then Exit Function
+    g_macDepth = g_macDepth + 1
+    MacEnter = 1
+End Function
+
+Sub MacLeave()
+    g_macDepth = g_macDepth - 1
+End Sub

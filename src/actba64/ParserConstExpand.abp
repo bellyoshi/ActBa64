@@ -1,0 +1,355 @@
+' ParserConstExpand - Const マクロの式を引数で置き換える
+
+Function MacPutNum(ast As *Ast, n As Long, num As Long) As Long
+    Dim nodes As *AstNode
+    MacPutNum = -1
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[n].num = num
+    MacPutNum = n
+End Function
+
+Function MacCopyRaw(ast As *Ast, src As Long) As Long
+    Dim nodes As *AstNode
+    Dim num As Long
+    nodes = ast->nodes
+    num = nodes[src].num
+    MacCopyRaw = AstAddNode(ast, nodes[src].kind)
+    MacCopyRaw = MacPutNum(ast, MacCopyRaw, num)
+End Function
+
+Function MacDupName(ast As *Ast, n As Long, src As Long) As Long
+    Dim buf(SYM_NAME_LEN - 1) As Byte
+    Dim num As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    num = nodes[n].num
+    AstCopyStr(ast, src, VarPtr(buf))
+    AstSetStr(ast, n, VarPtr(buf))
+    MacDupName = MacPutNum(ast, n, num)
+End Function
+
+Function MacCopyVar(ast As *Ast, src As Long) As Long
+    MacCopyVar = MacCopyRaw(ast, src)
+    If MacCopyVar < 0 Then Exit Function
+    MacCopyVar = MacDupName(ast, MacCopyVar, src)
+End Function
+
+Function MacSetLeft(ast As *Ast, n As Long, c As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].left = c
+    MacSetLeft = n
+End Function
+
+Function MacSetRight(ast As *Ast, n As Long, c As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].right = c
+    MacSetRight = n
+End Function
+
+Function MacSetExtra(ast As *Ast, n As Long, c As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].extra = c
+    MacSetExtra = n
+End Function
+
+Function MacSetNxt(ast As *Ast, n As Long, c As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].nxt = c
+    MacSetNxt = n
+End Function
+
+Function MacNeed(c As Long, src As Long) As Long
+    MacNeed = 1
+    If c < 0 And src >= 0 Then MacNeed = 0
+End Function
+
+Function MacVarHit(ast As *Ast, varIdx As Long, param As Long) As Long
+    Dim buf(SYM_NAME_LEN - 1) As Byte
+    Dim pbuf(SYM_NAME_LEN - 1) As Byte
+    MacVarHit = 0
+    AstCopyStr(ast, varIdx, VarPtr(buf))
+    AstCopyStr(ast, param, VarPtr(pbuf))
+    If MacNameEq(VarPtr(buf), VarPtr(pbuf)) <> 0 Then MacVarHit = 1
+End Function
+
+Function MacBindVar(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim nodes As *AstNode
+    Dim e As Long
+    MacBindVar = -2
+    nodes = ast->nodes
+    If MacVarHit(ast, src, param) = 0 Then Exit Function
+    e = nodes[arg].left
+    MacBindVar = MacClone(ast, e, -1, -1)
+End Function
+
+Function MacCloneVarNext(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    MacCloneVarNext = MacCloneVar(ast, src, nodes[param].nxt, nodes[arg].nxt)
+End Function
+
+Function MacCloneVar(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim hit As Long
+    MacCloneVar = -1
+    If param < 0 Then MacCloneVar = MacCopyVar(ast, src)
+    If param < 0 Then Exit Function
+    hit = MacBindVar(ast, src, param, arg)
+    If hit <> -2 Then MacCloneVar = hit
+    If hit <> -2 Then Exit Function
+    MacCloneVar = MacCloneVarNext(ast, src, param, arg)
+End Function
+
+Function MacCloneLeaf(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim k As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    k = nodes[src].kind
+    MacCloneLeaf = -2
+    If k = AST_VAR Then MacCloneLeaf = MacCloneVar(ast, src, param, arg)
+    If k = AST_NUM Then MacCloneLeaf = MacCopyRaw(ast, src)
+    If k = AST_STRING Then MacCloneLeaf = MacCopyVar(ast, src)
+End Function
+
+Function MacClone(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    MacClone = -1
+    If src < 0 Then Exit Function
+    MacClone = MacCloneLeaf(ast, src, param, arg)
+    If MacClone <> -2 Then Exit Function
+    MacClone = MacCloneOp(ast, src, param, arg)
+End Function
+
+Function MacPutLeft(ast As *Ast, n As Long, left As Long, param As Long, arg As Long) As Long
+    Dim c As Long
+    c = MacClone(ast, left, param, arg)
+    MacPutLeft = MacNeed(c, left)
+    If MacPutLeft = 0 Then Exit Function
+    MacSetLeft(ast, n, c)
+End Function
+
+Function MacPutRight(ast As *Ast, n As Long, right As Long, param As Long, arg As Long) As Long
+    Dim c As Long
+    c = MacClone(ast, right, param, arg)
+    MacPutRight = -1
+    If MacNeed(c, right) = 0 Then Exit Function
+    MacPutRight = MacSetRight(ast, n, c)
+End Function
+
+Function MacPutExtra(ast As *Ast, n As Long, ex As Long, param As Long, arg As Long) As Long
+    Dim c As Long
+    c = MacClone(ast, ex, param, arg)
+    MacPutExtra = -1
+    If MacNeed(c, ex) = 0 Then Exit Function
+    MacPutExtra = MacSetExtra(ast, n, c)
+End Function
+
+Function MacCloneOne(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim left As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    left = nodes[src].left
+    MacCloneOne = MacCopyRaw(ast, src)
+    MacCloneOne = MacFinishOne(ast, MacCloneOne, left, param, arg)
+End Function
+
+Function MacFinishOne(ast As *Ast, n As Long, left As Long, param As Long, arg As Long) As Long
+    MacFinishOne = -1
+    If n < 0 Then Exit Function
+    If MacPutLeft(ast, n, left, param, arg) = 0 Then Exit Function
+    MacFinishOne = n
+End Function
+
+Function MacCloneTwo(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim nodes As *AstNode
+    Dim left As Long
+    Dim right As Long
+    nodes = ast->nodes
+    left = nodes[src].left
+    right = nodes[src].right
+    MacCloneTwo = MacCopyRaw(ast, src)
+    MacCloneTwo = MacFinishTwo(ast, MacCloneTwo, left, right, param, arg)
+End Function
+
+Function MacFinishTwo(ast As *Ast, n As Long, left As Long, right As Long, param As Long, arg As Long) As Long
+    MacFinishTwo = -1
+    If n < 0 Then Exit Function
+    If MacPutLeft(ast, n, left, param, arg) = 0 Then Exit Function
+    MacFinishTwo = MacPutRight(ast, n, right, param, arg)
+End Function
+
+Function MacGrab(ast As *Ast, src As Long, which As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    MacGrab = nodes[src].left
+    If which = 1 Then MacGrab = nodes[src].right
+    If which = 2 Then MacGrab = nodes[src].extra
+End Function
+
+Function MacCloneThree(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim left As Long
+    Dim right As Long
+    Dim ex As Long
+    left = MacGrab(ast, src, 0)
+    right = MacGrab(ast, src, 1)
+    ex = MacGrab(ast, src, 2)
+    MacCloneThree = MacBuildThree(ast, src, left, right, ex, param, arg)
+End Function
+
+Function MacBuildThree(ast As *Ast, src As Long, left As Long, right As Long, ex As Long, param As Long, arg As Long) As Long
+    Dim n As Long
+    n = MacCopyRaw(ast, src)
+    MacBuildThree = -1
+    If n < 0 Then Exit Function
+    If MacPutLeft(ast, n, left, param, arg) = 0 Then Exit Function
+    If MacPutRight(ast, n, right, param, arg) = 0 Then Exit Function
+    MacBuildThree = MacPutExtra(ast, n, ex, param, arg)
+End Function
+
+Function MacKindKids(k As Long) As Long
+    MacKindKids = 0
+    If k = AST_BINOP Then MacKindKids = 2
+    If k = AST_UNARY Or k = AST_CAST Then MacKindKids = 1
+    If k = AST_INDEX Or k = AST_BUILTIN Then MacKindKids = 3
+    If k = AST_CALL Then MacKindKids = 4
+End Function
+
+Function MacOpKind(ast As *Ast, src As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    MacOpKind = MacKindKids(nodes[src].kind)
+End Function
+
+Function MacCloneOp(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim k As Long
+    k = MacOpKind(ast, src)
+    MacCloneOp = -1
+    If k = 1 Then MacCloneOp = MacCloneOne(ast, src, param, arg)
+    If k = 2 Then MacCloneOp = MacCloneTwo(ast, src, param, arg)
+    If k = 3 Then MacCloneOp = MacCloneThree(ast, src, param, arg)
+    If k = 4 Then MacCloneOp = MacCloneCall(ast, src, param, arg)
+End Function
+
+Function MacCloneArgOne(ast As *Ast, srcArg As Long, param As Long, arg As Long) As Long
+    Dim nodes As *AstNode
+    Dim e As Long
+    nodes = ast->nodes
+    e = nodes[srcArg].left
+    MacCloneArgOne = MacCopyRaw(ast, srcArg)
+    MacCloneArgOne = MacFinishArg(ast, MacCloneArgOne, e, param, arg)
+End Function
+
+Function MacFinishArg(ast As *Ast, n As Long, e As Long, param As Long, arg As Long) As Long
+    Dim c As Long
+    MacFinishArg = -1
+    If n < 0 Then Exit Function
+    c = MacClone(ast, e, param, arg)
+    If c < 0 Then Exit Function
+    MacFinishArg = MacSetLeft(ast, n, c)
+End Function
+
+Function MacLinkArg(ast As *Ast, n As Long, srcNext As Long, param As Long, arg As Long) As Long
+    Dim rest As Long
+    rest = MacCloneArgs(ast, srcNext, param, arg)
+    MacLinkArg = MacSetNxt(ast, n, rest)
+    If rest = -3 Then MacLinkArg = -3
+End Function
+
+Function MacLinkNext(ast As *Ast, n As Long, srcArg As Long, param As Long, arg As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    MacLinkNext = MacLinkArg(ast, n, nodes[srcArg].nxt, param, arg)
+End Function
+
+Function MacCloneArgs(ast As *Ast, srcArg As Long, param As Long, arg As Long) As Long
+    Dim n As Long
+    MacCloneArgs = -1
+    If srcArg < 0 Then Exit Function
+    n = MacCloneArgOne(ast, srcArg, param, arg)
+    If n < 0 Then MacCloneArgs = -3
+    If n < 0 Then Exit Function
+    MacCloneArgs = MacLinkNext(ast, n, srcArg, param, arg)
+End Function
+
+Function MacCallMac(ast As *Ast, src As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    AstCopyStr(ast, src, VarPtr(name))
+    MacCallMac = MacFindName(ast, VarPtr(name))
+End Function
+
+Function MacApplyBody(ast As *Ast, mac As Long, arg0 As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    MacApplyBody = -1
+    If MacEnter() = 0 Then Exit Function
+    MacApplyBody = MacClone(ast, nodes[mac].left, nodes[mac].right, arg0)
+    MacLeave()
+End Function
+
+Function MacApplyAst(ast As *Ast, mac As Long, args As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    nodes = ast->nodes
+    n = MacCount(nodes, args)
+    MacApplyAst = -1
+    If n <> MacCount(nodes, nodes[mac].right) Then Exit Function
+    MacApplyAst = MacApplyBody(ast, mac, args)
+End Function
+
+Function MacCopyCall(ast As *Ast, src As Long, args As Long) As Long
+    Dim n As Long
+    n = MacCopyRaw(ast, src)
+    MacCopyCall = MacFinishCallNode(ast, n, src, args)
+End Function
+
+Function MacNamedNum(ast As *Ast, n As Long, src As Long) As Long
+    Dim nodes As *AstNode
+    Dim num As Long
+    nodes = ast->nodes
+    num = nodes[src].num
+    MacDupName(ast, n, src)
+    MacNamedNum = MacPutNum(ast, n, num)
+End Function
+
+Function MacFinishCallNode(ast As *Ast, n As Long, src As Long, args As Long) As Long
+    MacFinishCallNode = -1
+    If n < 0 Then Exit Function
+    MacNamedNum(ast, n, src)
+    MacFinishCallNode = MacSetLeft(ast, n, args)
+End Function
+
+Function MacFinishCall(ast As *Ast, src As Long, args As Long) As Long
+    Dim mac As Long
+    MacFinishCall = -1
+    If args = -3 Then Exit Function
+    mac = MacCallMac(ast, src)
+    If mac >= 0 Then MacFinishCall = MacApplyAst(ast, mac, args)
+    If mac < 0 Then MacFinishCall = MacCopyCall(ast, src, args)
+End Function
+
+Function MacCloneCall(ast As *Ast, src As Long, param As Long, arg As Long) As Long
+    Dim nodes As *AstNode
+    Dim args As Long
+    nodes = ast->nodes
+    args = MacCloneArgs(ast, nodes[src].left, param, arg)
+    MacCloneCall = MacFinishCall(ast, src, args)
+End Function
+
+Function MacApply(p As *Parser, mac As Long, arg0 As Long, nArgs As Long) As Long
+    MacApply = -1
+    If MacArgOk(p, mac, nArgs) = 0 Then Exit Function
+    MacApply = MacApplyBody(p->ast, mac, arg0)
+    If MacApply < 0 Then p->err = 1
+End Function
+
+Function MacExpand(p As *Parser, mac As Long) As Long
+    Dim arg0 As Long
+    Dim nArgs As Long
+    MacExpand = -1
+    p->pos = p->pos + 1
+    If ParseArgList(p, arg0, nArgs) = 0 Then Exit Function
+    MacExpand = MacApply(p, mac, arg0, nArgs)
+End Function
