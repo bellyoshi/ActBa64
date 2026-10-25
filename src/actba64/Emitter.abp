@@ -53,22 +53,53 @@ Sub EmitLeaR8Rip(cb As *CodeBuffer, targetRva As DWord, textBaseRva As DWord)
     EmitDword(cb, targetRva - nextRip)
 End Sub
 
-' push rbp; mov rbp, rsp; sub rsp, imm32
+' 1 ページずつ触らないと、4KB コミットのスタックで 8KB フレームの call が落ちる。
+Sub EmitProbePage(cb As *CodeBuffer)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H81)
+    EmitByte(cb, &HEC)
+    EmitDword(cb, &H1000)
+    EmitByte(cb, &H85)
+    EmitByte(cb, &H04)
+    EmitByte(cb, &H24)
+End Sub
+
+Sub EmitProbeStep(cb As *CodeBuffer, ByRef left As DWord, page As DWord)
+    EmitProbePage(cb)
+    left = left - page
+End Sub
+
+Sub EmitProbe(cb As *CodeBuffer, frame As DWord)
+    Dim left As DWord
+    Dim page As DWord
+    left = frame
+    page = &H1000
+    While left > page
+        EmitProbeStep(cb, left, page)
+    Wend
+    If left <> 0 Then EmitSubRspImm(cb, left)
+End Sub
+
+' push rbp; mov rbp, rsp; sub rsp, frame（4KB 超はページを触ってから）
 Sub EmitEnter(cb As *CodeBuffer, frameSize As DWord)
     EmitByte(cb, &H55)
     EmitByte(cb, &H48)
     EmitByte(cb, &H89)
     EmitByte(cb, &HE5)
-    EmitByte(cb, &H48)
-    EmitByte(cb, &H81)
-    EmitByte(cb, &HEC)
-    EmitDword(cb, frameSize)
+    EmitProbe(cb, frameSize)
 End Sub
 
 ' leave; ret  => mov rsp,rbp; pop rbp; ret
 Sub EmitLeaveRet(cb As *CodeBuffer)
     EmitByte(cb, &HC9)
     EmitByte(cb, &HC3)
+End Sub
+
+Sub EmitSubRspImm(cb As *CodeBuffer, imm As DWord)
+    EmitByte(cb, &H48)
+    EmitByte(cb, &H81)
+    EmitByte(cb, &HEC)
+    EmitDword(cb, imm)
 End Sub
 
 Sub EmitSubRsp(cb As *CodeBuffer, imm8 As Byte)
