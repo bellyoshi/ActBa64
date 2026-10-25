@@ -1,0 +1,292 @@
+' AstLowerClass - Super 呼び出しとメンバ Class の ctor/dtor
+
+Dim g_supLab As Long
+Dim g_supNArgs As Long
+Dim g_supParentTi As Long
+Dim g_memStmt As Long
+
+Function LowTakeThis(ctx As *LowerCtx, k As *Byte, ByRef off As Long, ByRef gl As Long, ByRef ty As Long, ByRef ti As Long, ByRef br As Long) As Long
+    LowTakeThis = 0
+    If LowLookupVar(ctx, k, VarPtr(off), VarPtr(ty), VarPtr(ti), VarPtr(br), VarPtr(gl)) Then LowTakeThis = 1
+    If LowTakeThis = 0 Then ctx->err = 1
+End Function
+
+Function LowLookupThis(ctx As *LowerCtx, ByRef off As Long, ByRef gl As Long) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    Dim ty As Long
+    Dim ti As Long
+    Dim br As Long
+    lstrcpy(VarPtr(k), "This")
+    LowLookupThis = LowTakeThis(ctx, VarPtr(k), off, gl, ty, ti, br)
+End Function
+
+Sub LowCdSuffix(isDtor As Long, dst As *Byte)
+    If isDtor <> 0 Then
+        lstrcpy(dst, "Dtor")
+    Else
+        lstrcpy(dst, "Ctor")
+    End If
+End Sub
+
+Function LowMemCdName(ctx As *LowerCtx, fty As Long, isDtor As Long, dst As *Byte) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    Dim names As *Byte
+    Dim t As *TypeTable
+    LowCdSuffix(isDtor, VarPtr(k))
+    t = AccCtxTypes(ctx)
+    names = t->typeNames
+    LowMangleClass(VarPtr(names[fty * TYNAME_LEN]), VarPtr(k), dst)
+    LowMemCdName = 1
+End Function
+
+Function LowMemCtorIdx(ctx As *LowerCtx, fty As Long) As Long
+    Dim buf(MANGLED_LEN - 1) As Byte
+    LowMemCdName(ctx, fty, 0, VarPtr(buf))
+    LowMemCtorIdx = LowFuncIndex(ctx, VarPtr(buf))
+End Function
+
+Function LowNargsAt(i As Long) As Long
+    Dim nargs As *Long
+    nargs = g_freeFuncNArgs As *Long
+    LowNargsAt = nargs[i]
+End Function
+
+Function LowMemUserArgs(ctx As *LowerCtx, fty As Long) As Long
+    Dim i As Long
+    LowMemUserArgs = 0
+    i = LowMemCtorIdx(ctx, fty)
+    If i < 0 Then Exit Function
+    LowMemUserArgs = LowNargsAt(i) - 1
+End Function
+
+Sub LowMemNeed0(ctx As *LowerCtx, fty As Long)
+    Dim n As Long
+    n = LowMemUserArgs(ctx, fty)
+    If n > 0 Then LowerDiagError(ctx, g_memStmt, "member class ctor requires arguments")
+End Sub
+
+Function LowMemCdLab(ctx As *LowerCtx, fty As Long, isDtor As Long) As Long
+    Dim buf(MANGLED_LEN - 1) As Byte
+    LowMemCdLab = -1
+    If LowMemCdName(ctx, fty, isDtor, VarPtr(buf)) = 0 Then Exit Function
+    LowMemCdLab = LowFindFunc(ctx, VarPtr(buf))
+    If isDtor = 0 And LowMemCdLab >= 0 Then LowMemNeed0(ctx, fty)
+End Function
+
+Sub LowEmitThisHome(ctx As *LowerCtx, off As Long, gl As Long, addOff As Long, cb As Long)
+    If cb > 0 Then IrEmit(ctx->list, OP_SUB_RSP, cb, 0)
+    LowEmitLoadOff(ctx->list, off, gl)
+    If addOff <> 0 Then IrEmit(ctx->list, OP_ADD_RAX_IMM, addOff, 0)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(ctx->list, 1)
+End Sub
+
+Function LowEmitThisArg(ctx As *LowerCtx, addOff As Long, cb As Long) As Long
+    Dim off As Long
+    Dim gl As Long
+    LowEmitThisArg = 0
+    If LowLookupThis(ctx, off, gl) = 0 Then Exit Function
+    LowEmitThisHome(ctx, off, gl, addOff, cb)
+    LowEmitThisArg = 1
+End Function
+
+Function LowEmitThisCall(ctx As *LowerCtx, lab As Long, addOff As Long) As Long
+    Dim cb As Long
+    LowEmitThisCall = 0
+    cb = LowCallBytes(1)
+    If LowEmitThisArg(ctx, addOff, cb) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(ctx->list, cb)
+    LowEmitThisCall = 1
+End Function
+
+Function LowEmitElemGo(ctx As *LowerCtx, lab As Long, addOff As Long) As Long
+    LowEmitElemGo = 0
+    If ctx->err <> 0 Then Exit Function
+    If lab < 0 Then
+        LowEmitElemGo = 1
+        Exit Function
+    End If
+    LowEmitElemGo = LowEmitThisCall(ctx, lab, addOff)
+End Function
+
+Function LowEmitElemCd(ctx As *LowerCtx, fty As Long, addOff As Long, isDtor As Long) As Long
+    Dim lab As Long
+    lab = LowMemCdLab(ctx, fty, isDtor)
+    LowEmitElemCd = LowEmitElemGo(ctx, lab, addOff)
+End Function
+
+Function LowElemOff(base As Long, i As Long, esz As Long) As Long
+    LowElemOff = base + i * esz
+End Function
+
+Function LowEmitElemsFwd(ctx As *LowerCtx, fty As Long, base As Long, esz As Long, n As Long) As Long
+    Dim i As Long
+    LowEmitElemsFwd = 0
+    i = 0
+    While i < n
+        If LowEmitElemCd(ctx, fty, LowElemOff(base, i, esz), 0) = 0 Then Exit Function
+        i = i + 1
+    Wend
+    LowEmitElemsFwd = 1
+End Function
+
+Function LowEmitElemsRev(ctx As *LowerCtx, fty As Long, base As Long, esz As Long, n As Long) As Long
+    Dim i As Long
+    LowEmitElemsRev = 1
+    i = n
+    While i > 0 And LowEmitElemsRev <> 0
+        i = i - 1
+        LowEmitElemsRev = LowEmitElemCd(ctx, fty, LowElemOff(base, i, esz), 1)
+    Wend
+End Function
+
+Function LowFieldBase(t As *TypeTable, fi As Long) As Long
+    LowFieldBase = AccLongAt(t->fieldOffs, fi)
+End Function
+
+Function LowFieldEsz(t As *TypeTable, fi As Long) As Long
+    LowFieldEsz = AccLongAt(t->fieldSizes, fi)
+End Function
+
+Function LowFieldN(t As *TypeTable, fi As Long) As Long
+    LowFieldN = AccLongAt(t->fieldCounts, fi)
+End Function
+
+Function LowEmitFieldElems(ctx As *LowerCtx, t As *TypeTable, fi As Long, fty As Long, isDtor As Long) As Long
+    If isDtor <> 0 Then
+        LowEmitFieldElems = LowEmitElemsRev(ctx, fty, LowFieldBase(t, fi), LowFieldEsz(t, fi), LowFieldN(t, fi))
+    Else
+        LowEmitFieldElems = LowEmitElemsFwd(ctx, fty, LowFieldBase(t, fi), LowFieldEsz(t, fi), LowFieldN(t, fi))
+    End If
+End Function
+
+Function LowEmitOneField(ctx As *LowerCtx, t As *TypeTable, fi As Long, classTi As Long, isDtor As Long) As Long
+    Dim fty As Long
+    LowEmitOneField = 1
+    If AccFieldOwner(fi) <> classTi Then Exit Function
+    fty = AccFieldClass(t, fi)
+    If fty < 0 Then Exit Function
+    LowEmitOneField = LowEmitFieldElems(ctx, t, fi, fty, isDtor)
+End Function
+
+Function LowEmitMemRev(ctx As *LowerCtx, t As *TypeTable, fi As Long, classTi As Long) As Long
+    LowEmitMemRev = 1
+    If fi < 0 Then Exit Function
+    If LowEmitMemRev(ctx, t, AccNextField(t, fi), classTi) = 0 Then
+        LowEmitMemRev = 0
+        Exit Function
+    End If
+    LowEmitMemRev = LowEmitOneField(ctx, t, fi, classTi, 1)
+End Function
+
+Function LowEmitMemFwd(ctx As *LowerCtx, t As *TypeTable, fi As Long, classTi As Long) As Long
+    LowEmitMemFwd = 1
+    If fi < 0 Then Exit Function
+    If LowEmitOneField(ctx, t, fi, classTi, 0) = 0 Then
+        LowEmitMemFwd = 0
+        Exit Function
+    End If
+    LowEmitMemFwd = LowEmitMemFwd(ctx, t, AccNextField(t, fi), classTi)
+End Function
+
+Function LowEmitMemWalk(ctx As *LowerCtx, t As *TypeTable, classTi As Long, isDtor As Long) As Long
+    Dim firsts As *Long
+    firsts = t->typeFirst
+    If isDtor <> 0 Then
+        LowEmitMemWalk = LowEmitMemRev(ctx, t, firsts[classTi], classTi)
+    Else
+        LowEmitMemWalk = LowEmitMemFwd(ctx, t, firsts[classTi], classTi)
+    End If
+End Function
+
+Function LowEmitMemFields(ctx As *LowerCtx, classTi As Long, isDtor As Long) As Long
+    Dim t As *TypeTable
+    t = AccCtxTypes(ctx)
+    LowEmitMemFields = LowEmitMemWalk(ctx, t, classTi, isDtor)
+End Function
+
+Function LowMemCdWanted(ctx As *LowerCtx, stmt As Long, isDtor As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    LowMemCdWanted = 0
+    If g_lowClassTi < 0 Then Exit Function
+    AstCopyStr(ctx->ast, stmt, VarPtr(name))
+    LowCdSuffix(isDtor, VarPtr(k))
+    LowMemCdWanted = AccSuffixIs(AccCtxTypes(ctx), g_lowClassTi, VarPtr(name), VarPtr(k))
+End Function
+
+Function LowEmitMemCd(ctx As *LowerCtx, stmt As Long, isDtor As Long) As Long
+    LowEmitMemCd = 1
+    g_memStmt = stmt
+    If LowMemCdWanted(ctx, stmt, isDtor) = 0 Then Exit Function
+    LowEmitMemCd = LowEmitMemFields(ctx, g_lowClassTi, isDtor)
+    If ctx->err <> 0 Then LowEmitMemCd = 0
+End Function
+
+Function LowSuperLab(ctx As *LowerCtx, idx As Long, parent As Long, key As *Byte) As Long
+    Dim buf(MANGLED_LEN - 1) As Byte
+    Dim names As *Byte
+    Dim t As *TypeTable
+    t = AccCtxTypes(ctx)
+    names = t->typeNames
+    LowMangleClass(VarPtr(names[parent * TYNAME_LEN]), key, VarPtr(buf))
+    LowSuperLab = LowFindFunc(ctx, VarPtr(buf))
+    If LowSuperLab < 0 Then LowerDiagError(ctx, idx, "unknown Super '" + MakeStr(VarPtr(buf)) + "'")
+End Function
+
+Sub LowSuperLoad(ctx As *LowerCtx, idx As Long, name As *Byte)
+    Dim nodes As *AstNode
+    nodes = AccCtxNodes(ctx)
+    AstCopyStr(ctx->ast, idx, name)
+    g_supNArgs = nodes[idx].num + 1
+    g_supParentTi = nodes[idx].right
+    g_supLab = LowSuperLab(ctx, idx, g_supParentTi, name)
+End Sub
+
+Function LowSuperBind(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowSuperLoad(ctx, idx, VarPtr(name))
+    LowSuperBind = 0
+    If g_supLab < 0 Then Exit Function
+    LowSuperBind = AccCheckMethod(ctx, idx, g_supParentTi, VarPtr(name))
+End Function
+
+Function LowSuperPrep(ctx As *LowerCtx, idx As Long) As Long
+    LowSuperPrep = LowSuperBind(ctx, idx)
+End Function
+
+Function LowEmitSuperThis(ctx As *LowerCtx) As Long
+    Dim off As Long
+    Dim gl As Long
+    LowEmitSuperThis = 0
+    If LowLookupThis(ctx, off, gl) = 0 Then Exit Function
+    LowEmitLoadOff(ctx->list, off, gl)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+    If TyIs32() = 0 Then IrEmit(ctx->list, OP_MOV_RCX_RAX, 0, 0)
+    LowEmitSuperThis = 1
+End Function
+
+Function LowSuperArgs(ctx As *LowerCtx, idx As Long, cb As Long) As Long
+    LowSuperArgs = 0
+    If cb > 0 Then IrEmit(ctx->list, OP_SUB_RSP, cb, 0)
+    If Not LowEmitMethodArgs(ctx, idx, g_supNArgs) Then Exit Function
+    LowEmitMethodRegArgs(ctx->list, g_supNArgs)
+    LowSuperArgs = LowEmitSuperThis(ctx)
+End Function
+
+Function LowSuperEmit(ctx As *LowerCtx, idx As Long) As Long
+    Dim cb As Long
+    LowSuperEmit = 0
+    cb = LowCallBytes(g_supNArgs)
+    If LowSuperArgs(ctx, idx, cb) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_CALL_LAB, g_supLab, 0)
+    LowEmitCallFinish(ctx->list, cb)
+    LowSuperEmit = 1
+End Function
+
+Function LowExprCallSuper(ctx As *LowerCtx, idx As Long) As Long
+    LowExprCallSuper = 0
+    If LowSuperPrep(ctx, idx) = 0 Then Exit Function
+    LowExprCallSuper = LowSuperEmit(ctx, idx)
+End Function

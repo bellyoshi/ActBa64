@@ -30,7 +30,7 @@ Function ParseFieldTypeSize(p As *Parser, types As *TypeTable, ByRef sz As Long,
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
-Function ParseClassField(p As *Parser, ti As Long) As boolean
+Function ParseClassField(p As *Parser, ti As Long, access As Long) As boolean
     Dim fname(SYM_NAME_LEN - 1) As Byte
     Dim kAs(KW_SHORT_LEN - 1) As Byte
     Dim count As Long
@@ -68,6 +68,10 @@ Function ParseClassField(p As *Parser, ti As Long) As boolean
         p->err = 1
         Exit Function
     End If
+    If AccSetField(types->nFields - 1, access, ti) = 0 Then
+        p->err = 1
+        Exit Function
+    End If
     ParseClassField = true
 End Function
 
@@ -101,7 +105,7 @@ Function ParseClassEnsureCd(p As *Parser, name As *Byte, hasCtor As Long, hasDto
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
-Function ParseClassBodyItem(p As *Parser, ast As *Ast, name As *Byte, ti As Long, ByRef nPrev As Long, ByRef hasCtor As Long, ByRef hasDtor As Long, ByRef isIface As Long) As boolean
+Function ParseClassBodyItem(p As *Parser, ast As *Ast, name As *Byte, ti As Long, ByRef nPrev As Long, ByRef hasCtor As Long, ByRef hasDtor As Long, ByRef isIface As Long, ByRef access As Long) As boolean
     Dim nodes As *AstNode
     Dim kPriv(KW_LEN - 1) As Byte
     Dim kPub(KW_LEN - 1) As Byte
@@ -112,7 +116,6 @@ Function ParseClassBodyItem(p As *Parser, ast As *Ast, name As *Byte, ti As Long
     Dim nMeth As Long
     Dim isCtor As Long
     Dim isDtor As Long
-    Dim access As Long
 
     ParseClassBodyItem = false
     lstrcpy(VarPtr(kPriv), "private")
@@ -123,19 +126,19 @@ Function ParseClassBodyItem(p As *Parser, ast As *Ast, name As *Byte, ti As Long
     lstrcpy(VarPtr(kFun), "function")
     If ParseIdentIs(p, VarPtr(kPriv)) <> 0 Then
         p->pos = p->pos + 1
-        access = 0
+        access = ACC_PRIVATE
     ElseIf ParseIdentIs(p, VarPtr(kPub)) <> 0 Then
         p->pos = p->pos + 1
-        access = 1
+        access = ACC_PUBLIC
     ElseIf ParseIdentIs(p, VarPtr(kProt)) <> 0 Then
         p->pos = p->pos + 1
-        access = 1
+        access = ACC_PROTECTED
     ElseIf ParseIdentIs(p, VarPtr(kVirt)) <> 0 Then
         p->pos = p->pos + 1
-        If Not ParseClassVirtDecl(p) Then Exit Function
+        If Not ParseClassVirtDecl(p, access) Then Exit Function
         isIface = 1
     ElseIf ParseIdentIs(p, VarPtr(kSub)) <> 0 Or ParseIdentIs(p, VarPtr(kFun)) <> 0 Then
-        nMeth = ParseClassMethod(p, name, isCtor, isDtor)
+        nMeth = ParseClassMethod(p, name, isCtor, isDtor, access)
         If nMeth < 0 Then Exit Function
         If isCtor <> 0 Then hasCtor = 1
         If isDtor <> 0 Then hasDtor = 1
@@ -146,13 +149,13 @@ Function ParseClassBodyItem(p As *Parser, ast As *Ast, name As *Byte, ti As Long
             nPrev = nodes[nPrev].nxt
         Wend
     Else
-        If Not ParseClassField(p, ti) Then Exit Function
+        If Not ParseClassField(p, ti, access) Then Exit Function
     End If
     ParseClassBodyItem = true
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
-Function ParseClassBody(p As *Parser, name As *Byte, ti As Long, ByRef nPrev As Long, ByRef hasCtor As Long, ByRef hasDtor As Long, ByRef isIface As Long) As boolean
+Function ParseClassBody(p As *Parser, name As *Byte, ti As Long, ByRef nPrev As Long, ByRef hasCtor As Long, ByRef hasDtor As Long, ByRef isIface As Long, ByRef access As Long) As boolean
     Dim ast As *Ast
     Dim kEnd(KW_SHORT_LEN - 1) As Byte
     Dim kClass(KW_LEN - 1) As Byte
@@ -171,7 +174,7 @@ Function ParseClassBody(p As *Parser, name As *Byte, ti As Long, ByRef nPrev As 
             p->pos = p->pos + 1
             Exit Do
         End If
-        If Not ParseClassBodyItem(p, ast, name, ti, nPrev, hasCtor, hasDtor, isIface) Then Exit Function
+        If Not ParseClassBodyItem(p, ast, name, ti, nPrev, hasCtor, hasDtor, isIface, access) Then Exit Function
     Loop
     ParseClassBody = true
 End Function
@@ -210,6 +213,7 @@ Function ParseClassStmt(p As *Parser) As Long
     Dim hasCtor As Long
     Dim hasDtor As Long
     Dim isIface As Long
+    Dim access As Long
 
     ParseClassStmt = -1
     If Not ParseClassOpen(p, VarPtr(name), ti, isIface) Then Exit Function
@@ -217,6 +221,7 @@ Function ParseClassStmt(p As *Parser) As Long
     types = ast->types
     hasCtor = 0
     hasDtor = 0
+    access = ACC_PRIVATE
     nFirst = -1
     nPrev = -1
     p->classTypeIdx = ti
@@ -226,7 +231,7 @@ Function ParseClassStmt(p As *Parser) As Long
     AstSetStr(ast, nType, VarPtr(name))
     nFirst = nType
     nPrev = nType
-    If Not ParseClassBody(p, VarPtr(name), ti, nPrev, hasCtor, hasDtor, isIface) Then Exit Function
+    If Not ParseClassBody(p, VarPtr(name), ti, nPrev, hasCtor, hasDtor, isIface, access) Then Exit Function
 
     ' COM インターフェース（Virtual のみ）は空 ctor/dtor を付けない
     If isIface = 0 Then

@@ -1,0 +1,57 @@
+' ClassAccChk - メンバ参照時のアクセス検査
+
+Function AccOwn(fi As Long, typeIdx As Long) As Long
+    AccOwn = AccFieldOwner(fi)
+    If AccOwn < 0 Then AccOwn = typeIdx
+End Function
+
+Sub AccDeny(ctx As *LowerCtx, idx As Long, name As *Byte, access As Long)
+    If access = ACC_PROTECTED Then
+        LowerDiagError(ctx, idx, "protected member '" + MakeStr(name) + "'")
+    Else
+        LowerDiagError(ctx, idx, "private member '" + MakeStr(name) + "'")
+    End If
+End Sub
+
+Function AccGate(ctx As *LowerCtx, idx As Long, name As *Byte, access As Long, owner As Long) As Long
+    AccGate = 1
+    If AccAllows(g_lowClassTi, owner, access) <> 0 Then Exit Function
+    AccDeny(ctx, idx, name, access)
+    AccGate = 0
+End Function
+
+Function AccCtxAst(ctx As *LowerCtx) As *Ast
+    AccCtxAst = ctx->ast
+End Function
+
+Function AccCtxTypes(ctx As *LowerCtx) As *TypeTable
+    Dim ast As *Ast
+    ast = AccCtxAst(ctx)
+    AccCtxTypes = ast->types
+End Function
+
+Function AccCtxNodes(ctx As *LowerCtx) As *AstNode
+    Dim ast As *Ast
+    ast = AccCtxAst(ctx)
+    AccCtxNodes = ast->nodes
+End Function
+
+Function AccCheckField(ctx As *LowerCtx, idx As Long, typeIdx As Long, name As *Byte) As Long
+    Dim fi As Long
+    Dim t As *TypeTable
+    AccCheckField = 1
+    t = AccCtxTypes(ctx)
+    If TyIsClass(t, typeIdx) = 0 Then Exit Function
+    fi = AccFindField(t, typeIdx, name)
+    If fi < 0 Then Exit Function
+    AccCheckField = AccGate(ctx, idx, name, AccFieldAcc(fi), AccOwn(fi, typeIdx))
+End Function
+
+Function AccCheckMethod(ctx As *LowerCtx, idx As Long, typeIdx As Long, name As *Byte) As Long
+    Dim acc As Long
+    Dim owner As Long
+    AccCheckMethod = 1
+    owner = AccMethOwner(typeIdx, name, acc)
+    If owner < 0 Then Exit Function
+    AccCheckMethod = AccGate(ctx, idx, name, acc, owner)
+End Function

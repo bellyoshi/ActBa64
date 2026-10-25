@@ -1,0 +1,328 @@
+' ClassAccMeth - メソッドのアクセスと Super 名
+
+Dim g_maccTi As *Long
+Dim g_maccAcc As *Long
+Dim g_maccNames As *Byte
+Dim g_maccN As Long
+Dim g_maccCap As Long
+
+Sub AccFreeMeth()
+    If g_maccTi <> NULL Then free(g_maccTi)
+    If g_maccAcc <> NULL Then free(g_maccAcc)
+    If g_maccNames <> NULL Then free(g_maccNames)
+    g_maccTi = NULL
+    g_maccAcc = NULL
+    g_maccNames = NULL
+    g_maccCap = 0
+    g_maccN = 0
+End Sub
+
+Sub AccReset()
+    AccFreeMeth()
+    AccFreeFields()
+    AccFreeParent()
+    g_lowClassTi = -1
+End Sub
+
+Function AccGrowMethTi(ncap As Long, old As Long) As Long
+    Dim p As *Byte
+    AccGrowMethTi = 0
+    p = MemGrow(g_maccTi As BytePtr, BytesN(old, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_maccTi = p As *Long
+    AccGrowMethTi = 1
+End Function
+
+Function AccGrowMethAcc(ncap As Long, old As Long) As Long
+    Dim p As *Byte
+    AccGrowMethAcc = 0
+    p = MemGrow(g_maccAcc As BytePtr, BytesN(old, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_maccAcc = p As *Long
+    AccGrowMethAcc = 1
+End Function
+
+Function AccGrowMethNames(ncap As Long, old As Long) As Long
+    Dim p As *Byte
+    AccGrowMethNames = 0
+    p = MemGrow(g_maccNames, BytesN(old, TYNAME_LEN), BytesN(ncap, TYNAME_LEN))
+    If p = NULL Then Exit Function
+    g_maccNames = p
+    AccGrowMethNames = 1
+End Function
+
+Function AccGrowMeth(ncap As Long) As Long
+    Dim old As Long
+    old = g_maccCap
+    AccGrowMeth = 0
+    If AccGrowMethTi(ncap, old) = 0 Then Exit Function
+    If AccGrowMethAcc(ncap, old) = 0 Then Exit Function
+    If AccGrowMethNames(ncap, old) = 0 Then Exit Function
+    g_maccCap = ncap
+    AccGrowMeth = 1
+End Function
+
+Function AccEnsureMeth(need As Long) As Long
+    Dim ncap As Long
+    AccEnsureMeth = 1
+    If need <= g_maccCap Then Exit Function
+    ncap = AccCapFor(g_maccCap, need)
+    AccEnsureMeth = AccGrowMeth(ncap)
+End Function
+
+Sub AccStoreName(i As Long, name As *Byte)
+    Dim names As *Byte
+    names = g_maccNames
+    lstrcpy(VarPtr(names[i * TYNAME_LEN]), name)
+End Sub
+
+Sub AccWriteMeth(i As Long, ti As Long, access As Long, name As *Byte)
+    g_maccTi[i] = ti
+    g_maccAcc[i] = access
+    AccStoreName(i, name)
+End Sub
+
+Function AccPushMethod(ti As Long, name As *Byte, access As Long) As Long
+    Dim i As Long
+    AccPushMethod = 0
+    If AccEnsureMeth(g_maccN + 1) = 0 Then Exit Function
+    i = g_maccN
+    AccWriteMeth(i, ti, access, name)
+    g_maccN = i + 1
+    AccPushMethod = 1
+End Function
+
+Function AccMethAt(i As Long, ti As Long, name As *Byte) As Long
+    Dim names As *Byte
+    AccMethAt = 0
+    If g_maccTi[i] <> ti Then Exit Function
+    names = g_maccNames
+    If TyNameEq(VarPtr(names[i * TYNAME_LEN]), name) <> 0 Then AccMethAt = 1
+End Function
+
+Function AccHit(cur As Long, i As Long, ti As Long, name As *Byte) As Long
+    AccHit = cur
+    If cur >= 0 Then Exit Function
+    If AccMethAt(i, ti, name) <> 0 Then AccHit = i
+End Function
+
+Function AccFindMethod(ti As Long, name As *Byte) As Long
+    Dim i As Long
+    AccFindMethod = -1
+    i = 0
+    While i < g_maccN
+        AccFindMethod = AccHit(AccFindMethod, i, ti, name)
+        i = i + 1
+    Wend
+End Function
+
+Function AccAddMethod(ti As Long, name As *Byte, access As Long) As Long
+    Dim i As Long
+    i = AccFindMethod(ti, name)
+    If i >= 0 Then
+        g_maccAcc[i] = access
+        AccAddMethod = 1
+        Exit Function
+    End If
+    AccAddMethod = AccPushMethod(ti, name, access)
+End Function
+
+Function AccNoteCtor(ti As Long, access As Long, isCtor As Long) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    AccNoteCtor = 1
+    If isCtor = 0 Then Exit Function
+    lstrcpy(VarPtr(k), "Ctor")
+    AccNoteCtor = AccAddMethod(ti, VarPtr(k), access)
+End Function
+
+Function AccNoteDtor(ti As Long, access As Long, isDtor As Long) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    AccNoteDtor = 1
+    If isDtor = 0 Then Exit Function
+    lstrcpy(VarPtr(k), "Dtor")
+    AccNoteDtor = AccAddMethod(ti, VarPtr(k), access)
+End Function
+
+Function AccNoteCd(ti As Long, access As Long, isCtor As Long, isDtor As Long) As Long
+    AccNoteCd = AccNoteCtor(ti, access, isCtor)
+    If AccNoteCd = 0 Then Exit Function
+    AccNoteCd = AccNoteDtor(ti, access, isDtor)
+End Function
+
+Function AccNoteMeth(ti As Long, name As *Byte, access As Long, isCtor As Long, isDtor As Long) As Long
+    AccNoteMeth = AccAddMethod(ti, name, access)
+    If AccNoteMeth = 0 Then Exit Function
+    AccNoteMeth = AccNoteCd(ti, access, isCtor, isDtor)
+End Function
+
+Function AccStarts(s As *Byte, pref As *Byte) As Long
+    Dim i As Long
+    AccStarts = 0
+    i = 0
+    While pref[i] <> 0
+        If s[i] <> pref[i] Then Exit Function
+        i = i + 1
+    Wend
+    AccStarts = 1
+End Function
+
+Sub AccClassPref(t As *TypeTable, ti As Long, dst As *Byte)
+    Dim names As *Byte
+    names = t->typeNames
+    lstrcpy(dst, VarPtr(names[ti * TYNAME_LEN]))
+    lstrcat(dst, "_")
+End Sub
+
+Function AccMatchClassPrefix(t As *TypeTable, ti As Long, funcName As *Byte) As Long
+    Dim pref(SYM_NAME_LEN + 2) As Byte
+    AccMatchClassPrefix = 0
+    AccClassPref(t, ti, VarPtr(pref))
+    If AccStarts(funcName, VarPtr(pref)) <> 0 Then AccMatchClassPrefix = lstrlen(VarPtr(pref))
+End Function
+
+Sub AccConsider(t As *TypeTable, i As Long, funcName As *Byte, ByRef bestN As Long, ByRef best As Long)
+    Dim n As Long
+    If TyIsClass(t, i) = 0 Then Exit Sub
+    n = AccMatchClassPrefix(t, i, funcName)
+    If n > bestN Then
+        bestN = n
+        best = i
+    End If
+End Sub
+
+Sub AccScanClasses(t As *TypeTable, funcName As *Byte, ByRef best As Long, ByRef bestN As Long)
+    Dim i As Long
+    i = 0
+    While i < t->nTypes
+        AccConsider(t, i, funcName, bestN, best)
+        i = i + 1
+    Wend
+End Sub
+
+Function AccClassOfName(t As *TypeTable, funcName As *Byte) As Long
+    Dim best As Long
+    Dim bestN As Long
+    best = -1
+    bestN = 0
+    If t <> NULL Then AccScanClasses(t, funcName, best, bestN)
+    AccClassOfName = best
+End Function
+
+Function AccSuffixIs(t As *TypeTable, ti As Long, funcName As *Byte, suffix As *Byte) As Long
+    Dim buf(MANGLED_LEN - 1) As Byte
+    Dim names As *Byte
+    AccSuffixIs = 0
+    names = t->typeNames
+    lstrcpy(VarPtr(buf), VarPtr(names[ti * TYNAME_LEN]))
+    lstrcat(VarPtr(buf), "_")
+    lstrcat(VarPtr(buf), suffix)
+    If TyNameEq(funcName, VarPtr(buf)) <> 0 Then AccSuffixIs = 1
+End Function
+
+Function AccDeriveStep(cur As Long, ancestor As Long, ByRef guard As Long) As Long
+    AccDeriveStep = 0
+    If cur = ancestor Then AccDeriveStep = 1
+    guard = guard + 1
+End Function
+
+Function AccDerives(cur As Long, ancestor As Long) As Long
+    Dim guard As Long
+    AccDerives = 0
+    guard = 0
+    While cur >= 0 And guard < 64 And AccDerives = 0
+        AccDerives = AccDeriveStep(cur, ancestor, guard)
+        cur = AccParent(cur)
+    Wend
+End Function
+
+Function AccAllows(curTi As Long, ownerTi As Long, access As Long) As Long
+    AccAllows = 0
+    If access = ACC_PUBLIC Then AccAllows = 1
+    If curTi < 0 Then Exit Function
+    If curTi = ownerTi Then AccAllows = 1
+    If access = ACC_PROTECTED Then AccAllows = AccDerives(curTi, ownerTi)
+End Function
+
+Function AccFieldNamed(t As *TypeTable, fi As Long, name As *Byte) As Long
+    Dim names As *Byte
+    names = t->fieldNames
+    AccFieldNamed = TyNameEq(VarPtr(names[fi * TYNAME_LEN]), name)
+End Function
+
+Function AccScanField(t As *TypeTable, fi As Long, name As *Byte) As Long
+    AccScanField = -1
+    If fi < 0 Then Exit Function
+    If AccFieldNamed(t, fi, name) <> 0 Then
+        AccScanField = fi
+        Exit Function
+    End If
+    AccScanField = AccScanField(t, AccNextField(t, fi), name)
+End Function
+
+Function AccFindField(t As *TypeTable, typeIdx As Long, name As *Byte) As Long
+    Dim firsts As *Long
+    AccFindField = -1
+    If t = NULL Then Exit Function
+    If typeIdx < 0 Or typeIdx >= t->nTypes Then Exit Function
+    firsts = t->typeFirst
+    AccFindField = AccScanField(t, firsts[typeIdx], name)
+End Function
+
+Function AccTakeMeth(ti As Long, name As *Byte, ByRef acc As Long) As Long
+    Dim i As Long
+    AccTakeMeth = 0
+    i = AccFindMethod(ti, name)
+    If i < 0 Then Exit Function
+    acc = g_maccAcc[i]
+    AccTakeMeth = 1
+End Function
+
+Function AccMethWalk(ti As Long, name As *Byte, ByRef acc As Long, guard As Long) As Long
+    AccMethWalk = -1
+    If ti < 0 Or guard >= 64 Then Exit Function
+    If AccTakeMeth(ti, name, acc) <> 0 Then
+        AccMethWalk = ti
+        Exit Function
+    End If
+    AccMethWalk = AccMethWalk(AccParent(ti), name, acc, guard + 1)
+End Function
+
+Function AccMethOwner(ti As Long, name As *Byte, ByRef acc As Long) As Long
+    AccMethOwner = AccMethWalk(ti, name, acc, 0)
+End Function
+
+Function AccNameIsClass(t As *TypeTable, ti As Long, meth As *Byte) As Long
+    Dim names As *Byte
+    names = t->typeNames
+    AccNameIsClass = TyNameEq(meth, VarPtr(names[ti * TYNAME_LEN]))
+End Function
+
+Function AccSuperDtor(t As *TypeTable, parent As Long, meth As *Byte, dst As *Byte) As Long
+    lstrcpy(dst, "Dtor")
+    AccSuperDtor = AccNameIsClass(t, parent, meth)
+End Function
+
+Function AccSuperLive(t As *TypeTable, parent As Long, meth As *Byte, dst As *Byte) As Long
+    AccSuperLive = 1
+    If AccNameIsClass(t, parent, meth) <> 0 Then
+        lstrcpy(dst, "Ctor")
+        Exit Function
+    End If
+    lstrcpy(dst, meth)
+End Function
+
+Function AccSuperKey(t As *TypeTable, parent As Long, meth As *Byte, isDtor As Long, dst As *Byte) As Long
+    If isDtor <> 0 Then
+        AccSuperKey = AccSuperDtor(t, parent, meth, dst)
+        Exit Function
+    End If
+    AccSuperKey = AccSuperLive(t, parent, meth, dst)
+End Function
+
+Function AccFieldClass(t As *TypeTable, fi As Long) As Long
+    Dim fty As Long
+    AccFieldClass = -1
+    fty = AccLongAt(t->fieldTypeIdxs, fi)
+    If fty < 0 Then Exit Function
+    If TyIsClass(t, fty) <> 0 Then AccFieldClass = fty
+End Function

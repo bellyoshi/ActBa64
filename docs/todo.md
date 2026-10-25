@@ -29,8 +29,6 @@
 
 ### P2 — OOP・メディア・規模
 
-- **`Super.*`**、メンバ Class の自動 ctor/dtor
-- **厳密 `Protected` / `Private`**（受理のみ。Public と同等）
 - **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術
 - **`Single` IEEE 演算**（格納と Input 変換が中心。汎用 SSE は未）
@@ -52,9 +50,6 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Super.Method` | スーパークラス ctor/dtor 呼び出し（4.20 Class 章） |
-| 厳密な `Protected` / `Private` | 受理するが Public と同等 |
-| メンバ Class の自動 ctor/dtor | 親 Class 内のメンバ Class 生成・破棄（4.20） |
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON は `src/rc` の `rc.exe`。その他の rc 文は未 |
