@@ -3,6 +3,7 @@
 
 Dim g_pDevice As *ID3D11Device
 Dim g_pContext As *ID3D11DeviceContext
+Dim g_pRasterizer As *ID3D11RasterizerState
 Dim g_pSwapChain As *IDXGISwapChain
 Dim g_pRTV As *ID3D11RenderTargetView
 Dim g_dxHwnd As HWND
@@ -185,23 +186,87 @@ Sub dx_DrawText(x As Long, y As Long, psz As BytePtr, d3dColor As DWord)
 	ReleaseDC(g_dxHwnd, hdc)
 End Sub
 
+Function DxCull11(mode As Long) As DWord
+	DxCull11 = D3D11_CULL_BACK
+	If mode = D3DCULL_NONE Then DxCull11 = D3D11_CULL_NONE
+	If mode = D3DCULL_CW Then DxCull11 = D3D11_CULL_FRONT
+	If mode = D3DCULL_CCW Then DxCull11 = D3D11_CULL_BACK
+End Function
+
+Sub DxFillRast(ByRef desc As D3D11_RASTERIZER_DESC, mode As Long)
+	ZeroMemory(VarPtr(desc), Len(desc))
+	desc.FillMode = D3D11_FILL_SOLID
+	desc.CullMode = DxCull11(mode)
+	desc.DepthClipEnable = 1
+End Sub
+
+Function DxMakeRast(mode As Long) As *ID3D11RasterizerState
+	Dim desc As D3D11_RASTERIZER_DESC
+	Dim pNew As *ID3D11RasterizerState
+	Dim hr As DWord
+	pNew = 0
+	DxFillRast(desc, mode)
+	hr = g_pDevice->CreateRasterizerState(VarPtr(desc), VarPtr(pNew))
+	If hr <> 0 Then pNew = 0
+	DxMakeRast = pNew
+End Function
+
+Sub DxDropRast()
+	If g_pRasterizer = 0 Then Exit Sub
+	g_pRasterizer->Release()
+	g_pRasterizer = 0
+End Sub
+
+Sub DxApplyRast(pNew As *ID3D11RasterizerState)
+	g_pContext->RSSetState(pNew)
+	DxDropRast()
+	g_pRasterizer = pNew
+End Sub
+
+Sub DxQuitRast()
+	If g_pContext <> 0 Then g_pContext->RSSetState(0)
+	DxDropRast()
+End Sub
+
+Sub dx_SetCullMode(CullMode As Long)
+	Dim pNew As *ID3D11RasterizerState
+	If g_pDevice = 0 Then Exit Sub
+	If g_pContext = 0 Then Exit Sub
+	pNew = DxMakeRast(CullMode)
+	If pNew = 0 Then Exit Sub
+	DxApplyRast(pNew)
+End Sub
+
+Sub DxRelRtv()
+	If g_pRTV = 0 Then Exit Sub
+	g_pRTV->Release()
+	g_pRTV = 0
+End Sub
+
+Sub DxRelCtx()
+	If g_pContext = 0 Then Exit Sub
+	g_pContext->Release()
+	g_pContext = 0
+End Sub
+
+Sub DxRelSwap()
+	If g_pSwapChain = 0 Then Exit Sub
+	g_pSwapChain->Release()
+	g_pSwapChain = 0
+End Sub
+
+Sub DxRelDev()
+	If g_pDevice = 0 Then Exit Sub
+	g_pDevice->Release()
+	g_pDevice = 0
+End Sub
+
 Sub dx_Quit()
-	If g_pRTV Then
-		g_pRTV->Release()
-		g_pRTV = 0
-	End If
-	If g_pContext Then
-		g_pContext->Release()
-		g_pContext = 0
-	End If
-	If g_pSwapChain Then
-		g_pSwapChain->Release()
-		g_pSwapChain = 0
-	End If
-	If g_pDevice Then
-		g_pDevice->Release()
-		g_pDevice = 0
-	End If
+	DxQuitRast()
+	DxRelRtv()
+	DxRelCtx()
+	DxRelSwap()
+	DxRelDev()
 	g_dxHwnd = 0
 	CoUninitialize()
 End Sub
