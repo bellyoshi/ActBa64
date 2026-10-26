@@ -26,8 +26,9 @@ ActiveBasic 4.20 で `actba64.pj` をビルドし、`bin\stage0\actba64.exe` に
 - `SizeOfImage` が小さくなり、OS が `%1 is not a valid Win32 application` で拒否する
 - DLL のエクスポート RVA が切れる（例: `0x1000 + 0x11811` → `0x2811`）。呼び出しは終了コード `0xC000001D`（不正命令）になる
 - `-actba32` の絶対アドレス（ラベル、グローバル、文字列、IAT）が連鎖加算のままだと同じ切り捨てになる
+- DLL の `.reloc`（ページ RVA とセクション配置）が切れると、優先ベースが塞がったときにロードへ失敗する
 
-現行ソースは `AlignUp`、`PeCalcLayout`、`CgSnapRva`、`CgAbs32Add` を DWord の段階代入にしてある。**stage0 を作り直すときはこのツリーで** AB4.20 ビルドすること。`build.ps1` は不正 PE を検知して stage3 等へフォールバックする。
+現行ソースは `AlignUp`、`PeCalcLayout`、`CgSnapRva`、`CgAbs32Add`、`PeRelocRva` を DWord の段階代入にしてある。**stage0 を作り直すときはこのツリーで** AB4.20 ビルドすること。`build.ps1` は不正 PE を検知して stage3 等へフォールバックする。
 
 ---
 
@@ -86,7 +87,7 @@ cd src\actba64
 actba64 <src.abp|.pj> [-actba32] [-o <out>]
 ```
 
-`.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1`（[language.md §8.4](./language.md#84-dll-を出力する)）。
+`.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1` で、再配置は `PeReloc.abp` が `.reloc` に書く（[language.md §8.4](./language.md#84-dll-を出力する)）。
 
 サンプル:
 

@@ -19,6 +19,10 @@ Type PeLayout
     edataVirt As DWord
     edataRva As DWord
     edataOff As Long
+    relocRaw As DWord
+    relocVirt As DWord
+    relocRva As DWord
+    relocOff As Long
     sizeImage As Long
     dataOff As Long
     idataFileOff As Long
@@ -122,7 +126,7 @@ Sub PeCalcImage(lay As *PeLayout)
     img = img + lay->dataVirt
     img = img + lay->idataVirt
     img = img + lay->edataVirt
-    img = img + lay->rsrcVirt
+    PeCalcImageTail(lay, img)
     lay->sizeImage = img
 End Sub
 
@@ -131,7 +135,7 @@ Sub PeCalcFileOff(lay As *PeLayout)
     lay->idataFileOff = lay->dataOff + lay->dataRaw
     lay->edataOff = lay->idataFileOff + lay->idataRaw
     lay->rsrcOff = lay->edataOff + lay->edataRaw
-    lay->outSize = lay->rsrcOff + lay->rsrcRaw
+    PeCalcFileTail(lay)
 End Sub
 
 Sub PeCalcLayoutFinish(lay As *PeLayout)
@@ -144,6 +148,7 @@ Sub PeCalcLayout(codeSize As Long, globSize As Long, idataSize As DWord, rsrcSiz
     PeCalcLayoutBase(codeSize, globSize, idataSize, lay)
     PeCalcLayoutEdata(lay)
     PeCalcLayoutRsrc(rsrcSize, lay)
+    PeCalcLayoutReloc(lay)
     PeCalcLayoutFinish(lay)
 End Sub
 
@@ -210,6 +215,7 @@ Sub PeWriteSects(outBuf As *Byte, sectOff As DWord, lay As *PeLayout, codeSize A
     If rsrcSize > 0 Then
         PeWriteSect(outBuf, sectOff, ".rsrc", lay->rsrcVirt, lay->rsrcRva, lay->rsrcRaw, lay->rsrcOff, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ)
     End If
+    PeWriteRelocSect(outBuf, sectOff, lay)
 End Sub
 
 Sub PeCopyPayloads(outBuf As *Byte, lay As *PeLayout, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, rsrcBuf As *Byte, rsrcSize As Long)
@@ -220,6 +226,7 @@ Sub PeCopyPayloads(outBuf As *Byte, lay As *PeLayout, codeBuf As *Byte, codeSize
     If rsrcSize > 0 And rsrcBuf <> NULL Then
         MemCopyAt(outBuf, lay->rsrcOff, rsrcBuf, rsrcSize)
     End If
+    PeCopyReloc(outBuf, lay)
 End Sub
 
 Sub PeWriteImpDir64(outBuf As *Byte, optOff As DWord, builder As *ImportBuilder)
@@ -236,6 +243,7 @@ Sub PeWriteOptDirs64(outBuf As *Byte, optOff As DWord, builder As *ImportBuilder
         PutDword(outBuf, optOff + 128, lay->rsrcRva)
         PutDword(outBuf, optOff + 132, rsrcSize)
     End If
+    PeWriteRelocDir64(outBuf, optOff, lay)
 End Sub
 
 Sub PeWriteOpt64(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, subsystem As Long, rsrcSize As Long)
@@ -278,6 +286,7 @@ Sub PeWriteOptDirs32(outBuf As *Byte, optOff As DWord, builder As *ImportBuilder
         PutDword(outBuf, optOff + 112, lay->rsrcRva)
         PutDword(outBuf, optOff + 116, rsrcSize)
     End If
+    PeWriteRelocDir32(outBuf, optOff, lay)
 End Sub
 
 Sub PeWriteOpt32(outBuf As *Byte, lay As *PeLayout, builder As *ImportBuilder, subsystem As Long, rsrcSize As Long)
@@ -316,6 +325,7 @@ End Function
 Function PeLayoutImage(outPath As *Byte, codeSize As Long, globSize As Long, idataSize As DWord, rsz As Long, lay As *PeLayout) As Long
     PeLayoutImage = 0
     PeSetDllFile(outPath)
+    If PeRelocBuild() = 0 Then Exit Function
     PeCalcLayout(codeSize, globSize, idataSize, rsz, lay)
     If rsz > 0 Then ResFixupRvas(lay->rsrcRva)
     PeLayoutImage = PePrepareEdata(lay)
@@ -344,6 +354,7 @@ Function PeWriteImage64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, gl
     If PeLayoutImage(outPath, codeSize, globSize, idataSize, rsz, VarPtr(lay)) = 0 Then Exit Function
     PeWriteImage64 = PeCommit64(outPath, VarPtr(lay), codeBuf, codeSize, idataBuf, idataSize, builder, subsystem, rsz)
     PeFreeEdata()
+    PeRelocReset()
 End Function
 
 Function WritePe64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder, subsystem As Long) As Long
@@ -379,6 +390,7 @@ Function PeWriteImage32(outPath As *Byte, codeBuf As *Byte, codeSize As Long, gl
     If PeLayoutImage(outPath, codeSize, globSize, idataSize, rsz, VarPtr(lay)) = 0 Then Exit Function
     PeWriteImage32 = PeCommit32(outPath, VarPtr(lay), codeBuf, codeSize, idataBuf, idataSize, builder, subsystem, rsz)
     PeFreeEdata()
+    PeRelocReset()
 End Function
 
 Function WritePe32(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder, subsystem As Long) As Long
