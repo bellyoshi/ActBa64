@@ -823,27 +823,45 @@ Sub TextBuf_Clear()
     Hl_ResetCache()
 End Sub
 
-Sub TextBuf_SetText(s As String)
-    Dim n As Long
-    Dim p As *Byte
+Function TextBuf_GapRoom() As Long
+    TextBuf_GapRoom = g_textBuf.gap_end - g_textBuf.gap_start
+End Function
 
+Function TextBuf_GrowOnce() As Long
+    Dim before As Long
+    before = g_textBuf.capacity
+    g_textBuf.GrowGap()
+    TextBuf_GrowOnce = 0
+    If g_textBuf.capacity > before Then TextBuf_GrowOnce = 1
+End Function
+
+Function TextBuf_EnsureRoom(ByVal n As Long) As Long
+    TextBuf_EnsureRoom = 0
+    While TextBuf_GapRoom() < n
+        If TextBuf_GrowOnce() = 0 Then Exit Function
+    Wend
+    TextBuf_EnsureRoom = 1
+End Function
+
+Sub TextBuf_CopyIn(p As *Byte, ByVal n As Long)
+    memcpy(VarPtr(g_textBuf.buffer[g_textBuf.gap_start]), p, n)
+    g_textBuf.gap_start = g_textBuf.gap_start + n
+    TextBuf_RebuildLineOffsets()
+End Sub
+
+Sub TextBuf_Fill(s As String)
+    Dim n As Long
+    n = Len(s)
+    If n <= 0 Then Exit Sub
+    TextBuf_EnsureInit()
+    If TextBuf_EnsureRoom(n) = 0 Then Exit Sub
+    TextBuf_CopyIn(StrPtr(s), n)
+End Sub
+
+Sub TextBuf_SetText(s As String)
     EditorUndo_Suppress(1)
     TextBuf_Clear()
-    n = Len(s)
-    If n > 0 Then
-        TextBuf_EnsureInit()
-        While (g_textBuf.gap_end - g_textBuf.gap_start) < n
-            g_textBuf.GrowGap()
-            If (g_textBuf.gap_end - g_textBuf.gap_start) < n Then
-                EditorUndo_Suppress(0)
-                Exit Sub
-            End If
-        Wend
-        p = StrPtr(s)
-        memcpy(VarPtr(g_textBuf.buffer[g_textBuf.gap_start]), p, n)
-        g_textBuf.gap_start = g_textBuf.gap_start + n
-        TextBuf_RebuildLineOffsets()
-    End If
+    TextBuf_Fill(s)
     Hl_ResetCache()
     TextBuf_MoveCursorTo(0)
     TextBuf_SyncPreferredCol()
