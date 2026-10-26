@@ -15,7 +15,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$StartDir = (Get-Location).Path
 $Root = $PSScriptRoot
+
+# build.ps1 が src\actba64 へ Set-Location するため、終了時に起動時の場所へ戻す
+try {
 Set-Location $Root
 
 $Actba64Dir = Join-Path $Root "src\actba64"
@@ -125,3 +129,6 @@ Write-Host ""
 Write-Host "release ready: $ReleaseDir"
 Get-ChildItem -LiteralPath $ReleaseDir | ForEach-Object { Write-Host ("  {0}" -f $_.Name) }
 exit 0
+} finally {
+    Set-Location -LiteralPath $StartDir
+}
