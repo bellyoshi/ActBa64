@@ -1,0 +1,67 @@
+' Drag selection. The anchor stays at the press point; the caret follows the mouse.
+
+Dim g_dragOn As Long
+
+Function EditorSelect_XY(ByVal lParam As LPARAM, ByRef x As Long, ByRef y As Long) As Long
+    x = lParam And 65535
+    If x >= 32768 Then x = x - 65536
+    y = (lParam \ 65536) And 65535
+    If y >= 32768 Then y = y - 65536
+    EditorSelect_XY = 1
+End Function
+
+Sub EditorSelect_Down(hWnd As HWND, ByVal lParam As LPARAM)
+    Dim x As Long
+    Dim y As Long
+    EditorSelect_XY(lParam, x, y)
+    SetFocus(hWnd)
+    SetCapture(hWnd)
+    g_dragOn = 1
+    EditorHitTestClick(hWnd, x, y)
+    g_selAnchor = TextBuf_CursorIndex()
+End Sub
+
+Sub EditorSelect_Scroll(hWnd As HWND, ByVal y As Long)
+    Dim rc As RECT
+    If y < VS_MARGIN_Y Then EditorCoreScrollBy(hWnd, -1)
+    GetClientRect(hWnd, rc)
+    If y >= rc.bottom Then EditorCoreScrollBy(hWnd, 1)
+End Sub
+
+Function EditorSelect_ClampY(hWnd As HWND, ByVal y As Long) As Long
+    Dim rc As RECT
+    GetClientRect(hWnd, rc)
+    EditorSelect_ClampY = y
+    If y < VS_MARGIN_Y Then EditorSelect_ClampY = VS_MARGIN_Y
+    If rc.bottom > 1 And y >= rc.bottom Then EditorSelect_ClampY = rc.bottom - 1
+End Function
+
+Sub EditorSelect_DragTo(hWnd As HWND, ByVal x As Long, ByVal y As Long)
+    Dim hy As Long
+    EditorSelect_Scroll(hWnd, y)
+    hy = EditorSelect_ClampY(hWnd, y)
+    EditorHitTestClick(hWnd, x, hy)
+    EditorInvalidate(hWnd)
+End Sub
+
+Sub EditorSelect_Stop(hWnd As HWND)
+    g_dragOn = 0
+    ReleaseCapture()
+    If TextBuf_HasSelection() = 0 Then TextBuf_ClearSelection()
+    EditorInvalidate(hWnd)
+End Sub
+
+Sub EditorSelect_Move(hWnd As HWND, ByVal wParam As WPARAM, ByVal lParam As LPARAM)
+    Dim x As Long
+    Dim y As Long
+    If g_dragOn = 0 Then Exit Sub
+    If (wParam And MK_LBUTTON) = 0 Then EditorSelect_Stop(hWnd)
+    If g_dragOn = 0 Then Exit Sub
+    EditorSelect_XY(lParam, x, y)
+    EditorSelect_DragTo(hWnd, x, y)
+End Sub
+
+Sub EditorSelect_Up(hWnd As HWND)
+    If g_dragOn = 0 Then Exit Sub
+    EditorSelect_Stop(hWnd)
+End Sub

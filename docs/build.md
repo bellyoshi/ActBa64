@@ -199,27 +199,8 @@ actba64 <src.abp|.pj> [-actba32] [-o <out>]
 
 ## 5. ProjectEditor
 
-配布物の `release\ProjectEditor.exe` は MDI エディタです。ソースは子ウィンドウで、同時に最大 8 枚開いたままにします。**Window** メニューは Cascade / Tile Horizontal / Tile Vertical です。
+操作仕様は [projecteditor.md](./projecteditor.md) です。`release\ProjectEditor.exe` は 64bit の MDI エディタで、隣の `actba64.exe` を呼びます。
 
 標準ヘッダの正本は [`src/Include`](../src/Include) です。`release_build.ps1` が `release\Include` へコピーします。ProjectEditor 専用の Include コピーはリポジトリに置きません。
-
-### プロジェクトウィンドウ
-
-`.pj` を開くと（File → Open、または起動時の引数）、ソースは開かずプロジェクトウィンドウが出ます。`#SOURCE` の次の行から、次の `#` 指令の手前までを一覧します。空行と `'` コメントは除きます（最大 128 件）。行をクリックするとそのファイルを開き、既に開いていれば前面にします。別の `.pj` を開くと一覧が差し替わります。プロジェクトウィンドウを閉じると、プロジェクトは解除されます。
-
-MDI の見本は [`src/actba64/samples/mdi/mdi.pj`](../src/actba64/samples/mdi/mdi.pj) です。
-
-### コンパイルと実行
-
-Basic メニューの **64bit**（既定）は、エディタと同じディレクトリの `actba64.exe` を呼びます。見つからなければパス上の同名です。**32bit** は同じ `actba64.exe` に `-actba32` を付けて呼びます。
-
-| 状態 | 渡す入力 | 出力 |
-|---|---|---|
-| プロジェクトウィンドウが開いている | その `.pj` | `#OUTPUT_RELEASE`（`.pj` のあるディレクトリ基準）。無ければ `.pj` の拡張子を `.exe` にしたもの |
-| プロジェクトを開いていない | 前面のソース 1 ファイル | そのパスの拡張子を `.exe` にしたもの |
-
-呼び方は `actba64 <入力> -o <出力>` です。32bit のときは `actba64 -actba32 <入力> -o <出力>` です。コンパイル前に、プロジェクトなら開いているメンバーのうち未保存のファイルを、単体なら前面のファイルを保存します。プロジェクトを開いているあいだは、前面が別ファイルでも Compile / Run はその `.pj` を渡します。メッセージウィンドウで、`ファイル(行):` を含む `error:` / `warning:` 行をクリックするとそのファイルの行頭へ移ります。位置の無い行や、ドラッグによる選択では移動しません。
-
-**Run** はコンパイルに成功したあと起動します。プロジェクトでは `#USEWINDOW` が 0 のとき `cmd /k` でコンソールを残し、1 以上なら exe を直接起動します（未指定は 0）。単体ファイルでは、先頭 120 行に `#console` があるときだけ `cmd /k` です。
 
 AB 4.20 と actba64 の両方で組むソースでは、AB 4.20 の標準ヘッダが既に持つ Win32 定数を `.sbp` に書きません。actba64 向けの共有定義は `WinConsts.sbp` に置き、`default.idx` が自動挿入します。

@@ -25,6 +25,7 @@ ActiveBasic 互換のサブセットコンパイラです。完全互換では�
 - [ActiveBasic との相違](docs/different.md)
 - [既知の問題](docs/known.md)（AB 4.20 と同じ挙動）
 - [未実装メモ](docs/todo.md)
+- [ProjectEditor 仕様](docs/projecteditor.md)
 - エディタ向けリファレンス: [src/projecteditor/help/actba64_ref.html](src/projecteditor/help/actba64_ref.html)（F1）
 
 ## ビルド
@@ -86,4 +87,4 @@ Copy-Item .\samples\dllcall\dllsample\dllsample.dll .\samples\dllcall\dllcall\dl
 
 ## エディタ
 
-`ProjectEditor.exe` は MDI です。ソースは子ウィンドウで、同時に最大 8 枚開いたままにします。`.pj` を開くとプロジェクトウィンドウに `#SOURCE` のファイル一覧が出て、行をクリックするとそのファイルを開きます。プロジェクトを開いているあいだの Compile / Run はその `.pj` を渡し、閉じていれば前面の 1 ファイルを渡します。操作の詳細は [docs/build.md §5](docs/build.md#5-projecteditor) です。
+`ProjectEditor.exe` は MDI です。ソースは子ウィンドウで、同時に最大 8 枚開いたままにします。`.pj` を開くとプロジェクトウィンドウに `#SOURCE` のファイル一覧が出て、行をクリックするとそのファイルを開きます。プロジェクトを開いているあいだの Compile / Run はその `.pj` を渡し、閉じていれば前面の 1 ファイルを渡します。仕様は [docs/projecteditor.md](docs/projecteditor.md) です。
