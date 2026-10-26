@@ -144,7 +144,7 @@ PAINT (x, y), color1 [, color2]
 ```
 
 - `LOCATE` 後の `Print` は窓上の文字位置へ描画（`;` なしなら次行へ）
-- 数値の `Print` は `Str$`（Long）／`StrD$`（Double、64bit）で文字列化してから描画
+- 数値の `Print` は `Str$`（Long）／`StrD$`（Double。64bit と `-actba32`）で文字列化してから描画
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
 - `Inkey$()` は窓の `WM_KEYDOWN` を 1 文字取り、無ければ `""`。`Input$(n)` は同じキーを `n` 文字そろうまで待つ。`#n88basic` / `#prompt` のときだけ使える
 
@@ -640,11 +640,11 @@ Print Log(MathE())    ' ≒ 1
 - N88 `CIRCLE` の角度・aspect も `Double`（内部の千分率表現は廃止）
 - `Input` / `Input #` の `Double`/`Single` は十進文字列を `ValDouble` で IEEE 化（`Single` はその後 `cvtsd2ss`）
 - `Rnd()` は `[0, 1)` の Double。`Abs` は Double 引数
-- `-actba32` でもスカラー、配列要素、UDT フィールドの Double 演算と `Math.abp`・`StrD$` は動く。`Print` の Double 自動変換は 64bit のみ
+- `-actba32` でもスカラー、配列要素、UDT フィールドの Double 演算と `Math.abp`・`StrD$` は動く。`Print` / `Print #` / `Write` の Double は `StrD$` を自動で呼ぶ
 
 `Space$(n)` は `Space.abp` から常時利用可。ネストした関数呼び出しは対応する。複雑な入れ子は一時変数経由が安全。
 
-`StrD$(d As Double)` は `DoubleStr.abp` から常時利用可。`Print` が Double 式を表示するとき自動で呼ばれる（64bit）。
+`StrD$(d As Double)` は `DoubleStr.abp` から常時利用可。`Print` が Double 式を表示するとき自動で呼ばれる（64bit と `-actba32`）。
 
 サンプル: `src/actba64/samples/math_test.abp` / テスト: `test/t_math_*.abp` / `test/t_double_lit*.abp` / `test/t_dbl_func.abp`
 
@@ -844,7 +844,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 | `Declare Lib` | ○ | ○ |
 | DLL 優先ベース | `0x180000000` | `0x10000000` |
 | DLL `.reloc` | 空の再配置表（コードは RIP 相対） | 絶対アドレスの HIGHLOW |
-| `Double` 演算 | ○（SSE。`rax`） | ○（SSE2。値は `edx:eax`。配列要素・UDT フィールドは未） |
+| `Double` 演算 | ○（SSE。`rax`） | ○（SSE2。値は `edx:eax`。配列要素・UDT フィールドも 8 バイト） |
 | N88 `LINE`/`CIRCLE` 文 | ○ | ○ |
 | `SizeOf`（ポインタを含む UDT） | ポインタ 8 バイト込み | ポインタ 4 バイト込み（期待サイズを 64bit 決め打ちしない） |
 
@@ -855,7 +855,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 ## 10. 非対応（意図的）
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは COM vtable。`Super` / `New` / `Delete` は対応）
-- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールドは IEEE Double（64bit と `-actba32`。`Print` の Double 変換は 64bit のみ）
+- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールド、`Print` の自動変換は IEEE Double（64bit と `-actba32`）
 - ネスト手続き
 - `#resource` の MENU / DIALOG / VERSIONINFO（ICON 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化
