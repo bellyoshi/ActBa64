@@ -71,6 +71,36 @@ Sub LowEmitCall1Rax(list As *IrList, isApi As Long, dllKind As Long, apiName As 
     LowEmitCallFinish(list, callBytes)
 End Sub
 
+' 評価済みの Double を StrD$ へ。32bit は edx:eax を 8 バイトで渡す。
+Function LowStrDLab(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "StrD$")
+    LowStrDLab = LowFindFunc(ctx, VarPtr(name))
+    If LowStrDLab >= 0 Then Exit Function
+    Print "error: missing 'StrD$' (Include\default\DoubleStr.abp)"
+    ctx->err = 1
+End Function
+
+Sub LowEmitCallStrD(list As *IrList, lab As Long)
+    If TyIs32() = 0 Then
+        LowEmitCall1Rax(list, 0, 0, 0, lab)
+        Exit Sub
+    End If
+    IrEmit(list, OP_SUB_RSP, 8, 0)
+    IrEmit(list, OP_STORE_RSP_DBL, 0, 0)
+    IrEmit(list, OP_CALL_LAB, lab, 0)
+End Sub
+
+Function LowEmitExprStrD(ctx As *LowerCtx, exprIdx As Long) As boolean
+    Dim lab As Long
+    lab = LowStrDLab(ctx)
+    LowEmitExprStrD = false
+    If lab < 0 Then Exit Function
+    If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+    LowEmitCallStrD(ctx->list, lab)
+    LowEmitExprStrD = true
+End Function
+
 ' 32bit stdcall: ecx=arg0, edx=arg1 をスタックへ積んで呼ぶ。64bit は既に rcx/rdx。
 Sub LowEmitCallLab2(list As *IrList, lab As Long)
     Dim callBytes As Long

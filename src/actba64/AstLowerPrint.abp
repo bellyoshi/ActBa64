@@ -22,37 +22,46 @@ Function LowPrintVarTy(ctx As *LowerCtx, exprIdx As Long) As Long
 End Function
 
 ' Print 対象を rax の文字列ポインタへ
-' 戻り値 true : 正常終了  false : エラーあり
-Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As boolean
-    Dim name(SYM_NAME_LEN - 1) As Byte
-    Dim lab As Long
-    Dim labStr As Long
-    Dim exprTy As Long
+Function LowEmitPrintRaw(ctx As *LowerCtx, exprIdx As Long) As boolean
+    LowEmitPrintRaw = false
+    If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+    LowEmitPrintRaw = true
+End Function
 
-    LowEmitPrintValue = false
-    exprTy = LowExprType(ctx, exprIdx)
-    If vTy = TY_BYTE_ARR Then
-        If LowExprArg(ctx, exprIdx) = 0 Then Exit Function
-    ElseIf vTy = TY_PTR_BYTE Then
-        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
-    ElseIf LowIsStringExpr(ctx, exprIdx) = 0 And exprTy = TY_DOUBLE And TyIs32() = 0 Then
-        lstrcpy(VarPtr(name), "StrD$")
-        lab = LowFindFunc(ctx, VarPtr(name))
-        If lab < 0 Then
-            Print "error: missing 'StrD$' (Include\default\DoubleStr.abp)"
-            ctx->err = 1
-            Exit Function
-        End If
-        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
-        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
-    ElseIf LowIsStringExpr(ctx, exprIdx) = 0 Then
-        labStr = LowEnsureRtStr(ctx)
-        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
-        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), labStr)
-    Else
-        If LowExpr(ctx, exprIdx) = 0 Then Exit Function
-    End If
-    LowEmitPrintValue = true
+Function LowEmitPrintArg(ctx As *LowerCtx, exprIdx As Long) As boolean
+    LowEmitPrintArg = false
+    If LowExprArg(ctx, exprIdx) = 0 Then Exit Function
+    LowEmitPrintArg = true
+End Function
+
+Function LowEmitPrintLong(ctx As *LowerCtx, exprIdx As Long) As boolean
+    Dim lab As Long
+    lab = LowEnsureRtStr(ctx)
+    LowEmitPrintLong = false
+    If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitPrintLong = true
+End Function
+
+' 0 文字列、1 Byte 配列、2 *Byte、3 Double、4 その他の数値
+Function LowEmitPrintKind(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Long
+    LowEmitPrintKind = 0
+    If vTy = TY_BYTE_ARR Then LowEmitPrintKind = 1
+    If LowEmitPrintKind <> 0 Then Exit Function
+    If vTy = TY_PTR_BYTE Then LowEmitPrintKind = 2
+    If LowEmitPrintKind <> 0 Then Exit Function
+    If LowIsStringExpr(ctx, exprIdx) <> 0 Then Exit Function
+    LowEmitPrintKind = 4
+    If LowExprType(ctx, exprIdx) = TY_DOUBLE Then LowEmitPrintKind = 3
+End Function
+
+Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As boolean
+    Dim kind As Long
+    kind = LowEmitPrintKind(ctx, exprIdx, vTy)
+    If kind = 0 Or kind = 2 Then LowEmitPrintValue = LowEmitPrintRaw(ctx, exprIdx)
+    If kind = 1 Then LowEmitPrintValue = LowEmitPrintArg(ctx, exprIdx)
+    If kind = 3 Then LowEmitPrintValue = LowEmitExprStrD(ctx, exprIdx)
+    If kind = 4 Then LowEmitPrintValue = LowEmitPrintLong(ctx, exprIdx)
 End Function
 
 ' rax の文字列を出力（N88 モードは N88_Print へ）
