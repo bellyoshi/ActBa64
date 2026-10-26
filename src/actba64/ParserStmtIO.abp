@@ -259,32 +259,86 @@ Function ParseInputFileVars(p As *Parser) As Long
     ParseInputFileVars = nInput
 End Function
 
-Function ParseInputPrompt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nInput As Long
-    Dim nVar As Long
-    Dim nPrompt As Long
-    Dim name(SYM_NAME_LEN - 1) As Byte
+' プロンプトと変数の区切り。N88 は ';'、ActiveBasic は ','
+Function ParseInputSep(p As *Parser) As boolean
+    ParseInputSep = false
+    If ParseTokKind(p) = TK_COMMA Then ParseInputSep = true
+    If ParseTokKind(p) = TK_SEMI Then ParseInputSep = true
+    If Not ParseInputSep Then
+        ParseFail(p, "expected ',' or ';'")
+        Exit Function
+    End If
+    p->pos = p->pos + 1
+End Function
 
-    ParseInputPrompt = -1
-    nPrompt = ParseExpr(p)
-    If nPrompt < 0 Then Exit Function
-    If Not ParseExpect(p, TK_COMMA) Then Exit Function
+Function ParseInputVarNode(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseInputVarNode = -1
     If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
     ast = p->ast
-    nVar = AstAddNode(ast, AST_VAR)
-    If nVar < 0 Then Exit Function
-    AstSetStr(ast, nVar, VarPtr(name))
+    ParseInputVarNode = AstAddNode(ast, AST_VAR)
+    If ParseInputVarNode < 0 Then Exit Function
+    AstSetStr(ast, ParseInputVarNode, VarPtr(name))
+End Function
+
+Function ParseInputLink(ast As *Ast, nPrompt As Long, nVar As Long) As Long
+    Dim nodes As *AstNode
+    Dim nInput As Long
     nInput = AstAddNode(ast, AST_INPUT)
+    ParseInputLink = nInput
     If nInput < 0 Then Exit Function
     nodes = ast->nodes
     nodes[nInput].left = nPrompt
     nodes[nInput].right = nVar
-    ParseInputPrompt = nInput
 End Function
 
-' Input var[, var...] ― stdin から変数ごとに1行読み取り
+Function ParseInputEatComma(p As *Parser) As boolean
+    ParseInputEatComma = false
+    If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    ParseInputEatComma = true
+End Function
+
+Function ParseInputChain(p As *Parser, nPrev As Long, nVar As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    ParseInputChain = -1
+    If nVar < 0 Then Exit Function
+    ast = p->ast
+    nodes = ast->nodes
+    nodes[nPrev].nxt = nVar
+    ParseInputChain = nVar
+End Function
+
+Function ParseInputVarTail(p As *Parser, nPrev As Long) As Long
+    Dim nVar As Long
+    ParseInputVarTail = nPrev
+    If Not ParseInputEatComma(p) Then Exit Function
+    nVar = ParseInputChain(p, nPrev, ParseInputVarNode(p))
+    ParseInputVarTail = nVar
+    If nVar < 0 Then Exit Function
+    ParseInputVarTail = ParseInputVarTail(p, nVar)
+End Function
+
+Function ParseInputAfterSep(p As *Parser, nPrompt As Long) As Long
+    Dim nVar As Long
+    ParseInputAfterSep = -1
+    If nPrompt < 0 Then Exit Function
+    If Not ParseInputSep(p) Then Exit Function
+    nVar = ParseInputVarNode(p)
+    If nVar < 0 Then Exit Function
+    If ParseInputVarTail(p, nVar) < 0 Then Exit Function
+    ParseInputAfterSep = ParseInputLink(p->ast, nPrompt, nVar)
+End Function
+
+Function ParseInputPrompt(p As *Parser) As Long
+    Dim nPrompt As Long
+    nPrompt = ParseExpr(p)
+    ParseInputPrompt = ParseInputAfterSep(p, nPrompt)
+End Function
+
+' Input var[, var...] ― 1行をカンマで分け、足りなければ次の行
 ' Input #n, var[, ...] ― ファイルからフィールド読み取り
 Function ParseInputStmt(p As *Parser) As Long
     Dim ast As *Ast

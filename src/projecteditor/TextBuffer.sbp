@@ -3,6 +3,7 @@ Const LINEOFF_INITIAL_CAP = 64
 
 Dim g_imeComposition As String
 Dim g_selAnchor As Long
+Dim g_selKeep As Long
 
 Class LineOffsetTable
     Public
@@ -563,32 +564,44 @@ Function TextBuf_IndexFromLineCol(ByVal lineNo As Long, ByVal col As Long) As Lo
     TextBuf_IndexFromLineCol = TextBuf_SnapInLine(s, e, s + col)
 End Function
 
-Sub TextBuf_MoveCursorUp()
-    Dim lineNo As Long
-
-    TextBuf_EnsureInit()
-    TextBuf_ClearSelection()
-    lineNo = TextBuf_CursorLine()
-    If lineNo <= 1 Then
-        TextBuf_MoveCursorTo(TextBuf_GetLineStart(1))
-        Exit Sub
-    End If
-    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(lineNo - 1, g_preferredCol))
+Sub TextBuf_SetKeep(ByVal keep As Long)
+    g_selKeep = keep
 End Sub
 
-Sub TextBuf_MoveCursorDown()
-    Dim lineNo As Long
-    Dim lineCount As Long
-
+Sub TextBuf_PrepareMove()
     TextBuf_EnsureInit()
-    TextBuf_ClearSelection()
-    lineNo = TextBuf_CursorLine()
-    lineCount = TextBuf_LineCount()
-    If lineNo >= lineCount Then
-        TextBuf_MoveCursorTo(TextBuf_GetLineEnd(lineCount))
+    If g_selKeep <> 0 Then
+        g_selKeep = 0
+        If g_selAnchor < 0 Then g_selAnchor = g_textBuf.gap_start
         Exit Sub
     End If
-    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(lineNo + 1, g_preferredCol))
+    TextBuf_ClearSelection()
+End Sub
+
+Function TextBuf_AtFirstLine() As Long
+    TextBuf_AtFirstLine = 0
+    If TextBuf_CursorLine() > 1 Then Exit Function
+    TextBuf_MoveCursorTo(TextBuf_GetLineStart(1))
+    TextBuf_AtFirstLine = 1
+End Function
+
+Sub TextBuf_MoveCursorUp()
+    TextBuf_PrepareMove()
+    If TextBuf_AtFirstLine() <> 0 Then Exit Sub
+    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(TextBuf_CursorLine() - 1, g_preferredCol))
+End Sub
+
+Function TextBuf_AtLastLine() As Long
+    TextBuf_AtLastLine = 0
+    If TextBuf_CursorLine() < TextBuf_LineCount() Then Exit Function
+    TextBuf_MoveCursorTo(TextBuf_GetLineEnd(TextBuf_LineCount()))
+    TextBuf_AtLastLine = 1
+End Function
+
+Sub TextBuf_MoveCursorDown()
+    TextBuf_PrepareMove()
+    If TextBuf_AtLastLine() <> 0 Then Exit Sub
+    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(TextBuf_CursorLine() + 1, g_preferredCol))
 End Sub
 
 Function TextBuf_GetTextBeforeCursorOnLine$() As String
@@ -623,6 +636,7 @@ End Function
 Sub InitTextBuffer()
     g_textBuf.Init()
     g_selAnchor = -1
+    g_selKeep = 0
     g_lineOff.Init()
 End Sub
 
@@ -761,9 +775,7 @@ End Sub
 
 Sub TextBuf_MoveCursorLeft()
     Dim n As Long
-
-    TextBuf_EnsureInit()
-    TextBuf_ClearSelection()
+    TextBuf_PrepareMove()
     n = TextBuf_PrevCharBytes()
     If n <= 0 Then Exit Sub
     TextBuf_MoveCursorTo(g_textBuf.gap_start - n)
@@ -772,9 +784,7 @@ End Sub
 
 Sub TextBuf_MoveCursorRight()
     Dim n As Long
-
-    TextBuf_EnsureInit()
-    TextBuf_ClearSelection()
+    TextBuf_PrepareMove()
     n = TextBuf_NextCharBytes()
     If n <= 0 Then Exit Sub
     TextBuf_MoveCursorTo(g_textBuf.gap_start + n)

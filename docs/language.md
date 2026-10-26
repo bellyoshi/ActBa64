@@ -31,7 +31,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 - 小数リテラル: `1.5` / `1.12345` など（符号・小数点付き十進）。字句テキストを保持し、**AST 上で IEEE 754 Double ビット**（`num`=下位32 / `left`=上位32）に変換する。科学記法（`1.0e10`）は未対応。コード生成は 64bit が `movabs rax, imm64`、`-actba32` は `edx:eax`
 - 文字列リテラル: `"..."`（`""` で `"`）
 - 識別子の大小文字: **定数・変数・Sub/Function・Type/Class 名は区別する**（AB 4.20 同様。`Foo` と `foo` は別）。**言語キーワード**（`If` / `Then` / `Dim` 等）と **組み込みランタイム名**（`FillMemory` / `malloc` 等）の認識のみ大小無視
-- 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）
+- 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）。単行 `If ... Then` では、同じ行の `:` で続く文と `Else` はその `If` の一部です
 
 行の継続:
 
@@ -146,6 +146,9 @@ PAINT (x, y), color1 [, color2]
 - `LOCATE` 後の `Print` は窓上の文字位置へ描画（`;` なしなら次行へ）
 - 数値の `Print` は `Str$`（Long）／`StrD$`（Double。64bit と `-actba32`）で文字列化してから描画
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
+- `Dim name`（型も `$` も無いスカラー）は `Double`。N88 の無印変数（単精度）の受け皿
+- `Input "prompt"; var` と `Input "prompt", var` は同じ（プロンプトを出してから 1 行読む）
+- 変数が複数の `Input` は、その 1 行をカンマで分ける。項目が足りなければ次の行を読む
 - `Inkey$()` は窓の `WM_KEYDOWN` を 1 文字取り、無ければ `""`。`Input$(n)` は同じキーを `n` 文字そろうまで待つ。`#n88basic` / `#prompt` のときだけ使える
 
 色番号（0..7、N88 8 色）:
@@ -255,6 +258,7 @@ Dim h As COFF_HEADER
 - `Const name = expr`: 整数式（リテラル、先に書いた `Const`、加減乗、整数除算、`Mod`、`And` / `Or` / `Xor` / `Not`、`<<` / `>>`、`^`、`As` の幅マスク）か文字列リテラル。`Double` は置けない
 - `Const name(仮引数) = expr`: 使うたびに仮引数へ実引数の式を埋め込んで展開する（64 個まで、入れ子 16 段まで）
 - `Dim name$`: `As String` 省略可（末尾 `$`）
+- `#n88basic` の `Dim name`（`$` も `As` も無いスカラー）は `Double`。配列の型省略は不可
 - `Include\default` で組み込み定数を自動導入
 
 ### 3.2 手続き
@@ -364,7 +368,7 @@ Else
     ...
 End If
 
-If 式 Then 文                    ' 単行 If
+If 式 Then 文[: 文...] [Else 文[: 文...]]   ' 単行 If。: の続きは Then / Else の一部
 
 Select Case 式
     Case 定数
@@ -394,7 +398,7 @@ End With
 Print 式
 Print 式;
 Print #番号, [式 [, ...]] [;]  ' ファイルへ。項目間はカンマ。`;` で改行抑制
-Input 変数          ' String / Long / Byte / Single / Double。stdin から1行
+Input ["prompt" ,|;] 変数 [, 変数 ...]  ' 1行をカンマで分割。足りなければ次の行
 Input #番号, 変数 [, ...]  ' ファイルからフィールド読み取り
 Open パス [For Input|Output|Append] As [#]番号
 Close [[#]番号]     ' 省略時は全クローズ
@@ -430,7 +434,7 @@ ExitProcess(式)
 | `Continue For` / `Continue While` / `Continue Do` | ○（ループ先頭へ） |
 | `Print` | ○ |
 | `Print #` | ○（`BasicFile.abp`。項目間カンマ。`;` で改行抑制） |
-| `Input` | ○（プロンプト文字列可。数値は十進文字列 → IEEE。`Double`/`Single` は `ValDouble`、整数は `Val`） |
+| `Input` | ○（プロンプトの区切りは `,` または `;`。変数が複数なら 1 行をカンマ分割し、項目が足りなければ次の行。数値は十進文字列 → IEEE） |
 | `Open` / `Close` / `Input #` | ○（`BasicFile.abp`。番号 1..16） |
 | `Field` / `Get #` / `Put #` | ○（ランダム。`Open ... As` + Field 長） |
 | `Write` | ○（画面または `#番号`。カンマ区切り） |

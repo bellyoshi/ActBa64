@@ -1,0 +1,71 @@
+' Single-line If. Colon-separated statements stay in Then or Else until Else or EOL.
+
+Function ParseStmtTail(ast As *Ast, ByVal nStmt As Long) As Long
+    Dim nodes As *AstNode
+    Dim n As Long
+    nodes = ast->nodes
+    n = nStmt
+    While nodes[n].nxt >= 0
+        n = nodes[n].nxt
+    Wend
+    ParseStmtTail = n
+End Function
+
+Sub ParseLinkStmt(ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByVal nStmt As Long)
+    Dim nodes As *AstNode
+    If nFirst < 0 Then nFirst = nStmt
+    If nFirst <> nStmt Then
+        nodes = ast->nodes
+        nodes[nPrev].nxt = nStmt
+    End If
+    nPrev = ParseStmtTail(ast, nStmt)
+End Sub
+
+Function ParseLineEnded(p As *Parser, ByVal lineNo As Long) As Long
+    ParseLineEnded = 0
+    If ParseTokKind(p) = TK_EOF Then ParseLineEnded = 1
+    If ParseLineEnded <> 0 Then Exit Function
+    If ParseTokLine(p) <> lineNo Then ParseLineEnded = 1
+End Function
+
+Function ParseSameLineHit(p As *Parser, stop1 As *Byte, ByVal lineNo As Long) As Long
+    ParseSameLineHit = ParseLineEnded(p, lineNo)
+    If ParseSameLineHit <> 0 Then Exit Function
+    If stop1[0] = 0 Then Exit Function
+    If ParseIdentIs(p, stop1) <> 0 Then ParseSameLineHit = 1
+End Function
+
+Function ParseSameLineOne(p As *Parser, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+    Dim nStmt As Long
+    ParseSameLineOne = 0
+    nStmt = ParseStmt(p)
+    If nStmt < 0 Or p->err <> 0 Then p->err = 1
+    If p->err <> 0 Then Exit Function
+    ParseLinkStmt(p->ast, nFirst, nPrev, nStmt)
+    ParseSameLineOne = 1
+End Function
+
+Function ParseSameLineStep(p As *Parser, stop1 As *Byte, ByVal lineNo As Long, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+    ParseSameLineStep = 0
+    If ParseSameLineHit(p, stop1, lineNo) <> 0 Then Exit Function
+    ParseSkipColons(p)
+    If ParseSameLineHit(p, stop1, lineNo) <> 0 Then Exit Function
+    ParseSameLineStep = ParseSameLineOne(p, nFirst, nPrev)
+End Function
+
+Sub ParseSameLineDrain(p As *Parser, stop1 As *Byte, ByVal lineNo As Long, ByRef nFirst As Long, ByRef nPrev As Long)
+    Dim go As Long
+    go = 1
+    While go <> 0
+        go = ParseSameLineStep(p, stop1, lineNo, nFirst, nPrev)
+    Wend
+End Sub
+
+Function ParseSameLineList(p As *Parser, stop1 As *Byte, ByVal lineNo As Long) As Long
+    Dim nFirst As Long
+    Dim nPrev As Long
+    nFirst = -1
+    nPrev = -1
+    ParseSameLineDrain(p, stop1, lineNo, nFirst, nPrev)
+    ParseSameLineList = nFirst
+End Function

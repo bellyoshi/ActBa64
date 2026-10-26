@@ -251,29 +251,50 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
-Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As boolean
-    Dim kAs(KW_SHORT_LEN - 1) As Byte
+' #n88basic の Dim name（型なしスカラー）は Double
+Function ParseDimN88Bare(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
+    ParseDimN88Bare = false
+    If p->n88Mode = 0 Then Exit Function
+    If bound >= 0 Then Exit Function
+    ty = TY_DOUBLE
+    ti = -1
+    ParseDimN88Bare = true
+End Function
 
-    ParseDimAsType = false
+Function ParseDimNoAs(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
+    ParseDimNoAs = true
+    If ParseDimStringSuffix(name, bound, ty, ti) Then Exit Function
+    If ParseDimN88Bare(p, bound, ty, ti) Then Exit Function
+    ParseFail(p, "expected 'As'")
+    ParseDimNoAs = false
+End Function
+
+Function ParseDimAsInit(p As *Parser, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
+    Dim kAs(KW_SHORT_LEN - 1) As Byte
     ty = -1
     ti = -1
     params = -1
     lstrcpy(VarPtr(kAs), "as")
-    If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
-        If Not ParseDimStringSuffix(name, bound, ty, ti) Then
-            p->err = 1
-            Exit Function
-        End If
-        ParseDimAsType = true
-        Exit Function
-    End If
+    ParseDimAsInit = ParseIdentIs(p, VarPtr(kAs))
+End Function
+
+Function ParseDimAsBody(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As boolean
+    ParseDimAsBody = false
     p->pos = p->pos + 1
     If ParseTokKind(p) = TK_STAR Then
         If ParseAsPtrType(p, ty, ti, params) = 0 Then Exit Function
     Else
         If ParseAsPrimType(p, bound, ty, ti) = 0 Then Exit Function
     End If
-    ParseDimAsType = true
+    ParseDimAsBody = true
+End Function
+
+Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As boolean
+    If ParseDimAsInit(p, ty, ti, params) = 0 Then
+        ParseDimAsType = ParseDimNoAs(p, name, bound, ty, ti)
+    Else
+        ParseDimAsType = ParseDimAsBody(p, bound, ty, ti, params)
+    End If
 End Function
 
 Function ParseDimResolveFnPtrAlias(p As *Parser, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
