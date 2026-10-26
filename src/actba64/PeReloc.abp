@@ -1,0 +1,322 @@
+' PeReloc - DLL のベース再配置（.reloc）
+' 32bit はコード中の絶対アドレス（HIGHLOW）。64bit は RIP 相対なので空ブロック。
+
+Dim g_relocAt As *Long
+Dim g_relocCap As Long
+Dim g_relocN As Long
+Dim g_relocBuf As *Byte
+Dim g_relocSize As Long
+Dim g_relW As DWord
+Dim g_relBlk As DWord
+Dim g_relPage As DWord
+Dim g_relLast As DWord
+Dim g_relHave As Long
+
+Sub PeRelocFreeBuf()
+    If g_relocBuf <> NULL Then free(g_relocBuf)
+    g_relocBuf = NULL
+    g_relocSize = 0
+End Sub
+
+Sub PeRelocReset()
+    PeRelocFreeBuf()
+    If g_relocAt <> NULL Then free(g_relocAt)
+    g_relocAt = NULL
+    g_relocCap = 0
+    g_relocN = 0
+End Sub
+
+Function PeRelocCap() As Long
+    Dim cap As Long
+    cap = g_relocCap
+    cap = cap + cap
+    If cap < DYN_INIT Then cap = DYN_INIT
+    PeRelocCap = cap
+End Function
+
+Function PeRelocGrowMem(cap As Long) As *Byte
+    PeRelocGrowMem = MemGrow(g_relocAt As BytePtr, BytesN(g_relocCap, 4), BytesN(cap, 4))
+End Function
+
+Function PeRelocGrow() As Long
+    Dim p As *Byte
+    PeRelocGrow = 0
+    p = PeRelocGrowMem(PeRelocCap())
+    If p = NULL Then Exit Function
+    g_relocCap = PeRelocCap()
+    g_relocAt = p As *Long
+    PeRelocGrow = 1
+End Function
+
+Sub PeRelocNote(off As Long)
+    If g_ppModuleDll = 0 Then Exit Sub
+    If TyIs32() = 0 Then Exit Sub
+    If off < 0 Then Exit Sub
+    If g_relocN >= g_relocCap Then
+        If PeRelocGrow() = 0 Then Exit Sub
+    End If
+    g_relocAt[g_relocN] = off
+    g_relocN = g_relocN + 1
+End Sub
+
+Sub PeRelocSwap(i As Long, j As Long)
+    Dim t As Long
+    t = g_relocAt[i]
+    g_relocAt[i] = g_relocAt[j]
+    g_relocAt[j] = t
+End Sub
+
+Sub PeRelocSortPass(n As Long)
+    Dim i As Long
+    i = 0
+    While i < n - 1
+        If g_relocAt[i + 1] < g_relocAt[i] Then PeRelocSwap(i, i + 1)
+        i = i + 1
+    Wend
+End Sub
+
+Sub PeRelocSort()
+    Dim k As Long
+    k = 0
+    While k < g_relocN
+        PeRelocSortPass(g_relocN)
+        k = k + 1
+    Wend
+End Sub
+
+Function PeRelocRva(i As Long) As DWord
+    Dim off As DWord
+    Dim rva As DWord
+    off = g_relocAt[i]
+    rva = TEXT_RVA
+    rva = rva + off
+    PeRelocRva = rva
+End Function
+
+Function PeRelocPage(rva As DWord) As DWord
+    Dim p As DWord
+    Dim o As DWord
+    p = rva
+    o = p And &HFFF
+    p = p - o
+    PeRelocPage = p
+End Function
+
+Function PeRelocEnt(rva As DWord) As Long
+    Dim o As DWord
+    Dim e As DWord
+    o = rva And &HFFF
+    e = &H3000
+    e = e Or o
+    PeRelocEnt = e
+End Function
+
+Sub PeRelocOpenHdr(page As DWord)
+    Dim step As DWord
+    g_relBlk = g_relW
+    PutDword(g_relocBuf, g_relW, page)
+    step = 4
+    g_relW = g_relW + step
+    PutDword(g_relocBuf, g_relW, 8)
+    g_relW = g_relW + step
+End Sub
+
+Sub PeRelocOpenBlk(page As DWord)
+    PeRelocOpenHdr(page)
+    g_relPage = page
+End Sub
+
+Sub PeRelocAdd(ByRef w As DWord, n As DWord)
+    w = w + n
+End Sub
+
+Sub PeRelocPadBlk()
+    Dim sz As DWord
+    Dim step As DWord
+    sz = g_relW
+    sz = sz - g_relBlk
+    If (sz And 2) = 0 Then Exit Sub
+    PutWord(g_relocBuf, g_relW, 0)
+    step = 2
+    g_relW = g_relW + step
+End Sub
+
+Sub PeRelocCloseBlk()
+    Dim sz As DWord
+    Dim at As DWord
+    PeRelocPadBlk()
+    sz = g_relW
+    sz = sz - g_relBlk
+    at = g_relBlk
+    PeRelocAdd(at, 4)
+    PutDword(g_relocBuf, at, sz)
+End Sub
+
+Sub PeRelocEnsureBlk(page As DWord)
+    If g_relW <> 0 And page = g_relPage Then Exit Sub
+    If g_relW <> 0 Then PeRelocCloseBlk()
+    PeRelocOpenBlk(page)
+End Sub
+
+Sub PeRelocPutEnt(rva As DWord)
+    Dim step As DWord
+    If g_relHave <> 0 And g_relLast = rva Then Exit Sub
+    PutWord(g_relocBuf, g_relW, PeRelocEnt(rva) As Word)
+    step = 2
+    g_relW = g_relW + step
+    g_relLast = rva
+    g_relHave = 1
+End Sub
+
+Sub PeRelocAddEnt(rva As DWord)
+    PeRelocEnsureBlk(PeRelocPage(rva))
+    PeRelocPutEnt(rva)
+End Sub
+
+Sub PeRelocFillEnd()
+    If g_relW <> 0 Then PeRelocCloseBlk()
+    g_relocSize = g_relW
+End Sub
+
+Sub PeRelocFill()
+    Dim i As Long
+    i = 0
+    While i < g_relocN
+        PeRelocAddEnt(PeRelocRva(i))
+        i = i + 1
+    Wend
+    PeRelocFillEnd()
+End Sub
+
+Function PeRelocBytesN() As Long
+    Dim n As Long
+    n = g_relocN
+    If n < 1 Then n = 1
+    PeRelocBytesN = n
+End Function
+
+Function PeRelocBytes() As Long
+    Dim b As Long
+    Dim k As Long
+    b = PeRelocBytesN()
+    k = 16
+    b = b * k
+    k = 32
+    b = b + k
+    PeRelocBytes = b
+End Function
+
+Sub PeRelocFillInit()
+    g_relW = 0
+    g_relHave = 0
+    PeRelocFill()
+End Sub
+
+Function PeRelocBuild32() As Long
+    Dim n As Long
+    PeRelocBuild32 = 0
+    PeRelocSort()
+    n = PeRelocBytes()
+    g_relocBuf = calloc(n)
+    If g_relocBuf = NULL Then Exit Function
+    PeRelocFillInit()
+    PeRelocBuild32 = 1
+End Function
+
+Sub PeRelocEmpty()
+    g_relocSize = 8
+    g_relocBuf = calloc(8)
+    If g_relocBuf = NULL Then
+        g_relocSize = 0
+        Exit Sub
+    End If
+    PutDword(g_relocBuf, 0, TEXT_RVA)
+    PutDword(g_relocBuf, 4, 8)
+End Sub
+
+Function PeRelocNeed32() As Long
+    PeRelocNeed32 = 0
+    If TyIs32() <> 0 And g_relocN > 0 Then PeRelocNeed32 = 1
+End Function
+
+Function PeRelocBuildBody() As Long
+    PeRelocBuildBody = 0
+    If PeRelocNeed32() <> 0 Then
+        PeRelocBuildBody = PeRelocBuild32()
+        Exit Function
+    End If
+    PeRelocEmpty()
+    If g_relocSize > 0 Then PeRelocBuildBody = 1
+End Function
+
+Function PeRelocBuild() As Long
+    PeRelocBuild = 1
+    PeRelocFreeBuf()
+    g_relocSize = 0
+    If g_ppModuleDll = 0 Then Exit Function
+    PeRelocBuild = PeRelocBuildBody()
+End Function
+
+Sub PeRelocRvaOf(lay As *PeLayout)
+    Dim r As DWord
+    r = lay->idataRva
+    r = r + lay->idataVirt
+    r = r + lay->edataVirt
+    r = r + lay->rsrcVirt
+    lay->relocRva = r
+End Sub
+
+Sub PeZeroReloc(lay As *PeLayout)
+    lay->relocRaw = 0
+    lay->relocVirt = 0
+    lay->relocRva = 0
+    lay->relocOff = 0
+End Sub
+
+Sub PeCalcLayoutReloc(lay As *PeLayout)
+    PeZeroReloc(lay)
+    If g_relocSize <= 0 Then Exit Sub
+    lay->nSect = lay->nSect + 1
+    PeRelocRvaOf(lay)
+    lay->relocVirt = PeAlignSect(g_relocSize)
+    lay->relocRaw = PeAlignFile(g_relocSize)
+End Sub
+
+Sub PeWriteRelocSect(outBuf As *Byte, ByRef sectOff As DWord, lay As *PeLayout)
+    Dim chars As DWord
+    If lay->relocRaw <= 0 Then Exit Sub
+    chars = IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ
+    chars = chars Or IMAGE_SCN_MEM_DISCARDABLE
+    PeWriteSect(outBuf, sectOff, ".reloc", g_relocSize, lay->relocRva, lay->relocRaw, lay->relocOff, chars)
+End Sub
+
+Sub PeCalcImageTail(lay As *PeLayout, ByRef img As DWord)
+    img = img + lay->rsrcVirt
+    img = img + lay->relocVirt
+End Sub
+
+Sub PeCalcFileTail(lay As *PeLayout)
+    Dim off As DWord
+    off = lay->rsrcOff
+    off = off + lay->rsrcRaw
+    lay->relocOff = off
+    off = off + lay->relocRaw
+    lay->outSize = off
+End Sub
+
+Sub PeCopyReloc(outBuf As *Byte, lay As *PeLayout)
+    If lay->relocRaw <= 0 Or g_relocBuf = NULL Then Exit Sub
+    MemCopyAt(outBuf, lay->relocOff, g_relocBuf, g_relocSize)
+End Sub
+
+Sub PeWriteRelocDir32(outBuf As *Byte, optOff As DWord, lay As *PeLayout)
+    If lay->relocRaw <= 0 Then Exit Sub
+    PutDword(outBuf, optOff + 136, lay->relocRva)
+    PutDword(outBuf, optOff + 140, g_relocSize)
+End Sub
+
+Sub PeWriteRelocDir64(outBuf As *Byte, optOff As DWord, lay As *PeLayout)
+    If lay->relocRaw <= 0 Then Exit Sub
+    PutDword(outBuf, optOff + 152, lay->relocRva)
+    PutDword(outBuf, optOff + 156, g_relocSize)
+End Sub

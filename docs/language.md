@@ -816,7 +816,9 @@ End Function
 
 `_System_StartupProgram` をソースが定義していなければ、コンパイラが合成します。中身は EXE の main と同じ GC 初期化とモジュール文で、`ExitProcess` は呼ばず戻ります。ソースに同名の手続きがあるときは、それを使います。
 
-優先イメージベースは EXE（64bit `0x140000000`、32bit `0x400000`）と重ならないよう、64bit DLL は `0x180000000`、32bit（`-actba32`）は `0x10000000` です。再配置（`.reloc`）は出しません。このベースが空いていればロードできます。
+優先イメージベースは EXE（64bit `0x140000000`、32bit `0x400000`）と重ならないよう、64bit DLL は `0x180000000`、32bit（`-actba32`）は `0x10000000` です。
+
+DLL には最後のセクションとして `.reloc` を付けます。32bit はコード中の絶対アドレス（ラベル、グローバル、文字列、IAT の `call dword ptr [abs]`）を HIGHLOW で記録します。64bit のコードは RIP 相対なので、ローダーが移動できるよう空の再配置表だけ出します。EXE には `.reloc` を付けません。`IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE` は立てないので、優先ベースが空いていればそのアドレスのままマップされます。塞がっているときはローダーが `.reloc` を適用して別のアドレスへ移します。
 
 `src\actba64` からの例です。`-o` は `#OUTPUT_RELEASE` があるので省略できます。
 
@@ -825,7 +827,7 @@ actba64 samples\dllcall\dllsample\dllsample.pj
 actba64 samples\dllcall\dllcall\dllcall.pj
 ```
 
-`dllsample.dll` は `dllcall.exe` と同じディレクトリに置きます（出力先はそれぞれの `.pj` フォルダです）。回帰は `test/t_dll_host.abp`（`' Prebuild:` で DLL を先に出します）。
+`dllsample.dll` は `dllcall.exe` と同じディレクトリに置きます（出力先はそれぞれの `.pj` フォルダです）。回帰は `test/t_dll_host.abp`（静的な `Declare Lib`。優先ベースが空いている経路）と `test/t_dll_reloc.abp`（優先ベースを予約してから `LoadLibraryA`）です。どちらも `' Prebuild:` で DLL を先に出します。
 
 ---
 
@@ -841,6 +843,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 | 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop） |
 | `Declare Lib` | ○ | ○ |
 | DLL 優先ベース | `0x180000000` | `0x10000000` |
+| DLL `.reloc` | 空の再配置表（コードは RIP 相対） | 絶対アドレスの HIGHLOW |
 | `Double` 演算 | ○（SSE。`rax`） | ○（SSE2。値は `edx:eax`。配列要素・UDT フィールドは未） |
 | N88 `LINE`/`CIRCLE` 文 | ○ | ○ |
 | `SizeOf`（ポインタを含む UDT） | ポインタ 8 バイト込み | ポインタ 4 バイト込み（期待サイズを 64bit 決め打ちしない） |
