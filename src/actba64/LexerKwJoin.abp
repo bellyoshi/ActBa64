@@ -1,0 +1,63 @@
+' LexerKwJoin - 空白なしの複合キーワード（AB 4.20）
+' SelectCase → Select + Case、EndSelect → End + Select
+
+Function LexFillSlice(dst As *Byte, buf As *Byte, n As Long) As Long
+    Dim i As Long
+    i = 0
+    While i < n
+        dst[i] = buf[i]
+        i = i + 1
+    Wend
+    dst[i] = CH_NUL
+    LexFillSlice = i
+End Function
+
+Function LexPushSlice(lx As *Lexer, buf As *Byte, n As Long) As Long
+    Dim tmp(SYM_NAME_LEN - 1) As Byte
+    Dim idx As Long
+    LexFillSlice(VarPtr(tmp), buf, n)
+    idx = LexPush(lx, TK_IDENT)
+    LexPushSlice = 0
+    If idx < 0 Then Exit Function
+    LexStoreText(lx, idx, VarPtr(tmp), n)
+    LexPushSlice = 1
+End Function
+
+Function LexPushTwo(lx As *Lexer, buf As *Byte, n1 As Long) As Long
+    Dim rest As *Byte
+    Dim n As Long
+    n = lstrlen(buf)
+    LexPushTwo = 0
+    If LexPushSlice(lx, buf, n1) = 0 Then Exit Function
+    PtrAddTo(buf, n1, rest)
+    LexPushTwo = LexPushSlice(lx, rest, n - n1)
+End Function
+
+Function LexEqWord(buf As *Byte, lit As *Byte) As Long
+    Dim i As Long
+    LexEqWord = 1
+    i = 0
+    While ToLowerChar(buf[i]) = ToLowerChar(lit[i])
+        If buf[i] = 0 Then Exit Function
+        i = i + 1
+    Wend
+    LexEqWord = 0
+End Function
+
+Function LexJoinAt(buf As *Byte) As Long
+    Dim w(KW_LEN - 1) As Byte
+    LexJoinAt = 0
+    lstrcpy(VarPtr(w), "selectcase")
+    If LexEqWord(buf, VarPtr(w)) <> 0 Then LexJoinAt = 6
+    If LexJoinAt <> 0 Then Exit Function
+    lstrcpy(VarPtr(w), "endselect")
+    If LexEqWord(buf, VarPtr(w)) <> 0 Then LexJoinAt = 3
+End Function
+
+Function LexEmitJoined(lx As *Lexer, buf As *Byte) As Long
+    Dim n1 As Long
+    n1 = LexJoinAt(buf)
+    LexEmitJoined = 0
+    If n1 = 0 Then Exit Function
+    LexEmitJoined = LexPushTwo(lx, buf, n1)
+End Function

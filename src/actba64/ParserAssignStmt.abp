@@ -265,34 +265,69 @@ Function ParseSkipLet(p As *Parser) As Long
     ParseSkipLet = 1
 End Function
 
+Function ParsePrevLine(p As *Parser) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    lx = p->lx
+    toks = lx->toks
+    ParsePrevLine = toks[p->pos - 1].srcLine
+End Function
+
+Function ParseAssignIfOp(p As *Parser, name As *Byte) As Long
+    Dim nVar As Long
+    ParseAssignIfOp = -2
+    If Not ParseIsAssignOpAhead(p) Then Exit Function
+    nVar = ParseClassIdentExpr(p, name)
+    ParseAssignIfOp = -1
+    If nVar < 0 Then Exit Function
+    ParseAssignIfOp = ParseAssignOpRhs(p, nVar)
+End Function
+
+Function ParseBareCall(p As *Parser, name As *Byte, srcLn As Long) As Long
+    ParseBareCall = -1
+    If ParseCmdGather(p, srcLn, 16) = 0 Then Exit Function
+    lstrcpy(VarPtr(g_cmdFn), name)
+    ParseBareCall = ParseCallFn(p)
+End Function
+
+Function ParseAssignOrCall(p As *Parser, name As *Byte) As Long
+    ParseAssignOrCall = ParseAssignIfOp(p, name)
+    If ParseAssignOrCall <> -2 Then Exit Function
+    ParseAssignOrCall = ParseBareCall(p, name, ParsePrevLine(p))
+End Function
+
+Function ParseAssignMem(p As *Parser, name As *Byte) As Long
+    ParseAssignMem = -2
+    If ParseTokKind(p) <> TK_DOT And ParseTokKind(p) <> TK_ARROW Then Exit Function
+    If ParseIsSuper(name) <> 0 And ParseTokKind(p) = TK_DOT Then
+        ParseAssignMem = ParseSuperCall(p)
+        Exit Function
+    End If
+    ParseAssignMem = ParseAssignMemberLhs(p, name)
+End Function
+
+Function ParseAssignBracket(p As *Parser, name As *Byte) As Long
+    ParseAssignBracket = -2
+    If ParseTokKind(p) = TK_LBRACK Then ParseAssignBracket = ParseAssignIndexLhs(p, name)
+    If ParseAssignBracket <> -2 Then Exit Function
+    If ParseTokKind(p) = TK_LPAREN Then ParseAssignBracket = ParseAssignParen(p, name)
+End Function
+
+Function ParseAssignIndexOr(p As *Parser, name As *Byte) As Long
+    ParseAssignIndexOr = ParseAssignMem(p, name)
+    If ParseAssignIndexOr <> -2 Then Exit Function
+    ParseAssignIndexOr = ParseAssignBracket(p, name)
+    If ParseAssignIndexOr <> -2 Then Exit Function
+    ParseAssignIndexOr = ParseAssignOrCall(p, name)
+End Function
+
 Function ParseAssignStmt(p As *Parser) As Long
     Dim name(SYM_NAME_LEN - 1) As Byte
-    Dim nVar As Long
-
     ParseAssignStmt = -1
     ParseSkipLet(p)
     If ParseTokKind(p) = TK_DOT Then
         ParseAssignStmt = ParseAssignWithDot(p)
         Exit Function
     End If
-    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
-    If ParseIsSuper(VarPtr(name)) <> 0 And ParseTokKind(p) = TK_DOT Then
-        ParseAssignStmt = ParseSuperCall(p)
-        Exit Function
-    End If
-    If ParseTokKind(p) = TK_DOT Or ParseTokKind(p) = TK_ARROW Then
-        ParseAssignStmt = ParseAssignMemberLhs(p, VarPtr(name))
-        Exit Function
-    End If
-    If ParseTokKind(p) = TK_LBRACK Then
-        ParseAssignStmt = ParseAssignIndexLhs(p, VarPtr(name))
-        Exit Function
-    End If
-    If ParseTokKind(p) = TK_LPAREN Then
-        ParseAssignStmt = ParseAssignParen(p, VarPtr(name))
-        Exit Function
-    End If
-    nVar = ParseClassIdentExpr(p, VarPtr(name))
-    If nVar < 0 Then Exit Function
-    ParseAssignStmt = ParseAssignOpRhs(p, nVar)
+    If ParseCopyIdent(p, VarPtr(name)) Then ParseAssignStmt = ParseAssignIndexOr(p, VarPtr(name))
 End Function
