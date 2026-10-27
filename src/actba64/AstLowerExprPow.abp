@@ -1,0 +1,66 @@
+' AstLowerExprPow - Double の ^ は pow(x, y)
+
+Function LowPowLab(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "pow")
+    LowPowLab = LowFindFunc(ctx, VarPtr(name))
+    If LowPowLab >= 0 Then Exit Function
+    Print "error: missing 'pow' (Include\default\Pow.abp)"
+    ctx->err = 1
+End Function
+
+Function LowPowBytes() As Long
+    LowPowBytes = LowCallBytes(2)
+    If TyIs32() <> 0 Then LowPowBytes = 16
+End Function
+
+Sub LowPowOpen(ctx As *LowerCtx)
+    Dim n As Long
+    n = LowPowBytes()
+    If n > 0 Then IrEmit(ctx->list, OP_SUB_RSP, n, 0)
+End Sub
+
+Function LowEmitPowOne(ctx As *LowerCtx, exprIdx As Long, home As Long) As Long
+    LowEmitPowOne = 0
+    If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+    LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, exprIdx))
+    LowEmitHomeStore(ctx->list, home, 8)
+    LowEmitPowOne = 1
+End Function
+
+Function LowEmitPowArgs(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowEmitPowArgs = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowEmitPowOne(ctx, nodes[idx].left, 0) = 0 Then Exit Function
+    LowEmitPowArgs = LowEmitPowOne(ctx, nodes[idx].right, 8)
+End Function
+
+Sub LowEmitPowCall(ctx As *LowerCtx, lab As Long)
+    Dim n As Long
+    n = LowPowBytes()
+    LowEmitLoadRegArgs(ctx->list, 2)
+    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(ctx->list, n)
+End Sub
+
+Function LowExprBinopPowDbl(ctx As *LowerCtx, idx As Long) As Long
+    Dim lab As Long
+    LowExprBinopPowDbl = 0
+    lab = LowPowLab(ctx)
+    If lab < 0 Then Exit Function
+    LowPowOpen(ctx)
+    If LowEmitPowArgs(ctx, idx) = 0 Then Exit Function
+    LowEmitPowCall(ctx, lab)
+    LowExprBinopPowDbl = 1
+End Function
+
+Function LowExprBinopPowTy(ctx As *LowerCtx, idx As Long, fty As Long) As Long
+    If fty = TY_DOUBLE Then
+        LowExprBinopPowTy = LowExprBinopPowDbl(ctx, idx)
+        Exit Function
+    End If
+    LowExprBinopPowTy = LowExprBinopPow(ctx, idx)
+End Function
