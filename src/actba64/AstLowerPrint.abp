@@ -60,8 +60,44 @@ Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As bo
     kind = LowEmitPrintKind(ctx, exprIdx, vTy)
     If kind = 0 Or kind = 2 Then LowEmitPrintValue = LowEmitPrintRaw(ctx, exprIdx)
     If kind = 1 Then LowEmitPrintValue = LowEmitPrintArg(ctx, exprIdx)
-    If kind = 3 Then LowEmitPrintValue = LowEmitExprStrD(ctx, exprIdx)
-    If kind = 4 Then LowEmitPrintValue = LowEmitPrintLong(ctx, exprIdx)
+    If kind = 3 Then LowEmitPrintValue = LowEmitPrintNumD(ctx, exprIdx)
+    If kind = 4 Then LowEmitPrintValue = LowEmitPrintNumL(ctx, exprIdx)
+End Function
+
+Function LowBaPrintNumLab(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "BaPrintNum$")
+    LowBaPrintNumLab = LowFindFunc(ctx, VarPtr(name))
+    If LowBaPrintNumLab >= 0 Then Exit Function
+    Print "error: missing 'BaPrintNum$'"
+    ctx->err = 1
+End Function
+
+Function LowEmitPrintPad(ctx As *LowerCtx) As boolean
+    Dim lab As Long
+    lab = LowBaPrintNumLab(ctx)
+    LowEmitPrintPad = false
+    If lab < 0 Then Exit Function
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitPrintPad = true
+End Function
+
+Function LowEmitPrintNumD(ctx As *LowerCtx, exprIdx As Long) As boolean
+    LowEmitPrintNumD = false
+    If Not LowEmitExprStrD(ctx, exprIdx) Then Exit Function
+    LowEmitPrintNumD = LowEmitPrintPad(ctx)
+End Function
+
+Function LowEmitPrintNumL(ctx As *LowerCtx, exprIdx As Long) As boolean
+    LowEmitPrintNumL = false
+    If Not LowEmitPrintLong(ctx, exprIdx) Then Exit Function
+    LowEmitPrintNumL = LowEmitPrintPad(ctx)
+End Function
+
+Function LowPrintRtLab(ctx As *LowerCtx, stay As Long) As Long
+    LowPrintRtLab = LowEnsureRtPrint(ctx)
+    If stay = 0 Then Exit Function
+    LowPrintRtLab = LowEnsureRtPrintStay(ctx)
 End Function
 
 ' rax の文字列を出力（N88 モードは N88_Print へ）
@@ -88,7 +124,7 @@ Function LowEmitPrintCall(ctx As *LowerCtx, stay As Long) As boolean
         IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
         LowEmitCallFinish(ctx->list, LowCallBytes(1))
     Else
-        lab = LowEnsureRtPrint(ctx)
+        lab = LowPrintRtLab(ctx, stay)
         LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
     End If
     LowEmitPrintCall = true
@@ -129,9 +165,35 @@ Function LowStmtPrint(ctx As *LowerCtx, idx As Long) As Long
         LowStmtPrint = 1
         Exit Function
     End If
-    If Not LowStmtPrintOneConsole(ctx, nodes[cur].left, nodes[idx].num) Then Exit Function
+    If LowStmtPrintItems(ctx, idx, cur) = 0 Then Exit Function
     LowEmitStrCollectSafepoint(ctx)
     LowStmtPrint = 1
+End Function
+
+' 続く項目があるときは改行しない。最後だけ文末の ; に従う。
+Function LowPrintCurStay(nodes As *AstNode, idx As Long, cur As Long) As Long
+    LowPrintCurStay = 1
+    If nodes[cur].nxt >= 0 Then Exit Function
+    LowPrintCurStay = nodes[idx].num
+End Function
+
+Function LowStmtPrintStep(ctx As *LowerCtx, idx As Long, cur As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowStmtPrintStep = -2
+    If Not LowStmtPrintOneConsole(ctx, nodes[cur].left, LowPrintCurStay(nodes, idx, cur)) Then Exit Function
+    LowStmtPrintStep = LowArgNext(ctx, cur)
+End Function
+
+Function LowStmtPrintItems(ctx As *LowerCtx, idx As Long, cur As Long) As Long
+    LowStmtPrintItems = 1
+    If cur < 0 Then Exit Function
+    cur = LowStmtPrintStep(ctx, idx, cur)
+    LowStmtPrintItems = 0
+    If cur < -1 Then Exit Function
+    LowStmtPrintItems = LowStmtPrintItems(ctx, idx, cur)
 End Function
 
 ' Print #n, ... — BaFileWrite* 経由

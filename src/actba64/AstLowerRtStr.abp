@@ -130,14 +130,13 @@ Sub LowEmitRtPrintWrite(list As *IrList)
     LowEmitCallFinish(list, callBytes)
 End Sub
 
-Sub LowEmitRtPrintCrlf(list As *IrList, labNl As Long)
+Sub LowEmitRtPrintCrlf(list As *IrList)
     Dim sApi(KW_LEN - 1) As Byte
     Dim crlf(3) As Byte
     Dim callBytes As Long
     crlf[0] = CH_CR
     crlf[1] = CH_NL
     crlf[2] = CH_NUL
-    IrEmit(list, OP_LABEL, labNl, 0)
     callBytes = LowCallBytes(5)
     If callBytes > 0 Then
         IrEmit(list, OP_SUB_RSP, callBytes, 0)
@@ -158,31 +157,74 @@ Sub LowEmitRtPrintCrlf(list As *IrList, labNl As Long)
     LowEmitCallFinish(list, callBytes)
 End Sub
 
-' Print s ― stdout + CRLF (rcx = s)
-Sub LowEmitRtPrintBody(ctx As *LowerCtx)
-    Dim list As *IrList
-    Dim sApi(KW_LEN - 1) As Byte
-    Dim labNl As Long
+' eax=1 なら改行しない。ENTER の前に置き、直後に -40 へ保存する。
+Sub LowEmitRtPrintStayEntry(list As *IrList, labJoin As Long)
+    If g_rtPrintStayLab < 0 Then Exit Sub
+    IrEmit(list, OP_LABEL, g_rtPrintStayLab, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 1, 0)
+    IrEmit(list, OP_JMP, labJoin, 0)
+End Sub
 
-    If g_rtPrintLab < 0 Then Exit Sub
-    list = ctx->list
-    labNl = LowNewLabel(ctx)
+Sub LowEmitRtPrintEnter(list As *IrList, labJoin As Long)
+    LowEmitRtPrintStayEntry(list, labJoin)
     IrEmit(list, OP_LABEL, g_rtPrintLab, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_LABEL, labJoin, 0)
     IrEmit(list, OP_ENTER, 64, 0)
+    IrEmit(list, OP_STORE_LOCAL, -40, 0)
+End Sub
+
+Sub LowEmitRtPrintPrep(list As *IrList, labAfter As Long)
+    Dim sApi(KW_LEN - 1) As Byte
     LowEmitCaptureArg0(list, -8)
     lstrcpy(VarPtr(sApi), "GetStdHandle")
     LowEmitApiImm1(list, IR_DLL_KERNEL32, VarPtr(sApi), &HFFFFFFF5)
     IrEmit(list, OP_STORE_LOCAL, -16, 0)
     IrEmit(list, OP_LOAD_LOCAL, -8, 0)
     IrEmit(list, OP_TEST_RAX, 0, 0)
-    IrEmit(list, OP_JZ, labNl, 0)
+    IrEmit(list, OP_JZ, labAfter, 0)
+End Sub
+
+Sub LowEmitRtPrintLen(list As *IrList, labAfter As Long)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
     IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
     IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
     IrEmit(list, OP_AND_EAX_IMM, 2147483647, 0)
     IrEmit(list, OP_TEST_RAX, 0, 0)
-    IrEmit(list, OP_JZ, labNl, 0)
+    IrEmit(list, OP_JZ, labAfter, 0)
     IrEmit(list, OP_STORE_LOCAL, -24, 0)
     LowEmitRtPrintWrite(list)
-    LowEmitRtPrintCrlf(list, labNl)
+End Sub
+
+Sub LowEmitRtPrintOpen(ctx As *LowerCtx, list As *IrList, labAfter As Long)
+    Dim labJoin As Long
+    labJoin = LowNewLabel(ctx)
+    LowEmitRtPrintEnter(list, labJoin)
+    LowEmitRtPrintPrep(list, labAfter)
+    LowEmitRtPrintLen(list, labAfter)
+End Sub
+
+Sub LowEmitRtPrintTail(list As *IrList, labAfter As Long, labDone As Long)
+    IrEmit(list, OP_LABEL, labAfter, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -40, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JNZ, labDone, 0)
+    LowEmitRtPrintCrlf(list)
+    IrEmit(list, OP_LABEL, labDone, 0)
     LowEmitLeave(list, 1)
+End Sub
+
+Sub LowEmitRtPrintRun(ctx As *LowerCtx, list As *IrList)
+    Dim labAfter As Long
+    Dim labDone As Long
+    labAfter = LowNewLabel(ctx)
+    labDone = LowNewLabel(ctx)
+    LowEmitRtPrintOpen(ctx, list, labAfter)
+    LowEmitRtPrintTail(list, labAfter, labDone)
+End Sub
+
+' Print s ― stdout。stay 入口は CRLF を付けない (rcx = s)
+Sub LowEmitRtPrintBody(ctx As *LowerCtx)
+    If g_rtPrintLab < 0 Then Exit Sub
+    LowEmitRtPrintRun(ctx, ctx->list)
 End Sub
