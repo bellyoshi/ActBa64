@@ -277,7 +277,42 @@ Sub LowStrictWarnArg(ctx As *LowerCtx, idx As Long, argNo As Long, fromTy As Lon
     LowerDiagWarn(ctx, idx, msg)
 End Sub
 
-Sub LowStrictEmitArg(ctx As *LowerCtx, idx As Long, userIndex As Long, surf As Long, pty As Long, pti As Long)
+Function LowStrictVarTy(ctx As *LowerCtx, expr As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vTy As Long, vOff As Long, vTi As Long, vBy As Long, vGl As Long
+    LowStrictVarTy = -1
+    AstCopyStr(ctx->ast, expr, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBy), VarPtr(vGl)) = 0 Then Exit Function
+    LowStrictVarTy = vTy
+End Function
+
+Function LowStrictBytePtrArg(ctx As *LowerCtx, expr As Long) As Long
+    LowStrictBytePtrArg = 0
+    If LowStrictKind(ctx, expr) <> AST_VAR Then Exit Function
+    If LowStrictVarTy(ctx, expr) = TY_PTR_BYTE Then LowStrictBytePtrArg = 1
+End Function
+
+Sub LowStrictWarnByteWord(ctx As *LowerCtx, idx As Long, argNo As Long)
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim msg As String
+    ast = ctx->ast
+    AstCopyStr(ast, idx, VarPtr(name))
+    msg = "implicit conversion of argument " + Str$(argNo) + " of '" + MakeStr(VarPtr(name))
+    msg = msg + "' from *Byte to *Word (#strict)"
+    LowerDiagWarn(ctx, idx, msg)
+End Sub
+
+Function LowStrictTryWord(ctx As *LowerCtx, idx As Long, argNo As Long, pti As Long, expr As Long) As Long
+    LowStrictTryWord = 0
+    If pti <> LOW_PTI_WORD Then Exit Function
+    If LowStrictBytePtrArg(ctx, expr) = 0 Then Exit Function
+    LowStrictWarnByteWord(ctx, idx, argNo + 1)
+    LowStrictTryWord = 1
+End Function
+
+Sub LowStrictEmitArg(ctx As *LowerCtx, idx As Long, userIndex As Long, surf As Long, pty As Long, pti As Long, expr As Long)
+    If LowStrictTryWord(ctx, idx, userIndex, pti, expr) <> 0 Then Exit Sub
     If pti = LOW_PTI_VOID And surf = TY_STRING Then
         LowStrictWarnArg(ctx, idx, userIndex + 1, TY_STRING, TY_PTR_BYTE)
         Exit Sub
@@ -298,7 +333,7 @@ Sub LowStrictOneArg(ctx As *LowerCtx, idx As Long, expr As Long, userIndex As Lo
     If meth <> 0 Then slot = userIndex + 1
     pty = LowStrictFormal(ctx, idx, slot, pti)
     If pty < 0 Then Exit Sub
-    LowStrictEmitArg(ctx, idx, userIndex, surf, pty, pti)
+    LowStrictEmitArg(ctx, idx, userIndex, surf, pty, pti, expr)
 End Sub
 
 Sub LowStrictArgWalk(ctx As *LowerCtx, idx As Long, meth As Long)

@@ -4,6 +4,7 @@
 ' LINE (x1,y1)-(x2,y2)[,color][,B|BF]
 ' CIRCLE [(x,y)|STEP(x,y)],r[,color][,start][,end][,aspect][,F[,color2]]
 ' LOCATE x,y | Locate(x,y)  — 文字座標（桁 x, 行 y）
+' COLOR text [, back]  — 文字色。back 省略は維持、-1 は透明（n88color.abp）
 ' PAINT (x,y), color1 [, color2]  — 塗りつぶし（境界色 color2、省略時 color1）
 '   start/end: ラジアン（Double）。省略または start=end で全周
 '   aspect: 垂直/水平（Double。省略時 1.0）
@@ -42,25 +43,7 @@ Dim g_n88Title(31) As Byte
 Dim g_n88Face(15) As Byte
 
 Function N88_Rgb(c As Long) As Long
-    Dim v As Long
-    v = c And 7
-    If v = 0 Then
-        N88_Rgb = 0
-    ElseIf v = 1 Then
-        N88_Rgb = &HFF0000
-    ElseIf v = 2 Then
-        N88_Rgb = &H0000FF
-    ElseIf v = 3 Then
-        N88_Rgb = &HFF00FF
-    ElseIf v = 4 Then
-        N88_Rgb = &H00FF00
-    ElseIf v = 5 Then
-        N88_Rgb = &HFFFF00
-    ElseIf v = 6 Then
-        N88_Rgb = &H00FFFF
-    Else
-        N88_Rgb = &HFFFFFF
-    End If
+    N88_Rgb = ColorCode(c)
 End Function
 
 Sub N88_TakeKey(wParam As WPARAM)
@@ -146,7 +129,7 @@ Sub N88_EnsureWindow()
 
     lstrcpy(VarPtr(g_n88Class), "ActBa64N88Class")
     lstrcpy(VarPtr(g_n88Title), "N88BASIC")
-    lstrcpy(VarPtr(g_n88Face), "Courier New")
+    lstrcpy(VarPtr(g_n88Face), "MS Gothic")
     hInst = GetModuleHandleA(0)
     N88_RegisterClass(hInst)
     N88_CreateSurfaces(hInst)
@@ -461,26 +444,61 @@ Sub Locate(x As Long, y As Long)
     g_n88CurY = y
 End Sub
 
-Sub N88_TextOutOn(hdc As HDC, s As *Byte)
-    Dim px As Long
-    Dim py As Long
+Function N88_TextFont(hdc As HDC) As HANDLE
+    N88_TextFont = 0
+    If g_n88Font = 0 Then Exit Function
+    N88_TextFont = SelectObject(hdc, g_n88Font)
+End Function
+
+Sub N88_TextRestore(hdc As HDC, old As HANDLE)
+    If old = 0 Then Exit Sub
+    SelectObject(hdc, old)
+End Sub
+
+Function N88_Utf8Chars(s As *Byte, n As Long) As Long
+    N88_Utf8Chars = MultiByteToWideChar(CP_UTF8, 0, s, n, 0, 0)
+End Function
+
+Function N88_WideBytes(chars As Long) As Long
     Dim n As Long
+    n = chars + 1
+    N88_WideBytes = n * 2
+End Function
+
+Function N88_ToWide(s As *Byte, n As Long, chars As Long) As *Byte
+    Dim wide As *Byte
+    N88_ToWide = 0
+    wide = malloc(N88_WideBytes(chars))
+    If wide = 0 Then Exit Function
+    N88_ToWide = wide
+    If MultiByteToWideChar(CP_UTF8, 0, s, n, wide, chars) > 0 Then Exit Function
+    free(wide)
+    N88_ToWide = 0
+End Function
+
+Sub N88_TextOutUtf8(hdc As HDC, s As *Byte, n As Long)
+    Dim chars As Long
+    Dim wide As *Byte
+    chars = N88_Utf8Chars(s, n)
+    If chars <= 0 Then Exit Sub
+    wide = N88_ToWide(s, n, chars)
+    If wide = 0 Then Exit Sub
+    TextOutW(hdc, g_n88CurX * N88_CHAR_W, g_n88CurY * N88_CHAR_H, wide, chars)
+    free(wide)
+End Sub
+
+Sub N88_TextDraw(hdc As HDC, s As *Byte)
+    N88_ApplyTextColor(hdc)
+    N88_TextOutUtf8(hdc, s, lstrlen(s))
+End Sub
+
+Sub N88_TextOutOn(hdc As HDC, s As *Byte)
     Dim old As HANDLE
     If hdc = 0 Then Exit Sub
     If s = 0 Then Exit Sub
-    old = 0
-    If g_n88Font <> 0 Then
-        old = SelectObject(hdc, g_n88Font)
-    End If
-    px = g_n88CurX * N88_CHAR_W
-    py = g_n88CurY * N88_CHAR_H
-    n = lstrlen(s)
-    SetBkMode(hdc, N88_TRANSPARENT)
-    SetTextColor(hdc, N88_Rgb(7))
-    TextOutA(hdc, px, py, s, n)
-    If old <> 0 Then
-        SelectObject(hdc, old)
-    End If
+    old = N88_TextFont(hdc)
+    N88_TextDraw(hdc, s)
+    N88_TextRestore(hdc, old)
 End Sub
 
 Sub N88_PutText(s As *Byte)
@@ -502,8 +520,42 @@ Sub N88_Print(s As *Byte)
     g_n88CurY = g_n88CurY + 1
 End Sub
 
+Function N88_CellAt(p As *Byte) As Long
+    N88_CellAt = 1
+    If p[0] >= &H80 Then N88_CellAt = 2
+End Function
+
+Function N88_SkipAt(p As *Byte) As Long
+    Dim b As Long
+    b = p[0]
+    N88_SkipAt = 1
+    If b >= &HC0 And b <= &HDF Then N88_SkipAt = 2
+    If b >= &HE0 And b <= &HEF Then N88_SkipAt = 3
+    If b >= &HF0 Then N88_SkipAt = 4
+End Function
+
+Sub N88_Advance(ByRef p As *Byte, ByRef left As Long, skip As Long)
+    While skip > 0 And left > 0
+        p = VarPtr(p[1])
+        skip = skip - 1
+        left = left - 1
+    Wend
+End Sub
+
+Function N88_Cells(s As *Byte, n As Long) As Long
+    Dim p As *Byte
+    Dim left As Long
+    p = s
+    left = n
+    While left > 0
+        N88_Cells = N88_Cells + N88_CellAt(p)
+        N88_Advance(p, left, N88_SkipAt(p))
+    Wend
+End Function
+
 Sub N88_PrintStay(s As *Byte)
     N88_PutText(s)
+    If s <> 0 Then g_n88CurX = g_n88CurX + N88_Cells(s, lstrlen(s))
 End Sub
 
 Sub N88_FloodOn(hdc As HDC, x As Long, y As Long, fillRgb As Long, borderRgb As Long)
