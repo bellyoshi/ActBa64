@@ -321,13 +321,99 @@ Function ParseAssignIndexOr(p As *Parser, name As *Byte) As Long
     ParseAssignIndexOr = ParseAssignOrCall(p, name)
 End Function
 
-Function ParseAssignStmt(p As *Parser) As Long
+' 文頭の予約語（Line など）。代入にはしない。
+Function ParseHitKw(name As *Byte, lit As String) As Long
+    ParseHitKw = 0
+    If ByteStrEqCI(lit, name) Then ParseHitKw = 1
+End Function
+
+Function ParseIsReservedA(name As *Byte) As Long
+    ParseIsReservedA = 1
+    If ParseHitKw(name, "line") <> 0 Then Exit Function
+    If ParseHitKw(name, "circle") <> 0 Then Exit Function
+    If ParseHitKw(name, "paint") <> 0 Then Exit Function
+    If ParseHitKw(name, "color") <> 0 Then Exit Function
+    ParseIsReservedA = 0
+End Function
+
+Function ParseIsReservedB(name As *Byte) As Long
+    ParseIsReservedB = 1
+    If ParseHitKw(name, "locate") <> 0 Then Exit Function
+    If ParseHitKw(name, "pset") <> 0 Then Exit Function
+    If ParseHitKw(name, "beep") <> 0 Then Exit Function
+    If ParseHitKw(name, "cls") <> 0 Then Exit Function
+    If ParseHitKw(name, "preset") <> 0 Then Exit Function
+    ParseIsReservedB = 0
+End Function
+
+Function ParseIsReservedCmd(name As *Byte) As Long
+    ParseIsReservedCmd = ParseIsReservedA(name)
+    If ParseIsReservedCmd <> 0 Then Exit Function
+    ParseIsReservedCmd = ParseIsReservedB(name)
+End Function
+
+Sub ParseLowerWord(dst As *Byte)
+    Dim i As Long
+    Dim c As Long
+    i = 0
+    While dst[i] <> 0
+        c = ToLowerChar(dst[i])
+        dst[i] = c As Byte
+        i = i + 1
+    Wend
+End Sub
+
+Sub ParseCap0(dst As *Byte)
+    Dim c As Long
+    If dst[0] < CH_La Then Exit Sub
+    If dst[0] > CH_Lz Then Exit Sub
+    c = dst[0] - CH_La + CH_A
+    dst[0] = c As Byte
+End Sub
+
+Sub ParseCanonKw(name As *Byte, dst As *Byte)
+    lstrcpy(dst, name)
+    ParseLowerWord(dst)
+    ParseCap0(dst)
+End Sub
+
+Function ParseQuote$() As String
+    Dim b(1) As Byte
+    b[0] = CH_DQUOTE
+    b[1] = CH_NUL
+    ParseQuote$ = MakeStr(VarPtr(b))
+End Function
+
+Function ParseReservedMsg$(name As *Byte) As String
+    Dim shown(KW_LEN - 1) As Byte
+    Dim q As String
+    ParseCanonKw(name, VarPtr(shown))
+    q = ParseQuote$()
+    ParseReservedMsg$ = q + MakeStr(VarPtr(shown)) + q + " のパラメータ指定が間違っています"
+End Function
+
+Function ParseReservedAsgn(p As *Parser, name As *Byte) As Long
+    ParseReservedAsgn = 0
+    If ParseTokKind(p) <> TK_EQ Then Exit Function
+    If ParseIsReservedCmd(name) = 0 Then Exit Function
+    ParseFail(p, ParseReservedMsg$(name))
+    ParseReservedAsgn = 1
+End Function
+
+Function ParseAssignNamed(p As *Parser) As Long
     Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseAssignNamed = -1
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    If ParseReservedAsgn(p, VarPtr(name)) <> 0 Then Exit Function
+    ParseAssignNamed = ParseAssignIndexOr(p, VarPtr(name))
+End Function
+
+Function ParseAssignStmt(p As *Parser) As Long
     ParseAssignStmt = -1
     ParseSkipLet(p)
     If ParseTokKind(p) = TK_DOT Then
         ParseAssignStmt = ParseAssignWithDot(p)
         Exit Function
     End If
-    If ParseCopyIdent(p, VarPtr(name)) Then ParseAssignStmt = ParseAssignIndexOr(p, VarPtr(name))
+    ParseAssignStmt = ParseAssignNamed(p)
 End Function

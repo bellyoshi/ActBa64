@@ -120,6 +120,10 @@ Copy-Item -LiteralPath $FontsSrc -Destination (Join-Path $ReleaseDir "fonts") -R
 Get-ChildItem -LiteralPath $EditorDir -Filter "ProjectEditor_lang_*.csv" | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $ReleaseDir $_.Name) -Force
 }
+$keywordsTxt = Join-Path $EditorDir "keywords.txt"
+if (Test-Path -LiteralPath $keywordsTxt) {
+    Copy-Item -LiteralPath $keywordsTxt -Destination (Join-Path $ReleaseDir "keywords.txt") -Force
+}
 $settingIni = Join-Path $EditorDir "setting.ini"
 if (Test-Path -LiteralPath $settingIni) {
     Copy-Item -LiteralPath $settingIni -Destination (Join-Path $ReleaseDir "setting.ini") -Force

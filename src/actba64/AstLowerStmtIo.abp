@@ -84,29 +84,52 @@ Function LowStmtInputOne(ctx As *LowerCtx, nVarIdx As Long, labIn As Long) As bo
     LowStmtInputOne = true
 End Function
 
-Function LowStmtInput(ctx As *LowerCtx, idx As Long) As Long
-    Dim stackPad(LOW_STACK_PAD - 1) As Byte
-    Dim name(SYM_NAME_LEN - 1) As Byte
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowStmtInputPromptEmit(ctx As *LowerCtx, nPrompt As Long) As boolean
     Dim lab As Long
+    LowStmtInputPromptEmit = false
+    If LowExpr(ctx, nPrompt) = 0 Then Exit Function
+    lab = LowEnsureRtPrintStay(ctx)
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtInputPromptEmit = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowStmtInputPrompt(ctx As *LowerCtx, nPrompt As Long) As boolean
+    LowStmtInputPrompt = true
+    If nPrompt < 0 Then Exit Function
+    LowStmtInputPrompt = LowStmtInputPromptEmit(ctx, nPrompt)
+End Function
+
+Function LowInputSemi(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowInputSemi = nodes[idx].num
+End Function
+
+Function LowStmtInputRun(ctx As *LowerCtx, nVarIdx As Long, nPrompt As Long, semi As Long) As Long
+    Dim stackPad(LOW_STACK_PAD - 1) As Byte
+    Dim lab As Long
+    LowStmtInputRun = 0
+    lab = LowEnsureRtInput(ctx)
+    If LowStmtInputAll(ctx, nVarIdx, lab, nPrompt, semi) = 0 Then Exit Function
+    LowEmitStrCollectSafepoint(ctx)
+    LowStmtInputRun = 1
+End Function
+
+Function LowStmtInput(ctx As *LowerCtx, idx As Long) As Long
     Dim nVarIdx As Long
     Dim nPrompt As Long
-
+    Dim semi As Long
     LowStmtInput = 0
     nVarIdx = LowInputVarIdx(ctx, idx, nPrompt)
-    If nVarIdx < 0 Then
-        ctx->err = 1
-        Exit Function
-    End If
-    If nPrompt >= 0 Then
-        If LowExpr(ctx, nPrompt) = 0 Then Exit Function
-        lab = LowEnsureRtPrint(ctx)
-        LowEmitCall1Rax(ctx->list, 0, 0, VarPtr(name), lab)
-        LowEmitStrCollectSafepoint(ctx)
-    End If
-    lab = LowEnsureRtInput(ctx)
-    If LowStmtInputAll(ctx, nVarIdx, lab) = 0 Then Exit Function
-    LowEmitStrCollectSafepoint(ctx)
-    LowStmtInput = 1
+    If nVarIdx < 0 Then ctx->err = 1
+    If nVarIdx < 0 Then Exit Function
+    semi = LowInputSemi(ctx, idx)
+    LowStmtInput = LowStmtInputRun(ctx, nVarIdx, nPrompt, semi)
 End Function
 
 Function LowStmtOpen(ctx As *LowerCtx, idx As Long) As Long

@@ -1,5 +1,26 @@
 ' ParserProc - Sub、Function、ループの頭
 
+Dim g_loopN As Long
+Dim g_loopKind(15) As Long
+
+Sub LoopPush(kind As Long)
+    If g_loopN >= 16 Then Exit Sub
+    g_loopKind[g_loopN] = kind
+    g_loopN = g_loopN + 1
+End Sub
+
+Sub LoopPop()
+    If g_loopN > 0 Then g_loopN = g_loopN - 1
+End Sub
+
+Function LoopTop() As Long
+    Dim i As Long
+    LoopTop = 0
+    If g_loopN <= 0 Then Exit Function
+    i = g_loopN - 1
+    LoopTop = g_loopKind[i]
+End Function
+
 Function ParseSubStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -45,36 +66,59 @@ Function ParseSubStmt(p As *Parser) As Long
     ParseSubStmt = nFunc
 End Function
 
-Function ParseWhileStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nWhile As Long
-    Dim cond As Long
-    Dim body As Long
-    Dim kWend(KW_SHORT_LEN - 1) As Byte
+Function ParseWhileBody(p As *Parser, kWend As *Byte) As Long
     Dim empty(1) As Byte
-
-    ParseWhileStmt = -1
-    p->pos = p->pos + 1
-    cond = ParseCond(p)
-    If cond < 0 Then Exit Function
     empty[0] = 0
-    lstrcpy(VarPtr(kWend), "wend")
-    body = ParseStmtListUntil(p, VarPtr(kWend), VarPtr(empty))
-    If p->err <> 0 Then Exit Function
-    If ParseIdentIs(p, VarPtr(kWend)) = 0 Then
+    lstrcpy(kWend, "wend")
+    LoopPush(AST_CONTINUEWHILE)
+    ParseWhileBody = ParseStmtListUntil(p, kWend, VarPtr(empty))
+    LoopPop()
+End Function
+
+Function ParseWhileWend(p As *Parser, kWend As *Byte) As boolean
+    ParseWhileWend = false
+    If ParseIdentIs(p, kWend) = 0 Then
         p->err = 1
         Exit Function
     End If
     p->pos = p->pos + 1
+    ParseWhileWend = true
+End Function
 
-    ast = p->ast
-    nWhile = AstAddNode(ast, AST_WHILE)
-    If nWhile < 0 Then Exit Function
+Sub ParseWhileFill(ast As *Ast, nWhile As Long, cond As Long, body As Long)
+    Dim nodes As *AstNode
     nodes = ast->nodes
     nodes[nWhile].left = cond
     nodes[nWhile].right = body
-    ParseWhileStmt = nWhile
+End Sub
+
+Function ParseWhileNode(p As *Parser, cond As Long, body As Long) As Long
+    Dim ast As *Ast
+    Dim nWhile As Long
+    ast = p->ast
+    nWhile = AstAddNode(ast, AST_WHILE)
+    ParseWhileNode = nWhile
+    If nWhile < 0 Then Exit Function
+    ParseWhileFill(ast, nWhile, cond, body)
+End Function
+
+Function ParseWhileRest(p As *Parser, cond As Long) As Long
+    Dim body As Long
+    Dim kWend(KW_SHORT_LEN - 1) As Byte
+    ParseWhileRest = -1
+    body = ParseWhileBody(p, VarPtr(kWend))
+    If p->err <> 0 Then Exit Function
+    If Not ParseWhileWend(p, VarPtr(kWend)) Then Exit Function
+    ParseWhileRest = ParseWhileNode(p, cond, body)
+End Function
+
+Function ParseWhileStmt(p As *Parser) As Long
+    Dim cond As Long
+    ParseWhileStmt = -1
+    p->pos = p->pos + 1
+    cond = ParseCond(p)
+    If cond < 0 Then Exit Function
+    ParseWhileStmt = ParseWhileRest(p, cond)
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
@@ -107,49 +151,77 @@ Function ParseForHeader(p As *Parser, ast As *Ast, name As *Byte, ByRef fromE As
     ParseForHeader = true
 End Function
 
-Function ParseForStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nFor As Long
-    Dim name(SYM_NAME_LEN - 1) As Byte
-    Dim nVar As Long
-    Dim fromE As Long
-    Dim toE As Long
-    Dim stepE As Long
-    Dim body As Long
+Function ParseForBody(p As *Parser) As Long
     Dim kNext(KW_SHORT_LEN - 1) As Byte
     Dim empty(1) As Byte
-
-    ParseForStmt = -1
-    ast = p->ast
-    If Not ParseForHeader(p, ast, VarPtr(name), fromE, toE, stepE) Then Exit Function
-
-    empty[0] = 0
     lstrcpy(VarPtr(kNext), "next")
-    body = ParseStmtListUntil(p, VarPtr(kNext), VarPtr(empty))
-    If p->err <> 0 Then Exit Function
-    If ParseIdentIs(p, VarPtr(kNext)) = 0 Then
-        p->err = 1
-        Exit Function
-    End If
-    p->pos = p->pos + 1
-    ' optional: Next varname (same as For var only)
-    If ParseIdentIs(p, VarPtr(name)) <> 0 Then
-        p->pos = p->pos + 1
-    End If
+    empty[0] = 0
+    LoopPush(AST_CONTINUEFOR)
+    ParseForBody = ParseStmtListUntil(p, VarPtr(kNext), VarPtr(empty))
+    LoopPop()
+End Function
 
-    nVar = AstAddNode(ast, AST_VAR)
-    If nVar < 0 Then Exit Function
-    AstSetStr(ast, nVar, VarPtr(name))
-    nFor = AstAddNode(ast, AST_FOR)
-    If nFor < 0 Then Exit Function
-    nodes = ast->nodes
+Sub ParseForNextName(p As *Parser, name As *Byte)
+    If ParseIdentIs(p, name) <> 0 Then p->pos = p->pos + 1
+End Sub
+
+Function ParseForTakeNext(p As *Parser, name As *Byte) As boolean
+    Dim kNext(KW_SHORT_LEN - 1) As Byte
+    lstrcpy(VarPtr(kNext), "next")
+    ParseForTakeNext = false
+    If ParseIdentIs(p, VarPtr(kNext)) = 0 Then p->err = 1
+    If p->err <> 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseForNextName(p, name)
+    ParseForTakeNext = true
+End Function
+
+Sub ParseForFill(nodes As *AstNode, nFor As Long, nVar As Long, fromE As Long, toE As Long, stepE As Long, body As Long)
     nodes[nFor].left = nVar
     nodes[nFor].right = fromE
     nodes[nFor].extra = toE
     nodes[nFor].num = body
     nodes[nFor].strId = stepE
-    ParseForStmt = nFor
+End Sub
+
+Function ParseForLink(ast As *Ast, nVar As Long, name As *Byte, fromE As Long, toE As Long, stepE As Long, body As Long) As Long
+    Dim nodes As *AstNode
+    Dim nFor As Long
+    AstSetStr(ast, nVar, name)
+    nFor = AstAddNode(ast, AST_FOR)
+    ParseForLink = nFor
+    If nFor < 0 Then Exit Function
+    nodes = ast->nodes
+    ParseForFill(nodes, nFor, nVar, fromE, toE, stepE, body)
+End Function
+
+Function ParseForNode(p As *Parser, name As *Byte, fromE As Long, toE As Long, stepE As Long, body As Long) As Long
+    Dim ast As *Ast
+    Dim nVar As Long
+    ParseForNode = -1
+    ast = p->ast
+    nVar = AstAddNode(ast, AST_VAR)
+    If nVar < 0 Then Exit Function
+    ParseForNode = ParseForLink(ast, nVar, name, fromE, toE, stepE, body)
+End Function
+
+Function ParseForAfter(p As *Parser, name As *Byte, fromE As Long, toE As Long, stepE As Long) As Long
+    Dim body As Long
+    ParseForAfter = -1
+    body = ParseForBody(p)
+    If p->err <> 0 Then Exit Function
+    If Not ParseForTakeNext(p, name) Then Exit Function
+    ParseForAfter = ParseForNode(p, name, fromE, toE, stepE, body)
+End Function
+
+Function ParseForStmt(p As *Parser) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim fromE As Long
+    Dim toE As Long
+    Dim stepE As Long
+    ParseForStmt = -1
+    If Not ParseForHeader(p, p->ast, VarPtr(name), fromE, toE, stepE) Then Exit Function
+    ParseForStmt = ParseForAfter(p, VarPtr(name), fromE, toE, stepE)
 End Function
 
 Function ParseWithStmt(p As *Parser) As Long

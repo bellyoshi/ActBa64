@@ -165,43 +165,53 @@ Function ParseExitKwStmt(p As *Parser) As Long
     p->err = 1
 End Function
 
-Function ParseContinueKwStmt(p As *Parser) As Long
+Function ParseContArm(p As *Parser, kw As *Byte, kind As Long) As Long
     Dim ast As *Ast
     Dim n As Long
-    Dim kDo(KW_SHORT_LEN - 1) As Byte
-    Dim kWhile(KW_LEN - 1) As Byte
-    Dim kFor(KW_SHORT_LEN - 1) As Byte
+    ParseContArm = -2
+    If ParseIdentIs(p, kw) = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ast = p->ast
+    n = AstAddNode(ast, kind)
+    ParseContArm = n
+End Function
 
+Function ParseContinueDoWhile(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kw), "do")
+    ParseContinueDoWhile = ParseContArm(p, VarPtr(kw), AST_CONTINUEDO)
+    If ParseContinueDoWhile <> -2 Then Exit Function
+    lstrcpy(VarPtr(kw), "while")
+    ParseContinueDoWhile = ParseContArm(p, VarPtr(kw), AST_CONTINUEWHILE)
+End Function
+
+Function ParseContinueNamed(p As *Parser) As Long
+    Dim kw(KW_SHORT_LEN - 1) As Byte
+    ParseContinueNamed = ParseContinueDoWhile(p)
+    If ParseContinueNamed <> -2 Then Exit Function
+    lstrcpy(VarPtr(kw), "for")
+    ParseContinueNamed = ParseContArm(p, VarPtr(kw), AST_CONTINUEFOR)
+End Function
+
+Function ParseContinueBare(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim kind As Long
+    ParseContinueBare = -1
+    kind = LoopTop()
+    If kind = 0 Then
+        p->err = 1
+        Exit Function
+    End If
+    ast = p->ast
+    ParseContinueBare = AstAddNode(ast, kind)
+End Function
+
+Function ParseContinueKwStmt(p As *Parser) As Long
     ParseContinueKwStmt = -1
     p->pos = p->pos + 1
-    lstrcpy(VarPtr(kDo), "do")
-    lstrcpy(VarPtr(kWhile), "while")
-    lstrcpy(VarPtr(kFor), "for")
-    If ParseIdentIs(p, VarPtr(kDo)) <> 0 Then
-        p->pos = p->pos + 1
-        ast = p->ast
-        n = AstAddNode(ast, AST_CONTINUEDO)
-        If n < 0 Then Exit Function
-        ParseContinueKwStmt = n
-        Exit Function
-    End If
-    If ParseIdentIs(p, VarPtr(kWhile)) <> 0 Then
-        p->pos = p->pos + 1
-        ast = p->ast
-        n = AstAddNode(ast, AST_CONTINUEWHILE)
-        If n < 0 Then Exit Function
-        ParseContinueKwStmt = n
-        Exit Function
-    End If
-    If ParseIdentIs(p, VarPtr(kFor)) <> 0 Then
-        p->pos = p->pos + 1
-        ast = p->ast
-        n = AstAddNode(ast, AST_CONTINUEFOR)
-        If n < 0 Then Exit Function
-        ParseContinueKwStmt = n
-        Exit Function
-    End If
-    p->err = 1
+    ParseContinueKwStmt = ParseContinueNamed(p)
+    If ParseContinueKwStmt <> -2 Then Exit Function
+    ParseContinueKwStmt = ParseContinueBare(p)
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
@@ -361,35 +371,64 @@ Function ParseDoTailCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long)
     ParseDoTailCond = true
 End Function
 
-Function ParseDoStmt(p As *Parser) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nDo As Long
-    Dim body As Long
-    Dim cond As Long
-    Dim doMode As Long
-    Dim kLoop(KW_SHORT_LEN - 1) As Byte
+Function ParseDoBody(p As *Parser, kLoop As *Byte) As Long
     Dim empty(1) As Byte
-
-    ParseDoStmt = -1
-    p->pos = p->pos + 1
-    If Not ParseDoHeadCond(p, cond, doMode) Then Exit Function
     empty[0] = 0
-    lstrcpy(VarPtr(kLoop), "loop")
-    body = ParseStmtListUntil(p, VarPtr(kLoop), VarPtr(empty))
-    If p->err <> 0 Then Exit Function
-    If ParseIdentIs(p, VarPtr(kLoop)) = 0 Then
+    lstrcpy(kLoop, "loop")
+    LoopPush(AST_CONTINUEDO)
+    ParseDoBody = ParseStmtListUntil(p, kLoop, VarPtr(empty))
+    LoopPop()
+End Function
+
+Function ParseDoLoopTok(p As *Parser, kLoop As *Byte) As boolean
+    ParseDoLoopTok = false
+    If ParseIdentIs(p, kLoop) = 0 Then
         p->err = 1
         Exit Function
     End If
     p->pos = p->pos + 1
-    If Not ParseDoTailCond(p, cond, doMode) Then Exit Function
-    ast = p->ast
-    nDo = AstAddNode(ast, AST_DO)
-    If nDo < 0 Then Exit Function
+    ParseDoLoopTok = true
+End Function
+
+Sub ParseDoFill(ast As *Ast, nDo As Long, cond As Long, body As Long, doMode As Long)
+    Dim nodes As *AstNode
     nodes = ast->nodes
     nodes[nDo].left = cond
     nodes[nDo].right = body
     nodes[nDo].extra = doMode
-    ParseDoStmt = nDo
+End Sub
+
+Function ParseDoNode(p As *Parser, cond As Long, doMode As Long, body As Long) As Long
+    Dim ast As *Ast
+    Dim nDo As Long
+    ast = p->ast
+    nDo = AstAddNode(ast, AST_DO)
+    ParseDoNode = nDo
+    If nDo < 0 Then Exit Function
+    ParseDoFill(ast, nDo, cond, body, doMode)
+End Function
+
+Function ParseDoTailNode(p As *Parser, cond As Long, doMode As Long, body As Long) As Long
+    ParseDoTailNode = -1
+    If Not ParseDoTailCond(p, cond, doMode) Then Exit Function
+    ParseDoTailNode = ParseDoNode(p, cond, doMode, body)
+End Function
+
+Function ParseDoRest(p As *Parser, cond As Long, doMode As Long) As Long
+    Dim body As Long
+    Dim kLoop(KW_SHORT_LEN - 1) As Byte
+    ParseDoRest = -1
+    body = ParseDoBody(p, VarPtr(kLoop))
+    If p->err <> 0 Then Exit Function
+    If Not ParseDoLoopTok(p, VarPtr(kLoop)) Then Exit Function
+    ParseDoRest = ParseDoTailNode(p, cond, doMode, body)
+End Function
+
+Function ParseDoStmt(p As *Parser) As Long
+    Dim cond As Long
+    Dim doMode As Long
+    ParseDoStmt = -1
+    p->pos = p->pos + 1
+    If Not ParseDoHeadCond(p, cond, doMode) Then Exit Function
+    ParseDoStmt = ParseDoRest(p, cond, doMode)
 End Function

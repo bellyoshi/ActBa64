@@ -99,43 +99,78 @@ Function LowExprBinopPow(ctx As *LowerCtx, idx As Long) As Long
     LowExprBinopPow = 1
 End Function
 
-Function LowExprBinopDiv(ctx As *LowerCtx, idx As Long, op As Long, fty As Long) As Long
+Function LowAstNodes(ctx As *LowerCtx) As *AstNode
+    Dim ast As *Ast
+    ast = ctx->ast
+    LowAstNodes = ast->nodes
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowExprPushLeft(ctx As *LowerCtx, list As *IrList, left As Long) As boolean
+    LowExprPushLeft = false
+    If LowExpr(ctx, left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    LowExprPushLeft = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowExprPopRight(ctx As *LowerCtx, list As *IrList, right As Long) As boolean
+    LowExprPopRight = false
+    If LowExpr(ctx, right) = 0 Then Exit Function
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    LowExprPopRight = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowExprBinopPair(ctx As *LowerCtx, idx As Long) As boolean
     Dim stackPad(LOW_STACK_PAD - 1) As Byte
     Dim nodes As *AstNode
-    Dim ast As *Ast
     Dim list As *IrList
-
-    LowExprBinopDiv = 0
-    ast = ctx->ast
+    LowExprBinopPair = false
+    nodes = LowAstNodes(ctx)
     list = ctx->list
-    nodes = ast->nodes
-    If op = BOP_IDIV Or op = BOP_DIV Then
-        LowExprBinopDiv = LowExprBinopDivOp(ctx, idx, fty)
-    ElseIf op = BOP_MOD Then
-        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-        IrEmit(list, OP_PUSH_RAX, 0, 0)
-        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-        IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
-        IrEmit(list, OP_POP_RAX, 0, 0)
-        IrEmit(list, OP_XOR_EDX, 0, 0)
-        IrEmit(list, OP_DIV_ECX, 0, 0)
-        IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
-        LowExprBinopDiv = 1
-    ElseIf op = BOP_SHL Or op = BOP_SHR Then
-        If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
-        IrEmit(list, OP_PUSH_RAX, 0, 0)
-        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
-        IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
-        IrEmit(list, OP_POP_RAX, 0, 0)
-        If op = BOP_SHL Then
-            IrEmit(list, OP_SHL_EAX_CL, 0, 0)
-        Else
-            IrEmit(list, OP_SAR_EAX_CL, 0, 0)
-        End If
-        LowExprBinopDiv = 1
-    ElseIf op = BOP_POW Then
-        LowExprBinopDiv = LowExprBinopPowTy(ctx, idx, fty)
-    End If
+    If Not LowExprPushLeft(ctx, list, nodes[idx].left) Then Exit Function
+    LowExprBinopPair = LowExprPopRight(ctx, list, nodes[idx].right)
+End Function
+
+Function LowExprBinopIdiv(ctx As *LowerCtx, idx As Long, fty As Long) As Long
+    Dim list As *IrList
+    LowExprBinopIdiv = LowExprBinopDivOp(ctx, idx, fty)
+    If LowExprBinopIdiv = 0 Then Exit Function
+    If fty <> TY_DOUBLE Then Exit Function
+    list = ctx->list
+    IrEmit(list, OP_CVT_SD_TO_I32, 0, 0)
+End Function
+
+Function LowExprBinopMod(ctx As *LowerCtx, idx As Long) As Long
+    Dim list As *IrList
+    LowExprBinopMod = 0
+    list = ctx->list
+    If Not LowExprBinopPair(ctx, idx) Then Exit Function
+    IrEmit(list, OP_XOR_EDX, 0, 0)
+    IrEmit(list, OP_DIV_ECX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
+    LowExprBinopMod = 1
+End Function
+
+Function LowExprBinopShift(ctx As *LowerCtx, idx As Long, op As Long) As Long
+    Dim list As *IrList
+    LowExprBinopShift = 0
+    list = ctx->list
+    If Not LowExprBinopPair(ctx, idx) Then Exit Function
+    If op = BOP_SHL Then IrEmit(list, OP_SHL_EAX_CL, 0, 0)
+    If op = BOP_SHR Then IrEmit(list, OP_SAR_EAX_CL, 0, 0)
+    LowExprBinopShift = 1
+End Function
+
+Function LowExprBinopDiv(ctx As *LowerCtx, idx As Long, op As Long, fty As Long) As Long
+    LowExprBinopDiv = 0
+    If op = BOP_DIV Then LowExprBinopDiv = LowExprBinopDivOp(ctx, idx, TY_DOUBLE)
+    If op = BOP_IDIV Then LowExprBinopDiv = LowExprBinopIdiv(ctx, idx, fty)
+    If op = BOP_MOD Then LowExprBinopDiv = LowExprBinopMod(ctx, idx)
+    If op = BOP_SHL Or op = BOP_SHR Then LowExprBinopDiv = LowExprBinopShift(ctx, idx, op)
+    If op = BOP_POW Then LowExprBinopDiv = LowExprBinopPowTy(ctx, idx, fty)
 End Function
 
 ' lstrcmp 由来の TEST フラグから 真=-1 / 偽=0 を eax へ

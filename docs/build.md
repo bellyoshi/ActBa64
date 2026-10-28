@@ -167,6 +167,7 @@ actba64 <src.abp|.pj> [-actba32] [-o <out>]
 | `release\Include\` | `src\Include` のコピー |
 | `release\help\` | エディタ向け HTML ヘルプ |
 | `release\ProjectEditor_lang_*.csv` | UI 言語パック（既定は英語組み込み） |
+| `release\keywords.txt` | エディタのハイライト予約語（1 行 1 語） |
 | `release\setting.ini` | `Language=ja` 等（ファイル無し / `en` なら英語） |
 
 `Include` の正本は [`src/Include`](../src/Include) のみ。`VoidPtr` は `*Byte`（ポインタ幅は **コンパイル対象** に従う: 既定 8、`-actba32` で 4）。
