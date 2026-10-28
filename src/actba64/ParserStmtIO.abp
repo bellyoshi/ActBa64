@@ -2,6 +2,10 @@
 '  ParserStmtIO - stmt lists / Print / File IO
 ' ===================================================
 
+' Print 項目の直後。1 は ;（空白1文字）、2 は ,（タブ）
+Const PRINT_SEP_SEMI = 1
+Const PRINT_SEP_COMMA = 2
+
 Function ParseStmtListUntil(p As *Parser, stop1 As *Byte, stop2 As *Byte) As Long
     Dim nFirst As Long
     Dim nPrev As Long
@@ -117,77 +121,98 @@ Function ParseIoExprCanStart(p As *Parser) As boolean
     End If
 End Function
 
+Sub ParseIoLink(nodes As *AstNode, nArg As Long, e As Long, ByRef nFirst As Long, ByRef nPrev As Long)
+    nodes[nArg].left = e
+    If nFirst < 0 Then
+        nFirst = nArg
+    Else
+        nodes[nPrev].nxt = nArg
+    End If
+    nPrev = nArg
+End Sub
+
+Function ParseIoArgNode(ast As *Ast, e As Long, ByRef nFirst As Long, ByRef nPrev As Long) As boolean
+    Dim nArg As Long
+    ParseIoArgNode = false
+    nArg = AstAddNode(ast, AST_ARG)
+    If nArg < 0 Then Exit Function
+    ParseIoLink(ast->nodes, nArg, e, nFirst, nPrev)
+    ParseIoArgNode = true
+End Function
+
+Function ParseIoComma(p As *Parser, nodes As *AstNode, nArg As Long) As Long
+    ParseIoComma = 0
+    If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    nodes[nArg].num = PRINT_SEP_COMMA
+    ParseIoComma = 1
+End Function
+
+' セミコロンの次が同じ行の項目でなければ true（文末の ; は戻す）
+Function ParseIoSemiRewind(p As *Parser, srcLine As Long) As boolean
+    ParseIoSemiRewind = true
+    If Not ParseIoExprCanStart(p) Then Exit Function
+    If ParseTokLine(p) <> srcLine Then Exit Function
+    ParseIoSemiRewind = false
+End Function
+
+Function ParseIoSemiKeep(p As *Parser, nodes As *AstNode, nArg As Long, srcLine As Long) As Long
+    ParseIoSemiKeep = 0
+    If ParseIoSemiRewind(p, srcLine) Then
+        p->pos = p->pos - 1
+        Exit Function
+    End If
+    nodes[nArg].num = PRINT_SEP_SEMI
+    ParseIoSemiKeep = 1
+End Function
+
+Function ParseIoSemi(p As *Parser, nodes As *AstNode, nArg As Long) As Long
+    Dim srcLine As Long
+    ParseIoSemi = 0
+    If ParseTokKind(p) <> TK_SEMI Then Exit Function
+    srcLine = ParseTokLine(p)
+    p->pos = p->pos + 1
+    ParseIoSemi = ParseIoSemiKeep(p, nodes, nArg, srcLine)
+End Function
+
+Function ParseIoTakeSep(p As *Parser, nodes As *AstNode, nArg As Long) As Long
+    ParseIoTakeSep = ParseIoComma(p, nodes, nArg)
+    If ParseIoTakeSep <> 0 Then Exit Function
+    ParseIoTakeSep = ParseIoSemi(p, nodes, nArg)
+End Function
+
+' 1 項目。1=続く  0=終わり  -1=エラー
+Function ParseIoExprStep(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long) As Long
+    Dim e As Long
+    Dim nodes As *AstNode
+    ParseIoExprStep = -1
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    If Not ParseIoArgNode(ast, e, nFirst, nPrev) Then Exit Function
+    nodes = ast->nodes
+    ParseIoExprStep = ParseIoTakeSep(p, nodes, nPrev)
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParseIoExprArgs(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long) As boolean
-    Dim nodes As *AstNode
-    Dim nArg As Long
-    Dim e As Long
-    Dim semiLine As Long
-
+    Dim step As Long
     ParseIoExprArgs = false
     Do
-        e = ParseExpr(p)
-        If e < 0 Then Exit Function
-        nArg = AstAddNode(ast, AST_ARG)
-        If nArg < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[nArg].left = e
-        If nFirst < 0 Then
-            nFirst = nArg
-        Else
-            nodes[nPrev].nxt = nArg
-        End If
-        nPrev = nArg
-        If ParseTokKind(p) = TK_COMMA Then
-            p->pos = p->pos + 1
-        ElseIf ParseTokKind(p) = TK_SEMI Then
-            ' same-line ";" separates items; EOL ";" is Print stay
-            semiLine = ParseTokLine(p)
-            p->pos = p->pos + 1
-            If Not ParseIoExprCanStart(p) Then
-                p->pos = p->pos - 1
-                Exit Do
-            End If
-            If ParseTokLine(p) <> semiLine Then
-                p->pos = p->pos - 1
-                Exit Do
-            End If
-        Else
-            Exit Do
-        End If
+        step = ParseIoExprStep(p, ast, nFirst, nPrev)
+        If step < 0 Then Exit Function
+        If step = 0 Then Exit Do
     Loop
     ParseIoExprArgs = true
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParsePrintItems(p As *Parser, ByRef nFirst As Long) As boolean
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    Dim nArg As Long
     Dim nPrev As Long
-    Dim e As Long
-
-    ParsePrintItems = false
+    ParsePrintItems = true
     nFirst = -1
     nPrev = -1
-    If ParseTokKind(p) = TK_LPAREN Then
-        p->pos = p->pos + 1
-        e = ParseExpr(p)
-        If e < 0 Then Exit Function
-        If Not ParseExpect(p, TK_RPAREN) Then Exit Function
-        ast = p->ast
-        nArg = AstAddNode(ast, AST_ARG)
-        If nArg < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[nArg].left = e
-        nFirst = nArg
-    ElseIf ParseTokKind(p) <> TK_SEMI Then
-        If ParseTokKind(p) = TK_NUMBER Or ParseTokKind(p) = TK_FLOAT Or ParseTokKind(p) = TK_STRING Or ParseTokKind(p) = TK_IDENT Or ParseTokKind(p) = TK_LPAREN Or ParseTokKind(p) = TK_MINUS Or ParseTokKind(p) = TK_PLUS Then
-            ast = p->ast
-            If Not ParseIoExprArgs(p, ast, nFirst, nPrev) Then Exit Function
-        End If
-    End If
-    ParsePrintItems = true
+    If ParseTokKind(p) = TK_SEMI Or Not ParseIoExprCanStart(p) Then Exit Function
+    ParsePrintItems = ParseIoExprArgs(p, p->ast, nFirst, nPrev)
 End Function
 
 Function ParsePrintStmt(p As *Parser) As Long
@@ -259,16 +284,19 @@ Function ParseInputFileVars(p As *Parser) As Long
     ParseInputFileVars = nInput
 End Function
 
-' プロンプトと変数の区切り。N88 は ';'、ActiveBasic は ','
-Function ParseInputSep(p As *Parser) As boolean
-    ParseInputSep = false
-    If ParseTokKind(p) = TK_COMMA Then ParseInputSep = true
-    If ParseTokKind(p) = TK_SEMI Then ParseInputSep = true
-    If Not ParseInputSep Then
-        ParseFail(p, "expected ',' or ';'")
-        Exit Function
-    End If
+' 1=カンマ  2=セミコロン（? を出す）  0=失敗
+Function ParseInputSepKind(p As *Parser) As Long
+    ParseInputSepKind = 0
+    If ParseTokKind(p) = TK_COMMA Then ParseInputSepKind = 1
+    If ParseTokKind(p) = TK_SEMI Then ParseInputSepKind = 2
+    If ParseInputSepKind = 0 Then ParseFail(p, "expected ',' or ';'")
+    If ParseInputSepKind = 0 Then Exit Function
     p->pos = p->pos + 1
+End Function
+
+Function ParseInputSemiBit(kind As Long) As Long
+    ParseInputSemiBit = 0
+    If kind = 2 Then ParseInputSemiBit = 1
 End Function
 
 Function ParseInputVarNode(p As *Parser) As Long
@@ -282,15 +310,20 @@ Function ParseInputVarNode(p As *Parser) As Long
     AstSetStr(ast, ParseInputVarNode, VarPtr(name))
 End Function
 
-Function ParseInputLink(ast As *Ast, nPrompt As Long, nVar As Long) As Long
+Sub ParseInputBind(nodes As *AstNode, nInput As Long, nPrompt As Long, nVar As Long, semi As Long)
+    nodes[nInput].left = nPrompt
+    nodes[nInput].right = nVar
+    nodes[nInput].num = semi
+End Sub
+
+Function ParseInputLink(ast As *Ast, nPrompt As Long, nVar As Long, semi As Long) As Long
     Dim nodes As *AstNode
     Dim nInput As Long
     nInput = AstAddNode(ast, AST_INPUT)
     ParseInputLink = nInput
     If nInput < 0 Then Exit Function
     nodes = ast->nodes
-    nodes[nInput].left = nPrompt
-    nodes[nInput].right = nVar
+    ParseInputBind(nodes, nInput, nPrompt, nVar, semi)
 End Function
 
 Function ParseInputEatComma(p As *Parser) As boolean
@@ -321,15 +354,23 @@ Function ParseInputVarTail(p As *Parser, nPrev As Long) As Long
     ParseInputVarTail = ParseInputVarTail(p, nVar)
 End Function
 
-Function ParseInputAfterSep(p As *Parser, nPrompt As Long) As Long
-    Dim nVar As Long
-    ParseInputAfterSep = -1
-    If nPrompt < 0 Then Exit Function
-    If Not ParseInputSep(p) Then Exit Function
+Function ParseInputVars(p As *Parser, ByRef nVar As Long) As boolean
+    ParseInputVars = false
     nVar = ParseInputVarNode(p)
     If nVar < 0 Then Exit Function
     If ParseInputVarTail(p, nVar) < 0 Then Exit Function
-    ParseInputAfterSep = ParseInputLink(p->ast, nPrompt, nVar)
+    ParseInputVars = true
+End Function
+
+Function ParseInputAfterSep(p As *Parser, nPrompt As Long) As Long
+    Dim nVar As Long
+    Dim kind As Long
+    ParseInputAfterSep = -1
+    If nPrompt < 0 Then Exit Function
+    kind = ParseInputSepKind(p)
+    If kind = 0 Then Exit Function
+    If Not ParseInputVars(p, nVar) Then Exit Function
+    ParseInputAfterSep = ParseInputLink(p->ast, nPrompt, nVar, ParseInputSemiBit(kind))
 End Function
 
 Function ParseInputPrompt(p As *Parser) As Long

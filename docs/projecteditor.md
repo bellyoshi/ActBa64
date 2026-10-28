@@ -196,7 +196,7 @@ CSV は UTF-8 の `id,text` です。空行と、`#` `;` `[` で始まる行は�
 | `"` で囲んだ文字列 | 赤 `RGB(163, 21, 21)` |
 | それ以外（数値を含む） | 黒 |
 
-キーワードとして色を付ける語は、`and` `or` `xor` `mod`、`if` `then` `elseif` `else` `end`、`dim` `const` `typedef` `type`、`sub` `function` `declare` `lib` `alias`、`while` `wend` `for` `next`、`do` `loop` `until` `select` `case`、`exit` `return` `print` `input`、`as` `byref` `byval` `to` `step`、`varptr` `addressof` `sizeof`、`long` `byte` `word` `string` `integer` `dword`、`hwnd` `hdc` `true` `false` `null`、`line` `circle` `sleep` `locate` `paint`、`class` `public` `private`、`sin` `cos` `tan` `abs` `sqr` `atn` です。大小は区別しません。`$` で終わる名前も 1 語として見ます。
+キーワードとして色を付ける語は、exe と同じディレクトリの `keywords.txt` です。1 行に 1 語で、大小は区別しません。空行と、`'` または `;` で始まる行は読み飛ばします。ファイルが無いときはキーワード色を付けません。`$` で終わる名前も 1 語として見ます。
 
 `#` 指令として青くするのは `#n88basic` `#prompt` `#console` `#strict` `#include` `#usewindow` です。
 

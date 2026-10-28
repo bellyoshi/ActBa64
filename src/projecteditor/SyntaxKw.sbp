@@ -1,0 +1,196 @@
+' SyntaxKw - keywords.txt（exe と同じディレクトリ）をハイライト予約語にする
+
+Const HL_KW_MAX = 8191
+
+Dim g_hlKw(8191) As Byte
+Dim g_hlKwLen As Long
+Dim g_hlKwReady As Long
+
+Function HlKw_Path$() As String
+    Dim dir As String
+    dir = EditorBuild_ExeDir$()
+    If Len(dir) = 0 Then
+        HlKw_Path$ = "keywords.txt"
+    Else
+        HlKw_Path$ = dir + "keywords.txt"
+    End If
+End Function
+
+Sub HlKw_Ensure()
+    Dim raw As String
+    If g_hlKwReady <> 0 Then Exit Sub
+    g_hlKwReady = 1
+    raw = UiLang_ReadFile$(HlKw_Path$())
+    HlKw_Store(raw)
+End Sub
+
+Sub HlKw_Store(raw As String)
+    Dim p As *Byte
+    Dim n As Long
+    g_hlKwLen = 0
+    n = Len(raw)
+    If n <= 0 Then Exit Sub
+    p = StrPtr(raw)
+    HlKw_Walk(p, n)
+End Sub
+
+Sub HlKw_Walk(p As *Byte, ByVal n As Long)
+    Dim i As Long
+    i = 0
+    While i < n
+        i = HlKw_Step(p, n, i)
+    Wend
+End Sub
+
+Function HlKw_IsSkip(ByVal b As Long) As Long
+    HlKw_IsSkip = 0
+    If b = 32 Or b = 9 Or b = 13 Or b = 10 Then HlKw_IsSkip = 1
+End Function
+
+Function HlKw_Step(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    Dim b As Long
+    b = 0
+    If i < n Then b = p[i] And &HFF
+    If i >= n Or HlKw_IsSkip(b) <> 0 Then
+        HlKw_Step = i + 1
+        Exit Function
+    End If
+    HlKw_Step = HlKw_Take(p, n, i)
+End Function
+
+Function HlKw_Take(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    Dim b As Long
+    b = p[i] And &HFF
+    If b = 39 Or b = 59 Then
+        HlKw_Take = HlKw_SkipLine(p, n, i)
+        Exit Function
+    End If
+    HlKw_Take = HlKw_CopyWord(p, n, i)
+End Function
+
+Function HlKw_SkipLine(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    Dim b As Long
+    While i < n
+        b = p[i] And &HFF
+        i = i + 1
+        If b = 10 Then Exit While
+    Wend
+    HlKw_SkipLine = i
+End Function
+
+Function HlKw_CopyWord(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    i = HlKw_CopyBytes(p, n, i)
+    HlKw_PushByte(10)
+    HlKw_CopyWord = i
+End Function
+
+Function HlKw_CopyBytes(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    Dim b As Long
+    While i < n
+        b = p[i] And &HFF
+        If HlKw_IsSkip(b) <> 0 Then Exit While
+        HlKw_PushLower(b)
+        i = i + 1
+    Wend
+    HlKw_CopyBytes = i
+End Function
+
+Sub HlKw_PushLower(ByVal b As Long)
+    If b >= 65 And b <= 90 Then b = b + 32
+    HlKw_PushByte(b)
+End Sub
+
+Sub HlKw_PushByte(ByVal b As Long)
+    Dim ch As Byte
+    If g_hlKwLen >= HL_KW_MAX Then Exit Sub
+    ch = b As Byte
+    g_hlKw[g_hlKwLen] = ch
+    g_hlKwLen = g_hlKwLen + 1
+    ch = 0 As Byte
+    g_hlKw[g_hlKwLen] = ch
+End Sub
+
+Function HlKw_Find(kw As String) As Long
+    Dim p As *Byte
+    Dim i As Long
+    HlKw_Find = 0
+    If g_hlKwLen <= 0 Then Exit Function
+    p = StrPtr(kw)
+    i = 0
+    HlKw_Find = HlKw_Scan(p, Len(kw), i)
+End Function
+
+Function HlKw_Scan(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    HlKw_Scan = 0
+    While i < g_hlKwLen
+        If HlKw_EqLine(p, n, i) <> 0 Then
+            HlKw_Scan = 1
+            Exit Function
+        End If
+        i = HlKw_NextLine(i)
+    Wend
+End Function
+
+Function HlKw_NextLine(ByVal i As Long) As Long
+    Dim b As Long
+    While i < g_hlKwLen
+        b = g_hlKw[i] And &HFF
+        i = i + 1
+        If b = 10 Then Exit While
+    Wend
+    HlKw_NextLine = i
+End Function
+
+Function HlKw_EqLine(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    Dim k As Long
+    k = HlKw_Match(p, n, i)
+    If k < 0 Then
+        HlKw_EqLine = 0
+        Exit Function
+    End If
+    HlKw_EqLine = HlKw_AtEnd(i + n)
+End Function
+
+Function HlKw_Match(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    Dim k As Long
+    k = HlKw_Count(p, n, i)
+    HlKw_Match = HlKw_Full(n, k)
+End Function
+
+Function HlKw_Count(p As *Byte, ByVal n As Long, ByVal i As Long) As Long
+    Dim k As Long
+    k = 0
+    While HlKw_More(n, i, k) <> 0
+        If HlKw_ByteAt(i + k) <> HlKw_ByteAtP(p, k) Then Exit While
+        k = k + 1
+    Wend
+    HlKw_Count = k
+End Function
+
+Function HlKw_More(ByVal n As Long, ByVal i As Long, ByVal k As Long) As Long
+    HlKw_More = 0
+    If k >= n Then Exit Function
+    If i + k >= g_hlKwLen Then Exit Function
+    HlKw_More = 1
+End Function
+
+Function HlKw_Full(ByVal n As Long, ByVal k As Long) As Long
+    HlKw_Full = -1
+    If k = n Then HlKw_Full = k
+End Function
+
+Function HlKw_ByteAt(ByVal i As Long) As Long
+    HlKw_ByteAt = g_hlKw[i] And &HFF
+End Function
+
+Function HlKw_ByteAtP(p As *Byte, ByVal k As Long) As Long
+    HlKw_ByteAtP = p[k] And &HFF
+End Function
+
+Function HlKw_AtEnd(ByVal i As Long) As Long
+    Dim b As Long
+    HlKw_AtEnd = 0
+    If i >= g_hlKwLen Then Exit Function
+    b = g_hlKw[i] And &HFF
+    If b = 10 Or b = 0 Then HlKw_AtEnd = 1
+End Function

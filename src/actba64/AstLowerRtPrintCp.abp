@@ -1,0 +1,224 @@
+' AstLowerRtPrintCp - コンソール画面の Print だけ CP932 へ
+' パイプやファイルへは UTF-8 のまま（診断の照合が壊れない）
+' -8 元 UTF-8、-24 長さ、-48 ワイド、-56 文字数、-64 CP932、-72 バイト数
+
+Sub LowEmitArgImm(list As *IrList, slot As Long, imm As Long)
+    Dim off As Long
+    off = slot * TyPtrSize()
+    IrEmit(list, OP_MOV_EAX_IMM, imm, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, off, 0)
+End Sub
+
+Sub LowEmitArgLocal(list As *IrList, slot As Long, disp As Long)
+    Dim off As Long
+    off = slot * TyPtrSize()
+    IrEmit(list, OP_LOAD_LOCAL, disp, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, off, 0)
+End Sub
+
+Sub LowEmitApiBegin(list As *IrList, nArgs As Long)
+    Dim callBytes As Long
+    callBytes = LowCallBytes(nArgs)
+    If callBytes > 0 Then IrEmit(list, OP_SUB_RSP, callBytes, 0)
+End Sub
+
+Sub LowEmitApiEnd(list As *IrList, nArgs As Long, api As *Byte)
+    Dim callBytes As Long
+    callBytes = LowCallBytes(nArgs)
+    LowEmitLoadRegArgs(list, nArgs)
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, api)
+    LowEmitCallFinish(list, callBytes)
+End Sub
+
+Sub LowEmitConsoleCp(list As *IrList)
+    Dim api(NAME32_LEN - 1) As Byte
+    lstrcpy(VarPtr(api), "GetConsoleOutputCP")
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, VarPtr(api))
+End Sub
+
+Sub LowEmitJne932(list As *IrList, lab As Long)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 932, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, lab, 0)
+End Sub
+
+Sub LowEmitJle(list As *IrList, lab As Long)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JLE, lab, 0)
+End Sub
+
+Sub LowEmitJz(list As *IrList, lab As Long)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, lab, 0)
+End Sub
+
+Sub LowEmitMb2WcHead(list As *IrList)
+    LowEmitApiBegin(list, 6)
+    LowEmitArgImm(list, 0, 65001)
+    LowEmitArgImm(list, 1, 0)
+    LowEmitArgLocal(list, 2, -8)
+    LowEmitArgLocal(list, 3, -24)
+End Sub
+
+Sub LowEmitMb2WcQuery(list As *IrList)
+    Dim api(NAME32_LEN - 1) As Byte
+    LowEmitMb2WcHead(list)
+    LowEmitArgImm(list, 4, 0)
+    LowEmitArgImm(list, 5, 0)
+    lstrcpy(VarPtr(api), "MultiByteToWideChar")
+    LowEmitApiEnd(list, 6, VarPtr(api))
+End Sub
+
+Sub LowEmitMb2WcStore(list As *IrList)
+    Dim api(NAME32_LEN - 1) As Byte
+    LowEmitMb2WcHead(list)
+    LowEmitArgLocal(list, 4, -48)
+    LowEmitArgLocal(list, 5, -56)
+    lstrcpy(VarPtr(api), "MultiByteToWideChar")
+    LowEmitApiEnd(list, 6, VarPtr(api))
+End Sub
+
+Sub LowEmitWc2MbHead(list As *IrList)
+    LowEmitApiBegin(list, 8)
+    LowEmitArgImm(list, 0, 932)
+    LowEmitArgImm(list, 1, 0)
+    LowEmitArgLocal(list, 2, -48)
+    LowEmitArgLocal(list, 3, -56)
+End Sub
+
+Sub LowEmitWc2MbQuery(list As *IrList)
+    Dim api(NAME32_LEN - 1) As Byte
+    LowEmitWc2MbHead(list)
+    LowEmitArgImm(list, 4, 0)
+    LowEmitArgImm(list, 5, 0)
+    LowEmitArgImm(list, 6, 0)
+    LowEmitArgImm(list, 7, 0)
+    lstrcpy(VarPtr(api), "WideCharToMultiByte")
+    LowEmitApiEnd(list, 8, VarPtr(api))
+End Sub
+
+Sub LowEmitWc2MbStore(list As *IrList)
+    Dim api(NAME32_LEN - 1) As Byte
+    LowEmitWc2MbHead(list)
+    LowEmitArgLocal(list, 4, -64)
+    LowEmitArgLocal(list, 5, -72)
+    LowEmitArgImm(list, 6, 0)
+    LowEmitArgImm(list, 7, 0)
+    lstrcpy(VarPtr(api), "WideCharToMultiByte")
+    LowEmitApiEnd(list, 8, VarPtr(api))
+End Sub
+
+Sub LowEmitWideBytes(list As *IrList)
+    IrEmit(list, OP_LOAD_LOCAL, -56, 0)
+    IrEmit(list, OP_MOV_ECX_EAX, 0, 0)
+    IrEmit(list, OP_ADD_EAX_ECX, 0, 0)
+End Sub
+
+Sub LowEmitHeapToLocal(list As *IrList, disp As Long)
+    LowEmitHeapAllocRax(list, 0)
+    IrEmit(list, OP_STORE_LOCAL, disp, 0)
+End Sub
+
+Sub LowEmitFreeLocal(list As *IrList, disp As Long)
+    IrEmit(list, OP_LOAD_LOCAL, disp, 0)
+    LowEmitHeapFreeRax(list)
+End Sub
+
+Sub LowEmitUseConverted(list As *IrList)
+    IrEmit(list, OP_STORE_LOCAL, -24, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -64, 0)
+    IrEmit(list, OP_STORE_LOCAL, -8, 0)
+End Sub
+
+Sub LowEmitFileType(list As *IrList)
+    Dim api(NAME32_LEN - 1) As Byte
+    LowEmitApiBegin(list, 1)
+    LowEmitArgLocal(list, 0, -16)
+    lstrcpy(VarPtr(api), "GetFileType")
+    LowEmitApiEnd(list, 1, VarPtr(api))
+End Sub
+
+Sub LowEmitJneChar(list As *IrList, lab As Long)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, 2, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JNE, lab, 0)
+End Sub
+
+Sub LowEmitCpQueryWide(list As *IrList, labRaw As Long)
+    LowEmitFileType(list)
+    LowEmitJneChar(list, labRaw)
+    LowEmitConsoleCp(list)
+    LowEmitJne932(list, labRaw)
+    LowEmitMb2WcQuery(list)
+    LowEmitJle(list, labRaw)
+    IrEmit(list, OP_STORE_LOCAL, -56, 0)
+End Sub
+
+Sub LowEmitCpAllocWide(list As *IrList, labRaw As Long, labFreeWide As Long)
+    LowEmitWideBytes(list)
+    LowEmitHeapToLocal(list, -48)
+    LowEmitJz(list, labRaw)
+    LowEmitMb2WcStore(list)
+    LowEmitJle(list, labFreeWide)
+End Sub
+
+Sub LowEmitCpQuerySjis(list As *IrList, labFreeWide As Long)
+    LowEmitWc2MbQuery(list)
+    LowEmitJle(list, labFreeWide)
+    IrEmit(list, OP_STORE_LOCAL, -72, 0)
+End Sub
+
+Sub LowEmitCpAllocSjis(list As *IrList, labFreeWide As Long, labFreeBoth As Long)
+    IrEmit(list, OP_LOAD_LOCAL, -72, 0)
+    LowEmitHeapToLocal(list, -64)
+    LowEmitJz(list, labFreeWide)
+    LowEmitWc2MbStore(list)
+    LowEmitJle(list, labFreeBoth)
+End Sub
+
+Sub LowEmitCpCommit(list As *IrList, labDone As Long)
+    LowEmitUseConverted(list)
+    LowEmitRtPrintWrite(list)
+    LowEmitFreeLocal(list, -64)
+    LowEmitFreeLocal(list, -48)
+    IrEmit(list, OP_JMP, labDone, 0)
+End Sub
+
+Sub LowEmitCpFail(list As *IrList, labRaw As Long, labFreeWide As Long, labFreeBoth As Long)
+    IrEmit(list, OP_LABEL, labFreeBoth, 0)
+    LowEmitFreeLocal(list, -64)
+    IrEmit(list, OP_LABEL, labFreeWide, 0)
+    LowEmitFreeLocal(list, -48)
+    IrEmit(list, OP_LABEL, labRaw, 0)
+    LowEmitRtPrintWrite(list)
+End Sub
+
+Sub LowEmitCpConvert(list As *IrList, labRaw As Long, labWide As Long, labBoth As Long, labDone As Long)
+    LowEmitCpQueryWide(list, labRaw)
+    LowEmitCpAllocWide(list, labRaw, labWide)
+    LowEmitCpQuerySjis(list, labWide)
+    LowEmitCpAllocSjis(list, labWide, labBoth)
+    LowEmitCpCommit(list, labDone)
+    LowEmitCpFail(list, labRaw, labWide, labBoth)
+End Sub
+
+Sub LowEmitCpLabs(ctx As *LowerCtx, ByRef labRaw As Long, ByRef labWide As Long, ByRef labBoth As Long, ByRef labDone As Long)
+    labRaw = LowNewLabel(ctx)
+    labWide = LowNewLabel(ctx)
+    labBoth = LowNewLabel(ctx)
+    labDone = LowNewLabel(ctx)
+End Sub
+
+Sub LowEmitRtPrintWriteCp(ctx As *LowerCtx, list As *IrList)
+    Dim labRaw As Long
+    Dim labWide As Long
+    Dim labBoth As Long
+    Dim labDone As Long
+    LowEmitCpLabs(ctx, labRaw, labWide, labBoth, labDone)
+    LowEmitCpConvert(list, labRaw, labWide, labBoth, labDone)
+    IrEmit(list, OP_LABEL, labDone, 0)
+End Sub

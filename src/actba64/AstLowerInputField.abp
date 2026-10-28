@@ -148,10 +148,148 @@ Function LowStmtInputFields(ctx As *LowerCtx, nVarIdx As Long, lab As Long) As L
     LowStmtInputFields = 1
 End Function
 
-Function LowStmtInputAll(ctx As *LowerCtx, nVarIdx As Long, lab As Long) As Long
-    If LowInputIsMulti(ctx, nVarIdx) = 0 Then
-        LowStmtInputAll = LowStmtInputList(ctx, nVarIdx, lab)
+Function LowInputCount(ctx As *LowerCtx, cur As Long) As Long
+    Dim nxt As Long
+    LowInputCount = 0
+    If cur < 0 Then Exit Function
+    nxt = LowInputNext(ctx, cur)
+    LowInputCount = LowInputCount(ctx, nxt) + 1
+End Function
+
+Function LowEmitStayStr(ctx As *LowerCtx) As boolean
+    Dim lab As Long
+    lab = LowEnsureRtPrintStay(ctx)
+    LowEmitStayStr = false
+    If lab < 0 Then Exit Function
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitStayStr = true
+End Function
+
+Function LowEmitQBuf(ctx As *LowerCtx) As boolean
+    Dim buf(2) As Byte
+    buf[0] = 63
+    buf[1] = CH_SP
+    buf[2] = 0
+    LowEmitQBuf = false
+    IrEmitStr(ctx->list, OP_LEA_RAX_STR, 0, VarPtr(buf))
+    LowEmitQBuf = LowEmitMakeStrRax(ctx)
+End Function
+
+' セミコロン区切りのときだけ "? " を出す
+Function LowEmitInputMark(ctx As *LowerCtx, semi As Long) As boolean
+    LowEmitInputMark = true
+    If semi = 0 Then Exit Function
+    If Not LowEmitQBuf(ctx) Then
+        LowEmitInputMark = false
         Exit Function
     End If
-    LowStmtInputAll = LowStmtInputFields(ctx, nVarIdx, lab)
+    LowEmitInputMark = LowEmitStayStr(ctx)
+End Function
+
+Function LowEmitInputAsk(ctx As *LowerCtx, nPrompt As Long, semi As Long) As boolean
+    LowEmitInputAsk = false
+    If Not LowStmtInputPrompt(ctx, nPrompt) Then Exit Function
+    LowEmitInputAsk = LowEmitInputMark(ctx, semi)
+End Function
+
+Function LowEmitRedoText(ctx As *LowerCtx) As boolean
+    Dim msg(63) As Byte
+    lstrcpy(VarPtr(msg), "入力データの個数が足りません")
+    LowEmitRedoText = false
+    IrEmitStr(ctx->list, OP_LEA_RAX_STR, 0, VarPtr(msg))
+    LowEmitRedoText = LowEmitMakeStrRax(ctx)
+End Function
+
+Function LowEmitRedoLine(ctx As *LowerCtx) As boolean
+    Dim lab As Long
+    LowEmitRedoLine = false
+    If Not LowEmitRedoText(ctx) Then Exit Function
+    lab = LowEnsureRtPrint(ctx)
+    If lab < 0 Then Exit Function
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitRedoLine = true
+End Function
+
+Function LowEmitFieldCount(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "InHoldFields")
+    LowEmitFieldCount = LowCallName0(ctx, VarPtr(name))
+End Function
+
+Sub LowEmitJgeImm(list As *IrList, imm As Long, lab As Long)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, imm, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(list, OP_JGE, lab, 0)
+End Sub
+
+Function LowEmitInputShort(ctx As *LowerCtx, nVars As Long, labOk As Long) As Long
+    LowEmitInputShort = 0
+    If LowEmitFieldCount(ctx) < 0 Then Exit Function
+    LowEmitJgeImm(ctx->list, nVars, labOk)
+    LowEmitInputShort = 1
+End Function
+
+Function LowEmitInputRetry(ctx As *LowerCtx, nVars As Long, labTop As Long, labOk As Long) As Long
+    LowEmitInputRetry = 0
+    If LowEmitInputShort(ctx, nVars, labOk) = 0 Then Exit Function
+    If Not LowEmitRedoLine(ctx) Then Exit Function
+    IrEmit(ctx->list, OP_JMP, labTop, 0)
+    IrEmit(ctx->list, OP_LABEL, labOk, 0)
+    LowEmitInputRetry = 1
+End Function
+
+Function LowEmitReadHold(ctx As *LowerCtx, labIn As Long) As Long
+    Dim labSkip As Long
+    labSkip = LowNewLabel(ctx)
+    LowEmitReadHold = LowEmitFillIfEmpty(ctx, labIn, labSkip)
+End Function
+
+Function LowEmitInputHead(ctx As *LowerCtx, nPrompt As Long, semi As Long, labIn As Long) As Long
+    LowEmitInputHead = 0
+    If Not LowEmitInputAsk(ctx, nPrompt, semi) Then Exit Function
+    If LowCallIn(ctx, LOW_IN_RESET) < 0 Then Exit Function
+    LowEmitInputHead = LowEmitReadHold(ctx, labIn)
+End Function
+
+Function LowStmtInputMultiOpen(ctx As *LowerCtx, ByRef labTop As Long, ByRef labOk As Long, ByRef nVars As Long, nVarIdx As Long) As Long
+    labTop = LowNewLabel(ctx)
+    labOk = LowNewLabel(ctx)
+    nVars = LowInputCount(ctx, nVarIdx)
+    IrEmit(ctx->list, OP_LABEL, labTop, 0)
+    LowStmtInputMultiOpen = 1
+End Function
+
+Function LowStmtInputMultiBody(ctx As *LowerCtx, nVarIdx As Long, labIn As Long) As Long
+    LowStmtInputMultiBody = 0
+    If LowStmtInputFieldList(ctx, nVarIdx, labIn) = 0 Then Exit Function
+    If LowCallIn(ctx, LOW_IN_RESET) < 0 Then Exit Function
+    LowStmtInputMultiBody = 1
+End Function
+
+Function LowStmtInputMulti(ctx As *LowerCtx, nVarIdx As Long, nPrompt As Long, semi As Long, labIn As Long) As Long
+    Dim labTop As Long
+    Dim labOk As Long
+    Dim nVars As Long
+    LowStmtInputMulti = 0
+    LowStmtInputMultiOpen(ctx, labTop, labOk, nVars, nVarIdx)
+    If LowEmitInputHead(ctx, nPrompt, semi, labIn) = 0 Then Exit Function
+    If LowEmitInputRetry(ctx, nVars, labTop, labOk) = 0 Then Exit Function
+    LowStmtInputMulti = LowStmtInputMultiBody(ctx, nVarIdx, labIn)
+End Function
+
+Function LowStmtInputSingle(ctx As *LowerCtx, nVarIdx As Long, lab As Long, nPrompt As Long, semi As Long) As Long
+    LowStmtInputSingle = 0
+    If Not LowStmtInputPrompt(ctx, nPrompt) Then Exit Function
+    If Not LowEmitInputMark(ctx, semi) Then Exit Function
+    LowStmtInputSingle = LowStmtInputList(ctx, nVarIdx, lab)
+End Function
+
+Function LowStmtInputAll(ctx As *LowerCtx, nVarIdx As Long, lab As Long, nPrompt As Long, semi As Long) As Long
+    If LowInputIsMulti(ctx, nVarIdx) = 0 Then
+        LowStmtInputAll = LowStmtInputSingle(ctx, nVarIdx, lab, nPrompt, semi)
+        Exit Function
+    End If
+    LowStmtInputAll = LowStmtInputMulti(ctx, nVarIdx, nPrompt, semi, lab)
 End Function
