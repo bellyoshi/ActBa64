@@ -1,0 +1,201 @@
+' SrcEnc - ソースを内部 UTF-8 にする
+' 妥当な UTF-8 はそのまま（BOM は外す）。それ以外は CP932 とみなす。
+
+Function SrcUtf8Cont(b As Long) As Long
+    SrcUtf8Cont = 0
+    If b >= &H80 And b <= &HBF Then SrcUtf8Cont = 1
+End Function
+
+Function SrcUtf8Len(b As Long) As Long
+    SrcUtf8Len = 1
+    If b >= &HC2 And b <= &HDF Then SrcUtf8Len = 2
+    If b >= &HE0 And b <= &HEF Then SrcUtf8Len = 3
+    If b >= &HF0 And b <= &HF4 Then SrcUtf8Len = 4
+    If b >= &H80 And SrcUtf8Len = 1 Then SrcUtf8Len = 0
+End Function
+
+Function SrcLeadOk(b0 As Long, b1 As Long, count As Long) As Long
+    SrcLeadOk = 1
+    If count = 3 And b0 = &HE0 And b1 < &HA0 Then SrcLeadOk = 0
+    If count = 3 And b0 = &HED And b1 >= &HA0 Then SrcLeadOk = 0
+    If count = 4 And b0 = &HF0 And b1 < &H90 Then SrcLeadOk = 0
+    If count = 4 And b0 = &HF4 And b1 > &H8F Then SrcLeadOk = 0
+End Function
+
+Function SrcContOkAt(p As *Byte, left As Long, count As Long) As Long
+    Dim j As Long
+    SrcContOkAt = 0
+    If count < 1 Or count > left Then Exit Function
+    For j = 1 To count - 1
+        If SrcUtf8Cont(p[j]) = 0 Then Exit Function
+    Next
+    SrcContOkAt = 1
+End Function
+
+Function SrcStepAt(p As *Byte, left As Long) As Long
+    Dim count As Long
+    SrcStepAt = 0
+    count = SrcUtf8Len(p[0])
+    If SrcContOkAt(p, left, count) = 0 Then Exit Function
+    SrcStepAt = count
+    If count < 2 Then Exit Function
+    If SrcLeadOk(p[0], p[1], count) = 0 Then SrcStepAt = 0
+End Function
+
+Function SrcEat(ByRef p As *Byte, ByRef left As Long) As Long
+    Dim adv As Long
+    SrcEat = 0
+    adv = SrcStepAt(p, left)
+    If adv < 1 Then Exit Function
+    PtrAddTo(p, adv, p)
+    left = left - adv
+    SrcEat = 1
+End Function
+
+Function SrcIsUtf8(raw As *Byte, n As Long) As Long
+    Dim p As *Byte
+    Dim left As Long
+    p = raw
+    left = n
+    SrcIsUtf8 = 1
+    While left > 0 And SrcIsUtf8 <> 0
+        If SrcEat(p, left) = 0 Then SrcIsUtf8 = 0
+    Wend
+End Function
+
+Function SrcHasBom(raw As *Byte, n As Long) As Long
+    SrcHasBom = 0
+    If n < 3 Then Exit Function
+    If raw[0] <> &HEF Then Exit Function
+    If raw[1] <> &HBB Then Exit Function
+    If raw[2] <> &HBF Then Exit Function
+    SrcHasBom = 1
+End Function
+
+Function SrcMalloc(n As Long) As *Byte
+    Dim bytes As Long
+    bytes = n
+    AddTo(bytes, 1)
+    SrcMalloc = malloc(bytes)
+End Function
+
+Function SrcAlloc(n As Long) As *Byte
+    Dim out As *Byte
+    Dim tail As *Byte
+    SrcAlloc = 0
+    out = SrcMalloc(n)
+    If out = 0 Then Exit Function
+    PtrAddTo(out, n, tail)
+    tail[0] = 0
+    SrcAlloc = out
+End Function
+
+Sub SrcBlit(dst As *Byte, src As *Byte, skip As Long, m As Long)
+    Dim p As *Byte
+    If m <= 0 Then Exit Sub
+    PtrAddTo(src, skip, p)
+    memcpy(dst, p, m)
+End Sub
+
+Function SrcCopy(raw As *Byte, n As Long, skip As Long) As *Byte
+    Dim out As *Byte
+    Dim m As Long
+    m = n - skip
+    out = SrcAlloc(m)
+    SrcCopy = out
+    If out = 0 Then Exit Function
+    SrcBlit(out, raw, skip, m)
+End Function
+
+Function SrcStripBom(raw As *Byte, ByRef n As Long) As *Byte
+    Dim out As *Byte
+    out = SrcCopy(raw, n, 3)
+    SrcStripBom = raw
+    If out = 0 Then Exit Function
+    n = n - 3
+    free(raw)
+    SrcStripBom = out
+End Function
+
+Function SrcWideLen(raw As *Byte, n As Long) As Long
+    SrcWideLen = MultiByteToWideChar(932, 0, raw, n, 0, 0)
+End Function
+
+Function SrcWideBytes(wideLen As Long) As Long
+    Dim n As Long
+    n = wideLen
+    AddTo(n, 1)
+    n = n * 2
+    SrcWideBytes = n
+End Function
+
+Function SrcToWide(raw As *Byte, n As Long, wideLen As Long) As *Byte
+    Dim wide As *Byte
+    SrcToWide = 0
+    wide = malloc(SrcWideBytes(wideLen))
+    If wide = 0 Then Exit Function
+    SrcToWide = wide
+    If MultiByteToWideChar(932, 0, raw, n, wide As *Word, wideLen) > 0 Then Exit Function
+    free(wide)
+    SrcToWide = 0
+End Function
+
+Function SrcUtf8LenOf(wide As *Byte, wideLen As Long) As Long
+    SrcUtf8LenOf = WideCharToMultiByte(65001, 0, wide As *Word, wideLen, 0, 0, 0, 0)
+End Function
+
+Function SrcWideToUtf8(wide As *Byte, wideLen As Long) As *Byte
+    Dim outLen As Long
+    SrcWideToUtf8 = 0
+    outLen = SrcUtf8LenOf(wide, wideLen)
+    If outLen <= 0 Then Exit Function
+    SrcWideToUtf8 = SrcAlloc(outLen)
+    If SrcWideToUtf8 = 0 Then Exit Function
+    WideCharToMultiByte(65001, 0, wide As *Word, wideLen, SrcWideToUtf8, outLen, 0, 0)
+End Function
+
+Function SrcTakeUtf8(wide As *Byte, wideLen As Long, ByRef outSize As Long) As *Byte
+    SrcTakeUtf8 = SrcWideToUtf8(wide, wideLen)
+    free(wide)
+    If SrcTakeUtf8 = 0 Then Exit Function
+    outSize = lstrlen(SrcTakeUtf8)
+End Function
+
+Function SrcCp932ToUtf8(raw As *Byte, n As Long, ByRef outSize As Long) As *Byte
+    Dim wide As *Byte
+    Dim wideLen As Long
+    SrcCp932ToUtf8 = 0
+    wideLen = SrcWideLen(raw, n)
+    If wideLen <= 0 Then Exit Function
+    wide = SrcToWide(raw, n, wideLen)
+    If wide = 0 Then Exit Function
+    SrcCp932ToUtf8 = SrcTakeUtf8(wide, wideLen, outSize)
+End Function
+
+Function SrcFromCp932(raw As *Byte, ByRef n As Long) As *Byte
+    Dim out As *Byte
+    out = SrcCp932ToUtf8(raw, n, n)
+    SrcFromCp932 = raw
+    If out = 0 Then Exit Function
+    free(raw)
+    SrcFromCp932 = out
+End Function
+
+Function SrcNormalize(raw As *Byte, ByRef n As Long) As *Byte
+    SrcNormalize = raw
+    If raw = 0 Then Exit Function
+    If SrcHasBom(raw, n) <> 0 Then
+        SrcNormalize = SrcStripBom(raw, n)
+        Exit Function
+    End If
+    If SrcIsUtf8(raw, n) <> 0 Then Exit Function
+    SrcNormalize = SrcFromCp932(raw, n)
+End Function
+
+Function LoadText(path As *Byte, ByRef outSize As Long) As *Byte
+    Dim raw As *Byte
+    LoadText = 0
+    raw = LoadFile(path, outSize)
+    If raw = 0 Then Exit Function
+    LoadText = SrcNormalize(raw, outSize)
+End Function
