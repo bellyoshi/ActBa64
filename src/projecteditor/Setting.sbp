@@ -80,40 +80,45 @@ Function Setting_SelectedCode$(hWnd As HWND) As String
 End Function
 
 Function Setting_ExePath$() As String
-    Dim buf As *Byte
+    Dim buf(259) As Byte
     Dim n As Long
-
     Setting_ExePath$ = ""
-    buf = malloc(260)
-    If buf = 0 Then Exit Function
-    n = GetModuleFileName(NULL, buf, 260)
-    If n <= 0 Then
-        free(buf)
-        Exit Function
-    End If
-    Setting_ExePath$ = Enc_DupCStr$(buf, n)
-    free(buf)
+    n = ExeModuleFile(VarPtr(buf), 260)
+    If n <= 0 Then Exit Function
+    Setting_ExePath$ = Enc_DupCStr$(VarPtr(buf), n)
 End Function
 
-Function Setting_RestartSelf() As Long
+Function Setting_RestartCmd$() As String
     Dim path As String
-    Dim cmd As String
-    Dim pCmd As *Byte
-    Dim si As STARTUPINFO
-    Dim pi As PROCESS_INFORMATION
-
-    Setting_RestartSelf = 0
+    Setting_RestartCmd$ = ""
     path = Setting_ExePath$()
     If Len(path) = 0 Then Exit Function
-    cmd = Chr$(34) + path + Chr$(34)
-    pCmd = StrPtr(cmd)
+    Setting_RestartCmd$ = Chr$(34) + path + Chr$(34)
+End Function
+
+Sub Setting_ZeroProc(ByRef si As STARTUPINFO, ByRef pi As PROCESS_INFORMATION)
     FillMemory(VarPtr(si), Len(si), 0)
     FillMemory(VarPtr(pi), Len(pi), 0)
     si.cb = Len(si)
-    If EditorBuild_CreateProcess(0, pCmd, 0, 0, 0, 0, 0, 0, si, pi) = 0 Then Exit Function
+End Sub
+
+Function Setting_Spawn(pCmd As *Byte, ByRef si As STARTUPINFO, ByRef pi As PROCESS_INFORMATION) As Long
+    Setting_Spawn = 0
+    If EditorBuild_CreateProcess(0, pCmd, 0, 0, 0, 0, 0, 0, VarPtr(si), VarPtr(pi)) = 0 Then Exit Function
     CloseHandle(pi.hThread)
     CloseHandle(pi.hProcess)
-    Setting_RestartSelf = 1
+    Setting_Spawn = 1
+End Function
+
+Function Setting_RestartSelf() As Long
+    Dim cmd As String
+    Dim si As STARTUPINFO
+    Dim pi As PROCESS_INFORMATION
+    Setting_RestartSelf = 0
+    cmd = Setting_RestartCmd$()
+    If Len(cmd) = 0 Then Exit Function
+    Setting_ZeroProc(si, pi)
+    Setting_RestartSelf = Setting_Spawn(StrPtr(cmd), si, pi)
 End Function
 
 Sub Setting_OnOk(hWnd As HWND)
