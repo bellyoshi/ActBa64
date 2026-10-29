@@ -1,0 +1,298 @@
+' TextEnc - UTF-8 と CP932 のバイト変換
+' 妥当な UTF-8 はそのまま。BOM は印だけ付ける。それ以外は CP932。
+' エディタの文字送り（不正バイトは 1）はここへ移さない。
+
+Const ENC_UTF8 = 1
+Const ENC_UTF8_BOM = 2
+Const ENC_CP932 = 3
+
+Const ENC_CP_UTF8 = 65001
+Const ENC_CP932_CODEPAGE = 932
+
+Sub Enc_Add(ByRef dst As Long, n As Long)
+    dst = dst + n
+End Sub
+
+Sub Enc_Walk256(ByRef q As *Byte, ByRef n As Long)
+    While n >= 256
+        q = VarPtr(q[256])
+        n = n - 256
+    Wend
+End Sub
+
+Sub Enc_PtrFinish(q As *Byte, n As Long, ByRef dst As *Byte)
+    dst = q
+    If n > 0 Then dst = VarPtr(q[n])
+End Sub
+
+Sub Enc_PtrAdd(p As *Byte, off As Long, ByRef dst As *Byte)
+    Dim q As *Byte
+    Dim n As Long
+    q = p
+    n = off
+    dst = p
+    If n < 0 Then Exit Sub
+    Enc_Walk256(q, n)
+    Enc_PtrFinish(q, n, dst)
+End Sub
+
+Function Enc_Utf8Cont(b As Long) As Long
+    Enc_Utf8Cont = 0
+    If b >= &H80 And b <= &HBF Then Enc_Utf8Cont = 1
+End Function
+
+Function Enc_Utf8Len(b As Long) As Long
+    Enc_Utf8Len = 1
+    If b >= &HC2 And b <= &HDF Then Enc_Utf8Len = 2
+    If b >= &HE0 And b <= &HEF Then Enc_Utf8Len = 3
+    If b >= &HF0 And b <= &HF4 Then Enc_Utf8Len = 4
+    If b >= &H80 And Enc_Utf8Len = 1 Then Enc_Utf8Len = 0
+End Function
+
+Function Enc_LeadOk(b0 As Long, b1 As Long, count As Long) As Long
+    Enc_LeadOk = 1
+    If count = 3 And b0 = &HE0 And b1 < &HA0 Then Enc_LeadOk = 0
+    If count = 3 And b0 = &HED And b1 >= &HA0 Then Enc_LeadOk = 0
+    If count = 4 And b0 = &HF0 And b1 < &H90 Then Enc_LeadOk = 0
+    If count = 4 And b0 = &HF4 And b1 > &H8F Then Enc_LeadOk = 0
+End Function
+
+Function Enc_ContOkAt(p As *Byte, left As Long, count As Long) As Long
+    Dim j As Long
+    Enc_ContOkAt = 0
+    If count < 1 Or count > left Then Exit Function
+    For j = 1 To count - 1
+        If Enc_Utf8Cont(p[j]) = 0 Then Exit Function
+    Next
+    Enc_ContOkAt = 1
+End Function
+
+Function Enc_StepAt(p As *Byte, left As Long) As Long
+    Dim count As Long
+    Enc_StepAt = 0
+    count = Enc_Utf8Len(p[0])
+    If Enc_ContOkAt(p, left, count) = 0 Then Exit Function
+    Enc_StepAt = count
+    If count < 2 Then Exit Function
+    If Enc_LeadOk(p[0], p[1], count) = 0 Then Enc_StepAt = 0
+End Function
+
+Function Enc_Eat(ByRef p As *Byte, ByRef left As Long) As Long
+    Dim adv As Long
+    Enc_Eat = 0
+    adv = Enc_StepAt(p, left)
+    If adv < 1 Then Exit Function
+    Enc_PtrAdd(p, adv, p)
+    left = left - adv
+    Enc_Eat = 1
+End Function
+
+Function Enc_WalkUtf8(raw As *Byte, n As Long) As Long
+    Dim p As *Byte
+    Dim left As Long
+    p = raw
+    left = n
+    Enc_WalkUtf8 = 1
+    While left > 0 And Enc_WalkUtf8 <> 0
+        If Enc_Eat(p, left) = 0 Then Enc_WalkUtf8 = 0
+    Wend
+End Function
+
+Function Enc_IsValidUtf8(raw As *Byte, n As Long) As Long
+    Enc_IsValidUtf8 = 0
+    If raw = 0 Then Exit Function
+    Enc_IsValidUtf8 = Enc_WalkUtf8(raw, n)
+End Function
+
+Function Enc_HasBom(raw As *Byte, n As Long) As Long
+    Enc_HasBom = 0
+    If n < 3 Then Exit Function
+    If raw[0] <> &HEF Then Exit Function
+    If raw[1] <> &HBB Then Exit Function
+    If raw[2] <> &HBF Then Exit Function
+    Enc_HasBom = 1
+End Function
+
+Function Enc_Detect(raw As *Byte, n As Long) As Long
+    Enc_Detect = ENC_CP932
+    If Enc_HasBom(raw, n) <> 0 Then Enc_Detect = ENC_UTF8_BOM
+    If Enc_Detect = ENC_UTF8_BOM Then Exit Function
+    If Enc_IsValidUtf8(raw, n) <> 0 Then Enc_Detect = ENC_UTF8
+End Function
+
+Function Enc_Malloc(n As Long) As *Byte
+    Dim bytes As Long
+    bytes = n
+    Enc_Add(bytes, 1)
+    Enc_Malloc = malloc(bytes)
+End Function
+
+Function Enc_Alloc(n As Long) As *Byte
+    Dim out As *Byte
+    Dim tail As *Byte
+    Enc_Alloc = 0
+    out = Enc_Malloc(n)
+    If out = 0 Then Exit Function
+    Enc_PtrAdd(out, n, tail)
+    tail[0] = 0
+    Enc_Alloc = out
+End Function
+
+Sub Enc_Blit(dst As *Byte, src As *Byte, skip As Long, m As Long)
+    Dim p As *Byte
+    If m <= 0 Then Exit Sub
+    Enc_PtrAdd(src, skip, p)
+    memcpy(dst, p, m)
+End Sub
+
+Function Enc_Copy(raw As *Byte, n As Long, skip As Long) As *Byte
+    Dim out As *Byte
+    Dim m As Long
+    m = n - skip
+    out = Enc_Alloc(m)
+    Enc_Copy = out
+    If out = 0 Then Exit Function
+    Enc_Blit(out, raw, skip, m)
+End Function
+
+Function Enc_StripBom(raw As *Byte, ByRef n As Long) As *Byte
+    Dim out As *Byte
+    out = Enc_Copy(raw, n, 3)
+    Enc_StripBom = raw
+    If out = 0 Then Exit Function
+    n = n - 3
+    free(raw)
+    Enc_StripBom = out
+End Function
+
+Function Enc_WideBytes(chars As Long) As Long
+    Dim n As Long
+    n = chars
+    Enc_Add(n, 1)
+    n = n * 2
+    Enc_WideBytes = n
+End Function
+
+Sub Enc_ZeroTail(wide As *Byte, chars As Long)
+    Dim tail As *Byte
+    Dim off As Long
+    If wide = 0 Then Exit Sub
+    off = Enc_WideBytes(chars)
+    Enc_Add(off, -2)
+    Enc_PtrAdd(wide, off, tail)
+    tail[0] = 0
+    tail[1] = 0
+End Sub
+
+Function Enc_MbLen(cp As Long, raw As *Byte, n As Long) As Long
+    Enc_MbLen = MultiByteToWideChar(cp, 0, raw, n, 0, 0)
+End Function
+
+Function Enc_WideLenOf(cp As Long, raw As *Byte, n As Long) As Long
+    Enc_WideLenOf = 0
+    If n <= 0 Then Exit Function
+    Enc_WideLenOf = Enc_MbLen(cp, raw, n)
+End Function
+
+Function Enc_FillWide(cp As Long, raw As *Byte, n As Long, wide As *Byte, chars As Long) As Long
+    Enc_FillWide = MultiByteToWideChar(cp, 0, raw, n, wide As *Word, chars)
+End Function
+
+Function Enc_DropWide(wide As *Byte, ByRef chars As Long) As *Byte
+    If wide <> 0 Then free(wide)
+    chars = 0
+    Enc_DropWide = 0
+End Function
+
+Function Enc_StoreWide(wide As *Byte, ok As Long, ByRef chars As Long) As *Byte
+    Enc_StoreWide = wide
+    If wide <> 0 And ok > 0 Then
+        Enc_ZeroTail(wide, chars)
+        Exit Function
+    End If
+    Enc_StoreWide = Enc_DropWide(wide, chars)
+End Function
+
+Function Enc_ToWide(cp As Long, raw As *Byte, n As Long, ByRef chars As Long) As *Byte
+    Dim wide As *Byte
+    Dim ok As Long
+    chars = Enc_WideLenOf(cp, raw, n)
+    ok = chars
+    wide = 0
+    If chars > 0 Then wide = malloc(Enc_WideBytes(chars))
+    If wide <> 0 Then ok = Enc_FillWide(cp, raw, n, wide, chars)
+    Enc_ToWide = Enc_StoreWide(wide, ok, chars)
+End Function
+
+Function Enc_MbOutLen(cp As Long, wide As *Byte, chars As Long) As Long
+    Enc_MbOutLen = WideCharToMultiByte(cp, 0, wide As *Word, chars, 0, 0, 0, 0)
+End Function
+
+Function Enc_FillMb(cp As Long, wide As *Byte, chars As Long, out As *Byte, n As Long) As Long
+    Enc_FillMb = WideCharToMultiByte(cp, 0, wide As *Word, chars, out, n, 0, 0)
+End Function
+
+Function Enc_TakeMb(cp As Long, wide As *Byte, chars As Long, n As Long, ByRef outSize As Long) As *Byte
+    Dim out As *Byte
+    Enc_TakeMb = 0
+    If n <= 0 Then Exit Function
+    out = Enc_Alloc(n)
+    If out = 0 Then Exit Function
+    Enc_FillMb(cp, wide, chars, out, n)
+    outSize = n
+    Enc_TakeMb = out
+End Function
+
+Function Enc_FromWide(cp As Long, wide As *Byte, chars As Long, ByRef outSize As Long) As *Byte
+    Dim n As Long
+    outSize = 0
+    n = 0
+    If wide <> 0 And chars > 0 Then n = Enc_MbOutLen(cp, wide, chars)
+    Enc_FromWide = Enc_TakeMb(cp, wide, chars, n, outSize)
+End Function
+
+Function Enc_ReleaseWide(wide As *Byte, out As *Byte) As *Byte
+    If wide <> 0 Then free(wide)
+    Enc_ReleaseWide = out
+End Function
+
+Function Enc_Cp932AsUtf8(raw As *Byte, n As Long, ByRef outSize As Long) As *Byte
+    Dim wide As *Byte
+    Dim chars As Long
+    Dim out As *Byte
+    outSize = 0
+    wide = Enc_ToWide(ENC_CP932_CODEPAGE, raw, n, chars)
+    out = Enc_FromWide(ENC_CP_UTF8, wide, chars, outSize)
+    Enc_Cp932AsUtf8 = Enc_ReleaseWide(wide, out)
+End Function
+
+Function Enc_Utf8AsCp932(raw As *Byte, n As Long, ByRef outSize As Long) As *Byte
+    Dim wide As *Byte
+    Dim chars As Long
+    Dim out As *Byte
+    outSize = 0
+    wide = Enc_ToWide(ENC_CP_UTF8, raw, n, chars)
+    out = Enc_FromWide(ENC_CP932_CODEPAGE, wide, chars, outSize)
+    Enc_Utf8AsCp932 = Enc_ReleaseWide(wide, out)
+End Function
+
+Function Enc_FromCp932(raw As *Byte, ByRef n As Long) As *Byte
+    Dim out As *Byte
+    Dim sz As Long
+    out = Enc_Cp932AsUtf8(raw, n, sz)
+    Enc_FromCp932 = raw
+    If out = 0 Then Exit Function
+    n = lstrlen(out)
+    free(raw)
+    Enc_FromCp932 = out
+End Function
+
+Function Enc_Normalize(raw As *Byte, ByRef n As Long) As *Byte
+    Dim kind As Long
+    Enc_Normalize = raw
+    If raw = 0 Then Exit Function
+    kind = Enc_Detect(raw, n)
+    If kind = ENC_UTF8_BOM Then Enc_Normalize = Enc_StripBom(raw, n)
+    If kind = ENC_UTF8_BOM Then Exit Function
+    If kind = ENC_CP932 Then Enc_Normalize = Enc_FromCp932(raw, n)
+End Function

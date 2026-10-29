@@ -35,32 +35,19 @@ Function UiLang_PackPath$(code As String) As String
     End If
 End Function
 
-Function UiLang_ReadFile$(path As String) As String
-    Dim hFile As HANDLE
-    Dim fsiz As Long
-    Dim nRead As DWord
-    Dim p As *Byte
+Function UiLang_ReadBytes$(p As *Byte, n As Long) As String
     Dim encoding As Long
+    encoding = Enc_Detect(p, n)
+    UiLang_ReadBytes$ = Enc_BytesToUtf8$(p, n, encoding)
+End Function
 
+Function UiLang_ReadFile$(path As String) As String
+    Dim n As Long
+    Dim p As *Byte
     UiLang_ReadFile$ = ""
-    hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then Exit Function
-    fsiz = GetFileSize(hFile, NULL)
-    If fsiz < 0 Then
-        CloseHandle(hFile)
-        Exit Function
-    End If
-    p = malloc(fsiz + 1)
-    If p = 0 Then
-        CloseHandle(hFile)
-        Exit Function
-    End If
-    nRead = 0
-    If fsiz > 0 Then ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
-    CloseHandle(hFile)
-    p[nRead] = 0
-    encoding = Enc_Detect(p, nRead)
-    UiLang_ReadFile$ = Enc_BytesToUtf8$(p, nRead, encoding)
+    p = LoadFile(StrPtr(path), n)
+    If p = 0 Then Exit Function
+    UiLang_ReadFile$ = UiLang_ReadBytes$(p, n)
     free(p)
 End Function
 
@@ -165,36 +152,35 @@ Function UiLang_MatchLanguageKey(ByVal p As *Byte, ByVal lineStart As Long, ByVa
     UiLang_MatchLanguageKey = 1
 End Function
 
-Function UiLang_CodeFromBytes$(ByVal p As *Byte, ByVal off As Long, ByVal ln As Long) As String
-    Dim i As Long
-    Dim a As Long
-    Dim ok As Long
-    Dim buf(16) As Byte
+Function UiLang_CodeCharOk(ByVal a As Long, ByVal i As Long) As Long
+    UiLang_CodeCharOk = 0
+    If a >= 65 And a <= 90 Then UiLang_CodeCharOk = 1
+    If a >= 97 And a <= 122 Then UiLang_CodeCharOk = 1
+    If i <= 0 Then Exit Function
+    If a >= 48 And a <= 57 Then UiLang_CodeCharOk = 1
+    If a = 95 Then UiLang_CodeCharOk = 1
+End Function
 
-    UiLang_CodeFromBytes$ = ""
-    If p = 0 Then Exit Function
-    If ln < 1 Then Exit Function
-    If ln > 16 Then Exit Function
+Sub UiLang_PutByte(p As *Byte, ByVal i As Long, ByVal a As Long)
+    memcpy(VarPtr(p[i]), VarPtr(a), 1)
+End Sub
+
+Function UiLang_FillCode(p As *Byte, ByVal off As Long, ByVal ln As Long, dst As *Byte) As Long
+    Dim i As Long, a As Long
+    UiLang_FillCode = 0
     For i = 0 To ln - 1
         a = p[off + i] And &HFF
-        ok = 0
-        If a >= 65 Then
-            If a <= 90 Then ok = 1
-        End If
-        If a >= 97 Then
-            If a <= 122 Then ok = 1
-        End If
-        If a >= 48 Then
-            If a <= 57 Then
-                If i > 0 Then ok = 1
-            End If
-        End If
-        If a = 95 Then
-            If i > 0 Then ok = 1
-        End If
-        If ok = 0 Then Exit Function
-        buf[i] = a
+        If UiLang_CodeCharOk(a, i) = 0 Then Exit Function
+        UiLang_PutByte(dst, i, a)
     Next
+    UiLang_FillCode = 1
+End Function
+
+Function UiLang_CodeFromBytes$(ByVal p As *Byte, ByVal off As Long, ByVal ln As Long) As String
+    Dim buf(16) As Byte
+    UiLang_CodeFromBytes$ = ""
+    If p = 0 Or ln < 1 Or ln > 16 Then Exit Function
+    If UiLang_FillCode(p, off, ln, VarPtr(buf[0])) = 0 Then Exit Function
     buf[ln] = 0
     UiLang_CodeFromBytes$ = Enc_DupCStr$(VarPtr(buf[0]), ln)
 End Function
@@ -389,29 +375,22 @@ Sub UiLang_Init()
     UiLang_LoadPack(code)
 End Sub
 
+Function UiLang_ConfigText$(code As String) As String
+    Dim t As String
+    t = UiLang_TrimCode$(code)
+    If UiLang_IsValidCode(t) = 0 Then t = "en"
+    UiLang_ConfigText$ = "# ProjectEditor settings (UTF-8)" + Chr$(13) + Chr$(10)
+    UiLang_ConfigText$ = UiLang_ConfigText$ + "# Omit Language or use en for built-in English UI." + Chr$(13) + Chr$(10)
+    UiLang_ConfigText$ = UiLang_ConfigText$ + "# Example: ja loads ProjectEditor_lang_ja.csv next to the exe." + Chr$(13) + Chr$(10)
+    UiLang_ConfigText$ = UiLang_ConfigText$ + "Language=" + t + Chr$(13) + Chr$(10)
+End Function
+
 Function UiLang_WriteCode(code As String) As Long
     Dim path As String
     Dim text As String
-    Dim hFile As HANDLE
-    Dim nWritten As DWord
-    Dim n As Long
-    Dim t As String
-
-    UiLang_WriteCode = 0
-    t = UiLang_TrimCode$(code)
-    If UiLang_IsValidCode(t) = 0 Then t = "en"
     path = UiLang_ConfigPath$()
-    text = "# ProjectEditor settings (UTF-8)" + Chr$(13) + Chr$(10)
-    text = text + "# Omit Language or use en for built-in English UI." + Chr$(13) + Chr$(10)
-    text = text + "# Example: ja loads ProjectEditor_lang_ja.csv next to the exe." + Chr$(13) + Chr$(10)
-    text = text + "Language=" + t + Chr$(13) + Chr$(10)
-    n = Len(text)
-    hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then Exit Function
-    nWritten = 0
-    If n > 0 Then WriteFile(hFile, StrPtr(text), n, VarPtr(nWritten), ByVal NULL)
-    CloseHandle(hFile)
-    If nWritten = n Then UiLang_WriteCode = 1
+    text = UiLang_ConfigText$(code)
+    UiLang_WriteCode = WriteAll(StrPtr(path), StrPtr(text), Len(text))
 End Function
 
 Function UiText$(ByVal id As Long) As String
