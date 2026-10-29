@@ -106,7 +106,7 @@ DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出�
 | | 既定（64bit） | `-actba32` |
 |---|---|---|
 | ライブラリ挿入 | ○ | ○ |
-| `LINE` / `CIRCLE` / `LOCATE` / `PAINT` 文 | ○（パーサ） | ○（同じパーサ） |
+| `LINE` / `CIRCLE` / `LOCATE` / `PAINT` / `PSET` 文 | ○（パーサ） | ○（同じパーサ） |
 | `Inkey$` / `Input$(n)` | ○（`n88key.abp`） | ○ |
 | 640×480 黒窓 GUI | ○（自動） | ○ |
 | `End` → 窓待ち | ○（`N88_End`） | ○ |
@@ -136,16 +136,18 @@ CIRCLE ,r[,...]                       ' 中心は LP
 - `F` で塗りつぶし（タイルストリングは未対応）
 - 実行後 LP は円の中心へ移動
 
-N88 `LOCATE` / `PAINT`:
+N88 `LOCATE` / `PAINT` / `PSET`:
 
 ```text
 LOCATE x, y                 ' または Locate(x, y) — 桁 x, 行 y（0 始まり。本家 N88 の 行,桁 1 始まりとは異なる）
 PAINT (x, y), color1 [, color2]
+PSET (x, y) [, color]       ' 1 ドット。color 省略は 7（白）
 ```
 
 - `LOCATE` 後の `Print` は窓上の文字位置へ描画（`;` なしなら次行へ）
 - 数値の `Print` は正なら先頭空白、常に末尾空白を付け、`Str$`（Long）／`StrD$`（Double。64bit と `-actba32`）で文字列化してから描画
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
+- `PSET` は `(x,y)` に 1 ドットを描く。`#n88basic` / `#prompt` のときだけ有効。実行後 LP はその点へ移動
 - `Dim name`（型も `$` も無いスカラー）は `Double`。N88 の無印変数（単精度）の受け皿
 - `Input "prompt"; var` と `Input "prompt", var` は同じ（プロンプトを出してから 1 行読む）
 - 変数が複数の `Input` は、その 1 行をカンマで分ける。項目が足りなければ次の行を読む
@@ -439,7 +441,7 @@ ExitProcess(式)
 | `Write` | ○（画面または `#番号`。カンマ区切り） |
 | `Sleep(ms)` | ○（メッセージポンプ付き・default） |
 | `InsMenu` | ○（内部で `InsertMenuA`） |
-| `LINE` / `CIRCLE` / `LOCATE` / `PAINT`（N88 文） | ○（`#n88basic`） |
+| `LINE` / `CIRCLE` / `LOCATE` / `PAINT` / `PSET`（N88 文） | ○（`#n88basic`） |
 | `Beep` / `Cls` / `MsgBox` / `Window` / `DelWnd` | ○（`BasicCmd.abp`。`Cls` はコンソール。`Window` はメッセージループを作らない） |
 | `ChDir` / `MkDir` / `Kill` / `Exec` | ○（`BasicCmd.abp`） |
 | `Delete` | ○（クラスポインタ） |
@@ -848,7 +850,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 | DLL 優先ベース | `0x180000000` | `0x10000000` |
 | DLL `.reloc` | 空の再配置表（コードは RIP 相対） | 絶対アドレスの HIGHLOW |
 | `Double` 演算 | ○（SSE。`rax`） | ○（SSE2。値は `edx:eax`。配列要素・UDT フィールドも 8 バイト） |
-| N88 `LINE`/`CIRCLE` 文 | ○ | ○ |
+| N88 `LINE`/`CIRCLE`/`PSET` 文 | ○ | ○ |
 | `SizeOf`（ポインタを含む UDT） | ポインタ 8 バイト込み | ポインタ 4 バイト込み（期待サイズを 64bit 決め打ちしない） |
 
 `#PLATFORM=32` は AB4.20 の stage0 ホスト用で、この切替とは無関係です。
