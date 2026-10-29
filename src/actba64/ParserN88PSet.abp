@@ -1,0 +1,82 @@
+' ParserN88PSet - PSET (x,y)[,color] → PSet(x,y,color)
+' 色の省略は 7（白）。#n88basic のときだけ有効
+
+Function ParseN88PSetColor(p As *Parser, ByRef e3 As Long) As boolean
+    ParseN88PSetColor = true
+    e3 = -1
+    If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    e3 = ParseExpr(p)
+    If e3 < 0 Then ParseN88PSetColor = false
+End Function
+
+Function ParseN88PSetHead(p As *Parser, ByRef e1 As Long, ByRef e2 As Long, ByRef e3 As Long) As boolean
+    ParseN88PSetHead = false
+    p->pos = p->pos + 1
+    If Not ParseN88XyPair(p, e1, e2) Then Exit Function
+    ParseN88PSetHead = ParseN88PSetColor(p, e3)
+End Function
+
+Function ParseN88PSetWhite(ast As *Ast, e3 As Long) As Long
+    ParseN88PSetWhite = e3
+    If e3 >= 0 Then Exit Function
+    ParseN88PSetWhite = ParseMakeNum(ast, 7)
+End Function
+
+Function ParseN88PSetPush2(ast As *Ast, e1 As Long, e2 As Long, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As Long
+    ParseN88PSetPush2 = 0
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    If Not ParseLinkArg(ast, arg0, nPrev, nArgs, e1) Then Exit Function
+    If Not ParseLinkArg(ast, arg0, nPrev, nArgs, e2) Then Exit Function
+    ParseN88PSetPush2 = 1
+End Function
+
+Function ParseN88PSetPush(ast As *Ast, e1 As Long, e2 As Long, e3 As Long, ByRef arg0 As Long, ByRef nArgs As Long) As Long
+    Dim nPrev As Long
+    ParseN88PSetPush = 0
+    If ParseN88PSetPush2(ast, e1, e2, arg0, nPrev, nArgs) = 0 Then Exit Function
+    If Not ParseLinkArg(ast, arg0, nPrev, nArgs, e3) Then Exit Function
+    ParseN88PSetPush = 1
+End Function
+
+Function ParseN88PSetLink(ast As *Ast, e1 As Long, e2 As Long, e3 As Long) As Long
+    Dim name(KW_LEN - 1) As Byte
+    Dim arg0 As Long
+    Dim nArgs As Long
+    ParseN88PSetLink = -1
+    If ParseN88PSetPush(ast, e1, e2, e3, arg0, nArgs) = 0 Then Exit Function
+    lstrcpy(VarPtr(name), "PSet")
+    ParseN88PSetLink = ParseMakeCall(ast, VarPtr(name), arg0, nArgs)
+End Function
+
+Function ParseN88PSetStmt(p As *Parser) As Long
+    Dim e1 As Long
+    Dim e2 As Long
+    Dim e3 As Long
+    ParseN88PSetStmt = -1
+    If Not ParseN88PSetHead(p, e1, e2, e3) Then Exit Function
+    e3 = ParseN88PSetWhite(p->ast, e3)
+    If e3 < 0 Then Exit Function
+    ParseN88PSetStmt = ParseN88PSetLink(p->ast, e1, e2, e3)
+End Function
+
+Function ParseN88PSetLooks(p As *Parser) As Long
+    Dim save As Long
+    ParseN88PSetLooks = 0
+    save = p->pos
+    p->pos = p->pos + 1
+    If ParseTokKind(p) = TK_LPAREN Then ParseN88PSetLooks = 1
+    p->pos = save
+    p->err = 0
+End Function
+
+Function ParseN88PSetOrAssign(p As *Parser) As Long
+    ParseN88PSetOrAssign = -1
+    If ParseN88PSetLooks(p) <> 0 Then
+        ParseN88PSetOrAssign = ParseN88PSetStmt(p)
+        Exit Function
+    End If
+    ParseN88PSetOrAssign = ParseAssignStmt(p)
+End Function
