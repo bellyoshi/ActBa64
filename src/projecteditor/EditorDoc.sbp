@@ -38,63 +38,54 @@ Sub EditorDoc_ClearDirty()
     If g_activeChild <> 0 Then EditorDoc_UpdateTitle(g_activeChild)
 End Sub
 
-Function EditorDoc_LoadTextFile$(path As String) As String
-    Dim hFile As HANDLE
-    Dim fsiz As Long
-    Dim nRead As DWord
+Function EditorDoc_FileThere(path As *Byte) As Long
+    Dim h As HANDLE
+    EditorDoc_FileThere = 0
+    h = FileOpenRead(path)
+    If h = INVALID_HANDLE_VALUE Then Exit Function
+    CloseHandle(h)
+    EditorDoc_FileThere = 1
+End Function
+
+Function EditorDoc_FromBytes$(p As *Byte, n As Long) As String
+    g_docEncoding = Enc_Detect(p, n)
+    EditorDoc_FromBytes$ = Enc_BytesToUtf8$(p, n, g_docEncoding)
+End Function
+
+Function EditorDoc_EmptyDoc$() As String
+    Dim b As Byte
+    b = 0
+    EditorDoc_EmptyDoc$ = EditorDoc_FromBytes$(VarPtr(b), 0)
+End Function
+
+Function EditorDoc_TakeLoad$(path As *Byte) As String
+    Dim n As Long
     Dim p As *Byte
-    Dim encoding As Long
-
-    EditorDoc_LoadTextFile$ = ""
-    hFile = CreateFile(StrPtr(path), GENERIC_READ, FILE_SHARE_READ, ByVal NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then Exit Function
-
-    fsiz = GetFileSize(hFile, NULL)
-    If fsiz < 0 Then
-        CloseHandle(hFile)
-        Exit Function
-    End If
-
-    p = malloc(fsiz + 1)
-    If p = 0 Then
-        CloseHandle(hFile)
-        Exit Function
-    End If
-
-    nRead = 0
-    If fsiz > 0 Then
-        ReadFile(hFile, p, fsiz, VarPtr(nRead), ByVal NULL)
-    End If
-    CloseHandle(hFile)
-    p[nRead] = 0
-    encoding = Enc_Detect(p, nRead)
-    g_docEncoding = encoding
-    EditorDoc_LoadTextFile$ = Enc_BytesToUtf8$(p, nRead, encoding)
+    p = LoadFile(path, n)
+    EditorDoc_TakeLoad$ = EditorDoc_EmptyDoc$()
+    If p = 0 Then Exit Function
+    EditorDoc_TakeLoad$ = EditorDoc_FromBytes$(p, n)
     free(p)
 End Function
 
+Function EditorDoc_LoadTextFile$(path As String) As String
+    EditorDoc_LoadTextFile$ = ""
+    If EditorDoc_FileThere(StrPtr(path)) = 0 Then Exit Function
+    EditorDoc_LoadTextFile$ = EditorDoc_TakeLoad$(StrPtr(path))
+End Function
+
+Sub EditorDoc_FreeBytes(bytes As *Byte)
+    If bytes <> 0 Then free(bytes)
+End Sub
+
 Function EditorDoc_WriteTextFile(path As String, text As String) As Long
-    Dim hFile As HANDLE
-    Dim nWritten As DWord
     Dim n As Long
     Dim bytes As *Byte
-
     EditorDoc_WriteTextFile = 0
     bytes = Enc_EncodeText(text, g_docEncoding, n)
     If bytes = 0 And n > 0 Then Exit Function
-    hFile = CreateFile(StrPtr(path), GENERIC_WRITE, 0, ByVal NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
-    If hFile = INVALID_HANDLE_VALUE Then
-        If bytes <> 0 Then free(bytes)
-        Exit Function
-    End If
-    If n > 0 Then
-        WriteFile(hFile, bytes, n, VarPtr(nWritten), ByVal NULL)
-    Else
-        nWritten = 0
-    End If
-    CloseHandle(hFile)
-    If bytes <> 0 Then free(bytes)
-    If nWritten = n Then EditorDoc_WriteTextFile = 1
+    EditorDoc_WriteTextFile = WriteAll(StrPtr(path), bytes, n)
+    EditorDoc_FreeBytes(bytes)
 End Function
 
 Sub EditorDoc_New(hWnd As HWND)
@@ -277,73 +268,10 @@ End Sub
 
 
 Function EditorDoc_CmdArg$(ByVal index As Long) As String
-    Dim cmd As *Byte
-    Dim i As Long
-    Dim n As Long
-    Dim argIdx As Long
-    Dim out As *Byte
-    Dim m As Long
-
+    Dim buf[MAX_PATH - 1] As Byte
     EditorDoc_CmdArg$ = ""
-    cmd = GetCommandLine()
-    If cmd = 0 Then Exit Function
-    n = lstrlen(cmd)
-    If n <= 0 Then Exit Function
-    out = malloc(n + 1)
-    If out = 0 Then Exit Function
-
-    i = 0
-    argIdx = 0
-    While i < n
-        i = EditorDoc_SkipSpaces(cmd, i, n)
-        If i >= n Then Exit While
-        m = EditorDoc_CopyOneArg(cmd, i, n, out)
-        If argIdx = index Then
-            EditorDoc_CmdArg$ = Enc_DupCStr$(out, m)
-            free(out)
-            Exit Function
-        End If
-        argIdx = argIdx + 1
-    Wend
-    free(out)
-End Function
-
-Function EditorDoc_SkipSpaces(cmd As *Byte, ByVal i As Long, ByVal n As Long) As Long
-    Dim c As Byte
-    While i < n
-        c = cmd[i]
-        If c <> 32 And c <> 9 Then Exit While
-        i = i + 1
-    Wend
-    EditorDoc_SkipSpaces = i
-End Function
-
-Function EditorDoc_CopyOneArg(cmd As *Byte, ByRef i As Long, ByVal n As Long, out As *Byte) As Long
-    Dim c As Byte
-    Dim m As Long
-    Dim inQuote As Long
-    m = 0
-    inQuote = 0
-    If cmd[i] = 34 Then
-        inQuote = 1
-        i = i + 1
-    End If
-    While i < n
-        c = cmd[i]
-        If inQuote <> 0 Then
-            If c = 34 Then
-                i = i + 1
-                Exit While
-            End If
-        Else
-            If c = 32 Or c = 9 Then Exit While
-        End If
-        out[m] = c
-        m = m + 1
-        i = i + 1
-    Wend
-    out[m] = 0
-    EditorDoc_CopyOneArg = m
+    If GetCmd(index, VarPtr(buf)) = 0 Then Exit Function
+    EditorDoc_CmdArg$ = Enc_DupCStr$(VarPtr(buf), lstrlen(VarPtr(buf)))
 End Function
 
 Function EditorDoc_CmdExists(path As String) As Long
