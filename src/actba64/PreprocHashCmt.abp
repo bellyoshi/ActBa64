@@ -1,0 +1,151 @@
+' ブロックコメントの外だけ行頭の # 指令を見る。
+' ' から行末と "..." の中の /* はコメント開始にしない。
+
+Function PpCmtStarSlash(line As *Byte, n As Long, ByRef j As Long) As boolean
+    PpCmtStarSlash = false
+    If j + 1 >= n Then Exit Function
+    If line[j] <> CH_STAR Then Exit Function
+    If line[j + 1] <> CH_SLASH Then Exit Function
+    j = j + 2
+    PpCmtStarSlash = true
+End Function
+
+Function PpCmtSlashStar(line As *Byte, n As Long, ByRef j As Long) As boolean
+    PpCmtSlashStar = false
+    If j + 1 >= n Then Exit Function
+    If line[j] <> CH_SLASH Then Exit Function
+    If line[j + 1] <> CH_STAR Then Exit Function
+    j = j + 2
+    PpCmtSlashStar = true
+End Function
+
+Function PpCmtOneQuote(line As *Byte, n As Long, ByRef j As Long) As boolean
+    j = j + 1
+    PpCmtOneQuote = true
+    If j >= n Then Exit Function
+    If line[j] <> CH_DQUOTE Then Exit Function
+    j = j + 1
+    PpCmtOneQuote = false
+End Function
+
+Sub PpCmtEatQuote(line As *Byte, n As Long, ByRef j As Long)
+    While j < n
+        If line[j] <> CH_DQUOTE Then
+            j = j + 1
+        ElseIf PpCmtOneQuote(line, n, j) Then
+            Exit Sub
+        End If
+    Wend
+End Sub
+
+Function PpCmtTakeQuote(line As *Byte, n As Long, ByRef j As Long) As boolean
+    PpCmtTakeQuote = false
+    If j >= n Then Exit Function
+    If line[j] <> CH_DQUOTE Then Exit Function
+    j = j + 1
+    PpCmtEatQuote(line, n, j)
+    PpCmtTakeQuote = true
+End Function
+
+Function PpCmtTakeLine(line As *Byte, n As Long, ByRef j As Long) As boolean
+    PpCmtTakeLine = false
+    If j >= n Then Exit Function
+    If line[j] <> CH_SQUOTE Then Exit Function
+    j = n
+    PpCmtTakeLine = true
+End Function
+
+Function PpCmtEnterBlk(line As *Byte, n As Long, ByRef j As Long, ByRef inBlk As Long) As boolean
+    PpCmtEnterBlk = false
+    If Not PpCmtSlashStar(line, n, j) Then Exit Function
+    inBlk = 1
+    PpCmtEnterBlk = true
+End Function
+
+Sub PpCmtStepOut(line As *Byte, n As Long, ByRef j As Long, ByRef inBlk As Long)
+    If PpCmtTakeQuote(line, n, j) Then Exit Sub
+    If PpCmtTakeLine(line, n, j) Then Exit Sub
+    If PpCmtEnterBlk(line, n, j, inBlk) Then Exit Sub
+    j = j + 1
+End Sub
+
+Sub PpCmtStepIn(line As *Byte, n As Long, ByRef j As Long, ByRef inBlk As Long)
+    If PpCmtStarSlash(line, n, j) Then
+        inBlk = 0
+        Exit Sub
+    End If
+    j = j + 1
+End Sub
+
+Sub PpCmtStep(line As *Byte, n As Long, ByRef j As Long, ByRef inBlk As Long)
+    If inBlk <> 0 Then
+        PpCmtStepIn(line, n, j, inBlk)
+        Exit Sub
+    End If
+    PpCmtStepOut(line, n, j, inBlk)
+End Sub
+
+Sub PpCmtScanLine(line As *Byte, n As Long, ByRef inBlk As Long)
+    Dim j As Long
+    j = 0
+    While j < n
+        PpCmtStep(line, n, j, inBlk)
+    Wend
+End Sub
+
+Function PpHashLineHit(line As *Byte, n As Long, name As *Byte, ByRef inBlk As Long) As boolean
+    PpHashLineHit = false
+    If inBlk = 0 Then PpHashLineHit = PpLineIsHashDir(line, n, name)
+    If PpHashLineHit Then Exit Function
+    PpCmtScanLine(line, n, inBlk)
+End Function
+
+Sub PpHashCopy(src As *Byte, start As Long, line As *Byte, ln As Long)
+    Dim j As Long
+    j = 0
+    While j < ln
+        line[j] = src[start + j]
+        j = j + 1
+    Wend
+    line[ln] = CH_NUL
+End Sub
+
+Function PpHashFillLine(src As *Byte, start As Long, n As Long, line As *Byte) As Long
+    Dim ln As Long
+    ln = n
+    If ln >= PP_LINE_MAX Then ln = PP_LINE_MAX - 1
+    PpHashCopy(src, start, line, ln)
+    PpHashFillLine = ln
+End Function
+
+Sub PpHashSkipEol(src As *Byte, ByRef i As Long)
+    If src[i] = CH_CR Then i = i + 1
+    If src[i] = CH_NL Then i = i + 1
+End Sub
+
+Function PpHashSrcStep(src As *Byte, ByRef i As Long, name As *Byte, line As *Byte, ByRef inBlk As Long) As Long
+    Dim start As Long
+    Dim ln As Long
+    start = i
+    i = PpLineEndAt(src, start)
+    ln = PpHashFillLine(src, start, i - start, line)
+    PpHashSrcStep = 0
+    If PpHashLineHit(line, ln, name, inBlk) Then PpHashSrcStep = 1
+    PpHashSkipEol(src, i)
+End Function
+
+Function PpHashWalk(src As *Byte, name As *Byte, line As *Byte, ByRef i As Long, ByRef inBlk As Long) As Long
+    PpHashWalk = 0
+    While src[i] <> CH_NUL
+        PpHashWalk = PpHashSrcStep(src, i, name, line, inBlk)
+        If PpHashWalk <> 0 Then Exit Function
+    Wend
+End Function
+
+Function PpHashScanSrc(src As *Byte, name As *Byte, line As *Byte) As Long
+    Dim i As Long
+    Dim inBlk As Long
+    i = 0
+    inBlk = 0
+    PpHashScanSrc = PpHashWalk(src, name, line, i, inBlk)
+End Function
