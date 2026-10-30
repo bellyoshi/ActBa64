@@ -1,0 +1,103 @@
+' ramCmd / ramLen / ramReady を置いて GetCmd のトークンを見る
+
+Sub CmdRam(s As String)
+    lstrcpy(VarPtr(ramCmd), StrPtr(s))
+    ramLen = Len(s)
+    ramReady = 1
+End Sub
+
+Sub CmdExpect(idx As Long, s As String, msg As String)
+    Dim buf[MAX_PATH] As Byte
+    Dim found As Long
+    found = GetCmd(idx, VarPtr(buf))
+    Assert(1, found, msg)
+    Assert(true, ByteStrEq(s, VarPtr(buf)), msg)
+End Sub
+
+Sub CmdMiss(idx As Long, msg As String)
+    Dim buf[MAX_PATH] As Byte
+    buf[0] = 65
+    Assert(0, GetCmd(idx, VarPtr(buf)), msg)
+    Assert(0, buf[0], msg)
+End Sub
+
+Sub CmdPlain()
+    CmdRam("prog a b")
+    CmdExpect(0, "prog", "plain 0")
+    CmdExpect(1, "a", "plain 1")
+    CmdExpect(2, "b", "plain 2")
+    CmdMiss(3, "plain 3")
+End Sub
+
+Sub CmdQuoted()
+    CmdRam("prog ""hello world"" x")
+    CmdExpect(0, "prog", "quote 0")
+    CmdExpect(1, "hello world", "quote 1")
+    CmdExpect(2, "x", "quote 2")
+End Sub
+
+Sub CmdSpaces()
+    CmdRam("   prog   a")
+    CmdExpect(0, "prog", "lead 0")
+    CmdExpect(1, "a", "lead 1")
+    CmdRam("   ")
+    CmdMiss(0, "only sp")
+End Sub
+
+Sub CmdEmptyQuote()
+    CmdRam("prog """"")
+    CmdExpect(0, "prog", "empty q 0")
+    CmdExpect(1, "", "empty q 1")
+    CmdMiss(2, "empty q 2")
+End Sub
+
+Sub CmdOpenQuote()
+    CmdRam("prog ""abc")
+    CmdExpect(1, "abc", "open")
+    CmdRam("prog a""b c")
+    CmdExpect(1, "a""b", "mid")
+    CmdExpect(2, "c", "mid next")
+End Sub
+
+Sub CmdPair()
+    CmdRam("""a""""b""")
+    CmdExpect(0, "a", "pair 0")
+    CmdExpect(1, "b", "pair 1")
+End Sub
+
+Sub CmdTab()
+    CmdRam("prog" & Chr$(9) & "a b")
+    CmdExpect(0, "prog" & Chr$(9) & "a", "tab")
+    CmdExpect(1, "b", "tab next")
+End Sub
+
+Sub CmdEmpty()
+    CmdRam("")
+    CmdMiss(0, "empty")
+End Sub
+
+Sub CmdLen()
+    CmdRam("prog extra")
+    ramLen = 4
+    CmdExpect(0, "prog", "len 0")
+    CmdMiss(1, "len 1")
+End Sub
+
+Sub CmdOs()
+    Dim buf[MAX_PATH] As Byte
+    ramReady = 0
+    ramCmd[0] = 0
+    Assert(1, GetCmd(0, VarPtr(buf)), "os argv0")
+    Assert(false, (buf[0] = 0), "os nonempty")
+End Sub
+
+CmdPlain()
+CmdQuoted()
+CmdSpaces()
+CmdEmptyQuote()
+CmdOpenQuote()
+CmdPair()
+CmdTab()
+CmdEmpty()
+CmdLen()
+CmdOs()
