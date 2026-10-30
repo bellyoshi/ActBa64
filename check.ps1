@@ -1,0 +1,29 @@
+﻿# check.ps1 - コミット前は unit、プッシュ前は integration
+#
+#   .\check.ps1              # unit（src\unittest\rununittest.ps1）
+#   .\check.ps1 unit
+#   .\check.ps1 integration  # src\actba64\run_test2.ps1（既定 stage1・64bit）
+
+param(
+    [Parameter(Position = 0)]
+    [ValidateSet("unit", "integration")]
+    [string]$Kind = "unit"
+)
+
+$ErrorActionPreference = "Stop"
+$Root = $PSScriptRoot
+
+if ($Kind -eq "unit") {
+    $script = Join-Path $Root "src\unittest\rununittest.ps1"
+} else {
+    $script = Join-Path $Root "src\actba64\run_test2.ps1"
+}
+
+if (-not (Test-Path -LiteralPath $script)) {
+    Write-Error "not found: $script"
+    exit 2
+}
+
+Write-Host "=== check $Kind ==="
+& powershell -NoProfile -ExecutionPolicy Bypass -File $script
+exit $LASTEXITCODE

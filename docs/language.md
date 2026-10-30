@@ -387,6 +387,8 @@ For i = 式 To 式 [Step 式]
     ...
 Next
 
+制御変数が `Double` のとき、初期値・終値・`Step` は IEEE Double で加算・比較する。正の `Step` は変数が終値を超えたら抜け、負の `Step` は下回ったら抜ける。終値と等しい回は実行する。
+
 Do [While 式 | Until 式]
     ...
 Loop [While 式 | Until 式]

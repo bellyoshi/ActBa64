@@ -105,6 +105,11 @@ actba64 <src.abp|.pj> [-actba32] [-o <out>]
 
 ユニットテストは `src/unittest` に置く。将来はプロジェクト全体を覆う。今は `bool` と `ByteCharUtils` の `IsLower` である。`run_test2.ps1` の対象ではない。
 
+リポジトリ根の `check.ps1` が入口である。
+
+- **git commit の前**は必ず `.\check.ps1 unit`（引数なしも同じ）。失敗したらコミットしない。振る舞いを変えたら、コミットしなくてもユニットテストを回す。
+- **git push の前**は `.\check.ps1 integration`（下の `run_test2.ps1`、既定 stage1）。失敗したら push しない。
+
 ```powershell
 .\run_test2.ps1                 # bin\stage1\actba64.exe（既定・64bit）
 .\run_test2.ps1 stage0          # ブートストラップ起点（AB4.20 手動ビルド）の確認

@@ -1,0 +1,201 @@
+' For の制御変数が Double のとき、IEEE で加算・比較する
+
+Sub LowForCopyName(ctx As *LowerCtx, idx As Long, name As *Byte)
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, nodes[idx].left, name)
+End Sub
+
+Function LowForVarTy(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long, vTy As Long, vTypeIdx As Long, vByRef As Long, vGlob As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowForCopyName(ctx, idx, VarPtr(name))
+    LowForVarTy = TY_LONG
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then LowForVarTy = vTy
+End Function
+
+Function LowForDblBind(ctx As *LowerCtx, idx As Long, ByRef vOff As Long, ByRef vByRef As Long, ByRef vGlob As Long) As boolean
+    Dim vTy As Long, vTypeIdx As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowForDblBind = false
+    LowForCopyName(ctx, idx, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then LowForDblBind = true
+    If LowForDblBind Then Exit Function
+    ctx->err = 1
+End Function
+
+Function LowForEvalDbl(ctx As *LowerCtx, expr As Long) As boolean
+    LowForEvalDbl = false
+    If expr < 0 Then Exit Function
+    If LowExpr(ctx, expr) = 0 Then Exit Function
+    LowEmitCvtToDoubleIfNeeded(ctx, expr)
+    LowForEvalDbl = true
+End Function
+
+Sub LowForStoreByRef(ctx As *LowerCtx, vOff As Long, vGlob As Long)
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    LowEmitLoadOff(ctx->list, vOff, vGlob)
+    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+    IrEmit(ctx->list, OP_STORE_PTR, 0, 0)
+End Sub
+
+Sub LowForStoreDbl(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long)
+    If LowEmitStoreIfDbl(ctx->list, vOff, TY_DOUBLE, vByRef, vGlob) <> 0 Then Exit Sub
+    If vByRef <> 0 Then
+        LowForStoreByRef(ctx, vOff, vGlob)
+        Exit Sub
+    End If
+    LowEmitStoreOff(ctx->list, vOff, vGlob)
+End Sub
+
+Sub LowForLoadDbl(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long)
+    LowEmitLoadVarVal(ctx->list, vOff, TY_DOUBLE, vByRef, vGlob)
+End Sub
+
+Function LowForDblInit(ctx As *LowerCtx, idx As Long, vOff As Long, vByRef As Long, vGlob As Long) As boolean
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    LowForDblInit = false
+    ast = ctx->ast
+    nodes = ast->nodes
+    If Not LowForEvalDbl(ctx, nodes[idx].right) Then Exit Function
+    LowForStoreDbl(ctx, vOff, vByRef, vGlob)
+    LowForDblInit = true
+End Function
+
+Function LowForDblBin(ctx As *LowerCtx, right As Long, op As Long) As boolean
+    LowForDblBin = false
+    LowEmitPushOperand(ctx->list, TY_DOUBLE)
+    If Not LowForEvalDbl(ctx, right) Then Exit Function
+    LowEmitPopOperand(ctx->list, TY_DOUBLE)
+    IrEmit(ctx->list, op, 0, 0)
+    LowForDblBin = true
+End Function
+
+Sub LowForCmpZero(ctx As *LowerCtx, labNeg As Long)
+    LowEmitPushOperand(ctx->list, TY_DOUBLE)
+    IrEmit(ctx->list, OP_MOV_RAX_IMM64, 0, 0)
+    LowEmitPopOperand(ctx->list, TY_DOUBLE)
+    IrEmit(ctx->list, OP_UCOMISD, 0, 0)
+    IrEmit(ctx->list, OP_JB, labNeg, 0)
+End Sub
+
+Function LowForDblRel(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long, limit As Long, jcc As Long, lab As Long) As boolean
+    LowForDblRel = false
+    LowForLoadDbl(ctx, vOff, vByRef, vGlob)
+    If Not LowForDblBin(ctx, limit, OP_UCOMISD) Then Exit Function
+    IrEmit(ctx->list, jcc, lab, 0)
+    LowForDblRel = true
+End Function
+
+Function LowForDblCmpStep(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long, stepIdx As Long, limit As Long, labNeg As Long, labCont As Long, labEnd As Long) As boolean
+    LowForDblCmpStep = false
+    If Not LowForEvalDbl(ctx, stepIdx) Then Exit Function
+    LowForCmpZero(ctx, labNeg)
+    If Not LowForDblRel(ctx, vOff, vByRef, vGlob, limit, OP_JA, labEnd) Then Exit Function
+    IrEmit(ctx->list, OP_JMP, labCont, 0)
+    IrEmit(ctx->list, OP_LABEL, labNeg, 0)
+    LowForDblCmpStep = LowForDblRel(ctx, vOff, vByRef, vGlob, limit, OP_JB, labEnd)
+    IrEmit(ctx->list, OP_LABEL, labCont, 0)
+End Function
+
+Sub LowForDblLabs(ctx As *LowerCtx, ByRef labTop As Long, ByRef labEnd As Long, ByRef labNeg As Long, ByRef labCont As Long, ByRef labForCont As Long)
+    labTop = LowNewLabel(ctx)
+    labEnd = LowNewLabel(ctx)
+    labNeg = LowNewLabel(ctx)
+    labCont = LowNewLabel(ctx)
+    labForCont = LowNewLabel(ctx)
+    g_forEndLab = labEnd
+    g_forContLab = labForCont
+End Sub
+
+Function LowForDblHead(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long, stepIdx As Long, limit As Long, labNeg As Long, labCont As Long, labEnd As Long) As boolean
+    If stepIdx < 0 Then
+        LowForDblHead = LowForDblRel(ctx, vOff, vByRef, vGlob, limit, OP_JA, labEnd)
+        Exit Function
+    End If
+    LowForDblHead = LowForDblCmpStep(ctx, vOff, vByRef, vGlob, stepIdx, limit, labNeg, labCont, labEnd)
+End Function
+
+Sub LowForOneDbl(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_MOV_EAX_IMM, 1, 0)
+    IrEmit(ctx->list, OP_CVT_I32_TO_SD, 0, 0)
+End Sub
+
+Function LowForDblAddOne(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long) As boolean
+    LowForLoadDbl(ctx, vOff, vByRef, vGlob)
+    LowEmitPushOperand(ctx->list, TY_DOUBLE)
+    LowForOneDbl(ctx)
+    LowEmitPopOperand(ctx->list, TY_DOUBLE)
+    IrEmit(ctx->list, OP_ADD_SD, 0, 0)
+    LowForStoreDbl(ctx, vOff, vByRef, vGlob)
+    LowForDblAddOne = true
+End Function
+
+Function LowForDblAddExpr(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long, stepIdx As Long) As boolean
+    LowForDblAddExpr = false
+    LowForLoadDbl(ctx, vOff, vByRef, vGlob)
+    If Not LowForDblBin(ctx, stepIdx, OP_ADD_SD) Then Exit Function
+    LowForStoreDbl(ctx, vOff, vByRef, vGlob)
+    LowForDblAddExpr = true
+End Function
+
+Function LowForDblInc(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long, stepIdx As Long) As boolean
+    If stepIdx < 0 Then
+        LowForDblInc = LowForDblAddOne(ctx, vOff, vByRef, vGlob)
+        Exit Function
+    End If
+    LowForDblInc = LowForDblAddExpr(ctx, vOff, vByRef, vGlob, stepIdx)
+End Function
+
+Function LowForDblTail(ctx As *LowerCtx, vOff As Long, vByRef As Long, vGlob As Long, stepIdx As Long, labTop As Long, labForCont As Long) As boolean
+    IrEmit(ctx->list, OP_LABEL, labForCont, 0)
+    LowForDblTail = LowForDblInc(ctx, vOff, vByRef, vGlob, stepIdx)
+    If Not LowForDblTail Then Exit Function
+    IrEmit(ctx->list, OP_JMP, labTop, 0)
+    LowForDblTail = true
+End Function
+
+Function LowStmtForDblRun(ctx As *LowerCtx, idx As Long, vOff As Long, vByRef As Long, vGlob As Long, labTop As Long, labEnd As Long, labNeg As Long, labCont As Long) As boolean
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    IrEmit(ctx->list, OP_LABEL, labTop, 0)
+    LowMaybeLoopStrCollect(ctx, nodes[idx].extra, nodes[idx].num, nodes[idx].strId)
+    LowStmtForDblRun = LowForDblHead(ctx, vOff, vByRef, vGlob, nodes[idx].strId, nodes[idx].extra, labNeg, labCont, labEnd)
+End Function
+
+Function LowStmtForDblRest(ctx As *LowerCtx, idx As Long, vOff As Long, vByRef As Long, vGlob As Long, labTop As Long, labEnd As Long, labForCont As Long) As boolean
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowStmtList(ctx, nodes[idx].num) = 0 Then Exit Function
+    If Not LowForDblTail(ctx, vOff, vByRef, vGlob, nodes[idx].strId, labTop, labForCont) Then Exit Function
+    IrEmit(ctx->list, OP_LABEL, labEnd, 0)
+    LowStmtForDblRest = true
+End Function
+
+Function LowForDblEnter(ctx As *LowerCtx, idx As Long, ByRef vOff As Long, ByRef vByRef As Long, ByRef vGlob As Long) As Long
+    Dim labTop As Long, labEnd As Long, labNeg As Long, labCont As Long, labForCont As Long
+    LowForDblEnter = 0
+    If Not LowForDblBind(ctx, idx, vOff, vByRef, vGlob) Then Exit Function
+    If Not LowForDblInit(ctx, idx, vOff, vByRef, vGlob) Then Exit Function
+    LowForDblLabs(ctx, labTop, labEnd, labNeg, labCont, labForCont)
+    If Not LowStmtForDblRun(ctx, idx, vOff, vByRef, vGlob, labTop, labEnd, labNeg, labCont) Then Exit Function
+    If Not LowStmtForDblRest(ctx, idx, vOff, vByRef, vGlob, labTop, labEnd, labForCont) Then Exit Function
+    LowForDblEnter = 1
+End Function
+
+Function LowStmtForDbl(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long, vByRef As Long, vGlob As Long
+    Dim saveFor As Long, saveCont As Long
+    saveFor = g_forEndLab
+    saveCont = g_forContLab
+    LowStmtForDbl = LowForDblEnter(ctx, idx, vOff, vByRef, vGlob)
+    g_forEndLab = saveFor
+    g_forContLab = saveCont
+End Function
