@@ -99,9 +99,11 @@ actba64 <src.abp|.pj> [-actba32] [-o <out>]
 .\bin\stage2\actba64.exe hello.abp -actba32 -o hello32.exe
 ```
 
-### 回帰テスト
+### 統合テスト
 
-`test\` 内の `' Target: actba64` 付き `.abp` / `.pj` をコンパイルして実行する。既定 64bit と `-Actba32` の両方で回せる。
+`src/actba64/test`（`src\actba64` からは `test\`）は統合テストである。`' Target: actba64` 付き `.abp` / `.pj` をコンパイルして実行する。既定 64bit と `-Actba32` の両方で回せる。
+
+ユニットテストは `src/unittest` に置く。将来はプロジェクト全体を覆う。今は `bool` と `ByteCharUtils` の `IsLower` である。`run_test2.ps1` の対象ではない。
 
 ```powershell
 .\run_test2.ps1                 # bin\stage1\actba64.exe（既定・64bit）

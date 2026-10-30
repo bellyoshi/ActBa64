@@ -717,7 +717,7 @@ Lof(番号)   ' Input バッファ長、またはファイルサイズ／レコ�
 
 `Field` の割り当て変数形式（BasicHelp の拡張形）は未実装。
 
-回帰テスト例: `src/actba64/test/t_open_close.abp`、`t_input_hash*.abp`、`t_field_get_put.abp`、`t_write_file.abp`、`t_print_file.abp`、`t_eof_loc_lof.abp`
+統合テスト例: `src/actba64/test/t_open_close.abp`、`t_input_hash*.abp`、`t_field_get_put.abp`、`t_write_file.abp`、`t_print_file.abp`、`t_eof_loc_lof.abp`
 
 ### 7.6 カメラと射影（`dx_camera.sbp`）
 
@@ -940,4 +940,5 @@ End
 - エディタ向け actba64 リファレンス: [src/projecteditor/help/actba64_ref.html](../src/projecteditor/help/actba64_ref.html)（ヘルプメニュー / F1）
 - N88 図形サンプル: [src/actba64/samples/n88_shapes.abp](../src/actba64/samples/n88_shapes.abp)
 - Math サンプル: [src/actba64/samples/math_test.abp](../src/actba64/samples/math_test.abp)
-- 回帰テスト: `src/actba64/test/`（`' Target: actba64`。`run_test2.ps1` / `-Actba32`）。GUI 系は既定 SKIP（`-IncludeGui`）。詳細は [build.md](./build.md)
+- 統合テスト: `src/actba64/test/`（`' Target: actba64`。`run_test2.ps1` / `-Actba32`）。GUI 系は既定 SKIP（`-IncludeGui`）。詳細は [build.md](./build.md)
+- ユニットテスト: `src/unittest`。将来はプロジェクト全体を覆う。今は `bool` と `ByteCharUtils` の `IsLower`。
