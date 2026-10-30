@@ -157,13 +157,65 @@ Function Enc_EncodeText(ByVal text As String, ByVal encoding As Long, ByRef outL
     Enc_EncodeText = Enc_SaveUtf8(text, encoding, outLen)
 End Function
 
+' TextOutW / GetTextExtentPoint32W は日本語で TextShaping が落ちる。
+' 描画は ETO_IGNORELANGUAGE。幅は ASCII セルと全角 2 セルで足す。
+Function Enc_TakeCell(hDC As HDC, wide As *Byte, chars As Long, ByRef cy As Long) As Long
+    Dim sz As SIZE
+    Enc_TakeCell = 8
+    If EditorGetTextExtentPoint32W(hDC, wide, chars, sz) = 0 Then Exit Function
+    cy = sz.cy
+    Enc_TakeCell = sz.cx
+End Function
+
+Function Enc_CellCx(hDC As HDC, ByRef cy As Long) As Long
+    Dim wide As *Byte
+    Dim chars As Long
+    cy = 16
+    Enc_CellCx = 8
+    wide = Enc_Utf8ToWide("8", chars)
+    If wide = 0 Then Exit Function
+    Enc_CellCx = Enc_TakeCell(hDC, wide, chars, cy)
+    free(wide)
+End Function
+
+Function Enc_ChWidth(ch As Long, cell As Long) As Long
+    Enc_ChWidth = cell * 2
+    If ch < 128 Then Enc_ChWidth = cell
+    If ch >= &HFF61 And ch <= &HFF9F Then Enc_ChWidth = cell
+End Function
+
+Function Enc_AtWide(wide As *Byte, i As Long) As Long
+    Dim b0 As Long
+    Dim b1 As Long
+    b0 = wide[i * 2] And &HFF
+    b1 = wide[i * 2 + 1] And &HFF
+    Enc_AtWide = b0 + b1 * 256
+End Function
+
+Function Enc_WidthOf(wide As *Byte, chars As Long, cell As Long) As Long
+    Dim i As Long
+    Enc_WidthOf = 0
+    i = 0
+    While i < chars
+        Enc_WidthOf = Enc_WidthOf + Enc_ChWidth(Enc_AtWide(wide, i), cell)
+        i = i + 1
+    Wend
+End Function
+
+Function Enc_FillSize(hDC As HDC, wide As *Byte, chars As Long, ByRef lpSize As SIZE) As Long
+    Dim cell As Long
+    cell = Enc_CellCx(hDC, lpSize.cy)
+    lpSize.cx = Enc_WidthOf(wide, chars, cell)
+    Enc_FillSize = 1
+End Function
+
 Function Enc_TextExtentUtf8(ByVal hDC As HDC, ByVal text As String, ByRef lpSize As SIZE) As Long
     Dim wide As *Byte
     Dim chars As Long
     Enc_TextExtentUtf8 = 0
     wide = Enc_Utf8ToWide(text, chars)
     If wide = 0 Then Exit Function
-    Enc_TextExtentUtf8 = EditorGetTextExtentPoint32W(hDC, wide, chars, lpSize)
+    Enc_TextExtentUtf8 = Enc_FillSize(hDC, wide, chars, lpSize)
     free(wide)
 End Function
 
@@ -173,7 +225,7 @@ Function Enc_TextOutUtf8(ByVal hDC As HDC, ByVal x As Long, ByVal y As Long, ByV
     Enc_TextOutUtf8 = 0
     wide = Enc_Utf8ToWide(text, chars)
     If wide = 0 Then Exit Function
-    Enc_TextOutUtf8 = EditorTextOutW(hDC, x, y, wide, chars)
+    Enc_TextOutUtf8 = EditorExtTextOutW(hDC, x, y, &H1000, 0, wide, chars, 0)
     free(wide)
 End Function
 

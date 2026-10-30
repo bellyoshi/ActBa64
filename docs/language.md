@@ -114,13 +114,14 @@ DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出�
 N88 `LINE`（actba64 サブセット）:
 
 ```text
-LINE (x1,y1)-(x2,y2)[,color][,B|BF]
-LINE -(x2,y2)[,color][,B|BF]          ' 始点は LP（最終参照点）
+LINE [(x1,y1)]-[STEP](x2,y2)[,color][,B|BF]
+LINE -[STEP](x2,y2)[,color][,B|BF]    ' 始点は LP（最終参照点）。無ければ (0,0)
 ```
 
 - 省略時の `color` は 7（白）
+- `STEP` のとき `(x2,y2)` は始点からの相対。`LINE (50,50)-STEP(30,30)` は `(80,80)` まで
 - `B` = 四角形の枠、`BF` = 塗りつぶし四角
-- 実行後 LP は終点へ移動
+- 実行後 LP は絶対座標の終点へ移動
 
 N88 `CIRCLE`（actba64 サブセット）:
 

@@ -1,0 +1,56 @@
+' Expect: 0
+' Target: actba64
+' 日本語入りのソースを表示すると ProjectEditor が TextShaping で落ちる。
+' 表示したまま 2 秒生き残れば成功。
+
+Function PeSample$() As String
+    PeSample$ = "#console" + Chr$(13) + Chr$(10) + "Print """ + "正解" + """" + Chr$(13) + Chr$(10)
+End Function
+
+Function PeWrite(path As String, text As String) As Long
+    Dim h As HANDLE
+    PeWrite = 0
+    h = CreateFileA(StrPtr(path), &H40000000, 0, 0, 2, 0, 0)
+    If h = -1 Then Exit Function
+    WriteFile(h, StrPtr(text), Len(text), 0, 0)
+    CloseHandle(h)
+    PeWrite = 1
+End Function
+
+Sub PeFillSi(ByRef si As STARTUPINFO)
+    FillMemory(VarPtr(si), SizeOf(STARTUPINFO), 0)
+    si.cb = SizeOf(STARTUPINFO)
+    si.dwFlags = 1
+    si.wShowWindow = 1
+End Sub
+
+Function PeLaunch(cmd As *Byte, ByRef pi As PROCESS_INFORMATION) As Long
+    Dim si As STARTUPINFO
+    FillMemory(VarPtr(pi), SizeOf(PROCESS_INFORMATION), 0)
+    PeFillSi(si)
+    PeLaunch = CreateProcessA(0, cmd, 0, 0, 0, 0, 0, 0, si, pi)
+End Function
+
+Function PeAlive(ByRef pi As PROCESS_INFORMATION) As Long
+    Dim r As Long
+    PeAlive = 0
+    r = WaitForSingleObject(pi.hProcess, 2000)
+    If r = 258 Then PeAlive = 1
+End Function
+
+Dim cmd(300) As Byte
+Dim pi As PROCESS_INFORMATION
+Dim sample As String
+Dim editor As String
+
+sample = "sj_open_sample.abp"
+editor = "..\..\release\ProjectEditor.exe "
+If PeWrite(sample, PeSample$()) = 0 Then ExitProcess(2)
+lstrcpy(VarPtr(cmd), StrPtr(editor + sample))
+If PeLaunch(VarPtr(cmd), pi) = 0 Then ExitProcess(3)
+If PeAlive(pi) = 0 Then ExitProcess(1)
+TerminateProcess(pi.hProcess, 0)
+CloseHandle(pi.hProcess)
+CloseHandle(pi.hThread)
+DeleteFileA(StrPtr(sample))
+ExitProcess(0)
