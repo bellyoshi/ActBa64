@@ -1,0 +1,256 @@
+' 前面ソースの検索。Ctrl+F でダイアログ、F3 / Shift+F3 で次と前。
+' 一致範囲を選択する。空の検索語は何もしない。文書末と先頭を 1 周する。
+
+Const IDM_FIND = 1201
+Const IDM_FINDNEXT = 1202
+Const IDM_FINDPREV = 1203
+Const IDC_FIND_EDIT = 1301
+Const IDC_FIND_CASE = 1302
+Const IDC_FIND_NEXT = 1303
+Const IDC_FIND_PREV = 1304
+Const IDC_FIND_CLOSE = 1305
+Const FIND_EDIT_EX = &H200
+Const FIND_EDIT_STYLE = &H50810080
+Const FIND_BTN_STYLE = &H50010000
+Const FIND_CHK_STYLE = &H50010003
+
+Dim g_hFind As HWND
+Dim g_findNeedle As String
+Dim g_findCase As Long
+Dim g_findDone As Long
+Dim g_findDidShow As Long
+Dim g_findMenu As Long
+
+Declare Function Find_GetWindowTextW Lib "user32.dll" Alias "GetWindowTextW" (ByVal hWnd As HWND, ByVal lpString As *Byte, ByVal nMaxCount As Long) As Long
+Declare Function Find_GetWindowTextLengthW Lib "user32.dll" Alias "GetWindowTextLengthW" (ByVal hWnd As HWND) As Long
+Declare Function EditorFind_IsDlgMsg Lib "user32.dll" Alias "IsDialogMessageA" (ByVal hDlg As HWND, ByRef lpMsg As MSG) As Long
+
+Sub EditorFind_Font(hCtrl As HWND)
+    If hCtrl = 0 Then Exit Sub
+    SendMessage(hCtrl, WM_SETFONT, hFont_Setting As WPARAM, 1)
+End Sub
+
+Function EditorFind_Make(hWnd As HWND, cls As String, ByVal ex As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal ht As Long, ByVal id As Long) As HWND
+    Dim h As HWND
+    h = CreateWindowEx(ex, cls, "", style, x, y, w, ht, hWnd, id As HMENU, GetModuleHandle(0), 0)
+    EditorFind_Font(h)
+    EditorFind_Make = h
+End Function
+
+Function EditorFind_WideBytes(ByVal chars As Long) As Long
+    EditorFind_WideBytes = chars + 1
+    EditorFind_WideBytes = EditorFind_WideBytes * 2
+End Function
+
+Function EditorFind_Wide$(hEdit As HWND, ByVal chars As Long) As String
+    Dim wide As *Byte
+    EditorFind_Wide$ = ""
+    wide = malloc(EditorFind_WideBytes(chars))
+    If wide = 0 Then Exit Function
+    Find_GetWindowTextW(hEdit, wide, chars + 1)
+    EditorFind_Wide$ = Enc_WideToUtf8$(wide, chars)
+    free(wide)
+End Function
+
+Function EditorFind_EditText$(hEdit As HWND) As String
+    Dim chars As Long
+    EditorFind_EditText$ = ""
+    If hEdit = 0 Then Exit Function
+    chars = Find_GetWindowTextLengthW(hEdit)
+    If chars <= 0 Then Exit Function
+    EditorFind_EditText$ = EditorFind_Wide$(hEdit, chars)
+End Function
+
+Function EditorFind_Query$() As String
+    EditorFind_Query$ = g_findNeedle
+    If g_hFind = 0 Then Exit Function
+    EditorFind_Query$ = EditorFind_EditText$(GetDlgItem(g_hFind, IDC_FIND_EDIT))
+End Function
+
+Function EditorFind_CaseOn(hWnd As HWND) As Long
+    Dim h As HWND
+    EditorFind_CaseOn = 0
+    h = GetDlgItem(hWnd, IDC_FIND_CASE)
+    If h = 0 Then Exit Function
+    If SendMessage(h, BM_GETCHECK, 0, 0) = BST_CHECKED Then EditorFind_CaseOn = 1
+End Function
+
+Sub EditorFind_BuildEdit(hWnd As HWND)
+    Dim h As HWND
+    h = EditorFind_Make(hWnd, "EDIT", FIND_EDIT_EX, FIND_EDIT_STYLE, 12, 12, 440, 24, IDC_FIND_EDIT)
+    Setting_SetUtf8Text(h, g_findNeedle)
+    SendMessage(h, EM_SETSEL, 0, -1)
+End Sub
+
+Sub EditorFind_BuildCase(hWnd As HWND)
+    Dim h As HWND
+    h = EditorFind_Make(hWnd, "BUTTON", 0, FIND_CHK_STYLE, 12, 46, 440, 22, IDC_FIND_CASE)
+    Setting_SetUtf8Text(h, UiText$(UI_FIND_CASE))
+    SendMessage(h, BM_SETCHECK, g_findCase, 0)
+End Sub
+
+Sub EditorFind_Button(hWnd As HWND, ByVal x As Long, ByVal id As Long, ByVal uiId As Long)
+    Dim h As HWND
+    h = EditorFind_Make(hWnd, "BUTTON", 0, FIND_BTN_STYLE, x, 82, 140, 28, id)
+    Setting_SetUtf8Text(h, UiText$(uiId))
+End Sub
+
+Sub EditorFind_BuildButtons(hWnd As HWND)
+    EditorFind_Button(hWnd, 12, IDC_FIND_NEXT, UI_FIND_NEXT)
+    EditorFind_Button(hWnd, 160, IDC_FIND_PREV, UI_FIND_PREV)
+    EditorFind_Button(hWnd, 308, IDC_FIND_CLOSE, UI_FIND_CLOSE)
+End Sub
+
+Sub EditorFind_Build(hWnd As HWND)
+    Setting_SetUtf8Text(hWnd, UiText$(UI_FIND_TITLE))
+    EditorFind_BuildEdit(hWnd)
+    EditorFind_BuildCase(hWnd)
+    EditorFind_BuildButtons(hWnd)
+End Sub
+
+Function EditorFind_OriginFwd() As Long
+    EditorFind_OriginFwd = TextBuf_CursorIndex()
+    If TextBuf_HasSelection() <> 0 Then EditorFind_OriginFwd = TextBuf_SelEnd()
+End Function
+
+Function EditorFind_OriginBack() As Long
+    EditorFind_OriginBack = TextBuf_CursorIndex()
+    If TextBuf_HasSelection() <> 0 Then EditorFind_OriginBack = TextBuf_SelStart()
+End Function
+
+Function EditorFind_Hit(needle As String, ByVal forward As Long, ByVal matchCase As Long) As Long
+    Dim hay As String
+    hay = TextBuf_GetConfirmed$()
+    If forward = 0 Then EditorFind_Hit = FindText_Backward(hay, needle, EditorFind_OriginBack(), matchCase)
+    If forward <> 0 Then EditorFind_Hit = FindText_Forward(hay, needle, EditorFind_OriginFwd(), matchCase)
+End Function
+
+Function EditorFind_Owner() As HWND
+    EditorFind_Owner = g_hFind
+    If g_hFind = 0 Then EditorFind_Owner = hMainWnd
+End Function
+
+Sub EditorFind_Select(hWnd As HWND, ByVal at As Long, ByVal n As Long)
+    If hWnd = 0 Then Exit Sub
+    g_selAnchor = at
+    TextBuf_MoveCursorTo(at + n)
+    TextBuf_SyncPreferredCol()
+    VirtualScroll_EnsureCursorVisible(hWnd)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+Sub EditorFind_Apply(needle As String, ByVal forward As Long)
+    Dim hit As Long
+    hit = EditorFind_Hit(needle, forward, g_findCase)
+    If hit < 0 Then UiMsgBox(EditorFind_Owner(), UiText$(UI_FIND_NOT_FOUND), UiText$(UI_FIND_TITLE))
+    If hit >= 0 Then EditorFind_Select(g_activeChild, hit, Len(needle))
+End Sub
+
+Sub EditorFind_Go(ByVal forward As Long)
+    Dim needle As String
+    needle = EditorFind_Query$()
+    If Len(needle) = 0 Then Exit Sub
+    g_findNeedle = needle
+    g_findCase = EditorFind_CaseOn(g_hFind)
+    EditorFind_Apply(needle, forward)
+End Sub
+
+Sub EditorFind_OnCmd(ByVal id As Long, ByVal note As Long)
+    If note <> BN_CLICKED Then Exit Sub
+    If id = IDC_FIND_NEXT Then EditorFind_Go(1)
+    If id = IDC_FIND_PREV Then EditorFind_Go(0)
+    If id = IDC_FIND_CLOSE Then g_findDone = 1
+End Sub
+
+Function EditorFindProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
+    If dwMsg = WM_CLOSE Then g_findDone = 1
+    If dwMsg = WM_COMMAND Then EditorFind_OnCmd(LOWORD(wParam), HIWORD(wParam))
+    If dwMsg = WM_CLOSE Or dwMsg = WM_COMMAND Then EditorFindProc = 0
+    If dwMsg <> WM_CLOSE And dwMsg <> WM_COMMAND Then EditorFindProc = DefWindowProc(hWnd, dwMsg, wParam, lParam)
+End Function
+
+Sub EditorFind_Open(hOwner As HWND)
+    g_findDone = 0
+    g_hFind = CreateWindowEx(0, "NORMALDLG", "Find", &H00C80000, -2147483648, -2147483648, 480, 168, hOwner, 0 As HMENU, GetModuleHandle(0), 0)
+    If g_hFind = 0 Then Exit Sub
+    EditorSetWndProc(g_hFind, GWL_WNDPROC, AddressOf(EditorFindProc) As LONG_PTR)
+    EditorFind_Build(g_hFind)
+    ShowWindow(g_hFind, SW_SHOW)
+    SetFocus(GetDlgItem(g_hFind, IDC_FIND_EDIT))
+End Sub
+
+Sub EditorFind_Close(hOwner As HWND)
+    If g_hFind <> 0 Then DestroyWindow(g_hFind)
+    g_hFind = 0
+    g_findDone = 0
+    EnableWindow(hOwner, 1)
+    If g_activeChild <> 0 Then SetFocus(g_activeChild)
+End Sub
+
+Function EditorFind_NextMsg(ByRef msg As MSG) As Long
+    Dim r As Long
+    EditorFind_NextMsg = 1
+    r = GetMessage(msg, 0, 0, 0)
+    If r = 0 Then PostQuitMessage(msg.wParam)
+    If r = 0 Or r = -1 Then EditorFind_NextMsg = 0
+End Function
+
+Function EditorFind_KeyAct(ByVal vk As Long) As Long
+    EditorFind_KeyAct = 1
+    If vk = VK_ESCAPE Then g_findDone = 1
+    If vk = VK_RETURN Then EditorFind_Go(1)
+    If vk = VK_F3 Then EditorFind_F3()
+    If vk <> VK_ESCAPE And vk <> VK_RETURN And vk <> VK_F3 Then EditorFind_KeyAct = 0
+End Function
+
+Sub EditorFind_F3()
+    If EditorKeys_Shift() <> 0 Then EditorFind_Go(0)
+    If EditorKeys_Shift() = 0 Then EditorFind_Go(1)
+End Sub
+
+Function EditorFind_Key(ByRef msg As MSG) As Long
+    EditorFind_Key = 0
+    If msg.message <> WM_KEYDOWN Then Exit Function
+    EditorFind_Key = EditorFind_KeyAct(msg.wParam)
+End Function
+
+Function EditorFind_Pump() As Long
+    Dim msg As MSG
+    EditorFind_Pump = EditorFind_NextMsg(msg)
+    If EditorFind_Pump = 0 Then Exit Function
+    If EditorFind_Key(msg) <> 0 Then Exit Function
+    If EditorFind_IsDlgMsg(g_hFind, msg) <> 0 Then Exit Function
+    TranslateMessage(msg)
+    DispatchMessage(msg)
+End Function
+
+Sub EditorFind_Modal(hOwner As HWND)
+    EnableWindow(hOwner, 0)
+    While g_findDone = 0
+        If EditorFind_Pump() = 0 Then g_findDone = 1
+    Wend
+    EditorFind_Close(hOwner)
+End Sub
+
+Sub EditorFind_Show()
+    If g_hFind <> 0 Then Exit Sub
+    g_findDidShow = 1
+    EditorFind_Open(hMainWnd)
+    If g_hFind = 0 Then Exit Sub
+    EditorFind_Modal(hMainWnd)
+End Sub
+
+Sub EditorFind_Again(ByVal forward As Long)
+    g_findDidShow = 0
+    If Len(g_findNeedle) = 0 Then EditorFind_Show()
+    If g_findDidShow <> 0 Then Exit Sub
+    If Len(g_findNeedle) = 0 Then Exit Sub
+    EditorFind_Apply(g_findNeedle, forward)
+End Sub
+
+Sub EditorFind_Command(ByVal id As Long)
+    If g_activeChild = 0 Then Exit Sub
+    If id = IDM_FIND Then EditorFind_Show()
+    If id = IDM_FINDNEXT Then EditorFind_Again(1)
+    If id = IDM_FINDPREV Then EditorFind_Again(0)
+End Sub
