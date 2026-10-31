@@ -12,8 +12,98 @@ Sub BasicBeep()
     MessageBeep(0)
 End Sub
 
+' UTF-8 のバイト列を、ANSI API へ渡す CP932（末尾 0）へ。変換できないときは元のポインタ。
+Function BasicUtf8Chars(p As *Byte, n As Long) As Long
+    BasicUtf8Chars = 0
+    If n <= 0 Then Exit Function
+    BasicUtf8Chars = MultiByteToWideChar(65001, 8, p, n, 0, 0)
+End Function
+
+Function BasicWideBuf(chars As Long) As *Byte
+    BasicWideBuf = 0
+    If chars <= 0 Then Exit Function
+    BasicWideBuf = malloc((chars + 1) * 2)
+End Function
+
+Function BasicToWide(p As *Byte, n As Long, chars As Long) As *Byte
+    Dim wide As *Byte
+    BasicToWide = 0
+    wide = BasicWideBuf(chars)
+    If wide = 0 Then Exit Function
+    BasicToWide = wide
+    If MultiByteToWideChar(65001, 8, p, n, wide, chars) > 0 Then Exit Function
+    free(wide)
+    BasicToWide = 0
+End Function
+
+Function BasicCpLen(wide As *Byte, chars As Long) As Long
+    BasicCpLen = 0
+    If chars <= 0 Then Exit Function
+    BasicCpLen = WideCharToMultiByte(932, 0, wide As *Word, chars, 0, 0, 0, 0)
+End Function
+
+Function BasicCpBuf(n As Long) As *Byte
+    Dim p As *Byte
+    BasicCpBuf = 0
+    If n <= 0 Then Exit Function
+    p = malloc(n + 1)
+    BasicCpBuf = p
+    If p = 0 Then Exit Function
+    p[n] = 0
+End Function
+
+Function BasicFillCp(wide As *Byte, chars As Long, p As *Byte, n As Long) As Long
+    BasicFillCp = 0
+    If p = 0 Then Exit Function
+    BasicFillCp = WideCharToMultiByte(932, 0, wide As *Word, chars, p, n, 0, 0)
+End Function
+
+Function BasicCpKeep(p As *Byte, ok As Long) As *Byte
+    BasicCpKeep = 0
+    If ok > 0 Then BasicCpKeep = p
+    If ok > 0 Then Exit Function
+    If p <> 0 Then free(p)
+End Function
+
+Function BasicCpOfWide(wide As *Byte, chars As Long) As *Byte
+    Dim n As Long, p As *Byte
+    n = BasicCpLen(wide, chars)
+    p = BasicCpBuf(n)
+    BasicCpOfWide = BasicCpKeep(p, BasicFillCp(wide, chars, p, n))
+End Function
+
+Function BasicCpFree(wide As *Byte, chars As Long) As *Byte
+    BasicCpFree = BasicCpOfWide(wide, chars)
+    free(wide)
+End Function
+
+Function BasicAnsiPtr(raw As *Byte) As *Byte
+    Dim n As Long, chars As Long, wide As *Byte
+    BasicAnsiPtr = raw
+    If raw = 0 Then Exit Function
+    n = lstrlen(raw)
+    chars = BasicUtf8Chars(raw, n)
+    wide = BasicToWide(raw, n, chars)
+    If wide = 0 Then Exit Function
+    BasicAnsiPtr = BasicCpFree(wide, chars)
+End Function
+
+Sub BasicFreeAnsi(p As *Byte, raw As *Byte)
+    If p = 0 Or p = raw Then Exit Sub
+    free(p)
+End Sub
+
+Function MessageBox(hWnd As HWND, text As *Byte, title As *Byte, typ As DWord) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicAnsiPtr(text)
+    b = BasicAnsiPtr(title)
+    MessageBox = MessageBoxA(hWnd, a, b, typ)
+    BasicFreeAnsi(a, text)
+    BasicFreeAnsi(b, title)
+End Function
+
 Function BasicMsgBox(hWnd As HWND, text As String, title As String, typ As DWord) As Long
-    BasicMsgBox = MessageBoxA(hWnd, StrPtr(text), StrPtr(title), typ)
+    BasicMsgBox = MessageBox(hWnd, StrPtr(text), StrPtr(title), typ)
 End Function
 
 Function BasicDelWnd(hWnd As HWND) As Long
@@ -73,8 +163,11 @@ End Function
 
 Function BasicWindow(ByRef hWnd As HWND, hOwner As HWND, x As Long, y As Long, w As Long, h As Long, title As String, style As DWord, className As String, id As HMENU, proc As Long, exStyle As DWord) As HWND
     Dim wndCls As String
+    Dim cap As *Byte
     wndCls = BasicWndClass$(className)
-    hWnd = CreateWindowEx(exStyle, StrPtr(wndCls), StrPtr(title), style, x, y, w, h, hOwner, id, GetModuleHandle(0), proc)
+    cap = BasicAnsiPtr(StrPtr(title))
+    hWnd = CreateWindowEx(exStyle, StrPtr(wndCls), cap, style, x, y, w, h, hOwner, id, GetModuleHandle(0), proc)
+    BasicFreeAnsi(cap, StrPtr(title))
     BasicWindow = hWnd
 End Function
 
