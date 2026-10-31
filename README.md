@@ -52,7 +52,7 @@ cd src\actba64
 .\run_test2.ps1 stage2 -IncludeGui
 ```
 
-詳細・メタデータ・スキップ規則は [docs/build.md](docs/build.md) の「統合テスト」を参照。ユニットテストは `src/unittest`（今は bool と IsLower。将来はプロジェクト全体）。コミット前は `.\check.ps1 unit`、プッシュ前は `.\check.ps1 integration`。
+詳細・メタデータ・スキップ規則は [docs/build.md](docs/build.md) の「統合テスト」を参照。ユニットテストは `src/unittest`。コミット前は `.\check.ps1 unit`、プッシュ前は `.\check.ps1 integration`。
 
 ## 使い方
 

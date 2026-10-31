@@ -26,11 +26,14 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 - コメント:
   - `'` から行末
   - `/* ... */` ブロック（ネスト不可。途中にも可）
+- `#` 指令はコメントと `"..."` の外だけを見る。行コメント、ブロックコメント、文字列の中の `#console` などは指令にならない
 - 識別子: `[A-Za-z_][A-Za-z0-9_]*`、末尾 `$` 可（例: `Left$`）
 - 整数: 十進 / `&H` 十六進
 - 小数リテラル: `1.5` / `1.12345` など（符号・小数点付き十進）。字句テキストを保持し、**AST 上で IEEE 754 Double ビット**（`num`=下位32 / `left`=上位32）に変換する。科学記法（`1.0e10`）は未対応。コード生成は 64bit が `movabs rax, imm64`、`-actba32` は `edx:eax`
 - 文字列リテラル: `"..."`（`""` で `"`）
 - 識別子の大小文字: **定数・変数・Sub/Function・Type/Class 名は区別する**（AB 4.20 同様。`Foo` と `foo` は別）。**言語キーワード**（`If` / `Then` / `Dim` 等）と **組み込みランタイム名**（`FillMemory` / `malloc` 等）の認識のみ大小無視
+- 未定義の名前はコンパイルエラー。メッセージは `"名前" 無効な識別子です。`
+- 空白を挟まない `SelectCase` / `EndSelect` / `EndIf` / `EndSub` / `EndFunction` / `ExitFunction` / `ExitSub` は、間に空白を入れた形と同じ
 - 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）。単行 `If ... Then` では、同じ行の `:` で続く文と `Else` はその `If` の一部です
 
 行の継続:
@@ -145,8 +148,8 @@ PAINT (x, y), color1 [, color2]
 PSET (x, y) [, color]       ' 1 ドット。color 省略は 7（白）
 ```
 
-- `LOCATE` 後の `Print` は窓上の文字位置へ描画（`;` なしなら次行へ）
-- 数値の `Print` は正なら先頭空白、常に末尾空白を付け、`Str$`（Long）／`StrD$`（Double。64bit と `-actba32`）で文字列化してから描画
+- `LOCATE` 後の `Print` は窓上の文字位置へ描画する。`;` が無いと次の行へ進み、桁を 0 に戻す。`;` は同じ行に残し、描いた桁だけ進む。先頭バイトが `&H80` 以上の文字は 2 桁
+- 数値の `Print` は `Str$`（Long）／`StrD$`（Double。64bit と `-actba32`）の文字だけを描く
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
 - `PSET` は `(x,y)` に 1 ドットを描く。`#n88basic` / `#prompt` のときだけ有効。実行後 LP はその点へ移動
 - `Dim name`（型も `$` も無いスカラー）は `Double`。N88 の無印変数（単精度）の受け皿
@@ -284,7 +287,7 @@ End Sub
 - `ByRef` 対応。呼び出し側の `ByVal` は無視してよい。構造体引数は `ByRef` 必須（`ByVal` と指定なしはエラー）。フィールド代入は呼び出し元に残る
 - 戻り値は `Function名 = 式`
 - 同じ名前の `Sub` / `Function` はコンパイルエラー（大小は区別しない）
-- `Exit Sub` / `Exit Function`
+- `Exit Sub` / `Exit Function`。空白なしの `ExitSub` / `ExitFunction` も同じ
 - ネストした `Sub`/`Function` は不可
 - `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT。任意 DLL・自作可。拡張子省略時は `.dll`。詳細は [§8](#8-winapi--iat)）
 - `Function Export Name` / `Sub Export Name` は DLL のエクスポート（[§8.4](#84-dll-を出力する)）
@@ -400,7 +403,7 @@ With 式
     .field = ...
 End With
 
-Print [式 [{; | ,} 式 ...]] [;]  ' `;` は改行せず続ける。数値は符号桁と末尾空白
+Print [式 [{; | ,} 式 ...]] [;]  ' `;` は空白を挟んで改行しない。`,` はタブ。数値は Str$ / StrD$ の文字だけ
 Print #番号, [式 [, ...]] [;]  ' ファイルへ。項目間はカンマ。`;` で改行抑制
 Input ["prompt" ,|;] 変数 [, 変数 ...]  ' 1行をカンマで分割。足りなければ次の行
 Input #番号, 変数 [, ...]  ' ファイルからフィールド読み取り
@@ -458,9 +461,9 @@ ExitProcess(式)
 
 - `Cls` の `n` は受け取るが、グラフィック画面は無いので常にコンソールをクリアする
 - `MsgBox` は `hWnd` と `text$` が必須。`title$` の省略は空、`type` の省略は 0。第 5 引数があるときだけ `MessageBoxA` の戻り値をその変数へ代入する
-- `Window` の `hWnd` は `ByRef HWND`。`class$` を省略すると `ActBa64Wnd` を一度だけ登録する（ウィンドウ手続きは `DefWindowProc`）。`id` 以降の省略は 0。メッセージループは作らない。`proc` は `CreateWindowEx` の `lpParam` に渡す
+- `Window` の `hWnd` は `ByRef HWND`。`class$` を省略すると `ActBa64Wnd` を一度だけ登録する（ウィンドウ手続きは `DefWindowProc`）。引数の空欄（`, ,`）と、`id` 以降の省略は 0。メッセージループは作らない。`proc` は `CreateWindowEx` の `lpParam` に渡す
 - `Exec` の `cmd$` を省略すると空文字にする
-- `Date$()` / `Time$()` は文ではなく関数（`BasicCmd.abp`）。それぞれ `yyyy/mm/dd` と `hh:mm:ss` で、月日と時刻は 2 桁。`Str$` の先頭空白は付けない
+- `Date$()` / `Time$()` は文ではなく関数（`BasicCmd.abp`）。それぞれ `yyyy/mm/dd` と `hh:mm:ss` で、月日と時刻は 2 桁
 
 行番号は付けても付けなくてもよい。文の先頭の整数が行番号で、その行に文が無くてもエラーにしない。`100 PRINT A` は 100 の位置から `PRINT` へ落ちる。文の先頭の `*名前` も同じ位置のラベルで、`*start Print 1` は `start` から `Print` へ落ちる。改行して始まる `*名前` はラベルで、`_` で続けた行の `*` は掛け算のまま。同じ行番号や同じ名前が何度あっても、`GoTo` や `GoSub` の飛び先でなければエラーにしない。飛び先が無い、または二つ以上あるときはコンパイルエラー。名前の大小は区別する。`GoTo` と `GoSub` の飛び先は行番号か `*名前`。`GoSub` は戻る場所を覚えて移り、`Return` で戻る。`GoSub` していない `Return` は終了コード 1 でプロセスを終える。
 
@@ -491,6 +494,8 @@ ExitProcess(式)
 
 文字列の関係演算は辞書順（`lstrcmpA`）。長さが違い途中まで一致したら短い方が小さい。  
 `As` は例: `&H12345678 As Word` → `&H5678`。`#strict` 時は異なる型の変数代入、`Long` から `Byte` への代入（呼び出し結果を含む）、引数の `String`→`VoidPtr` と `VoidPtr`→`Long` が warning（`As` キャストで抑制）。
+
+`Double` / `Single` を `Long` または `Byte` へ代入するとき、およびその型の仮引数へ渡すときは、0 方向へ切り捨てる。`Circle (x + 100, y + 100)` の中心は、`x` と `y` が `Double` でもその整数座標になる。
 
 ### 5.2 アドレス・サイズ・組込
 
@@ -565,7 +570,9 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 
 ## 6. 文字列
 
-- 表現: ActiveBasic 4.20 互換。ヒープ／静的データの直前 4 バイトに長さ（dword）、ポインタはデータ先頭を指す
+- 表現: ヒープ／静的データの直前 4 バイトに長さ（dword）、ポインタはデータ先頭を指す。中身のバイト列は UTF-8。ソースが妥当な UTF-8（先頭の BOM は読み飛ばす）ならそのまま、そうでなければ CP932 として読んで UTF-8 にする
+- `s[n]` はデータ先頭から 0 始まりの 1 バイト（0..255）。`"ab"` の `s[0]` は 97
+- コンソール画面への `Print` は、出力コードページが 932 のときだけ CP932 で出す。パイプとファイルへは UTF-8 のまま。`#n88basic` の窓文字は UTF-8 をワイド文字にして描く
 - `Len(s)` はその長さを返す（`lstrlen` ではない）。`Chr$(0)` は長さ 1
 - 末尾に WinAPI 用の NUL を付けるが、データ中の埋め込み NUL も有効
 - `StrPtr(s)` はデータ先頭（恒等）。`MakeStr(p)` は NUL 終端 `BytePtr` から長さ付き String を複製
@@ -640,14 +647,14 @@ Print Log(MathE())    ' ≒ 1
 `Sin` / `Cos` / `Tan` / `SinDeg` / `CosDeg` / `Atn` / `Exp` / `Log` / `Log10` /
 `Fix` / `Int` / `Rnd` / `Randomize` / `DegToRad` / `RadToDeg`。
 `CDbl` / `CSng` / `CInt` / `CDWord` は `CvtNum.abp`（`CDbl` は Double、`CSng` は Single、`CInt` は四捨五入した Long。0.5 は 0 から遠い側。`CDWord` は切捨て）。
-`ldexp` / `frexp` / `ipow` / `pow` / `rand` / `srand` は `Pow.abp`。`rand` は 0..32767。`Rnd` とは種を共有しない。
+`ldexp` / `frexp` / `ipow` / `pow` / `rand` / `srand` は `Pow.abp`。種の初期値は 1。`rand` は `next = next * 1103515245 + 12345` のあと `(next >> 16) And 32767`（0..32767）。`Rnd` はこの種を 2 回進める。
 `Val` は `Val.abp` で Double（空白、符号、小数、`&H` / `&O`）。`String$(n, s)` は `s` を `n` 回繰り返す。`GetBasicColor(0..7)` は N88 の 8 色。
 `Print Using "fmt"; expr` は値 1 つ。`#` / `.#` は数値、文字列リテラルは `@` と `& &`。同じ処理は `Using$` / `UsingStr$`。
 
 - 小数リテラル・`Function As Double` / Double 仮引数はすべて IEEE Double ビット
 - N88 `CIRCLE` の角度・aspect も `Double`（内部の千分率表現は廃止）
 - `Input` / `Input #` の `Double`/`Single` は十進文字列を `ValDouble` で IEEE 化（`Single` はその後 `cvtsd2ss`）
-- `Rnd()` は `[0, 1)` の Double。`Abs` は Double 引数
+- `Rnd()` は `CDbl((rand() * rand()) Mod 100000) / 100000`（`[0, 1)`）。種を置かない最初の呼び出しは 0.53204。`Randomize` は `GetTickCount` で種を置き、`RandomizeSeed(n)` は種を `n` にする。`Abs` は Double 引数
 - `-actba32` でもスカラー、配列要素、UDT フィールドの Double 演算と `Math.abp`・`StrD$` は動く。`Print` / `Print #` / `Write` の Double は `StrD$` を自動で呼ぶ
 
 `Space$(n)` は `Space.abp` から常時利用可。ネストした関数呼び出しは対応する。複雑な入れ子は一時変数経由が安全。
@@ -702,7 +709,7 @@ Print #番号, [式 [, 式 ...]] [;]
 ```
 
 - `Write` で `#番号` なし → 標準出力。`Print #` は番号必須
-- 値の区切りは **カンマ**（画面 `Print` は `;` で同じ行に続ける。数値は正なら先頭空白、末尾にも空白）
+- 値の区切りは **カンマ**（画面 `Print` の `;` は空白、`,` はタブ。数値は `Str$` / `StrD$` の文字だけ）
 - 末尾 `;` なしなら CRLF を付ける
 - 数値は `Str$` / `StrD$` で文字列化してから出力
 
@@ -848,7 +855,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 | 出力 | PE32+ / AMD64 | PE32 / i386 |
 | ポインタ / `String` / `HANDLE` | 8 バイト | 4 バイト |
 | `Long` | 4 | 4（LP64 ではない） |
-| 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop） |
+| 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース。呼び出し直前は 16 バイト整列。右辺の API 呼び出しも同じ） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop） |
 | `Declare Lib` | ○ | ○ |
 | DLL 優先ベース | `0x180000000` | `0x10000000` |
 | DLL `.reloc` | 空の再配置表（コードは RIP 相対） | 絶対アドレスの HIGHLOW |
