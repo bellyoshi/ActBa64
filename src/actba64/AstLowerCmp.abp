@@ -8,9 +8,15 @@ Function LowEmitStrCmp(ctx As *LowerCtx, leftIdx As Long, rightIdx As Long) As b
     Dim labB As Long
     Dim lab As Long
 
+    Dim raw As Long
+    Dim sApi(KW_LEN - 1) As Byte
+
     LowEmitStrCmp = false
     list = ctx->list
     empty[0] = 0
+    raw = 0
+    If LowExprIsCStr(ctx, leftIdx) <> 0 Then raw = 1
+    If LowExprIsCStr(ctx, rightIdx) <> 0 Then raw = 1
     lab = LowEnsureRtStrCmp(ctx)
     labA = LowNewLabel(ctx)
     labB = LowNewLabel(ctx)
@@ -27,9 +33,27 @@ Function LowEmitStrCmp(ctx As *LowerCtx, leftIdx As Long, rightIdx As Long) As b
     IrEmit(list, OP_LABEL, labB, 0)
     IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
-    LowEmitCallLab2(list, lab)
+    If raw <> 0 Then
+        lstrcpy(VarPtr(sApi), "lstrcmpA")
+        LowEmitLstrcmp(list, VarPtr(sApi))
+    Else
+        LowEmitCallLab2(list, lab)
+    End If
     LowEmitStrCmp = true
 End Function
+
+' ecx=左、edx=右。C 文字列は lstrcmpA（長さヘッダを読まない）。
+Sub LowEmitLstrcmp(list As *IrList, api As *Byte)
+    If TyIs32() <> 0 Then
+        IrEmit(list, OP_MOV_EAX_EDX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        IrEmit(list, OP_PUSH_RAX, 0, 0)
+        IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, api)
+        Exit Sub
+    End If
+    LowEmitApiCallShadow(list, IR_DLL_KERNEL32, api)
+End Sub
 
 ' 文字列比較（TEST eax）で偽になる jcc
 Function LowCmpFalseJccStr(ctx As *LowerCtx, op As Long) As Long
