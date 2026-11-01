@@ -108,9 +108,101 @@ Function LowIsStringExpr(ctx As *LowerCtx, idx As Long) As Long
         LowIsStringExpr = LowIsStringExprName(ctx, idx)
         Exit Function
     End If
+    If kind = AST_INDEX Then
+        LowIsStringExpr = LowIsStringArrIdx(ctx, idx)
+        Exit Function
+    End If
     If kind = AST_CALL Then
         LowIsStringExpr = LowIsStringExprName(ctx, idx)
     End If
+End Function
+
+' 文字列配列の要素。長さ付き String として比較する。
+Function LowIsStringArrIdx(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim base As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+
+    LowIsStringArrIdx = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    base = nodes[idx].left
+    If nodes[base].kind <> AST_VAR Then Exit Function
+    AstCopyStr(ast, base, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+    If vTy = TY_STRING_ARR Then LowIsStringArrIdx = 1
+End Function
+
+' フィールドを持たないポインタ幅の TypeDef（VoidPtr = *Byte）。
+Function LowUdtIsPtr(ctx As *LowerCtx, ti As Long) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim firsts As *Long
+    Dim sizes As *Long
+    LowUdtIsPtr = 0
+    If ti < 0 Then Exit Function
+    ast = ctx->ast
+    types = ast->types
+    firsts = types->typeFirst
+    sizes = types->typeSizes
+    If firsts[ti] >= 0 Then Exit Function
+    If sizes[ti] <> TyPtrSize() Then Exit Function
+    LowUdtIsPtr = 1
+End Function
+
+' VoidPtr / *Byte。長さヘッダはなく、NUL までの C 文字列。
+Function LowExprIsCStr(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim kind As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long
+    Dim vTy As Long
+    Dim vTypeIdx As Long
+    Dim vByRef As Long
+    Dim vGlob As Long
+
+    LowExprIsCStr = 0
+    If idx < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    kind = nodes[idx].kind
+    If kind = AST_VAR Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+        If vTy = TY_PTR_BYTE Then
+            LowExprIsCStr = 1
+            Exit Function
+        End If
+        If vTy = TY_LONG And vTypeIdx = LOW_PTI_VOID Then
+            LowExprIsCStr = 1
+            Exit Function
+        End If
+        If vTy = TY_UDT Then
+            LowExprIsCStr = LowUdtIsPtr(ctx, vTypeIdx)
+        End If
+        Exit Function
+    End If
+    If kind = AST_MEMBER Then LowExprIsCStr = LowFieldIsCStr(ctx, idx)
+End Function
+
+' *Byte、またはフィールドなしポインタ幅の TypeDef（VoidPtr）。
+Function LowFieldIsCStr(ctx As *LowerCtx, idx As Long) As Long
+    Dim ft As Long
+    LowFieldIsCStr = 0
+    ft = LowMemberFieldTy(ctx, idx)
+    If ft = FIELDTY_PTR_BYTE Then
+        LowFieldIsCStr = 1
+        Exit Function
+    End If
+    If ft < 0 Then Exit Function
+    LowFieldIsCStr = LowUdtIsPtr(ctx, ft)
 End Function
 
 Function LowEnsureLab(ctx As *LowerCtx, ByRef lab As Long) As Long

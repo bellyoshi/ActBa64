@@ -184,6 +184,9 @@ Function LowStmtAssignIndex(ctx As *LowerCtx, idx As Long) As Long
     leftIdx = nodes[idx].left
     leftK = nodes[leftIdx].kind
     If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    If leftK = AST_INDEX Then
+        If LowIsStringArrIdx(ctx, leftIdx) <> 0 Then LowCopyCStr(ctx, nodes[idx].right)
+    End If
     If leftK = AST_CALL Then
         AstCopyStr(ast, leftIdx, VarPtr(name))
         If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
@@ -289,6 +292,14 @@ Function LowStmtAssignMember(ctx As *LowerCtx, idx As Long) As Long
     LowStmtAssignMember = LowAssignMemGo(ctx, idx, leftIdx, LowAssignMemSize(ctx, leftIdx))
 End Function
 
+' C 文字列を String へ入れるときは長さ付きの複製にする。バッファの再利用で中身が消えない。
+Sub LowCopyCStr(ctx As *LowerCtx, rhsIdx As Long)
+    Dim lab As Long
+    If LowExprIsCStr(ctx, rhsIdx) = 0 Then Exit Sub
+    lab = LowEnsureRtMakeStr(ctx)
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+End Sub
+
 Function LowStmtAssignVar(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(LOW_STACK_PAD - 1) As Byte
     Dim vOff As Long
@@ -315,6 +326,7 @@ Function LowStmtAssignVar(ctx As *LowerCtx, idx As Long) As Long
     If vTy = TY_SINGLE Then folded = LowEmitSingleF64Lit(ctx, nodes[idx].right)
     If folded = 0 Then
         If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        If vTy = TY_STRING Then LowCopyCStr(ctx, nodes[idx].right)
         If vTy = TY_SINGLE Then
             LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
         ElseIf vTy = TY_DOUBLE Then
