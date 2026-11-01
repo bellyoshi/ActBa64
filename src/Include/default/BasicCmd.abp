@@ -93,6 +93,145 @@ Sub BasicFreeAnsi(p As *Byte, raw As *Byte)
     free(p)
 End Sub
 
+' 二重 NUL までのバイト数。フィルタの区間区切りを残すため lstrlen は使わない。
+Function BasicMultiSpan(p As *Byte) As Long
+    Dim i As Long
+    BasicMultiSpan = 0
+    If p = 0 Then Exit Function
+    i = 0
+    While (p[i] <> 0) Or (p[i + 1] <> 0)
+        i = i + 1
+    Wend
+    BasicMultiSpan = i + 2
+End Function
+
+Function BasicSegLen(p As *Byte, at As Long) As Long
+    Dim i As Long
+    i = at
+    While p[i] <> 0
+        i = i + 1
+    Wend
+    BasicSegLen = i - at
+End Function
+
+Function BasicCopyAt(dst As *Byte, at As Long, src As *Byte, n As Long) As Long
+    Dim i As Long
+    i = 0
+    While i < n
+        dst[at + i] = src[i]
+        i = i + 1
+    Wend
+    dst[at + n] = 0
+    BasicCopyAt = at + n + 1
+End Function
+
+Function BasicAnsiSeg(p As *Byte, at As Long, n As Long) As *Byte
+    Dim chars As Long, wide As *Byte
+    chars = BasicUtf8Chars(VarPtr(p[at]), n)
+    wide = BasicToWide(VarPtr(p[at]), n, chars)
+    BasicAnsiSeg = 0
+    If wide = 0 Then Exit Function
+    BasicAnsiSeg = BasicCpFree(wide, chars)
+End Function
+
+Function BasicTakeSeg(raw As *Byte, i As Long, ByRef n As Long) As *Byte
+    n = BasicSegLen(raw, i)
+    BasicTakeSeg = BasicAnsiSeg(raw, i, n)
+End Function
+
+Function BasicMultiStep(raw As *Byte, dst As *Byte, ByRef at As Long, ByRef i As Long) As Long
+    Dim n As Long, seg As *Byte
+    seg = BasicTakeSeg(raw, i, n)
+    BasicMultiStep = 0
+    If seg = 0 Then Exit Function
+    at = BasicCopyAt(dst, at, seg, lstrlen(seg))
+    free(seg)
+    i = i + n + 1
+    BasicMultiStep = 1
+End Function
+
+Function BasicMultiRun(raw As *Byte, dst As *Byte, n As Long, ByRef at As Long) As Long
+    Dim i As Long
+    i = 0
+    at = 0
+    BasicMultiRun = 0
+    While i < n - 2
+        If BasicMultiStep(raw, dst, at, i) = 0 Then Exit Function
+    Wend
+    BasicMultiRun = 1
+End Function
+
+Function BasicMultiDrop(dst As *Byte, ok As Long) As *Byte
+    BasicMultiDrop = dst
+    If ok <> 0 Then Exit Function
+    free(dst)
+    BasicMultiDrop = 0
+End Function
+
+Function BasicMultiStore(raw As *Byte, n As Long) As *Byte
+    Dim dst As *Byte, at As Long
+    dst = malloc(n)
+    BasicMultiStore = 0
+    If dst = 0 Then Exit Function
+    dst = BasicMultiDrop(dst, BasicMultiRun(raw, dst, n, at))
+    If dst = 0 Then Exit Function
+    dst[at] = 0
+    BasicMultiStore = dst
+End Function
+
+Function BasicAnsiMulti(raw As *Byte) As *Byte
+    Dim n As Long, p As *Byte
+    BasicAnsiMulti = raw
+    If raw = 0 Then Exit Function
+    n = BasicMultiSpan(raw)
+    If n <= 2 Then Exit Function
+    p = BasicMultiStore(raw, n)
+    If p <> 0 Then BasicAnsiMulti = p
+End Function
+
+Function BasicOfnConv(raw As VoidPtr, multi As Long) As VoidPtr
+    BasicOfnConv = raw
+    If raw = 0 Then Exit Function
+    If multi <> 0 Then BasicOfnConv = BasicAnsiMulti(raw As *Byte)
+    If multi = 0 Then BasicOfnConv = BasicAnsiPtr(raw As *Byte)
+End Function
+
+Sub BasicOfnPrep(ByRef ofn As OPENFILENAME, ByRef f As VoidPtr, ByRef t As VoidPtr, ByRef d As VoidPtr, ByRef e As VoidPtr)
+    f = ofn.lpstrFilter
+    t = ofn.lpstrTitle
+    d = ofn.lpstrInitialDir
+    e = ofn.lpstrDefExt
+    ofn.lpstrFilter = BasicOfnConv(f, 1)
+    ofn.lpstrTitle = BasicOfnConv(t, 0)
+    ofn.lpstrInitialDir = BasicOfnConv(d, 0)
+    ofn.lpstrDefExt = BasicOfnConv(e, 0)
+End Sub
+
+Sub BasicOfnUndo(ByRef ofn As OPENFILENAME, f As VoidPtr, t As VoidPtr, d As VoidPtr, e As VoidPtr)
+    BasicFreeAnsi(ofn.lpstrFilter As *Byte, f As *Byte)
+    BasicFreeAnsi(ofn.lpstrTitle As *Byte, t As *Byte)
+    BasicFreeAnsi(ofn.lpstrInitialDir As *Byte, d As *Byte)
+    BasicFreeAnsi(ofn.lpstrDefExt As *Byte, e As *Byte)
+    ofn.lpstrFilter = f
+    ofn.lpstrTitle = t
+    ofn.lpstrInitialDir = d
+    ofn.lpstrDefExt = e
+End Sub
+
+Function GetOpenFileName(ByRef lpofn As OPENFILENAME) As Long
+    Dim f As VoidPtr, t As VoidPtr, d As VoidPtr, e As VoidPtr
+    BasicOfnPrep(lpofn, f, t, d, e)
+    GetOpenFileName = GetOpenFileNameA(lpofn)
+    BasicOfnUndo(lpofn, f, t, d, e)
+End Function
+
+Function GetSaveFileName(ByRef lpofn As OPENFILENAME) As Long
+    Dim f As VoidPtr, t As VoidPtr, d As VoidPtr, e As VoidPtr
+    BasicOfnPrep(lpofn, f, t, d, e)
+    GetSaveFileName = GetSaveFileNameA(lpofn)
+    BasicOfnUndo(lpofn, f, t, d, e)
+End Function
+
 Function MessageBox(hWnd As HWND, text As *Byte, title As *Byte, typ As DWord) As Long
     Dim a As *Byte, b As *Byte
     a = BasicAnsiPtr(text)
