@@ -100,7 +100,8 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
         IrEmit(list, OP_SUB_RSP, callBytes, 0)
     End If
     If Not LowEmitCallArgHomes(ctx, idx, nArgs, byBits, isApi, VarPtr(name)) Then Exit Function
-    LowEmitLoadRegArgs(list, nArgs)
+    LowEmitPadArgs(ctx, idx, nArgs, byBits, isApi, VarPtr(name))
+    LowEmitLoadRegArgs(list, LowCallAllArgs(ctx, VarPtr(name), nArgs, isApi))
     If isApi <> 0 Then
         IrEmitStr(list, OP_CALL_API, dllKind, apiName)
     Else
@@ -255,9 +256,68 @@ Function LowStackHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As L
 End Function
 
 Function LowEmitCallBytes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, isApi As Long, name As *Byte) As Long
+    Dim nAll As Long
+    nAll = LowCallAllArgs(ctx, name, nArgs, isApi)
     If TyIs32() <> 0 And isApi = 0 Then
-        LowEmitCallBytes = LowStackHomes(ctx, idx, nArgs, byBits, name)
+        LowEmitCallBytes = LowStackHomes(ctx, idx, nArgs, byBits, name) + LowPadBytes(ctx, name, nArgs, nAll, byBits)
         Exit Function
     End If
-    LowEmitCallBytes = LowCallBytes(nArgs)
+    LowEmitCallBytes = LowCallBytes(nAll)
 End Function
+
+' 省略した引数も仮引数の数だけ渡す
+Function LowCallAllArgs(ctx As *LowerCtx, name As *Byte, nArgs As Long, isApi As Long) As Long
+    Dim i As Long
+    LowCallAllArgs = nArgs
+    If isApi <> 0 Then Exit Function
+    i = LowFuncIndex(ctx, name)
+    If i < 0 Then Exit Function
+    If LowNargsAt(i) > nArgs Then LowCallAllArgs = LowNargsAt(i)
+End Function
+
+Function LowArgBit(argIdx As Long) As Long
+    Dim j As Long
+    LowArgBit = 1
+    j = 0
+    While j < argIdx
+        LowArgBit = LowArgBit * 2
+        j = j + 1
+    Wend
+End Function
+
+Function LowPadSlot(ctx As *LowerCtx, name As *Byte, argIdx As Long, byBits As Long) As Long
+    Dim useAddr As Long
+    useAddr = 0
+    If (byBits And LowArgBit(argIdx)) <> 0 Then useAddr = 1
+    LowPadSlot = LowNextArgBytes(ctx, name, argIdx, useAddr, 0)
+End Function
+
+Function LowPadBytes(ctx As *LowerCtx, name As *Byte, nArgs As Long, nAll As Long, byBits As Long) As Long
+    Dim k As Long
+    LowPadBytes = 0
+    For k = nArgs To nAll - 1
+        LowPadBytes = LowPadBytes + LowPadSlot(ctx, name, k, byBits)
+    Next
+End Function
+
+Function LowPadStart(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, name As *Byte) As Long
+    LowPadStart = nArgs * TyPtrSize()
+    If TyIs32() <> 0 Then LowPadStart = LowStackHomes(ctx, idx, nArgs, byBits, name)
+End Function
+
+' 足りない引数の場所に 0 を置く。ByRef なら NULL。
+Sub LowEmitPadArgs(ctx As *LowerCtx, idx As Long, nArgs As Long, byBits As Long, isApi As Long, name As *Byte)
+    Dim k As Long, home As Long, slot As Long
+    home = LowPadStart(ctx, idx, nArgs, byBits, name)
+    For k = nArgs To LowCallAllArgs(ctx, name, nArgs, isApi) - 1
+        slot = LowPadSlot(ctx, name, k, byBits)
+        LowEmitPadZero(ctx->list, home, slot)
+        home = home + slot
+    Next
+End Sub
+
+Sub LowEmitPadZero(list As *IrList, home As Long, slot As Long)
+    IrEmit(list, OP_MOV_EAX_IMM, 0, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, home, 0)
+    If slot = 8 And TyIs32() <> 0 Then IrEmit(list, OP_STORE_RSP_RAX, home + 4, 0)
+End Sub

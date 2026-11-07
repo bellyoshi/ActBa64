@@ -204,25 +204,43 @@ Function ParseParamEllipsis(p As *Parser) As Long
     ParseParamEllipsis = 1
 End Function
 
-Function ParseParamList(p As *Parser, ByRef nFirst As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As boolean
-    Dim ast As *Ast
-    Dim nPrev As Long
-
-    ParseParamList = false
-    ast = p->ast
-    nFirst = -1
-    nPrev = -1
-    nParams = 0
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseParamItems(p As *Parser, ByRef nFirst As Long, ByRef nPrev As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As boolean
+    ParseParamItems = false
     If ParseTokKind(p) <> TK_RPAREN Then
         Do
             If ParseParamEllipsis(p) <> 0 Then Exit Do
-            If Not ParseParamOne(p, ast, nFirst, nPrev, nParams, allowDblStar, allowDouble) Then Exit Function
+            If Not ParseParamOne(p, p->ast, nFirst, nPrev, nParams, allowDblStar, allowDouble) Then Exit Function
             If ParseTokKind(p) <> TK_COMMA Then Exit Do
             p->pos = p->pos + 1
         Loop
     End If
-    If Not ParseExpect(p, TK_RPAREN) Then Exit Function
-    ParseParamList = true
+    ParseParamItems = ParseExpect(p, TK_RPAREN)
+End Function
+
+' 同じ行で ")(" と続けば、後ろの括弧は省略できる引数。
+Function ParseParamMore(p As *Parser) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    ParseParamMore = 0
+    If ParseTokKind(p) <> TK_LPAREN Then Exit Function
+    lx = p->lx
+    toks = lx->toks
+    If toks[p->pos - 1].srcLine <> ParseTokLine(p) Then Exit Function
+    p->pos = p->pos + 1
+    ParseParamMore = 1
+End Function
+
+Function ParseParamList(p As *Parser, ByRef nFirst As Long, ByRef nParams As Long, allowDblStar As Long, allowDouble As Long) As boolean
+    Dim nPrev As Long
+    ParseParamList = false
+    nFirst = -1
+    nPrev = -1
+    nParams = 0
+    If Not ParseParamItems(p, nFirst, nPrev, nParams, allowDblStar, allowDouble) Then Exit Function
+    If ParseParamMore(p) = 0 Then ParseParamList = true
+    If ParseParamList Then Exit Function
+    ParseParamList = ParseParamItems(p, nFirst, nPrev, nParams, allowDblStar, allowDouble)
 End Function
 
 Function ParseFuncRetLongStr(p As *Parser, ByRef retTy As Long) As Long
