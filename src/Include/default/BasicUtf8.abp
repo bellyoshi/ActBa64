@@ -1,6 +1,9 @@
 ' 窓の文字列 API。引数のバイト列は UTF-8。ワイド文字 API へ渡す。
 ' 値が 65535 以下のクラス名はアトムなので変換しない。
 
+Dim g_clsName As *Byte
+Dim g_clsMenu As *Byte
+
 Function BasicAtom(raw As *Byte) As Long
     BasicAtom = 0
     If raw = 0 Then BasicAtom = 1
@@ -47,6 +50,75 @@ Function BasicWidePtr(raw As *Byte) As *Byte
         Exit Function
     End If
     BasicWidePtr = BasicWideOrRaw(raw)
+End Function
+
+' n が負なら NUL まで。raw が 0 なら 0。
+Function BasicSpanLen(raw As *Byte, n As Long) As Long
+    BasicSpanLen = 0
+    If raw = 0 Then Exit Function
+    BasicSpanLen = n
+    If n < 0 Then BasicSpanLen = lstrlen(raw)
+End Function
+
+' 長さ指定の UTF-8 をワイドにする。失敗時は raw を返し chars は 0。
+Function BasicWideChars(wide As *Byte) As Long
+    Dim i As Long
+    BasicWideChars = 0
+    If BasicAtom(wide) <> 0 Then Exit Function
+    i = 0
+    While wide[i] <> 0 Or wide[i + 1] <> 0
+        i = i + 2
+    Wend
+    BasicWideChars = i / 2
+End Function
+
+Function BasicUtf8OfWide(wide As *Byte) As *Byte
+    Dim chars As Long, n As Long, p As *Byte
+    chars = BasicWideChars(wide)
+    n = BasicUtf8Len(wide, chars)
+    p = malloc(n + 1)
+    BasicUtf8OfWide = 0
+    If p = 0 Then Exit Function
+    GwPutFit(wide, chars, p, n + 1)
+    BasicUtf8OfWide = p
+End Function
+
+Function BasicKeepUtf8(ByRef slot As *Byte, wide As *Byte) As *Byte
+    BasicKeepUtf8 = wide
+    If BasicAtom(wide) <> 0 Then Exit Function
+    If slot <> 0 Then free(slot)
+    slot = BasicUtf8OfWide(wide)
+    BasicKeepUtf8 = slot
+    If slot <> 0 Then Exit Function
+    BasicKeepUtf8 = wide
+End Function
+
+Function BasicDupUtf8(raw As *Byte) As *Byte
+    Dim n As Long, p As *Byte
+    n = lstrlen(raw)
+    p = malloc(n + 1)
+    BasicDupUtf8 = p
+    If p = 0 Then Exit Function
+    lstrcpy(p, raw)
+End Function
+
+' 戻り値がアトムや NULL でも、名前で引いたときはその UTF-8 を返す。
+Function BasicClassOut(ByRef slot As *Byte, wide As *Byte, raw As *Byte) As *Byte
+    BasicClassOut = BasicKeepUtf8(slot, wide)
+    If BasicAtom(BasicClassOut) = 0 Then Exit Function
+    If BasicAtom(raw) <> 0 Then Exit Function
+    If slot <> 0 And slot <> wide Then free(slot)
+    slot = BasicDupUtf8(raw)
+    BasicClassOut = slot
+End Function
+
+Function BasicWideSpan(raw As *Byte, n As Long, ByRef chars As Long) As *Byte
+    chars = BasicUtf8Chars(raw, BasicSpanLen(raw, n))
+    BasicWideSpan = raw
+    If chars <= 0 Then Exit Function
+    BasicWideSpan = BasicWideOf(raw, BasicSpanLen(raw, n))
+    If BasicWideSpan = 0 Then chars = 0
+    If BasicWideSpan = 0 Then BasicWideSpan = raw
 End Function
 
 Function GwAlloc(chars As Long) As *Byte

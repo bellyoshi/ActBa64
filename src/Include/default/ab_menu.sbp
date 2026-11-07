@@ -138,19 +138,115 @@ Const GMDI_GOINTOPOPUPS = &H0002
 
 Declare Function GetMenuDefaultItem Lib "user32.dll" (hMenu As HMENU, fByPos As DWord, gmdiFlags As DWord) As DWord
 
-Declare Function GetMenuItemInfo Lib "user32.dll" Alias "GetMenuItemInfoA" (hMenu As HMENU, uItem As DWord, fByPosition As DWord, ByRef lpmii As MENUITEMINFO) As Long
+Declare Function GetMenuItemInfoA Lib "user32.dll" (hMenu As HMENU, uItem As DWord, fByPosition As DWord, ByRef lpmii As MENUITEMINFO) As Long
+Declare Function GetMenuItemInfoW Lib "user32.dll" (hMenu As HMENU, uItem As DWord, fByPosition As DWord, ByRef lpmii As MENUITEMINFO) As Long
 
 Declare Function GetSubMenu Lib "user32.dll" (hMenu As HMENU, nPos As Long) As HMENU
 
 Declare Function GetSystemMenu Lib "user32.dll" (hWnd As HWND, bRevert As Long) As HMENU
 
-Declare Function InsertMenuItem Lib "user32.dll" Alias "InsertMenuItemA" (hMenu As HMENU, uItem As DWord, fByPosition As DWord, ByRef lpmii As MENUITEMINFO) As Long
+Declare Function InsertMenuItemA Lib "user32.dll" (hMenu As HMENU, uItem As DWord, fByPosition As DWord, ByRef lpmii As MENUITEMINFO) As Long
+Declare Function InsertMenuItemW Lib "user32.dll" (hMenu As HMENU, uItem As DWord, fByPosition As DWord, ByRef lpmii As MENUITEMINFO) As Long
 
 Declare Function RemoveMenu Lib "user32.dll" (hMenu As HMENU, uPosition As DWord, uFlags As DWord) As Long
 
 Declare Function SetMenuDefaultItem Lib "user32.dll" (hMenu As HMENU, uItem As DWord, fByPos As DWord) As Long
 
-Declare Function SetMenuItemInfo Lib "user32.dll" Alias "SetMenuItemInfoA" (hMenu As HMENU, uItem As DWord, fByPosition As Long, ByRef lpmii As MENUITEMINFO) As Long
+Declare Function SetMenuItemInfoA Lib "user32.dll" (hMenu As HMENU, uItem As DWord, fByPosition As Long, ByRef lpmii As MENUITEMINFO) As Long
+Declare Function SetMenuItemInfoW Lib "user32.dll" (hMenu As HMENU, uItem As DWord, fByPosition As Long, ByRef lpmii As MENUITEMINFO) As Long
+
+' MIIM_STRING、または MIIM_TYPE で区切り・ビットマップ・オーナードロー以外
+Function BasicMiiText(fMask As DWord, fType As DWord) As Long
+    BasicMiiText = 0
+    If (fMask And MIIM_STRING) <> 0 Then BasicMiiText = 1
+    If (fMask And MIIM_TYPE) = 0 Then Exit Function
+    If (fType And &H904) <> 0 Then BasicMiiText = 0
+    If (fType And &H904) = 0 Then BasicMiiText = 1
+End Function
+
+Function BasicMiiWide(ByRef mii As MENUITEMINFO) As *Byte
+    BasicMiiWide = mii.dwTypeData
+    If BasicMiiText(mii.fMask, mii.fType) = 0 Then Exit Function
+    mii.dwTypeData = BasicWidePtr(BasicMiiWide)
+End Function
+
+Sub BasicMiiDone(ByRef mii As MENUITEMINFO, raw As *Byte)
+    BasicFreeAnsi(mii.dwTypeData, raw)
+    mii.dwTypeData = raw
+End Sub
+
+Function InsertMenuItem(hMenu As HMENU, uItem As DWord, byPos As DWord, ByRef mii As MENUITEMINFO) As Long
+    Dim raw As *Byte
+    raw = BasicMiiWide(mii)
+    InsertMenuItem = InsertMenuItemW(hMenu, uItem, byPos, mii)
+    BasicMiiDone(mii, raw)
+End Function
+
+Function SetMenuItemInfo(hMenu As HMENU, uItem As DWord, byPos As Long, ByRef mii As MENUITEMINFO) As Long
+    Dim raw As *Byte
+    raw = BasicMiiWide(mii)
+    SetMenuItemInfo = SetMenuItemInfoW(hMenu, uItem, byPos, mii)
+    BasicMiiDone(mii, raw)
+End Function
+
+Function BasicMiiBuf(cap As Long) As *Byte
+    BasicMiiBuf = 0
+    If cap <= 0 Then Exit Function
+    BasicMiiBuf = GwAlloc(cap)
+End Function
+
+Function BasicMiiStore(wide As *Byte, got As Long, raw As *Byte, cap As Long) As Long
+    BasicMiiStore = got
+    If raw = 0 Or wide = 0 Then Exit Function
+    BasicMiiStore = GwPut(wide, got, raw, cap)
+End Function
+
+Sub BasicMiiRestore(ByRef mii As MENUITEMINFO, raw As *Byte, wide As *Byte, chars As Long)
+    If wide <> 0 Then free(wide)
+    mii.dwTypeData = raw
+    mii.cch = chars
+End Sub
+
+Function BasicMiiPull(hMenu As HMENU, item As DWord, byPos As DWord, ByRef mii As MENUITEMINFO, raw As *Byte, cap As Long) As Long
+    Dim wide As *Byte, chars As Long
+    wide = BasicMiiBuf(cap)
+    mii.dwTypeData = wide
+    mii.cch = cap
+    BasicMiiPull = GetMenuItemInfoW(hMenu, item, byPos, mii)
+    chars = BasicMiiStore(wide, mii.cch, raw, cap)
+    BasicMiiRestore(mii, raw, wide, chars)
+End Function
+
+Function GetMenuItemInfo(hMenu As HMENU, uItem As DWord, byPos As DWord, ByRef mii As MENUITEMINFO) As Long
+    Dim raw As *Byte, cap As Long
+    If BasicMiiText(mii.fMask, mii.fType) = 0 Then GetMenuItemInfo = GetMenuItemInfoW(hMenu, uItem, byPos, mii)
+    If BasicMiiText(mii.fMask, mii.fType) = 0 Then Exit Function
+    raw = mii.dwTypeData
+    cap = mii.cch
+    GetMenuItemInfo = BasicMiiPull(hMenu, uItem, byPos, mii, raw, cap)
+End Function
+
+Declare Function ModifyMenuA Lib "user32.dll" (hMenu As HMENU, uPosition As DWord, uFlags As DWord, uIDNewItem As HMENU, lpNewItem As *Byte) As Long
+Declare Function ModifyMenuW Lib "user32.dll" (hMenu As HMENU, uPosition As DWord, uFlags As DWord, uIDNewItem As HMENU, lpNewItem As *Byte) As Long
+Declare Function GetMenuStringA Lib "user32.dll" (hMenu As HMENU, uIDItem As DWord, lpString As *Byte, cchMax As Long, flags As DWord) As Long
+Declare Function GetMenuStringW Lib "user32.dll" (hMenu As HMENU, uIDItem As DWord, lpString As *Byte, cchMax As Long, flags As DWord) As Long
+
+Function ModifyMenu(hMenu As HMENU, pos As DWord, flags As DWord, id As HMENU, item As *Byte) As Long
+    Dim p As *Byte
+    p = BasicMenuWide(flags, item)
+    ModifyMenu = ModifyMenuW(hMenu, pos, flags, id, p)
+    BasicMenuDrop()
+End Function
+
+Function GetMenuString(hMenu As HMENU, id As DWord, buf As *Byte, cchMax As Long, flags As DWord) As Long
+    Dim chars As Long, wide As *Byte
+    GetMenuString = 0
+    If GwReady(buf, cchMax) = 0 Then Exit Function
+    wide = GwAlloc(cchMax)
+    If wide = 0 Then Exit Function
+    chars = GetMenuStringW(hMenu, id, wide, cchMax, flags)
+    GetMenuString = GwFinish(wide, chars, buf, cchMax)
+End Function
 
 Const TPM_LEFTBUTTON =   &H0000
 
