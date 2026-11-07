@@ -1,0 +1,86 @@
+' N88 の Input。UI スレッドの WM_CHAR を 1 行に貯め、Enter まで待つ。
+
+Sub N88_OnDestroy()
+    N88_FailUi()
+    PostQuitMessage(0)
+End Sub
+
+Sub N88_AdvanceRow()
+    g_n88CurX = 0
+    g_n88CurY = g_n88CurY + 1
+End Sub
+
+Function N88_TakeLine$() As String
+    If g_n88Closed <> 0 Then Exit Function
+    N88_AdvanceRow()
+    N88_TakeLine$ = N88_LineText$()
+End Function
+
+Sub N88_ArmLine()
+    N88_LineReset()
+    g_n88InputOn = 1
+    ResetEvent(g_n88LineEv)
+End Sub
+
+Sub N88_WaitLine()
+    If g_n88Closed <> 0 Then Exit Sub
+    WaitForSingleObject(g_n88LineEv, INFINITE)
+    g_n88InputOn = 0
+End Sub
+
+Function N88_ReadLine() As String
+    N88_ArmLine()
+    N88_WaitLine()
+    N88_ReadLine = N88_TakeLine$()
+End Function
+
+Sub N88_OnEnter()
+    N88_LineEnter()
+    g_n88InputOn = 0
+    SetEvent(g_n88LineEv)
+End Sub
+
+Sub N88_EchoChar(ch As Long)
+    Dim buf(1) As Byte
+    buf[0] = ch
+    buf[1] = 0
+    N88_PrintStay(VarPtr(buf))
+End Sub
+
+Sub N88_EchoSpace()
+    Dim buf(1) As Byte
+    buf[0] = 32
+    buf[1] = 0
+    N88_PutText(VarPtr(buf))
+End Sub
+
+Sub N88_EchoBack()
+    If g_n88CurX <= 0 Then Exit Sub
+    g_n88CurX = g_n88CurX - 1
+    N88_EchoSpace()
+End Sub
+
+Sub N88_OnBack()
+    If N88_LineBack() = 0 Then Exit Sub
+    N88_EchoBack()
+End Sub
+
+Sub N88_OnPrintable(ch As Long)
+    If N88_LineAdd(ch) = 0 Then Exit Sub
+    N88_EchoChar(ch)
+End Sub
+
+Sub N88_OnChar(ch As Long)
+    If ch = N88_CH_CR Or ch = N88_CH_LF Then N88_OnEnter()
+    If ch = N88_CH_BS Then N88_OnBack()
+    If ch >= 32 Then N88_OnPrintable(ch)
+End Sub
+
+Function N88_OnMsg(message As DWord, wParam As WPARAM) As Long
+    N88_OnMsg = 0
+    If message = WM_KEYDOWN Then N88_TakeKey(wParam)
+    If message <> WM_CHAR Then Exit Function
+    If g_n88InputOn = 0 Then Exit Function
+    N88_OnChar(wParam And 255)
+    N88_OnMsg = 1
+End Function

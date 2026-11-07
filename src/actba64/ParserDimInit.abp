@@ -1,0 +1,84 @@
+' Dim の = [ ... ] と、境界付き As *Byte
+
+Function ParseDimAsPrim(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
+    ParseDimAsPrim = false
+    If ParseAsPrimType(p, bound, ty, ti) = 0 Then Exit Function
+    ParseDimAsPrim = true
+End Function
+
+Function ParseDimAsStar(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As boolean
+    ParseDimAsStar = false
+    If ParseAsPtrType(p, ty, ti, params) = 0 Then Exit Function
+    If bound >= 0 And ty = TY_PTR_BYTE Then ty = TY_PTR_BYTE_ARR
+    ParseDimAsStar = true
+End Function
+
+Function ParseDimPushFirst(p As *Parser, e As Long, ByRef prev As Long, ByRef head As Long) As boolean
+    ParseDimPushFirst = false
+    head = ParseIdxArg(p, e)
+    If head < 0 Then Exit Function
+    prev = head
+    ParseDimPushFirst = true
+End Function
+
+Function ParseDimPushNext(p As *Parser, e As Long, ByRef prev As Long) As boolean
+    ParseDimPushNext = false
+    prev = ParseIdxLink(p, prev, e)
+    If prev < 0 Then Exit Function
+    ParseDimPushNext = true
+End Function
+
+Function ParseDimPush(p As *Parser, e As Long, ByRef prev As Long, ByRef head As Long) As boolean
+    ParseDimPush = false
+    If head < 0 Then
+        ParseDimPush = ParseDimPushFirst(p, e, prev, head)
+        Exit Function
+    End If
+    ParseDimPush = ParseDimPushNext(p, e, prev)
+End Function
+
+Function ParseDimStep(p As *Parser, ByRef prev As Long, ByRef head As Long, ByRef more As Long) As boolean
+    Dim e As Long
+    ParseDimStep = false
+    e = ParseExprNoAs(p)
+    If e < 0 Then Exit Function
+    If Not ParseDimPush(p, e, prev, head) Then Exit Function
+    more = 0
+    If ParseTokKind(p) = TK_COMMA Then more = 1
+    ParseDimStep = true
+End Function
+
+Function ParseDimEat(p As *Parser, ByRef prev As Long, ByRef head As Long, ByRef more As Long) As boolean
+    ParseDimEat = false
+    If Not ParseDimStep(p, prev, head, more) Then Exit Function
+    If more <> 0 Then p->pos = p->pos + 1
+    ParseDimEat = true
+End Function
+
+Function ParseDimElems(p As *Parser, ByRef head As Long) As boolean
+    Dim prev As Long, more As Long
+    head = -1: prev = -1: more = 1
+    ParseDimElems = true
+    While more <> 0
+        ParseDimElems = ParseDimEat(p, prev, head, more)
+        If Not ParseDimElems Then Exit Function
+    Wend
+End Function
+
+Function ParseDimBracket(p As *Parser, ByRef initE As Long) As boolean
+    ParseDimBracket = false
+    p->pos = p->pos + 1
+    If Not ParseDimElems(p, initE) Then Exit Function
+    ParseDimBracket = ParseExpect(p, TK_RBRACK)
+End Function
+
+Function ParseDimInitExpr(p As *Parser, ByRef initE As Long) As boolean
+    ParseDimInitExpr = false
+    If ParseTokKind(p) = TK_LBRACK Then
+        ParseDimInitExpr = ParseDimBracket(p, initE)
+        Exit Function
+    End If
+    initE = ParseExprNoAs(p)
+    If initE < 0 Then Exit Function
+    ParseDimInitExpr = true
+End Function

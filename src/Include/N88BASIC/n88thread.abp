@@ -1,0 +1,90 @@
+' N88 の UI スレッド。窓を作ったスレッドが GetMessage する。
+' プログラムはメインスレッドのまま。Input は行イベントを待つ。
+
+Declare Function CreateEventA Lib "kernel32.dll" (ByVal lpEventAttributes As Long, ByVal bManualReset As Long, ByVal bInitialState As Long, ByVal lpName As Long) As HANDLE
+Declare Function SetEvent Lib "kernel32.dll" (ByVal hEvent As HANDLE) As Long
+Declare Function ResetEvent Lib "kernel32.dll" (ByVal hEvent As HANDLE) As Long
+
+Dim g_n88ReadyEv As HANDLE
+Dim g_n88ClosedEv As HANDLE
+Dim g_n88LineEv As HANDLE
+Dim g_n88UiThread As HANDLE
+Dim g_n88UiOn As Long
+Dim g_n88Closed As Long
+Dim g_n88InputOn As Long
+Dim g_n88Cs As CRITICAL_SECTION
+Dim g_n88CsOn As Long
+
+Sub N88_InitLock()
+    If g_n88CsOn <> 0 Then Exit Sub
+    InitializeCriticalSection(g_n88Cs)
+    g_n88CsOn = 1
+End Sub
+
+Sub N88_Lock()
+    If g_n88CsOn = 0 Then Exit Sub
+    EnterCriticalSection(g_n88Cs)
+End Sub
+
+Sub N88_Unlock()
+    If g_n88CsOn = 0 Then Exit Sub
+    LeaveCriticalSection(g_n88Cs)
+End Sub
+
+Sub N88_FailUi()
+    g_n88Closed = 1
+    g_n88InputOn = 0
+    SetEvent(g_n88LineEv)
+    SetEvent(g_n88ClosedEv)
+End Sub
+
+Sub N88_SignalReady()
+    SetEvent(g_n88ReadyEv)
+End Sub
+
+Sub N88_ZeroSa(ByRef sa As SECURITY_ATTRIBUTES)
+    FillMemory(VarPtr(sa), SizeOf(SECURITY_ATTRIBUTES), 0)
+    sa.nLength = SizeOf(SECURITY_ATTRIBUTES)
+End Sub
+
+Function N88_UiThread(param As VoidPtr) As Long
+    N88_EnsureWindow()
+    N88_SignalReady()
+    If g_n88Hwnd = 0 Then N88_FailUi()
+    If g_n88Hwnd <> 0 Then N88_Run()
+    N88_UiThread = 0
+End Function
+
+Sub N88_OpenEvents()
+    If g_n88ReadyEv <> 0 Then Exit Sub
+    g_n88ReadyEv = CreateEventA(0, 0, 0, 0)
+    g_n88ClosedEv = CreateEventA(0, 0, 0, 0)
+    g_n88LineEv = CreateEventA(0, 0, 0, 0)
+End Sub
+
+Sub N88_SpawnUi()
+    Dim sa As SECURITY_ATTRIBUTES
+    Dim tid As DWord
+    N88_ZeroSa(sa)
+    g_n88UiThread = CreateThread(sa, 0, AddressOf(N88_UiThread), 0, 0, VarPtr(tid))
+End Sub
+
+Sub N88_WaitReady()
+    If g_n88UiThread = 0 Then N88_FailUi()
+    If g_n88UiThread = 0 Then Exit Sub
+    WaitForSingleObject(g_n88ReadyEv, INFINITE)
+    g_n88UiOn = 1
+End Sub
+
+Sub N88_StartUi()
+    If g_n88UiOn <> 0 Then Exit Sub
+    N88_InitLock()
+    N88_OpenEvents()
+    N88_SpawnUi()
+    N88_WaitReady()
+End Sub
+
+Sub N88_WaitClose()
+    If g_n88ClosedEv = 0 Then Exit Sub
+    WaitForSingleObject(g_n88ClosedEv, INFINITE)
+End Sub

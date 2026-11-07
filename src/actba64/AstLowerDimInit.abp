@@ -1,0 +1,91 @@
+' Dim name[n] = [e, ...] As *Byte の要素ストア
+
+Function LowDimInitIsList(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast, nodes As *AstNode, r As Long
+    LowDimInitIsList = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    r = nodes[idx].right
+    If r < 0 Then Exit Function
+    If nodes[r].kind = AST_ARG Then LowDimInitIsList = 1
+End Function
+
+Function LowDimByteOff(slot As Long) As Long
+    LowDimByteOff = slot * TyPtrSize()
+End Function
+
+Function LowDimListTyOk(ctx As *LowerCtx, vTy As Long) As boolean
+    LowDimListTyOk = false
+    If vTy = TY_PTR_BYTE_ARR Then
+        LowDimListTyOk = true
+        Exit Function
+    End If
+    Print "error: array initializer requires As *Byte"
+    ctx->err = 1
+End Function
+
+Function LowDimStoreAt(ctx As *LowerCtx, vOff As Long, vGlob As Long, byteOff As Long) As boolean
+    Dim list As *IrList
+    list = ctx->list
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    LowEmitLeaOff(list, vOff, vGlob)
+    IrEmit(list, OP_ADD_RAX_IMM, byteOff, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_STORE_PTR, 0, 0)
+    LowDimStoreAt = true
+End Function
+
+Function LowDimStoreNamed(ctx As *LowerCtx, name As *Byte, byteOff As Long) As boolean
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    LowDimStoreNamed = false
+    If Not LowLookupVar(ctx, name, VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    If Not LowDimListTyOk(ctx, vTy) Then Exit Function
+    LowDimStoreNamed = LowDimStoreAt(ctx, vOff, vGl, byteOff)
+End Function
+
+Function LowDimStoreSlot(ctx As *LowerCtx, idx As Long, byteOff As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowDimStoreSlot = 0
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If Not LowDimStoreNamed(ctx, VarPtr(name), byteOff) Then Exit Function
+    LowDimStoreSlot = 1
+End Function
+
+Function LowDimListOne(ctx As *LowerCtx, idx As Long, arg As Long, slot As Long) As Long
+    Dim ast As *Ast, nodes As *AstNode, e As Long
+    LowDimListOne = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    e = nodes[arg].left
+    If LowExpr(ctx, e) = 0 Then Exit Function
+    LowDimListOne = LowDimStoreSlot(ctx, idx, LowDimByteOff(slot))
+End Function
+
+Function LowDimListNext(ctx As *LowerCtx, cur As Long, ByRef slot As Long) As Long
+    Dim ast As *Ast, nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    slot = slot + 1
+    LowDimListNext = nodes[cur].nxt
+End Function
+
+Function LowDimListWalk(ctx As *LowerCtx, idx As Long, cur As Long, ByRef slot As Long) As Long
+    LowDimListWalk = 1
+    While cur >= 0
+        If LowDimListOne(ctx, idx, cur, slot) = 0 Then
+            LowDimListWalk = 0
+            Exit Function
+        End If
+        cur = LowDimListNext(ctx, cur, slot)
+    Wend
+End Function
+
+Function LowStmtDimList(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast, nodes As *AstNode, cur As Long, slot As Long
+    LowStmtDimList = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    cur = nodes[idx].right
+    slot = 0
+    LowStmtDimList = LowDimListWalk(ctx, idx, cur, slot)
+End Function
