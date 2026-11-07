@@ -576,6 +576,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 - コンソール画面への `Print` は、出力コードページが 932 のときだけ CP932 で出す。パイプとファイルへは UTF-8 のまま。`#n88basic` の窓文字は UTF-8 をワイド文字にして描く
 - 無印の `SetWindowText` / `GetWindowText` / `GetWindowTextLength` / `CreateWindowEx` / `CreateFont` / `CreateFontIndirect` / `SetDlgItemText` / `GetDlgItemText` / `TextOut` / `GetTextExtentPoint32` / `DrawText` / `DrawTextEx` / `CreateStatusWindow` / `RegisterClassEx` / `UnregisterClass` / `InsertMenu` / `AppendMenu` / `ModifyMenu` / `InsertMenuItem` / `SetMenuItemInfo` は UTF-8 をワイド文字 API に渡す。末尾 `A` は変換しない
 - `GetWindowText` / `GetClassName` / `GetMenuString` のバッファと、`GetMenuItemInfo` の文字列は UTF-8。戻り値や `cch` は NUL を含まないバイト数
+- `RegisterClassEx` で作った窓は Unicode。無印の `DefWindowProc` は `DefWindowProcW`
 - `GetClassInfoEx` のクラス名とメニュー名は、次に呼ぶまで有効な UTF-8。クラス名がアトム、NULL、または問い合わせ用の変換バッファのときは、引いた名前の UTF-8 を返す
 - `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻す
 - `Len(s)` はその長さを返す（`lstrlen` ではない）。`Chr$(0)` は長さ 1
