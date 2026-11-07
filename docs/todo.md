@@ -35,6 +35,7 @@
 - **符号無し演算**の AB 4.20 ルール完全化
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
+- **ProjectEditor の RAD**: フォーム上にコントロールを置き、`MakeWindow.wbp` / `Callback.wbp` / `MainWnd.sbp` を生成する。4.20 のウィンドウ RAD
 - **Win32 `api_*.sbp` 増分**: 需要に応じ `Declare` / idx 追加
 
 ### P3 — 保留・非推奨に近い
@@ -66,7 +67,7 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| Project Editor / RAD | 4.20 のウィンドウ RAD・`MainWnd.sbp` 雛形の全面再現は未 |
+| ProjectEditor の RAD | フォームデザイナは未。コントロール配置から `MakeWindow.wbp` / `Callback.wbp` / `MainWnd.sbp` を出す 4.20 のウィンドウ RAD |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
 | ICON / MENU 等の型付きリソース | LoadIcon/LoadMenu 向けは未 |
