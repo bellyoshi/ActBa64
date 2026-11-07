@@ -447,7 +447,7 @@ ExitProcess(式)
 | `Field` / `Get #` / `Put #` | ○（ランダム。`Open ... As` + Field 長） |
 | `Write` | ○（画面または `#番号`。カンマ区切り） |
 | `Sleep(ms)` | ○（メッセージポンプ付き・default） |
-| `InsMenu` | ○（内部で `InsertMenuA`） |
+| `InsMenu` | ○（見出しの UTF-8 はワイド文字 API へ渡す。区切り・ビットマップ・オーナードローは変換しない） |
 | `LINE` / `CIRCLE` / `LOCATE` / `PAINT` / `PSET`（N88 文） | ○（`#n88basic`） |
 | `Beep` / `Cls` / `MsgBox` / `Window` / `DelWnd` | ○（`BasicCmd.abp`。`Cls` はコンソール。`Window` はメッセージループを作らない） |
 | `ChDir` / `MkDir` / `Kill` / `Exec` | ○（`BasicCmd.abp`） |
