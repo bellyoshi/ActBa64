@@ -153,7 +153,7 @@ PSET (x, y) [, color]       ' 1 ドット。color 省略は 7（白）
 - `PAINT` は `(x,y)` から境界色 `color2`（省略時は `color1`）までを `color1` で塗りつぶす
 - `PSET` は `(x,y)` に 1 ドットを描く。`#n88basic` / `#prompt` のときだけ有効。実行後 LP はその点へ移動
 - `Dim name`（型も `$` も無いスカラー）は `Double`。N88 の無印変数（単精度）の受け皿
-- `Input "prompt"; var` と `Input "prompt", var` は同じ（プロンプトを出してから 1 行読む）
+- `Input "prompt"; var` はプロンプトの直後に `? ` を出してから 1 行読む。`,` 区切りは `? ` を出さない
 - 変数が複数の `Input` は、その 1 行をカンマで分ける。項目が足りなければ次の行を読む
 - `Inkey$()` は窓の `WM_KEYDOWN` を 1 文字取り、無ければ `""`。`Input$(n)` は同じキーを `n` 文字そろうまで待つ。`#n88basic` / `#prompt` のときだけ使える
 
@@ -263,8 +263,9 @@ Dim h As COFF_HEADER
 
 - `Const name = expr`: 整数式（リテラル、先に書いた `Const`、加減乗、整数除算、`Mod`、`And` / `Or` / `Xor` / `Not`、`<<` / `>>`、`^`、`As` の幅マスク）か文字列リテラル。`Double` は置けない
 - `Const name(仮引数) = expr`: 使うたびに仮引数へ実引数の式を埋め込んで展開する（64 個まで、入れ子 16 段まで）
-- `Dim name$`: `As String` 省略可（末尾 `$`）
-- `#n88basic` の `Dim name`（`$` も `As` も無いスカラー）は `Double`。配列の型省略は不可
+- `Dim` の `As` は省ける。スカラーも配列も `Double`（`#n88basic` は不要）
+- 末尾 `$` は `String`（`Dim name$`、`Dim name$(n)`）。配列の添字は 0 始まり
+- `Dim name[n] = [式, ...] As *Byte` は要素が C 文字列ポインタの配列。`0` は NULL。`As` は初期化子の後
 - `Include\default` で組み込み定数を自動導入
 
 ### 3.2 手続き
@@ -405,7 +406,7 @@ End With
 
 Print [式 [{; | ,} 式 ...]] [;]  ' `;` は空白を挟んで改行しない。`,` はタブ。数値は Str$ / StrD$ の文字だけ
 Print #番号, [式 [, ...]] [;]  ' ファイルへ。項目間はカンマ。`;` で改行抑制
-Input ["prompt" ,|;] 変数 [, 変数 ...]  ' 1行をカンマで分割。足りなければ次の行
+Input ["prompt" ,|;] 変数 [, 変数 ...]  ' ; の直後に ? を付ける。複数なら 1 行をカンマ分割
 Input #番号, 変数 [, ...]  ' ファイルからフィールド読み取り
 Open パス [For Input|Output|Append] As [#]番号
 Close [[#]番号]     ' 省略時は全クローズ
@@ -573,6 +574,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 - 表現: ヒープ／静的データの直前 4 バイトに長さ（dword）、ポインタはデータ先頭を指す。中身のバイト列は UTF-8。ソースが妥当な UTF-8（先頭の BOM は読み飛ばす）ならそのまま、そうでなければ CP932 として読んで UTF-8 にする
 - `s[n]` はデータ先頭から 0 始まりの 1 バイト（0..255）。`"ab"` の `s[0]` は 97
 - コンソール画面への `Print` は、出力コードページが 932 のときだけ CP932 で出す。パイプとファイルへは UTF-8 のまま。`#n88basic` の窓文字は UTF-8 をワイド文字にして描く
+- `SetWindowText` / `GetWindowText` / `CreateWindowEx` / `CreateFont` / `SetDlgItemText` / `GetDlgItemText` は UTF-8。窓へはワイド文字 API で渡す。`GetWindowText` のバッファは UTF-8、戻り値は NUL を含まないバイト数。`SetWindowTextA` などは変換しない
 - `Len(s)` はその長さを返す（`lstrlen` ではない）。`Chr$(0)` は長さ 1
 - 末尾に WinAPI 用の NUL を付けるが、データ中の埋め込み NUL も有効
 - `StrPtr(s)` はデータ先頭（恒等）。`MakeStr(p)` は NUL 終端 `BytePtr` から長さ付き String を複製

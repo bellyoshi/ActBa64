@@ -32,18 +32,25 @@ Function ParseDimBound(p As *Parser, ByRef bound As Long) As boolean
     ParseDimBound = true
 End Function
 
+' 戻り値 true : 名前が $ で終わる
+Function ParseDimEndsDollar(name As *Byte) As boolean
+    Dim i As Long
+    ParseDimEndsDollar = false
+    i = 0
+    While name[i] <> 0
+        i = i + 1
+    Wend
+    If i > 0 And name[i - 1] = CH_DOLLAR Then ParseDimEndsDollar = true
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParseDimStringSuffix(name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
     ParseDimStringSuffix = false
-    ti = 0
-    While name[ti] <> 0
-        ti = ti + 1
-    Wend
-    If ti > 0 And name[ti - 1] = CH_DOLLAR And bound < 0 Then
-        ty = TY_STRING
-        ti = -1
-        ParseDimStringSuffix = true
-    End If
+    ti = -1
+    If Not ParseDimEndsDollar(name) Then Exit Function
+    ty = TY_STRING
+    If bound >= 0 Then ty = TY_STRING_ARR
+    ParseDimStringSuffix = true
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
@@ -257,23 +264,18 @@ Function ParseAsPrimType(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti
     ParseAsPrimType = ParseAsAliasOrUdt(p, bound, ty, ti)
 End Function
 
-' 戻り値 true : 正常終了  false : エラーあり
-' #n88basic の Dim name（型なしスカラー）は Double
-Function ParseDimN88Bare(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
-    ParseDimN88Bare = false
-    If p->n88Mode = 0 Then Exit Function
-    If bound >= 0 Then Exit Function
-    ty = TY_DOUBLE
+' As を省いた数値。スカラーも配列も Double。モードは見ない。
+Function ParseDimBareNum(bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
+    ParseDimBareNum = true
     ti = -1
-    ParseDimN88Bare = true
+    ty = TY_DOUBLE
+    If bound >= 0 Then ty = TY_DOUBLE_ARR
 End Function
 
-Function ParseDimNoAs(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
+Function ParseDimNoAs(name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long) As boolean
     ParseDimNoAs = true
     If ParseDimStringSuffix(name, bound, ty, ti) Then Exit Function
-    If ParseDimN88Bare(p, bound, ty, ti) Then Exit Function
-    ParseFail(p, "expected 'As'")
-    ParseDimNoAs = false
+    ParseDimNoAs = ParseDimBareNum(bound, ty, ti)
 End Function
 
 Function ParseDimAsInit(p As *Parser, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As Long
@@ -289,16 +291,15 @@ Function ParseDimAsBody(p As *Parser, bound As Long, ByRef ty As Long, ByRef ti 
     ParseDimAsBody = false
     p->pos = p->pos + 1
     If ParseTokKind(p) = TK_STAR Then
-        If ParseAsPtrType(p, ty, ti, params) = 0 Then Exit Function
+        ParseDimAsBody = ParseDimAsStar(p, bound, ty, ti, params)
     Else
-        If ParseAsPrimType(p, bound, ty, ti) = 0 Then Exit Function
+        ParseDimAsBody = ParseDimAsPrim(p, bound, ty, ti)
     End If
-    ParseDimAsBody = true
 End Function
 
 Function ParseDimAsType(p As *Parser, name As *Byte, bound As Long, ByRef ty As Long, ByRef ti As Long, ByRef params As Long) As boolean
     If ParseDimAsInit(p, ty, ti, params) = 0 Then
-        ParseDimAsType = ParseDimNoAs(p, name, bound, ty, ti)
+        ParseDimAsType = ParseDimNoAs(name, bound, ty, ti)
     Else
         ParseDimAsType = ParseDimAsBody(p, bound, ty, ti, params)
     End If
@@ -353,6 +354,7 @@ Function ParseDimBoundTyOk(ty As Long) As Long
     If ty = TY_DOUBLE_ARR Then ParseDimBoundTyOk = 1
     If ty = TY_SINGLE_ARR Then ParseDimBoundTyOk = 1
     If ty = TY_UDT_ARR Then ParseDimBoundTyOk = 1
+    If ty = TY_PTR_BYTE_ARR Then ParseDimBoundTyOk = 1
 End Function
 
 Function ParseDimMakeNode(p As *Parser, name As *Byte, ty As Long, bound As Long, initE As Long, ti As Long) As Long
@@ -377,12 +379,12 @@ End Function
 Function ParseDimOneInit(p As *Parser, ByRef initE As Long) As boolean
     ParseDimOneInit = false
     initE = -1
-    If ParseTokKind(p) = TK_EQ Then
-        p->pos = p->pos + 1
-        initE = ParseExprNoAs(p)
-        If initE < 0 Then Exit Function
+    If ParseTokKind(p) <> TK_EQ Then
+        ParseDimOneInit = true
+        Exit Function
     End If
-    ParseDimOneInit = true
+    p->pos = p->pos + 1
+    ParseDimOneInit = ParseDimInitExpr(p, initE)
 End Function
 
 Function ParseDimOneTail(p As *Parser, ByRef initE As Long) As Long

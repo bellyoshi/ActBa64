@@ -54,29 +54,44 @@ Sub N88_TakeKey(wParam As WPARAM)
     g_n88Key = wParam And 255
 End Sub
 
-Function N88_WndProc(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+Sub N88_BlitMem(hdc As HDC)
+    If g_n88MemDC = 0 Then Exit Sub
+    BitBlt(hdc, 0, 0, N88_WIDTH, N88_HEIGHT, g_n88MemDC, 0, 0, N88_SRCCOPY)
+End Sub
+
+Sub N88_FillClient(hdc As HDC, hWnd As HWND)
+    Dim rc As RECT
+    GetClientRect(hWnd, VarPtr(rc))
+    FillRect(hdc, VarPtr(rc), GetStockObject(N88_BLACK_BRUSH))
+End Sub
+
+Sub N88_PaintDc(hdc As HDC, hWnd As HWND)
+    N88_Lock()
+    N88_BlitMem(hdc)
+    N88_Unlock()
+    If g_n88MemDC = 0 Then N88_FillClient(hdc, hWnd)
+End Sub
+
+Sub N88_PaintClient(hWnd As HWND)
     Dim ps As PAINTSTRUCT
     Dim hdc As HDC
-    Dim rc As RECT
+    hdc = BeginPaint(hWnd, VarPtr(ps))
+    N88_PaintDc(hdc, hWnd)
+    EndPaint(hWnd, VarPtr(ps))
+End Sub
 
-    If message = WM_PAINT Then
-        hdc = BeginPaint(hWnd, VarPtr(ps))
-        If g_n88MemDC <> 0 Then
-            BitBlt(hdc, 0, 0, N88_WIDTH, N88_HEIGHT, g_n88MemDC, 0, 0, N88_SRCCOPY)
-        Else
-            GetClientRect(hWnd, VarPtr(rc))
-            FillRect(hdc, VarPtr(rc), GetStockObject(N88_BLACK_BRUSH))
-        End If
-        EndPaint(hWnd, VarPtr(ps))
-        N88_WndProc = 0
-        Exit Function
-    End If
-    If message = WM_DESTROY Then
-        PostQuitMessage(0)
-        N88_WndProc = 0
-        Exit Function
-    End If
-    If message = WM_KEYDOWN Then N88_TakeKey(wParam)
+Function N88_WndCmd(hWnd As HWND, message As DWord, wParam As WPARAM) As Long
+    N88_WndCmd = 0
+    If message = WM_PAINT Then N88_PaintClient(hWnd)
+    If message = WM_PAINT Then N88_WndCmd = 1
+    If message = WM_DESTROY Then N88_OnDestroy()
+    If message = WM_DESTROY Then N88_WndCmd = 1
+    If N88_OnMsg(message, wParam) <> 0 Then N88_WndCmd = 1
+End Function
+
+Function N88_WndProc(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    N88_WndProc = 0
+    If N88_WndCmd(hWnd, message, wParam) <> 0 Then Exit Function
     N88_WndProc = DefWindowProcA(hWnd, message, wParam, lParam)
 End Function
 
@@ -393,7 +408,9 @@ End Sub
 Sub Line(sx As Long, sy As Long, ex As Long, ey As Long, color As Long, mode As Long)
     N88_ApplyLineStep(sx, sy, ex, ey, mode)
     N88_EnsureWindow()
+    N88_Lock()
     N88_DrawOnBoth(sx, sy, ex, ey, color, mode)
+    N88_Unlock()
     g_n88LPx = ex
     g_n88LPy = ey
 End Sub
@@ -402,34 +419,54 @@ Sub LineCont(ex As Long, ey As Long, color As Long, mode As Long)
     Line(g_n88LPx, g_n88LPy, ex, ey, color, mode)
 End Sub
 
-' CIRCLE → Circle(cx,cy,r,color,start,end,aspect,flags,fillColor)
-Sub Circle(cx As Long, cy As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
-    Dim hdc As HDC
-    Dim x As Long
-    Dim y As Long
+Sub N88_CircleLp(ByRef x As Long, ByRef y As Long)
+    x = g_n88LPx
+    y = g_n88LPy
+End Sub
 
-    N88_EnsureWindow()
-    If g_n88Hwnd = 0 Then Exit Sub
+Sub N88_CircleStep(ByRef x As Long, ByRef y As Long, cx As Long, cy As Long)
+    x = g_n88LPx + cx
+    y = g_n88LPy + cy
+End Sub
 
+Sub N88_CircleAt(ByRef x As Long, ByRef y As Long, cx As Long, cy As Long, flags As Long)
     x = cx
     y = cy
-    If (flags And 16) <> 0 Then
-        x = g_n88LPx
-        y = g_n88LPy
-    ElseIf (flags And 8) <> 0 Then
-        x = g_n88LPx + cx
-        y = g_n88LPy + cy
-    End If
+    If (flags And 16) <> 0 Then N88_CircleLp(x, y)
+    If (flags And 16) <> 0 Then Exit Sub
+    If (flags And 8) <> 0 Then N88_CircleStep(x, y, cx, cy)
+End Sub
 
+Sub N88_CircleDraw(x As Long, y As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
+    Dim hdc As HDC
     If g_n88MemDC <> 0 Then
         N88_DrawCircleOn(g_n88MemDC, x, y, r, color, startAng, endAng, aspect, flags, fillColor)
     End If
     hdc = GetDC(g_n88Hwnd)
     N88_DrawCircleOn(hdc, x, y, r, color, startAng, endAng, aspect, flags, fillColor)
     ReleaseDC(g_n88Hwnd, hdc)
+End Sub
 
+Sub N88_CircleLocked(x As Long, y As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
+    N88_Lock()
+    N88_CircleDraw(x, y, r, color, startAng, endAng, aspect, flags, fillColor)
+    N88_Unlock()
+End Sub
+
+Sub N88_CircleFinish(x As Long, y As Long)
     g_n88LPx = x
     g_n88LPy = y
+End Sub
+
+' CIRCLE → Circle(cx,cy,r,color,start,end,aspect,flags,fillColor)
+Sub Circle(cx As Long, cy As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
+    Dim x As Long
+    Dim y As Long
+    N88_EnsureWindow()
+    If g_n88Hwnd = 0 Then Exit Sub
+    N88_CircleAt(x, y, cx, cy, flags)
+    N88_CircleLocked(x, y, r, color, startAng, endAng, aspect, flags, fillColor)
+    N88_CircleFinish(x, y)
 End Sub
 
 Sub N88_Run()
@@ -447,7 +484,7 @@ Sub N88_Run()
 End Sub
 
 Sub N88_End()
-    N88_Run()
+    N88_WaitClose()
     ExitProcess(0)
 End Sub
 
@@ -514,17 +551,20 @@ Sub N88_TextOutOn(hdc As HDC, s As *Byte)
     N88_TextRestore(hdc, old)
 End Sub
 
-Sub N88_PutText(s As *Byte)
+Sub N88_PutTextDc(s As *Byte)
     Dim hdc As HDC
-
-    N88_EnsureWindow()
-    If g_n88Hwnd = 0 Then Exit Sub
-    If g_n88MemDC <> 0 Then
-        N88_TextOutOn(g_n88MemDC, s)
-    End If
+    If g_n88MemDC <> 0 Then N88_TextOutOn(g_n88MemDC, s)
     hdc = GetDC(g_n88Hwnd)
     N88_TextOutOn(hdc, s)
     ReleaseDC(g_n88Hwnd, hdc)
+End Sub
+
+Sub N88_PutText(s As *Byte)
+    N88_EnsureWindow()
+    If g_n88Hwnd = 0 Then Exit Sub
+    N88_Lock()
+    N88_PutTextDc(s)
+    N88_Unlock()
 End Sub
 
 ' #n88basic 時の Print → 窓へ描画し、次行へ
@@ -548,22 +588,14 @@ Function N88_SkipAt(p As *Byte) As Long
     If b >= &HF0 Then N88_SkipAt = 4
 End Function
 
-Sub N88_Advance(ByRef p As *Byte, ByRef left As Long, skip As Long)
-    While skip > 0 And left > 0
-        p = VarPtr(p[1])
-        skip = skip - 1
-        left = left - 1
-    Wend
-End Sub
-
 Function N88_Cells(s As *Byte, n As Long) As Long
-    Dim p As *Byte
-    Dim left As Long
-    p = s
-    left = n
-    While left > 0
-        N88_Cells = N88_Cells + N88_CellAt(p)
-        N88_Advance(p, left, N88_SkipAt(p))
+    Dim i As Long
+    Dim sk As Long
+    i = 0
+    While i < n
+        N88_Cells = N88_Cells + N88_CellAt(VarPtr(s[i]))
+        sk = N88_SkipAt(VarPtr(s[i]))
+        i = i + sk
     Wend
 End Function
 
@@ -584,22 +616,29 @@ Sub N88_FloodOn(hdc As HDC, x As Long, y As Long, fillRgb As Long, borderRgb As 
     DeleteObject(brush)
 End Sub
 
-' PAINT (x,y), color1 [, color2] — color1=塗り, color2=境界（省略時 color1）
-Sub Paint(x As Long, y As Long, color1 As Long, color2 As Long)
+Sub N88_PaintDraw(x As Long, y As Long, fr As Long, br As Long)
     Dim hdc As HDC
-    Dim fr As Long
-    Dim br As Long
-
-    N88_EnsureWindow()
-    If g_n88Hwnd = 0 Then Exit Sub
-    fr = N88_Rgb(color1)
-    br = N88_Rgb(color2)
-    If g_n88MemDC <> 0 Then
-        N88_FloodOn(g_n88MemDC, x, y, fr, br)
-    End If
+    If g_n88MemDC <> 0 Then N88_FloodOn(g_n88MemDC, x, y, fr, br)
     hdc = GetDC(g_n88Hwnd)
     N88_FloodOn(hdc, x, y, fr, br)
     ReleaseDC(g_n88Hwnd, hdc)
+End Sub
+
+Sub N88_PaintAt(x As Long, y As Long, color1 As Long, color2 As Long)
+    Dim fr As Long
+    Dim br As Long
+    fr = N88_Rgb(color1)
+    br = N88_Rgb(color2)
+    N88_Lock()
+    N88_PaintDraw(x, y, fr, br)
+    N88_Unlock()
+End Sub
+
+' PAINT (x,y), color1 [, color2] — color1=塗り, color2=境界（省略時 color1）
+Sub Paint(x As Long, y As Long, color1 As Long, color2 As Long)
+    N88_EnsureWindow()
+    If g_n88Hwnd = 0 Then Exit Sub
+    N88_PaintAt(x, y, color1, color2)
     g_n88LPx = x
     g_n88LPy = y
 End Sub

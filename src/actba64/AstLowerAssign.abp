@@ -68,7 +68,7 @@ Sub LowStoreArrPtr(list As *IrList, vTy As Long)
 End Sub
 
 Sub LowStoreArrElem(ctx As *LowerCtx, vTy As Long, allowPtrLong As Long)
-    If vTy = TY_STRING_ARR Or vTy = TY_DOUBLE_ARR Then
+    If LowIsPtrSlot(vTy) <> 0 Or vTy = TY_DOUBLE_ARR Then
         LowStoreArrPtr(ctx->list, vTy)
     ElseIf vTy = TY_LONG_ARR Or vTy = TY_SINGLE_ARR Then
         LowStoreSized(ctx->list, 4)
@@ -292,12 +292,38 @@ Function LowStmtAssignMember(ctx As *LowerCtx, idx As Long) As Long
     LowStmtAssignMember = LowAssignMemGo(ctx, idx, leftIdx, LowAssignMemSize(ctx, leftIdx))
 End Function
 
+' ポインタの 4 バイト前にあるヒープ印を見る。rax は戻す。
+Sub LowEmitStrTag(list As *IrList)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_IMM, -4, 0)
+    IrEmit(list, OP_LOAD_DWORD_RAX, 0, 0)
+    IrEmit(list, OP_MOV_ECX, &H80000000, 0)
+    IrEmit(list, OP_AND_EAX_ECX, 0, 0)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+End Sub
+
+' ヒープ印があればそのまま。無い C 文字列は MakeStr で複製する。
+Sub LowEmitKeepOrCopy(list As *IrList, labMake As Long, labCopy As Long, labDone As Long)
+    IrEmit(list, OP_TEST_RAX, 0, 0)
+    IrEmit(list, OP_JZ, labCopy, 0)
+    LowEmitStrTag(list)
+    IrEmit(list, OP_JNZ, labDone, 0)
+    IrEmit(list, OP_LABEL, labCopy, 0)
+    LowEmitCall1Rax(list, 0, 0, 0, labMake)
+    IrEmit(list, OP_LABEL, labDone, 0)
+End Sub
+
 ' C 文字列を String へ入れるときは長さ付きの複製にする。バッファの再利用で中身が消えない。
 Sub LowCopyCStr(ctx As *LowerCtx, rhsIdx As Long)
     Dim lab As Long
+    Dim labCopy As Long
+    Dim labDone As Long
     If LowExprIsCStr(ctx, rhsIdx) = 0 Then Exit Sub
     lab = LowEnsureRtMakeStr(ctx)
-    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    labCopy = LowNewLabel(ctx)
+    labDone = LowNewLabel(ctx)
+    LowEmitKeepOrCopy(ctx->list, lab, labCopy, labDone)
 End Sub
 
 Function LowStmtAssignVar(ctx As *LowerCtx, idx As Long) As Long

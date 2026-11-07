@@ -1,0 +1,204 @@
+' 窓の文字列 API。引数のバイト列は UTF-8。ワイド文字 API へ渡す。
+' 値が 65535 以下のクラス名はアトムなので変換しない。
+
+Function BasicAtom(raw As *Byte) As Long
+    BasicAtom = 0
+    If raw = 0 Then BasicAtom = 1
+    If raw < 65536 Then BasicAtom = 1
+End Function
+
+Function BasicWideEmpty() As *Byte
+    Dim p As *Byte
+    p = malloc(2)
+    BasicWideEmpty = p
+    If p = 0 Then Exit Function
+    p[0] = 0
+    p[1] = 0
+End Function
+
+Function BasicWideTerm(wide As *Byte, chars As Long) As *Byte
+    wide[chars * 2] = 0
+    wide[chars * 2 + 1] = 0
+    BasicWideTerm = wide
+End Function
+
+Function BasicWideOf(raw As *Byte, n As Long) As *Byte
+    Dim chars As Long, wide As *Byte
+    BasicWideOf = 0
+    chars = BasicUtf8Chars(raw, n)
+    If chars <= 0 Then Exit Function
+    wide = BasicToWide(raw, n, chars)
+    If wide = 0 Then Exit Function
+    BasicWideOf = BasicWideTerm(wide, chars)
+End Function
+
+Function BasicWideOrRaw(raw As *Byte) As *Byte
+    Dim w As *Byte
+    w = BasicWideOf(raw, lstrlen(raw))
+    BasicWideOrRaw = raw
+    If w <> 0 Then BasicWideOrRaw = w
+End Function
+
+Function BasicWidePtr(raw As *Byte) As *Byte
+    BasicWidePtr = raw
+    If BasicAtom(raw) <> 0 Then Exit Function
+    If lstrlen(raw) <= 0 Then
+        BasicWidePtr = BasicWideEmpty()
+        Exit Function
+    End If
+    BasicWidePtr = BasicWideOrRaw(raw)
+End Function
+
+Function GwAlloc(chars As Long) As *Byte
+    Dim p As *Byte
+    GwAlloc = 0
+    If chars < 0 Then Exit Function
+    p = malloc((chars + 1) * 2)
+    GwAlloc = p
+    If p = 0 Then Exit Function
+    p[0] = 0
+    p[1] = 0
+End Function
+
+Function BasicUtf8Len(wide As *Byte, chars As Long) As Long
+    BasicUtf8Len = 0
+    If chars <= 0 Then Exit Function
+    BasicUtf8Len = WideCharToMultiByte(65001, 0, wide As *Word, chars, 0, 0, 0, 0)
+End Function
+
+Function GwPutFit(wide As *Byte, chars As Long, buf As *Byte, room As Long) As Long
+    Dim n As Long
+    n = WideCharToMultiByte(65001, 0, wide As *Word, chars, buf, room, 0, 0)
+    If n < 0 Then n = 0
+    buf[n] = 0
+    GwPutFit = n
+End Function
+
+Function GwFitN(n As Long, nMax As Long) As Long
+    GwFitN = n
+    If n > nMax - 1 Then GwFitN = nMax - 1
+    If GwFitN < 0 Then GwFitN = 0
+End Function
+
+Function GwLeadLen(b As Long) As Long
+    GwLeadLen = 1
+    If b >= &HF0 Then GwLeadLen = 4
+    If b >= &HE0 And b < &HF0 Then GwLeadLen = 3
+    If b >= &HC0 And b < &HE0 Then GwLeadLen = 2
+End Function
+
+Function GwTrimUtf8(buf As *Byte, n As Long) As Long
+    While n > 0 And (buf[n - 1] And &HC0) = &H80
+        n = n - 1
+    Wend
+    If n > 0 And GwLeadLen(buf[n - 1]) > 1 Then n = n - 1
+    GwTrimUtf8 = n
+End Function
+
+Sub GwCopyN(dst As *Byte, src As *Byte, n As Long)
+    Dim i As Long
+    i = 0
+    While i < n
+        dst[i] = src[i]
+        i = i + 1
+    Wend
+    dst[n] = 0
+End Sub
+
+Function GwTrimCopy(wide As *Byte, chars As Long, full As *Byte, buf As *Byte, nMax As Long, need As Long) As Long
+    Dim n As Long
+    n = GwPutFit(wide, chars, full, need)
+    n = GwTrimUtf8(full, GwFitN(n, nMax))
+    GwCopyN(buf, full, n)
+    GwTrimCopy = n
+End Function
+
+Function GwPutTrim(wide As *Byte, chars As Long, buf As *Byte, nMax As Long, need As Long) As Long
+    Dim full As *Byte
+    GwPutTrim = 0
+    full = malloc(need + 1)
+    If full = 0 Then Exit Function
+    GwPutTrim = GwTrimCopy(wide, chars, full, buf, nMax, need)
+    free(full)
+End Function
+
+Function GwPut(wide As *Byte, chars As Long, buf As *Byte, nMax As Long) As Long
+    Dim need As Long
+    need = BasicUtf8Len(wide, chars)
+    GwPut = 0
+    If need < nMax Then GwPut = GwPutFit(wide, chars, buf, nMax - 1)
+    If need < nMax Then Exit Function
+    GwPut = GwPutTrim(wide, chars, buf, nMax, need)
+End Function
+
+Function GwReady(buf As *Byte, nMax As Long) As Long
+    GwReady = 0
+    If buf = 0 Or nMax <= 0 Then Exit Function
+    If nMax = 1 Then buf[0] = 0
+    If nMax = 1 Then Exit Function
+    GwReady = 1
+End Function
+
+Function GwFinish(wide As *Byte, chars As Long, buf As *Byte, nMax As Long) As Long
+    Dim n As Long
+    n = GwPut(wide, chars, buf, nMax)
+    free(wide)
+    GwFinish = n
+End Function
+
+Function GetWindowText(hWnd As HWND, buf As *Byte, nMax As Long) As Long
+    Dim chars As Long, wide As *Byte
+    GetWindowText = 0
+    If GwReady(buf, nMax) = 0 Then Exit Function
+    chars = GetWindowTextLengthW(hWnd)
+    wide = GwAlloc(chars)
+    If wide = 0 Then Exit Function
+    chars = GetWindowTextW(hWnd, wide, chars + 1)
+    GetWindowText = GwFinish(wide, chars, buf, nMax)
+End Function
+
+Function GwUtf8Len(hWnd As HWND) As Long
+    Dim chars As Long, wide As *Byte
+    GwUtf8Len = 0
+    chars = GetWindowTextLengthW(hWnd)
+    wide = GwAlloc(chars)
+    If wide = 0 Then Exit Function
+    chars = GetWindowTextW(hWnd, wide, chars + 1)
+    GwUtf8Len = BasicUtf8Len(wide, chars)
+    free(wide)
+End Function
+
+Function GetWindowTextLength(hWnd As HWND) As Long
+    GetWindowTextLength = GwUtf8Len(hWnd)
+End Function
+
+Function SetWindowText(hWnd As HWND, s As *Byte) As Long
+    Dim w As *Byte
+    w = BasicWidePtr(s)
+    SetWindowText = SetWindowTextW(hWnd, w)
+    BasicFreeAnsi(w, s)
+End Function
+
+Function CreateWindowEx(exStyle As DWord, cls As *Byte, title As *Byte, style As DWord, x As Long, y As Long, w As Long, h As Long, parent As HWND, menu As HMENU, inst As HINSTANCE, param As Long) As HWND
+    Dim wCls As *Byte, wTitle As *Byte
+    wCls = BasicWidePtr(cls)
+    wTitle = BasicWidePtr(title)
+    CreateWindowEx = CreateWindowExW(exStyle, wCls, wTitle, style, x, y, w, h, parent, menu, inst, param)
+    BasicFreeAnsi(wCls, cls)
+    BasicFreeAnsi(wTitle, title)
+End Function
+
+Function CreateFont(h As Long, w As Long, esc As Long, orient As Long, weight As Long, italic As DWord, under As DWord, strike As DWord, charset As DWord, outPrec As DWord, clip As DWord, quality As DWord, pitch As DWord, face As *Byte) As HFONT
+    Dim wFace As *Byte
+    wFace = BasicWidePtr(face)
+    CreateFont = CreateFontW(h, w, esc, orient, weight, italic, under, strike, charset, outPrec, clip, quality, pitch, wFace)
+    BasicFreeAnsi(wFace, face)
+End Function
+
+Function SetDlgItemText(hDlg As HWND, id As Long, s As *Byte) As Long
+    SetDlgItemText = SetWindowText(GetDlgItem(hDlg, id), s)
+End Function
+
+Function GetDlgItemText(hDlg As HWND, id As Long, buf As *Byte, nMax As Long) As Long
+    GetDlgItemText = GetWindowText(GetDlgItem(hDlg, id), buf, nMax)
+End Function

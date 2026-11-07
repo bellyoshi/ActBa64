@@ -79,6 +79,7 @@ ActiveBasic の文字列バイトは Shift-JIS（CP932）です。ActBa64 の文
 - ソースが妥当な UTF-8（先頭の BOM は読み飛ばす）ならそのまま保持します。それ以外は CP932 として解釈し、UTF-8 にします。
 - コンソール画面への `Print` は、コンソールの出力コードページが 932 のとき CP932 で出します。パイプとファイルへは UTF-8 のままです。
 - `#n88basic` の窓文字は UTF-8 をワイド文字にして描きます。
+- `SetWindowText` / `GetWindowText` / `GetWindowTextLength` / `CreateWindowEx` / `CreateFont` / `SetDlgItemText` / `GetDlgItemText` は UTF-8 をワイド文字 API に渡す。`GetWindowText` は UTF-8 を書き、戻り値は NUL を含まないバイト数。末尾 `A` の Declare は変換しない。
 - `s[n]` は 0 始まりの 1 バイトです。
 - `GetOpenFileName` と `GetSaveFileName` は、呼ぶあいだだけフィルタ（二重 NUL）・タイトル・初期フォルダ・拡張子を CP932 にし、戻る前に呼び出し側のポインタへ戻します。ファイル名バッファはダイアログが書いた CP932 のままです。
 
