@@ -574,7 +574,10 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 - 表現: ヒープ／静的データの直前 4 バイトに長さ（dword）、ポインタはデータ先頭を指す。中身のバイト列は UTF-8。ソースが妥当な UTF-8（先頭の BOM は読み飛ばす）ならそのまま、そうでなければ CP932 として読んで UTF-8 にする
 - `s[n]` はデータ先頭から 0 始まりの 1 バイト（0..255）。`"ab"` の `s[0]` は 97
 - コンソール画面への `Print` は、出力コードページが 932 のときだけ CP932 で出す。パイプとファイルへは UTF-8 のまま。`#n88basic` の窓文字は UTF-8 をワイド文字にして描く
-- `SetWindowText` / `GetWindowText` / `CreateWindowEx` / `CreateFont` / `SetDlgItemText` / `GetDlgItemText` は UTF-8。窓へはワイド文字 API で渡す。`GetWindowText` のバッファは UTF-8、戻り値は NUL を含まないバイト数。`SetWindowTextA` などは変換しない
+- 無印の `SetWindowText` / `GetWindowText` / `GetWindowTextLength` / `CreateWindowEx` / `CreateFont` / `CreateFontIndirect` / `SetDlgItemText` / `GetDlgItemText` / `TextOut` / `GetTextExtentPoint32` / `DrawText` / `DrawTextEx` / `CreateStatusWindow` / `RegisterClassEx` / `UnregisterClass` / `InsertMenu` / `AppendMenu` / `ModifyMenu` / `InsertMenuItem` / `SetMenuItemInfo` は UTF-8 をワイド文字 API に渡す。末尾 `A` は変換しない
+- `GetWindowText` / `GetClassName` / `GetMenuString` のバッファと、`GetMenuItemInfo` の文字列は UTF-8。戻り値や `cch` は NUL を含まないバイト数
+- `GetClassInfoEx` のクラス名とメニュー名は、次に呼ぶまで有効な UTF-8。クラス名がアトム、NULL、または問い合わせ用の変換バッファのときは、引いた名前の UTF-8 を返す
+- `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻す
 - `Len(s)` はその長さを返す（`lstrlen` ではない）。`Chr$(0)` は長さ 1
 - 末尾に WinAPI 用の NUL を付けるが、データ中の埋め込み NUL も有効
 - `StrPtr(s)` はデータ先頭（恒等）。`MakeStr(p)` は NUL 終端 `BytePtr` から長さ付き String を複製

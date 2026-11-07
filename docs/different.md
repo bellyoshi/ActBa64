@@ -74,13 +74,43 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 
 ## 文字列の内部表現
 
-ActiveBasic の文字列バイトは Shift-JIS（CP932）です。ActBa64 の文字列バイトは UTF-8 です。
+ActiveBasic は Shift-JIS で Actba64 は UTF-8 という大きな違いがあります。
 
-- ソースが妥当な UTF-8（先頭の BOM は読み飛ばす）ならそのまま保持します。それ以外は CP932 として解釈し、UTF-8 にします。
-- コンソール画面への `Print` は、コンソールの出力コードページが 932 のとき CP932 で出します。パイプとファイルへは UTF-8 のままです。
+プログラミングの文字コードの違いというのは2つの側面を持っています。プログラムのソースのコードと実行時の文字列の内部構造としてどのエンコードを使っているかの２つです。
+
+ActiveBasicは内部の文字列バイトは Shift-JIS（CP932）です。
+ソースはUTF-8、Shift-JIS両方対応しています。当時はShift-JISで書くことを想定されています。
+
+ActBa64 の文字列バイトは UTF-8 です。
+ソースはUTF-8、Shift-JIS両方対応しています。
+今後はUTF-8で書くことを推奨します。
+
+### ソースコードについて
+ ソースが妥当な UTF-8（先頭の BOM は読み飛ばす）ならそのまま保持します。
+ それ以外は Shift-JIS(CP932) として解釈し、UTF-8 に変換してからコンパイルします。
+
+### Print文
+ 文字化けがおこらないように工夫してあります。
+ コンソールの出力コードページが Shift-JIS(CP932) のとき 
+ 内部の文字列はUTF8ですがCP932に変換して出力します。
+ パイプとファイルへは UTF-8 のままです。
+
+### API
+ SetWindowTextAなどの最後のAがつくAPIはShft-JISで出力することを想定していて、そのままですとActba64では文字化けが起こります。
+ そこでSetWindowTextがラッパーとなり関数内でUTF-8をUTF-16に変換しSetWindowTextWを呼び出します。
+ Actba64上、内部でShift-JISは使われていません。
+ ユーザー側のプログラムで・・・AがついているAPIを直接Declareしていた場合は残念ながら文字化けが発生しますので修正が必要になります。
+
+以下API別の詳細です。
+
 - `#n88basic` の窓文字は UTF-8 をワイド文字にして描きます。
 - `SetWindowText` / `GetWindowText` / `GetWindowTextLength` / `CreateWindowEx` / `CreateFont` / `SetDlgItemText` / `GetDlgItemText` は UTF-8 をワイド文字 API に渡す。`GetWindowText` は UTF-8 を書き、戻り値は NUL を含まないバイト数。末尾 `A` の Declare は変換しない。
-- `InsMenu` / `InsertMenu` / `AppendMenu` の見出しも UTF-8 をワイド文字 API に渡す。`MF_SEPARATOR` / `MF_BITMAP` / `MF_OWNERDRAW` の第 5 引数は文字列ではないので変換しない。`InsertMenuA` / `AppendMenuA` は変換しない。
+- `InsMenu` / `InsertMenu` / `AppendMenu` / `ModifyMenu` の見出しも UTF-8 をワイド文字 API に渡す。`MF_SEPARATOR` / `MF_BITMAP` / `MF_OWNERDRAW` の第 5 引数は文字列ではないので変換しない。末尾 `A` は変換しない。`GetMenuString` は UTF-8 を書く。
+- `InsertMenuItem` / `SetMenuItemInfo` / `GetMenuItemInfo` は、`MIIM_STRING` または文字列の `MIIM_TYPE` のとき `dwTypeData` をワイド文字にする。`GetMenuItemInfo` は UTF-8 を書き、`cch` はそのバイト数。区切り・ビットマップ・オーナードローは変換しない。
+- `TextOut` / `GetTextExtentPoint32` / `DrawText` / `DrawTextEx` は UTF-8 をワイド文字数で渡す。長さが負のときは NUL まで。末尾 `A` はバイト数のまま。`DT_MODIFYSTRING` の書き換えは呼び出し側のバッファへ戻さない。
+- `CreateStatusWindow` の見出し、`RegisterClassEx` のクラス名とメニュー名、`UnregisterClass` は UTF-8 をワイド文字 API に渡す。65535 以下はアトムなので変換しない。`RegisterClassEx` は呼び出し側の `WNDCLASSEX` を変えない。`GetClassName` は UTF-8 を書く。`GetClassInfoEx` が返すクラス名とメニュー名のポインタは、次に `GetClassInfoEx` を呼ぶまで有効な UTF-8。クラス名がアトム、NULL、または問い合わせに使った変換バッファのときは、引いた名前の UTF-8 を複製して返す。
+- `CreateFontIndirect` の `lfFaceName` は UTF-8 をワイド文字 API に渡す。呼び出し側の `LOGFONT` はそのまま。`GetObject` は A 版なので、読み戻した `lfFaceName` は CP932。
+- `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻し、`FindText` は戻ったあとも書くため。
 - `s[n]` は 0 始まりの 1 バイトです。
 - `GetOpenFileName` と `GetSaveFileName` は、呼ぶあいだだけフィルタ（二重 NUL）・タイトル・初期フォルダ・拡張子を CP932 にし、戻る前に呼び出し側のポインタへ戻します。ファイル名バッファはダイアログが書いた CP932 のままです。
 
