@@ -21,10 +21,9 @@ Function LowArgExpr(ctx As *LowerCtx, idx As Long, n As Long) As Long
     LowArgExpr = nodes[argNode].left
 End Function
 
-' 32bit stdcall は eax を [esp+disp] へ。64bit はレジスタのまま
-Sub LowEmitInsMenuSlot(list As *IrList, disp As Long)
-    If TyIs32() = 0 Then Exit Sub
-    IrEmit(list, OP_STORE_RSP_RAX, disp, 0)
+' 引数スロットへ rax を書く。slot は 0 始まり
+Sub LowEmitInsMenuSlot(list As *IrList, slot As Long)
+    IrEmit(list, OP_STORE_RSP_RAX, slot * TyPtrSize(), 0)
 End Sub
 
 ' lpNewItem（第5引数）。64bit は rsp+32、32bit は esp+16
@@ -62,20 +61,20 @@ Function LowEmitInsMenuFlags(ctx As *LowerCtx, idx As Long, nArgs As Long) As bo
         IrEmit(list, OP_JNZ, labSub, 0)
         IrEmit(list, OP_POP_RAX, 0, 0)
         If LowExpr(ctx, LowArgExpr(ctx, idx, 4)) = 0 Then Exit Function
-        LowEmitInsMenuSlot(list, 12)
+        LowEmitInsMenuSlot(list, 3)
         IrEmit(list, OP_MOV_R9_RAX, 0, 0)
         If LowExpr(ctx, LowArgExpr(ctx, idx, 2)) = 0 Then Exit Function
-        LowEmitInsMenuSlot(list, 8)
+        LowEmitInsMenuSlot(list, 2)
         IrEmit(list, OP_MOV_R8_RAX, 0, 0)
         IrEmit(list, OP_JMP, labDone, 0)
         IrEmit(list, OP_LABEL, labSub, 0)
         IrEmit(list, OP_POP_RAX, 0, 0)
-        LowEmitInsMenuSlot(list, 12)
+        LowEmitInsMenuSlot(list, 3)
         IrEmit(list, OP_MOV_R9_RAX, 0, 0)
         If LowExpr(ctx, LowArgExpr(ctx, idx, 2)) = 0 Then Exit Function
         IrEmit(list, OP_MOV_ECX, LOW_MF_POPUP, 0)
         IrEmit(list, OP_OR_EAX_ECX, 0, 0)
-        LowEmitInsMenuSlot(list, 8)
+        LowEmitInsMenuSlot(list, 2)
         IrEmit(list, OP_MOV_R8_RAX, 0, 0)
         IrEmit(list, OP_LABEL, labDone, 0)
     Else
@@ -84,14 +83,14 @@ Function LowEmitInsMenuFlags(ctx As *LowerCtx, idx As Long, nArgs As Long) As bo
         Else
             IrEmit(list, OP_XOR_EAX, 0, 0)
         End If
-        LowEmitInsMenuSlot(list, 12)
+        LowEmitInsMenuSlot(list, 3)
         IrEmit(list, OP_MOV_R9_RAX, 0, 0)
         If LowExpr(ctx, LowArgExpr(ctx, idx, 2)) = 0 Then Exit Function
         If nArgs = 3 Then
             IrEmit(list, OP_MOV_ECX, LOW_MF_SEPARATOR, 0)
             IrEmit(list, OP_OR_EAX_ECX, 0, 0)
         End If
-        LowEmitInsMenuSlot(list, 8)
+        LowEmitInsMenuSlot(list, 2)
         IrEmit(list, OP_MOV_R8_RAX, 0, 0)
     End If
     LowEmitInsMenuFlags = true
@@ -102,11 +101,10 @@ Function LowStmtInsMenu(ctx As *LowerCtx, idx As Long) As Long
     Dim list As *IrList
     Dim nArgs As Long
     Dim callBytes As Long
-    Dim sApi(NAME32_LEN - 1) As Byte
 
     LowStmtInsMenu = 0
     list = ctx->list
-    ' InsertMenuA(hMenu, pos, flags, uIDNewItem, lpNewItem)
+    ' InsertMenuW(hMenu, pos, flags, uIDNewItem, lpNewItem)
     nArgs = LowCountCallArgs(ctx, idx, 0)
     If nArgs < 0 Then
         ctx->err = 1
@@ -121,13 +119,50 @@ Function LowStmtInsMenu(ctx As *LowerCtx, idx As Long) As Long
     If Not LowEmitInsMenuItem(ctx, idx, nArgs) Then Exit Function
     If Not LowEmitInsMenuFlags(ctx, idx, nArgs) Then Exit Function
     If LowExpr(ctx, LowArgExpr(ctx, idx, 1)) = 0 Then Exit Function
-    LowEmitInsMenuSlot(list, 4)
+    LowEmitInsMenuSlot(list, 1)
     IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
     If LowExpr(ctx, LowArgExpr(ctx, idx, 0)) = 0 Then Exit Function
     LowEmitInsMenuSlot(list, 0)
     IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
-    lstrcpy(VarPtr(sApi), "InsertMenuA")
-    IrEmitStr(list, OP_CALL_API, IR_DLL_USER32, VarPtr(sApi))
+    If LowEmitMenuConvert(ctx) < 0 Then Exit Function
+    LowEmitMenuApi(ctx)
+    If LowEmitMenuDrop(ctx) < 0 Then Exit Function
     LowEmitCallFinish(list, callBytes)
     LowStmtInsMenu = 1
+End Function
+
+Sub LowEmitMenuWideArg(list As *IrList)
+    Dim ps As Long
+    ps = TyPtrSize()
+    IrEmit(list, OP_LOAD_RSP_RAX, 2 * ps, 0)
+    IrEmit(list, OP_MOV_RCX_RAX, 0, 0)
+    IrEmit(list, OP_LOAD_RSP_RAX, 4 * ps, 0)
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+End Sub
+
+Sub LowEmitMenuWideDone(list As *IrList, lab As Long)
+    LowEmitCallLab2(list, lab)
+    IrEmit(list, OP_STORE_RSP_RAX, 4 * TyPtrSize(), 0)
+    LowEmitLoadRegArgs(list, 4)
+End Sub
+
+Function LowEmitMenuConvert(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "BasicMenuWide")
+    LowEmitMenuConvert = LowRequireFunc(ctx, VarPtr(name))
+    If LowEmitMenuConvert < 0 Then Exit Function
+    LowEmitMenuWideArg(ctx->list)
+    LowEmitMenuWideDone(ctx->list, LowEmitMenuConvert)
+End Function
+
+Sub LowEmitMenuApi(ctx As *LowerCtx)
+    Dim sApi(NAME32_LEN - 1) As Byte
+    lstrcpy(VarPtr(sApi), "InsertMenuW")
+    IrEmitStr(ctx->list, OP_CALL_API, IR_DLL_USER32, VarPtr(sApi))
+End Sub
+
+Function LowEmitMenuDrop(ctx As *LowerCtx) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "BasicMenuDrop")
+    LowEmitMenuDrop = LowCallName0(ctx, VarPtr(name))
 End Function
