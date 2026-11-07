@@ -287,6 +287,7 @@ End Sub
 
 - `ByRef` 対応。呼び出し側の `ByVal` は無視してよい。構造体引数は `ByRef` 必須（`ByVal` と指定なしはエラー）。フィールド代入は呼び出し元に残る
 - 戻り値は `Function名 = 式`
+- `Function F(a As Long)(ByRef e As Long) As Long` のように、同じ行で続く 2 つ目の括弧は省略できる引数。呼び出しで省いた引数は 0、`ByRef` なら `VarPtr(e)` が 0。2 つ目の括弧がなくても、`Sub` / `Function` を引数を省いて呼ぶと残りは 0（Declare の API は対象外）
 - 同じ名前の `Sub` / `Function` はコンパイルエラー（大小は区別しない）
 - `Exit Sub` / `Exit Function`。空白なしの `ExitSub` / `ExitFunction` も同じ
 - ネストした `Sub`/`Function` は不可
@@ -576,7 +577,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 - コンソール画面への `Print` は、出力コードページが 932 のときだけ CP932 で出す。パイプとファイルへは UTF-8 のまま。`#n88basic` の窓文字は UTF-8 をワイド文字にして描く
 - 無印の `SetWindowText` / `GetWindowText` / `GetWindowTextLength` / `CreateWindowEx` / `CreateFont` / `CreateFontIndirect` / `SetDlgItemText` / `GetDlgItemText` / `TextOut` / `GetTextExtentPoint32` / `DrawText` / `DrawTextEx` / `CreateStatusWindow` / `RegisterClassEx` / `UnregisterClass` / `InsertMenu` / `AppendMenu` / `ModifyMenu` / `InsertMenuItem` / `SetMenuItemInfo` は UTF-8 をワイド文字 API に渡す。末尾 `A` は変換しない
 - `GetWindowText` / `GetClassName` / `GetMenuString` のバッファと、`GetMenuItemInfo` の文字列は UTF-8。戻り値や `cch` は NUL を含まないバイト数
-- `RegisterClassEx` で作った窓は Unicode。無印の `DefWindowProc` は `DefWindowProcW`
+- `RegisterClassEx` で作った窓は Unicode。無印の `DefWindowProc` / `DefFrameProc` / `DefMDIChildProc` は W 版
 - `GetClassInfoEx` のクラス名とメニュー名は、次に呼ぶまで有効な UTF-8。クラス名がアトム、NULL、または問い合わせ用の変換バッファのときは、引いた名前の UTF-8 を返す
 - `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻す
 - `Len(s)` はその長さを返す（`lstrlen` ではない）。`Chr$(0)` は長さ 1

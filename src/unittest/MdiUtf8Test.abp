@@ -1,0 +1,53 @@
+' 窓は Unicode。DefFrameProc / DefMDIChildProc の WM_NCCREATE がタイトルを付けるので、A で読むと CP932。
+Type MdiCcs
+    hWindowMenu As HMENU
+    idFirstChild As DWord
+End Type
+
+Dim mdiWc As WNDCLASSEX
+Dim mdiCcs As MdiCcs
+Dim mdiFrame As HWND, mdiClient As HWND, mdiChild As HWND
+Dim mdiBuf(15) As Byte
+
+Declare Function GetWindowTextA Lib "user32.dll" (ByVal hWnd As HWND, ByVal lpString As *Byte, ByVal nMaxCount As Long) As Long
+
+Function MdiFrameTestProc(hWnd As HWND, msg As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    MdiFrameTestProc = DefFrameProc(hWnd, 0, msg, wp, lp)
+End Function
+
+Function MdiChildTestProc(hWnd As HWND, msg As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    MdiChildTestProc = DefMDIChildProc(hWnd, msg, wp, lp)
+End Function
+
+Sub MdiTestClass(name As *Byte, proc As VoidPtr)
+    FillMemory(VarPtr(mdiWc), Len(mdiWc), 0)
+    mdiWc.cbSize = Len(mdiWc)
+    mdiWc.lpfnWndProc = proc
+    mdiWc.hInstance = GetModuleHandle(0)
+    mdiWc.lpszClassName = name
+    If RegisterClassEx(mdiWc) = 0 Then Assert(1, 0, "mdi class")
+End Sub
+
+Sub MdiTestTitle(h As HWND, tag As String)
+    If h = 0 Then Assert(1, 0, tag + " hwnd")
+    FillMemory(VarPtr(mdiBuf), 16, 0)
+    GetWindowTextA(h, VarPtr(mdiBuf), 16)
+    Assert(&H95, mdiBuf[0], tag + "0")
+    Assert(&HD2, mdiBuf[1], tag + "1")
+    Assert(&H8F, mdiBuf[2], tag + "2")
+    Assert(&H57, mdiBuf[3], tag + "3")
+    Assert(0, mdiBuf[4], tag + "4")
+End Sub
+
+MdiTestClass("MdiUtf8Frame", AddressOf(MdiFrameTestProc))
+MdiTestClass("MdiUtf8Child", AddressOf(MdiChildTestProc))
+mdiFrame = CreateWindowEx(0, "MdiUtf8Frame", "編集", WS_CLIPCHILDREN, 0, 0, 200, 200, 0, 0, GetModuleHandle(0), 0)
+MdiTestTitle(mdiFrame, "f")
+mdiCcs.idFirstChild = 3000
+mdiClient = CreateWindowEx(0, "MDICLIENT", "", WS_CHILD Or WS_CLIPCHILDREN, 0, 0, 100, 100, mdiFrame, 1 As HMENU, GetModuleHandle(0), VarPtr(mdiCcs))
+If mdiClient = 0 Then Assert(1, 0, "mdi client")
+mdiChild = CreateWindowEx(WS_EX_MDICHILD, "MdiUtf8Child", "編集", 0, 0, 0, 50, 50, mdiClient, 0, GetModuleHandle(0), 0)
+MdiTestTitle(mdiChild, "c")
+DestroyWindow(mdiFrame)
+UnregisterClass("MdiUtf8Child", GetModuleHandle(0))
+UnregisterClass("MdiUtf8Frame", GetModuleHandle(0))
