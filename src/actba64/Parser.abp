@@ -59,6 +59,15 @@ Function ParseTokLine(p As *Parser) As Long
     ParseTokLine = toks[i].srcLine
 End Function
 
+' 論理行（_ で継続した行は継続元と同じ）。文の区切りの判定に使う
+Function ParseTokLogLine(p As *Parser) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    lx = p->lx
+    toks = lx->toks
+    ParseTokLogLine = toks[p->pos].logLine
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParseExpect(p As *Parser, kind As Long) As boolean
     Dim want As String
@@ -143,6 +152,25 @@ End Function
 
 Function ParseIdentIs(p As *Parser, name As *Byte) As Long
     ParseIdentIs = ParseIdentIsAt(p, p->pos, name)
+End Function
+
+' 単独の End（後ろの同じ論理行に語が無い）なら 1。プログラム終了の文で、End If などではない
+Function ParseIsBareEnd(p As *Parser) As Long
+    Dim kEnd(KW_SHORT_LEN - 1) As Byte
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    lstrcpy(VarPtr(kEnd), "end")
+    ParseIsBareEnd = ParseIdentIs(p, VarPtr(kEnd))
+    If ParseIsBareEnd = 0 Or ParseTokKindAt(p, p->pos + 1) <> TK_IDENT Then Exit Function
+    lx = p->lx
+    toks = lx->toks
+    If toks[p->pos + 1].logLine = toks[p->pos].logLine Then ParseIsBareEnd = 0
+End Function
+
+' ブロックを閉じる語か。単独の End は文なので閉じない
+Function ParseIsStopWord(p As *Parser, kw As *Byte) As Long
+    ParseIsStopWord = ParseIdentIs(p, kw)
+    If ParseIsStopWord <> 0 And ParseIsBareEnd(p) <> 0 Then ParseIsStopWord = 0
 End Function
 
 ' 文区切り `:`（同一行に複数文）
