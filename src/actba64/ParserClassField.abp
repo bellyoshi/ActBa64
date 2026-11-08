@@ -1,13 +1,33 @@
 ' ParserClassField - フィールドとクラス本体
 
+' *Function(...) / *Sub(...) のフィールドはポインタ幅の整数として持つ。1=読んだ, 0=関数ポインタでない, -1=エラー
+Function ParseFieldFnPtr(p As *Parser, ByRef sz As Long) As Long
+    Dim isSub As Long
+    Dim params As Long
+    Dim retTy As Long
+    ParseFieldFnPtr = 0
+    If Not ParseFnPtrIsSub(p, isSub) Then Exit Function
+    p->pos = p->pos + 1
+    ParseFieldFnPtr = -1
+    If ParseFnPtrBody(p, isSub, params, retTy) = 0 Then Exit Function
+    sz = TyPtrSize()
+    ParseFieldFnPtr = 1
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParseFieldTypeSize(p As *Parser, types As *TypeTable, ByRef sz As Long, ByRef fieldTy As Long) As boolean
     Dim tname(SYM_NAME_LEN - 1) As Byte
+    Dim fp As Long
 
     ParseFieldTypeSize = false
     fieldTy = -1
     If ParseTokKind(p) = TK_STAR Then
         p->pos = p->pos + 1
+        fp = ParseFieldFnPtr(p, sz)
+        If fp < 0 Then Exit Function
+        ParseFieldTypeSize = true
+        If fp > 0 Then Exit Function
+        ParseFieldTypeSize = false
         If Not ParseCopyIdent(p, VarPtr(tname)) Then
             p->err = 1
             Exit Function
@@ -30,6 +50,26 @@ Function ParseFieldTypeSize(p As *Parser, types As *TypeTable, ByRef sz As Long,
     ParseFieldTypeSize = true
 End Function
 
+' name(n) / name[n] の要素数（n+1）。無ければ 1
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseFieldCount(p As *Parser, ByRef count As Long) As boolean
+    Dim closeTk As Long
+    ParseFieldCount = true
+    count = 1
+    closeTk = TK_RPAREN
+    If ParseTokKind(p) = TK_LBRACK Then closeTk = TK_RBRACK
+    If ParseTokKind(p) <> TK_LPAREN And closeTk = TK_RPAREN Then Exit Function
+    p->pos = p->pos + 1
+    ParseFieldCount = false
+    If ParseTokKind(p) <> TK_NUMBER Then
+        p->err = 1
+        Exit Function
+    End If
+    count = ParseTokNum(p) + 1
+    p->pos = p->pos + 1
+    ParseFieldCount = ParseExpect(p, closeTk)
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParseClassField(p As *Parser, ti As Long, access As Long) As boolean
     Dim fname(SYM_NAME_LEN - 1) As Byte
@@ -48,17 +88,7 @@ Function ParseClassField(p As *Parser, ti As Long, access As Long) As boolean
         p->err = 1
         Exit Function
     End If
-    count = 1
-    If ParseTokKind(p) = TK_LPAREN Then
-        p->pos = p->pos + 1
-        If ParseTokKind(p) <> TK_NUMBER Then
-            p->err = 1
-            Exit Function
-        End If
-        count = ParseTokNum(p) + 1
-        p->pos = p->pos + 1
-        If Not ParseExpect(p, TK_RPAREN) Then Exit Function
-    End If
+    If Not ParseFieldCount(p, count) Then Exit Function
     If ParseIdentIs(p, VarPtr(kAs)) = 0 Then
         p->err = 1
         Exit Function
