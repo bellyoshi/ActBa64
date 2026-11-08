@@ -50,7 +50,7 @@
 |---|---|
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
 | プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
-| `#resource` の MENU / DIALOG / VERSIONINFO | ICON は `src/rc` の `rc.exe`。その他の rc 文は未 |
+| `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
 | `Char` / `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は `Byte`/`Long`/`DWord` 中心 |
@@ -70,7 +70,7 @@
 | ProjectEditor の RAD | フォームデザイナは未。コントロール配置から `MakeWindow.wbp` / `Callback.wbp` / `MainWnd.sbp` を出す 4.20 のウィンドウ RAD |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
-| ICON / MENU 等の型付きリソース | LoadIcon/LoadMenu 向けは未 |
+| MENU 等の型付きリソース | ICON / BITMAP は対応。LoadMenu 向けは未 |
 
 ### DirectX（4.20 は D3D9 + `dx_*.sbp` → ActBa64 は D3D11 で段階的に）
 

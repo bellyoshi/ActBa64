@@ -552,7 +552,7 @@ s(r)
 
 - ソース相対パスのファイル全体を PE `.rsrc` に **RCDATA（型 10）ID=1** として埋め込む
 - 実行時: `FindResourceA(GetModuleHandleA(0), MAKEINTRESOURCE(1), MAKEINTRESOURCE(10))`
-- `#resource "file.rc"` は `actba64.exe` の隣にある `rc.exe`（`src/rc/rc.pj`）を起動する。対応するのは `#define 名前 数値` と `ICON` 文だけ。MENU / DIALOG / VERSIONINFO は未
+- `#resource "file.rc"` は `actba64.exe` の隣にある `rc.exe`（`src/rc/rc.pj`）を起動する。対応するのは `#define 名前 数値`、`ICON` 文、`BITMAP` 文（RT_BITMAP。`.bmp` の先頭 14 バイトを除いて埋め込む）。ID の名前は `.rc` と同じフォルダの `resource.sbp` の `Const 名前=数値` からも引く（ActiveBasic の RAD ツールが出す形）。MENU / DIALOG / VERSIONINFO は未
 - `.pj` の `#RESOURCE=` は当面無視
 
 ### 5.3 メモリ
@@ -882,7 +882,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは COM vtable。`Super` / `New` / `Delete` は対応）
 - `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールド、`Print` の自動変換は IEEE Double（64bit と `-actba32`）
 - ネスト手続き
-- `#resource` の MENU / DIALOG / VERSIONINFO（ICON 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
+- `#resource` の MENU / DIALOG / VERSIONINFO（ICON / BITMAP 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化
 
 ---
