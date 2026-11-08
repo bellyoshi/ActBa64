@@ -1,0 +1,46 @@
+' MdiAskSave - 保存していない変更がある文書を閉じる前に、保存するか尋ねる
+
+Function MdiDocDirty(hWnd As HWND) As Long
+    Dim s As Long
+    MdiDocDirty = 0
+    If hWnd = g_activeChild Then MdiDocDirty = g_docDirty
+    If hWnd = g_activeChild Then Exit Function
+    s = MdiSlotOf(hWnd)
+    If s >= 0 Then MdiDocDirty = g_docDirtySlot(s)
+End Function
+
+Function MdiDocName$(hWnd As HWND) As String
+    Dim s As Long
+    MdiDocName$ = g_docPath
+    If hWnd <> g_activeChild Then
+        s = MdiSlotOf(hWnd)
+        MdiDocName$ = ""
+        If s >= 0 Then MdiDocName$ = g_docPathSlot(s)
+    End If
+    If Len(MdiDocName$) = 0 Then MdiDocName$ = "untitled"
+End Function
+
+' 1 = 閉じてよい（保存した / 保存しない）、0 = やめる（キャンセル / 保存できなかった）
+Function MdiAskSave(hWnd As HWND) As Long
+    Dim r As Long
+    Dim msg As String
+    MdiAskSave = 1
+    If MdiDocDirty(hWnd) = 0 Then Exit Function
+    If hWnd <> g_activeChild Then SendMessage(g_hClient, WM_MDIACTIVATE, hWnd As WPARAM, 0)
+    msg = UiText$(UI_ASK_SAVE) + Chr$(13) + Chr$(10) + Chr$(13) + Chr$(10) + MdiDocName$(hWnd)
+    r = UiMsgBoxYesNoCancel(hMainWnd, msg, "ProjectEditor")
+    If r = UI_IDCANCEL Then MdiAskSave = 0
+    If r = UI_IDYES Then MdiAskSave = EditorDoc_Save(hWnd)
+End Function
+
+' 開いている文書を順に尋ねる。どれかでやめたら 0
+Function MdiAskSaveAll() As Long
+    Dim i As Long
+    MdiAskSaveAll = 1
+    For i = 0 To 7
+        If g_docUsed(i) <> 0 And g_docHwnd(i) <> 0 Then
+            If MdiAskSave(g_docHwnd(i)) = 0 Then MdiAskSaveAll = 0
+            If MdiAskSaveAll = 0 Then Exit Function
+        End If
+    Next
+End Function
