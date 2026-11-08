@@ -122,6 +122,13 @@ Function LowStmtWhile(ctx As *LowerCtx, idx As Long) As Long
         LowStmtWhile = 1
 End Function
 
+' 整数 For の初期値・終値・Step。Double / Single は代入と同じく Long へ切り捨てる
+Function LowForIntExpr(ctx As *LowerCtx, expr As Long) As Long
+    LowForIntExpr = LowExpr(ctx, expr)
+    If LowForIntExpr = 0 Then Exit Function
+    LowEmitCvtToLongIfNeeded(ctx, expr, TY_LONG)
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function LowStmtForStep(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Long, stepIdx As Long, useInc As Long) As boolean
     Dim nodes As *AstNode
@@ -140,7 +147,7 @@ Function LowStmtForStep(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Lo
     ElseIf stepIdx >= 0 Then
         LowEmitLoadOff(ctx->list, vOff, vGlob)
         IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
-        If LowExpr(ctx, stepIdx) = 0 Then Exit Function
+        If LowForIntExpr(ctx, stepIdx) = 0 Then Exit Function
         IrEmit(ctx->list, OP_POP_RCX, 0, 0)
         IrEmit(ctx->list, OP_ADD_EAX_ECX, 0, 0)
         LowEmitStoreOff(ctx->list, vOff, vGlob)
@@ -168,7 +175,7 @@ Function LowStmtForPrep(ctx As *LowerCtx, idx As Long, ByRef vOff As Long, ByRef
     LowStmtForPrep = false
     ast = ctx->ast
     nodes = ast->nodes
-    If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    If LowForIntExpr(ctx, nodes[idx].right) = 0 Then Exit Function
     AstCopyStr(ast, nodes[idx].left, VarPtr(name))
     If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         LowerDiagError(ctx, idx, LowUndefMsg$(VarPtr(name)))
@@ -194,28 +201,38 @@ Function LowStmtForPrep(ctx As *LowerCtx, idx As Long, ByRef vOff As Long, ByRef
     LowStmtForPrep = true
 End Function
 
+' 制御変数と終値を比べる。ecx = 変数, eax = 終値（Step 式より後に評価してレジスタを壊されない）
+Function LowForIntRel(ctx As *LowerCtx, vOff As Long, vGlob As Long, limit As Long, jcc As Long, labEnd As Long) As boolean
+    LowForIntRel = false
+    LowEmitLoadOff(ctx->list, vOff, vGlob)
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    If LowForIntExpr(ctx, limit) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+    IrEmit(ctx->list, OP_CMP_ECX_EAX, 0, 0)
+    IrEmit(ctx->list, jcc, labEnd, 0)
+    LowForIntRel = true
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
-Function LowStmtForCmp(ctx As *LowerCtx, stepIdx As Long, labStepNeg As Long, labStepCont As Long, labEnd As Long) As boolean
-    LowStmtForCmp = false
+Function LowStmtForCmpStep(ctx As *LowerCtx, vOff As Long, vGlob As Long, limit As Long, stepIdx As Long, labStepNeg As Long, labStepCont As Long, labEnd As Long) As boolean
+    LowStmtForCmpStep = false
+    If LowForIntExpr(ctx, stepIdx) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
+    IrEmit(ctx->list, OP_JL, labStepNeg, 0)
+    If Not LowForIntRel(ctx, vOff, vGlob, limit, OP_JG, labEnd) Then Exit Function
+    IrEmit(ctx->list, OP_JMP, labStepCont, 0)
+    IrEmit(ctx->list, OP_LABEL, labStepNeg, 0)
+    LowStmtForCmpStep = LowForIntRel(ctx, vOff, vGlob, limit, OP_JL, labEnd)
+    IrEmit(ctx->list, OP_LABEL, labStepCont, 0)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowStmtForCmp(ctx As *LowerCtx, vOff As Long, vGlob As Long, limit As Long, stepIdx As Long, labStepNeg As Long, labStepCont As Long, labEnd As Long) As boolean
     If stepIdx >= 0 Then
-        If LowExpr(ctx, stepIdx) = 0 Then Exit Function
-        IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
-        IrEmit(ctx->list, OP_JL, labStepNeg, 0)
-        IrEmit(ctx->list, OP_MOV_EAX_EDX, 0, 0)
-        IrEmit(ctx->list, OP_CMP_ECX_EAX, 0, 0)
-        IrEmit(ctx->list, OP_JG, labEnd, 0)
-        IrEmit(ctx->list, OP_JMP, labStepCont, 0)
-        IrEmit(ctx->list, OP_LABEL, labStepNeg, 0)
-        IrEmit(ctx->list, OP_MOV_EAX_EDX, 0, 0)
-        IrEmit(ctx->list, OP_CMP_ECX_EAX, 0, 0)
-        IrEmit(ctx->list, OP_JL, labEnd, 0)
-        IrEmit(ctx->list, OP_LABEL, labStepCont, 0)
-    Else
-        IrEmit(ctx->list, OP_MOV_EAX_EDX, 0, 0)
-        IrEmit(ctx->list, OP_CMP_ECX_EAX, 0, 0)
-        IrEmit(ctx->list, OP_JG, labEnd, 0)
+        LowStmtForCmp = LowStmtForCmpStep(ctx, vOff, vGlob, limit, stepIdx, labStepNeg, labStepCont, labEnd)
+        Exit Function
     End If
-    LowStmtForCmp = true
+    LowStmtForCmp = LowForIntRel(ctx, vOff, vGlob, limit, OP_JG, labEnd)
 End Function
 
 Function LowStmtFor(ctx As *LowerCtx, idx As Long) As Long
@@ -247,12 +264,7 @@ Function LowStmtFor(ctx As *LowerCtx, idx As Long) As Long
     If Not LowStmtForPrep(ctx, idx, vOff, vGlob, stepIdx, useInc, labTop, labEnd, labStepNeg, labStepCont, labForCont) Then Exit Function
     IrEmit(ctx->list, OP_LABEL, labTop, 0)
     LowMaybeLoopStrCollect(ctx, nodes[idx].extra, nodes[idx].num, stepIdx)
-    LowEmitLoadOff(ctx->list, vOff, vGlob)
-    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
-    If LowExpr(ctx, nodes[idx].extra) = 0 Then Exit Function
-    IrEmit(ctx->list, OP_MOV_EDX_EAX, 0, 0)
-    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
-    If Not LowStmtForCmp(ctx, stepIdx, labStepNeg, labStepCont, labEnd) Then Exit Function
+    If Not LowStmtForCmp(ctx, vOff, vGlob, nodes[idx].extra, stepIdx, labStepNeg, labStepCont, labEnd) Then Exit Function
     body = nodes[idx].num
     If LowStmtList(ctx, body) = 0 Then Exit Function
     IrEmit(ctx->list, OP_LABEL, labForCont, 0)
