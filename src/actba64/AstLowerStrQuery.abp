@@ -205,6 +205,27 @@ Function LowFieldIsCStr(ctx As *LowerCtx, idx As Long) As Long
     LowFieldIsCStr = LowUdtIsPtr(ctx, ft)
 End Function
 
+' API や *Byte を返す関数の戻り値も C 文字列（長さヘッダなし）
+Function LowCallIsCStr(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    LowCallIsCStr = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].kind <> AST_CALL Then Exit Function
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowDeclIndex(ctx, VarPtr(name)) >= 0 Then LowCallIsCStr = 1
+    If LowFindFuncRetTy(ctx, VarPtr(name)) = TY_PTR_BYTE Then LowCallIsCStr = 1
+End Function
+
+' Left$ / Mid$ / Right$ の第 1 引数や連結の項（rax）が C 文字列なら長さ付き String に複製する
+Function LowStrArgToStr(ctx As *LowerCtx, idx As Long) As Long
+    LowStrArgToStr = 1
+    If LowExprIsCStr(ctx, idx) = 0 And LowCallIsCStr(ctx, idx) = 0 Then Exit Function
+    If Not LowEmitMakeStrRax(ctx) Then LowStrArgToStr = 0
+End Function
+
 Function LowEnsureLab(ctx As *LowerCtx, ByRef lab As Long) As Long
     If lab < 0 Then
         lab = LowNewLabel(ctx)
