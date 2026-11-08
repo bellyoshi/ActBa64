@@ -90,12 +90,26 @@ Function TyAdd(t As *TypeTable, name As *Byte) As Long
     TyAdd = i
 End Function
 
+Function TyAlignOk(a As Long) As Long
+    TyAlignOk = 0
+    If a = 1 Or a = 2 Or a = 4 Or a = 8 Or a = 16 Then TyAlignOk = 1
+End Function
+
+' Pack(n) の型なら整列 a を n までに抑える（#pragma pack と同じ）
+Function TyPackCap(t As *TypeTable, typeIdx As Long, a As Long) As Long
+    Dim e As Long
+    TyPackCap = a
+    e = t->typeExplicitAlign[typeIdx]
+    If e < 0 And a > -e Then TyPackCap = -e
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function TySetExplicitAlign(t As *TypeTable, typeIdx As Long, align As Long) As boolean
     TySetExplicitAlign = false
     If t = NULL Then Exit Function
     If typeIdx < 0 Or typeIdx >= t->nTypes Then Exit Function
-    If align <> 1 And align <> 2 And align <> 4 And align <> 8 And align <> 16 Then Exit Function
+    ' 負の値は Pack(n)（フィールドと型の整列を n までに抑える）
+    If TyAlignOk(align) = 0 And TyAlignOk(-align) = 0 Then Exit Function
     t->typeExplicitAlign[typeIdx] = align
     TySetExplicitAlign = true
 End Function
@@ -151,7 +165,7 @@ Function TyAlignOfLeaf(t As *TypeTable, typeIdx As Long) As Long
         best = 2
     End If
     If t->typeExplicitAlign[typeIdx] > best Then best = t->typeExplicitAlign[typeIdx]
-    TyAlignOfLeaf = best
+    TyAlignOfLeaf = TyPackCap(t, typeIdx, best)
 End Function
 
 ' C 互換: 型のアラインメント（ネスト UDT は要素の最大整列。size 丸めではない）
@@ -193,7 +207,7 @@ Function TyAlignOf(t As *TypeTable, typeIdx As Long) As Long
         fi = nexts[fi]
     Wend
     If t->typeExplicitAlign[typeIdx] > best Then best = t->typeExplicitAlign[typeIdx]
-    TyAlignOf = best
+    TyAlignOf = TyPackCap(t, typeIdx, best)
 End Function
 
 ' End Type 時にサイズを型アラインへ切り上げ（MSVC 互換）
@@ -291,7 +305,7 @@ Function TyAddField(t As *TypeTable, typeIdx As Long, name As *Byte, elemSize As
     If elemSize <= 0 Or count <= 0 Then Exit Function
     If Not TyEnsureFieldCap(t) Then Exit Function
 
-    align = TyFieldAlign(t, elemSize, fieldTy)
+    align = TyPackCap(t, typeIdx, TyFieldAlign(t, elemSize, fieldTy))
     tsizes = t->typeSizes
     off = TyAlignFieldOff(tsizes[typeIdx], align)
 
