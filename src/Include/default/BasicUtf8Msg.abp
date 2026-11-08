@@ -1,0 +1,73 @@
+' BasicUtf8Msg - SendMessage の文字列メッセージ。ソースの文字列は UTF-8 なので、
+' lParam に文字列を渡すメッセージはワイドにして SendMessageW へ渡す。
+' UTF-8 として読めないバイト列（CP932 など）はそのまま SendMessageA へ渡す。
+' CB_GETLBTEXT / LB_GETTEXT とその LEN は UTF-8 で返す。ほかのメッセージは SendMessageA のまま。
+
+' lParam に入力の文字列を取るメッセージなら 1
+Function BasicMsgTakesText(msg As DWord) As Long
+    BasicMsgTakesText = 0
+    If msg = &H000C Or msg = &H00C2 Then BasicMsgTakesText = 1
+    If msg = &H0143 Or msg = &H014A Or msg = &H014C Or msg = &H014D Or msg = &H0158 Then BasicMsgTakesText = 1
+    If msg = &H0180 Or msg = &H0181 Or msg = &H018C Or msg = &H018F Or msg = &H01A2 Then BasicMsgTakesText = 1
+End Function
+
+' 項目の文字列を返すメッセージ: CB_GETLBTEXT / LB_GETTEXT なら 1、その LEN なら 2
+Function BasicMsgItemText(msg As DWord) As Long
+    BasicMsgItemText = 0
+    If msg = &H0148 Or msg = &H0189 Then BasicMsgItemText = 1
+    If msg = &H0149 Or msg = &H018A Then BasicMsgItemText = 2
+End Function
+
+Function BasicMsgSendText(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    Dim raw As *Byte
+    Dim w As *Byte
+    raw = lParam As *Byte
+    w = BasicWideOf(raw, lstrlen(raw))
+    If w = 0 Then
+        BasicMsgSendText = SendMessageA(hWnd, msg, wParam, lParam)
+        Exit Function
+    End If
+    BasicMsgSendText = SendMessageW(hWnd, msg, wParam, w As LPARAM)
+    free(w)
+End Function
+
+' 項目 wParam のワイド文字列（呼び出し側で free）。chars に文字数
+Function BasicMsgItemWide(hWnd As HWND, msg As DWord, wParam As WPARAM, ByRef chars As Long) As *Byte
+    Dim w As *Byte
+    BasicMsgItemWide = 0
+    chars = SendMessageW(hWnd, msg + 1, wParam, 0)
+    If chars < 0 Then Exit Function
+    w = GwAlloc(chars)
+    If w = 0 Then Exit Function
+    chars = SendMessageW(hWnd, msg, wParam, w As LPARAM)
+    If chars < 0 Then chars = 0
+    BasicMsgItemWide = w
+End Function
+
+Function BasicMsgItemOut(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM, kind As Long) As LRESULT
+    Dim w As *Byte
+    Dim chars As Long
+    Dim n As Long
+    If kind = 2 Then msg = msg - 1
+    BasicMsgItemOut = -1
+    w = BasicMsgItemWide(hWnd, msg, wParam, chars)
+    If w = 0 Then Exit Function
+    n = BasicUtf8Len(w, chars)
+    If kind = 1 And lParam <> 0 Then n = GwPutFit(w, chars, lParam As *Byte, n + 1)
+    free(w)
+    BasicMsgItemOut = n
+End Function
+
+Function SendMessage(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    Dim kind As Long
+    kind = BasicMsgItemText(msg)
+    If kind <> 0 Then
+        SendMessage = BasicMsgItemOut(hWnd, msg, wParam, lParam, kind)
+        Exit Function
+    End If
+    If BasicMsgTakesText(msg) <> 0 And lParam <> 0 Then
+        SendMessage = BasicMsgSendText(hWnd, msg, wParam, lParam)
+        Exit Function
+    End If
+    SendMessage = SendMessageA(hWnd, msg, wParam, lParam)
+End Function
