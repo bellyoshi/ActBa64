@@ -1,0 +1,70 @@
+' AstLowerSelfCall - メソッドの中で同じクラス（と継承元）のメソッドを This. なしで呼ぶ
+' 関数・Declare のどちらにも無い名前だけを This.Name(...) として呼ぶ。同名の関数や API の解決は変えない。
+
+' メソッドの中なら This のクラス番号。外なら -1（エラーにはしない）
+Function LowSelfTi(ctx As *LowerCtx) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    Dim off As Long, ty As Long, ti As Long, br As Long, gl As Long
+    LowSelfTi = -1
+    lstrcpy(VarPtr(k), "This")
+    If Not LowLookupVar(ctx, VarPtr(k), VarPtr(off), VarPtr(ty), VarPtr(ti), VarPtr(br), VarPtr(gl)) Then Exit Function
+    If ty <> TY_PTR_UDT Then Exit Function
+    LowSelfTi = ti
+End Function
+
+' This のクラスに name のメソッドがあればクラス番号。無ければ -1
+Function LowSelfMethodTi(ctx As *LowerCtx, name As *Byte) As Long
+    Dim ti As Long, acc As Long
+    LowSelfMethodTi = -1
+    ti = LowSelfTi(ctx)
+    If ti < 0 Then Exit Function
+    If AccMethOwner(ti, name, acc) < 0 Then Exit Function
+    LowSelfMethodTi = ti
+End Function
+
+' This を含む引数の数
+Function LowSelfNArgs(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowSelfNArgs = nodes[idx].num + 1
+End Function
+
+Function LowSelfArgsOk(ctx As *LowerCtx, idx As Long, ti As Long, name As *Byte, nArgs As Long) As Long
+    LowSelfArgsOk = 0
+    If AccCheckMethod(ctx, idx, ti, name) = 0 Then Exit Function
+    If nArgs > LOW_MAX_ARGS Or LowCountCallArgs(ctx, idx, 1) <> nArgs Then ctx->err = 1
+    If ctx->err <> 0 Then Exit Function
+    LowSelfArgsOk = 1
+End Function
+
+' 引数をホーム領域とレジスタへ積み、最後に This を rcx（32bit は [esp]）へ
+Function LowSelfPush(ctx As *LowerCtx, idx As Long, nArgs As Long, cb As Long) As Long
+    LowSelfPush = 0
+    IrEmit(ctx->list, OP_SUB_RSP, cb, 0)
+    If Not LowEmitMethodArgs(ctx, idx, nArgs) Then Exit Function
+    LowEmitMethodRegArgs(ctx->list, nArgs)
+    LowSelfPush = LowEmitSuperThis(ctx)
+End Function
+
+Function LowSelfEmit(ctx As *LowerCtx, idx As Long, ti As Long, nArgs As Long) As Long
+    Dim cb As Long
+    LowSelfEmit = 0
+    cb = LowCallBytes(nArgs)
+    If LowSelfPush(ctx, idx, nArgs, cb) = 0 Then Exit Function
+    If Not LowExprCallMethodInvoke(ctx, idx, ti, nArgs, cb) Then Exit Function
+    LowSelfEmit = 1
+End Function
+
+' 呼べたら 1、エラーなら 0、メソッドでなければ -1
+Function LowTrySelfCall(ctx As *LowerCtx, idx As Long, name As *Byte) As Long
+    Dim ti As Long, nArgs As Long
+    LowTrySelfCall = -1
+    ti = LowSelfMethodTi(ctx, name)
+    If ti < 0 Then Exit Function
+    LowTrySelfCall = 0
+    nArgs = LowSelfNArgs(ctx, idx)
+    If LowSelfArgsOk(ctx, idx, ti, name, nArgs) = 0 Then Exit Function
+    LowTrySelfCall = LowSelfEmit(ctx, idx, ti, nArgs)
+End Function
