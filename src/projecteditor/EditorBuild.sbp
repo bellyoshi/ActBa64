@@ -18,7 +18,7 @@ Function EditorBuild_ExeDir$() As String
     EditorBuild_ExeDir$ = ""
     If ExeModuleFile(VarPtr(path), 260) <= 0 Then Exit Function
     If ExeDirOf(VarPtr(path), VarPtr(dir)) = 0 Then Exit Function
-    EditorBuild_ExeDir$ = Enc_DupCStr$(VarPtr(dir), lstrlen(VarPtr(dir)))
+    EditorBuild_ExeDir$ = PathEnc_Utf8$(VarPtr(dir), lstrlen(VarPtr(dir)))
 End Function
 
 Function EditorBuild_TargetConfigPath$() As String
@@ -271,10 +271,18 @@ Sub EditorBuild_ArmSi(hWrite As HANDLE)
     g_buildSi.hStdError = hWrite
 End Sub
 
+' コマンドラインの UTF-8 を CP932 にして CreateProcessA へ（子は GetCommandLineA で読む）
+Function EditorBuild_CreateProc(cmd As *Byte, inherit As Long, flags As DWord, si As *Byte, pi As *Byte) As Long
+    Dim a As *Byte
+    a = BasicAnsiPtr(cmd)
+    EditorBuild_CreateProc = EditorBuild_CreateProcess(0, a, 0, 0, inherit, flags, 0, 0, si, pi)
+    BasicFreeAnsi(a, cmd)
+End Function
+
 Function EditorBuild_StartProcess(cmdLine As String, hWrite As HANDLE, ByRef hProcess As HANDLE) As Long
     EditorBuild_ArmSi(hWrite)
     FillMemory(VarPtr(g_buildPi), Len(g_buildPi), 0)
-    EditorBuild_StartProcess = EditorBuild_CreateProcess(0, StrPtr(cmdLine), 0, 0, 1, CREATE_NO_WINDOW, 0, 0, VarPtr(g_buildSi), VarPtr(g_buildPi))
+    EditorBuild_StartProcess = EditorBuild_CreateProc(StrPtr(cmdLine), 1, CREATE_NO_WINDOW, VarPtr(g_buildSi), VarPtr(g_buildPi))
     If EditorBuild_StartProcess = 0 Then Exit Function
     CloseHandle(g_buildPi.hThread)
     hProcess = g_buildPi.hProcess
