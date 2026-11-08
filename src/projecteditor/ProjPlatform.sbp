@@ -1,0 +1,103 @@
+' ProjPlatform - .pj の #PLATFORM とメニューの 64bit / 32bit を合わせる
+' 開いた .pj が #PLATFORM=32 ならメニューを 32bit に、64 なら 64bit にする。
+' メニューで選び直したら、開いている .pj の #PLATFORM をその値に書き換える。
+
+' 0 = 書かれていない / 32 / 64
+Dim g_projPlatform As Long
+
+Sub ProjTakePlatform(t As String)
+    If ProjKeyIs(t, "#platform") <> 0 Then g_projPlatform = ProjParseInt(ProjEqVal$(t))
+End Sub
+
+Sub ProjApplyPlatform()
+    If g_projPlatform = 32 Then EditorBuild_SetTarget32(1)
+    If g_projPlatform = 64 Then EditorBuild_SetTarget32(0)
+End Sub
+
+Function ProjIsBreak(body As String, i As Long) As Long
+    Dim c As String
+    c = Mid$(body, i, 1)
+    ProjIsBreak = 0
+    If c = Chr$(13) Or c = Chr$(10) Then ProjIsBreak = 1
+End Function
+
+' i から行末まで（改行は含まない）。i は改行の先頭へ進む
+Function ProjCutLine$(body As String, ByRef i As Long) As String
+    Dim a As Long
+    a = i
+    While i <= Len(body)
+        If ProjIsBreak(body, i) <> 0 Then Exit While
+        i = i + 1
+    Wend
+    ProjCutLine$ = Mid$(body, a, i - a)
+End Function
+
+' i から続く改行をまとめて返す（空行も含めてそのまま残す）
+Function ProjCutBreak$(body As String, ByRef i As Long) As String
+    Dim a As Long
+    a = i
+    While i <= Len(body)
+        If ProjIsBreak(body, i) = 0 Then Exit While
+        i = i + 1
+    Wend
+    ProjCutBreak$ = Mid$(body, a, i - a)
+End Function
+
+Function ProjNewline$(body As String) As String
+    Dim i As Long
+    ProjNewline$ = Chr$(13) + Chr$(10)
+    For i = 1 To Len(body)
+        If Mid$(body, i, 1) = Chr$(13) Then Exit Function
+    Next
+    ProjNewline$ = Chr$(10)
+End Function
+
+' #PLATFORM の行を置き換える。無ければ #SOURCE の前（それも無ければ末尾）に足す
+Function ProjPlatformLine$(txt As String, v As String, nl As String, ByRef done As Long) As String
+    Dim t As String
+    ProjPlatformLine$ = txt
+    If done <> 0 Then Exit Function
+    t = ProjTrim$(txt)
+    If ProjKeyIs(t, "#platform") <> 0 Then ProjPlatformLine$ = "#PLATFORM=" + v
+    If ProjIsSource(t) <> 0 Then ProjPlatformLine$ = "#PLATFORM=" + v + nl + nl + txt
+    If ProjPlatformLine$ <> txt Then done = 1
+End Function
+
+Function ProjPlatformText$(body As String, v As String) As String
+    Dim i As Long, done As Long
+    Dim nl As String, out As String, txt As String
+    nl = ProjNewline$(body)
+    out = ""
+    done = 0
+    i = 1
+    While i <= Len(body)
+        txt = ProjCutLine$(body, i)
+        out = out + ProjPlatformLine$(txt, v, nl, done) + ProjCutBreak$(body, i)
+    Wend
+    If done = 0 Then out = out + nl + "#PLATFORM=" + v + nl
+    ProjPlatformText$ = out
+End Function
+
+' 元の文字コードのまま書き戻す
+Function ProjRewrite(text As String, enc As Long) As Long
+    Dim saved As Long
+    saved = g_docEncoding
+    g_docEncoding = enc
+    ProjRewrite = EditorDoc_WriteTextFile(g_projectPath, text)
+    g_docEncoding = saved
+End Function
+
+' メニューで選んだ 32 / 64 を開いている .pj の #PLATFORM に書く
+Sub ProjWritePlatform(bits As Long)
+    Dim saved As Long, enc As Long
+    Dim body As String, v As String
+    If Len(g_projectPath) = 0 Or g_projPlatform = bits Then Exit Sub
+    v = "64"
+    If bits = 32 Then v = "32"
+    saved = g_docEncoding
+    body = EditorDoc_LoadTextFile$(g_projectPath)
+    enc = g_docEncoding
+    g_docEncoding = saved
+    If Len(body) = 0 Then Exit Sub
+    If ProjRewrite(ProjPlatformText$(body, v), enc) <> 0 Then g_projPlatform = bits
+End Sub
