@@ -1,0 +1,65 @@
+' ParserPreType - 本体を読む前に Type / Class の名前を登録する
+' 後ろで定義する Type や Class も Dim x As T で使えるようにする（ActiveBasic と同じ）
+
+' pos の 1 つ前の字句と論理行が違えば文頭
+Function ParsePreAtStmtStart(p As *Parser, at As Long) As boolean
+    Dim ln As Long
+    ParsePreAtStmtStart = true
+    If at = 0 Then Exit Function
+    ln = ParseTokLogLine(p)
+    p->pos = at - 1
+    ParsePreAtStmtStart = ParseTokLogLine(p) <> ln Or ParseTokKind(p) = TK_COLON
+    p->pos = at
+End Function
+
+' Type なら 0、Class なら 1、どちらでもなければ -1
+Function ParsePreTypeKind(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParsePreTypeKind = -1
+    lstrcpy(VarPtr(kw), "type")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParsePreTypeKind = 0
+    lstrcpy(VarPtr(kw), "class")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParsePreTypeKind = 1
+End Function
+
+' 文頭の Type / Class の直後の名前を写す。名前が無ければ false
+Function ParsePreTypeName(p As *Parser, at As Long, name As *Byte) As boolean
+    Dim ln As Long
+    Dim kAs(KW_SHORT_LEN - 1) As Byte
+    ParsePreTypeName = false
+    ln = ParseTokLogLine(p)
+    p->pos = at + 1
+    lstrcpy(VarPtr(kAs), "as")
+    If ParseTokKind(p) = TK_IDENT And ParseTokLogLine(p) = ln And ParseIdentIs(p, VarPtr(kAs)) = 0 Then
+        ParsePreTypeName = ParseCopyIdent(p, name)
+    End If
+    p->pos = at
+End Function
+
+Sub ParsePreTypeAt(p As *Parser, at As Long)
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim kind As Long
+    Dim ti As Long
+    Dim ast As *Ast
+    kind = ParsePreTypeKind(p)
+    If kind < 0 Then Exit Sub
+    If Not ParsePreAtStmtStart(p, at) Then Exit Sub
+    If Not ParsePreTypeName(p, at, VarPtr(name)) Then Exit Sub
+    ast = p->ast
+    ti = TyAdd(ast->types, VarPtr(name))
+    If kind = 1 And ti >= 0 Then TySetClass(ast->types, ti)
+End Sub
+
+Sub ParsePreTypes(p As *Parser)
+    Dim save As Long
+    Dim at As Long
+    save = p->pos
+    at = 0
+    p->pos = 0
+    While ParseTokKind(p) <> TK_EOF
+        ParsePreTypeAt(p, at)
+        at = at + 1
+        p->pos = at
+    Wend
+    p->pos = save
+End Sub

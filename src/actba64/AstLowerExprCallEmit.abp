@@ -16,6 +16,11 @@ Sub LowEmitArgCvt(ctx As *LowerCtx, expr As Long, name As *Byte, argIdx As Long)
         LowEmitArgCvtFlt(ctx, expr, ty)
         Exit Sub
     End If
+    ' String の仮引数へ C 文字列（*Byte など）を渡すときは長さ付きの String に複製する（Val(p) など）
+    If ty = TY_STRING Then
+        LowStrArgToStr(ctx, expr)
+        Exit Sub
+    End If
     LowEmitCvtToLongIfNeeded(ctx, expr, ty)
 End Sub
 
@@ -176,6 +181,9 @@ Function LowExprCallNormal(ctx As *LowerCtx, idx As Long) As Long
         If di < 0 Then
             ' メソッドの中なら同じクラスのメソッド（This. の省略）
             LowExprCallNormal = LowTrySelfCall(ctx, idx, VarPtr(name))
+            If LowExprCallNormal >= 0 Then Exit Function
+            ' 関数ポインタのフィールド（errorproc(...) のような呼び出し）
+            LowExprCallNormal = LowTryFieldCall(ctx, idx, VarPtr(name))
             If LowExprCallNormal >= 0 Then Exit Function
             LowExprCallNormal = 0
             Print "error: unknown API/call '" + MakeStr(VarPtr(name)) + "'"

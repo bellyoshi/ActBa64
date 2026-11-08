@@ -1,0 +1,45 @@
+' AstLowerFieldCall - メソッドの中で関数ポインタのフィールドを name(...) と呼ぶ
+' 例: errorproc As *Sub(mes As *Byte) を持つクラスのメソッドで errorproc("x")
+
+' This の位置に置いたフィールドの値（関数アドレス）を rax へ
+Function LowLoadSelfField(ctx As *LowerCtx, off As Long) As Long
+    Dim k(KW_SHORT_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    LowLoadSelfField = 0
+    lstrcpy(VarPtr(k), "This")
+    If Not LowLookupVar(ctx, VarPtr(k), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    LowEmitLoadOff(ctx->list, vOff, vGl)
+    IrEmit(ctx->list, OP_ADD_RAX_IMM, off, 0)
+    IrEmit(ctx->list, OP_LOAD_PTR, 0, 0)
+    LowLoadSelfField = 1
+End Function
+
+Function LowFieldCallEmit(ctx As *LowerCtx, idx As Long, off As Long, name As *Byte) As Long
+    Dim list As *IrList
+    Dim nArgs As Long
+    Dim callBytes As Long
+    LowFieldCallEmit = 0
+    list = ctx->list
+    nArgs = LowSelfNArgs(ctx, idx) - 1
+    callBytes = LowCallBytes(nArgs)
+    If callBytes > 0 Then IrEmit(list, OP_SUB_RSP, callBytes, 0)
+    If Not LowEmitCallArgHomes(ctx, idx, nArgs, 0, 0, name) Then Exit Function
+    LowEmitLoadRegArgs(list, nArgs)
+    If LowLoadSelfField(ctx, off) = 0 Then Exit Function
+    IrEmit(list, OP_CALL_RAX, 0, 0)
+    LowEmitCallFinish(list, callBytes)
+    LowFieldCallEmit = 1
+End Function
+
+' 呼べたら 1、エラーなら 0、ポインタ幅のフィールドでなければ -1
+Function LowTryFieldCall(ctx As *LowerCtx, idx As Long, name As *Byte) As Long
+    Dim ti As Long, off As Long, sz As Long, cnt As Long, fty As Long
+    Dim ast As *Ast
+    LowTryFieldCall = -1
+    ti = LowSelfTi(ctx)
+    If ti < 0 Then Exit Function
+    ast = ctx->ast
+    If TyFindFieldEx(ast->types, ti, name, off, sz, cnt, fty) = 0 Then Exit Function
+    If sz <> TyPtrSize() Or cnt <> 1 Then Exit Function
+    LowTryFieldCall = LowFieldCallEmit(ctx, idx, off, name)
+End Function
