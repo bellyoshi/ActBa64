@@ -51,9 +51,9 @@ Print a +_
 
 | 行 | 意味 |
 |---|---|
-| `#console` | `Include\console\console.idx` を自動挿入 |
+| `#console` | `Include\console\console.idx` を自動挿入し、CUI（コンソール）にする。`#console` が無ければ GUI。ただし `#n88basic` / `#prompt` でなく、画面への `Print`（`Print #` は除く）があれば `#console` とみなして CUI にする |
 | `#n88basic` / `#N88BASIC` / `#prompt` | N88BASIC 互換モード（[§1.6](#16-n88basic-モード)）。`#prompt` は完全別名 |
-| `#USEWINDOW=0\|1` | 0=CUI / 1=GUI。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
+| `#USEWINDOW=0\|1` | 1=GUI（`#console` より優先）。0 は上の `#console` の規則に従う。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
 | `#strict` | 型の暗黙変換を warning（`As` で抑制）。`Long`→`Byte` はデータ欠落、引数の `String`→`VoidPtr` と `VoidPtr`→`Long` も含む |
 | `#include "path"` / `#include <path>` | ファイル挿入（深さ上限あり）。`"..."` はソース相対（絶対パス可）、`<...>` は `Include\` 配下を検索 |
 | `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` | 条件付きコンパイル（[§7.7](#77-条件付きコンパイル)） |
