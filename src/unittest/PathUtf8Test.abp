@@ -1,0 +1,123 @@
+' ファイルを開く／保存ダイアログの結果は UTF-8。nFileOffset / nFileExtension も UTF-8 のバイト位置。
+' 入るファイル名は呼ぶ前に CP932 にする。UTF-8 に直すと入らないときは CP932 のまま。
+' CreateFile / GetFileAttributes / Kill は UTF-8 をワイド文字 API に渡す。妥当な UTF-8 でなければ A 版。
+
+Dim ofnT As OPENFILENAME
+Dim ofnBuf(63) As Byte
+Dim ofnTtl(31) As Byte
+Dim pathTmp(259) As Byte
+Dim pathU As String
+Dim pathA As *Byte
+Dim pathW As *Byte
+Dim pathH As HANDLE
+
+Declare Function PathT_GetAttrW Lib "kernel32.dll" Alias "GetFileAttributesW" (ByVal lpFileName As *Byte) As DWord
+Declare Function PathT_TempA Lib "kernel32.dll" Alias "GetTempPathA" (ByVal n As DWord, ByVal buf As *Byte) As DWord
+
+Function PathT_Nib(ByVal c As Long) As Long
+    PathT_Nib = c - &H30
+    If c >= &H41 Then PathT_Nib = c - &H41 + 10
+End Function
+
+' 16 進 2 桁ずつを dst へ書く
+Sub PathT_Hex(dst As *Byte, hex As String)
+    Dim i As Long, last As Long
+    last = Len(hex) / 2 - 1
+    For i = 0 To last
+        dst[i] = PathT_Nib(hex[i * 2]) * 16 + PathT_Nib(hex[i * 2 + 1])
+    Next
+End Sub
+
+Sub PathT_Ofn(flags As DWord, nMax As DWord)
+    FillMemory(VarPtr(ofnT), Len(ofnT), 0)
+    ofnT.lStructSize = Len(ofnT)
+    ofnT.lpstrFile = VarPtr(ofnBuf)
+    ofnT.nMaxFile = nMax
+    ofnT.Flags = flags
+End Sub
+
+' 単一: CP932 "C:\表\あ.txt"（表 = 95 5C）
+FillMemory(VarPtr(ofnBuf), 64, 0)
+PathT_Hex(VarPtr(ofnBuf), "433A5C955C5C82A02E747874")
+FillMemory(VarPtr(ofnTtl), 32, 0)
+PathT_Hex(VarPtr(ofnTtl), "82A02E747874")
+PathT_Ofn(0, 64)
+ofnT.lpstrFileTitle = VarPtr(ofnTtl)
+ofnT.nMaxFileTitle = 32
+ofnT.nFileOffset = 6
+ofnT.nFileExtension = 9
+BasicOfnOut(ofnT)
+Assert(-1, MakeStr(VarPtr(ofnBuf)) = "C:\表\あ.txt", "ofn file utf8")
+Assert(-1, MakeStr(VarPtr(ofnTtl)) = "あ.txt", "ofn title utf8")
+Assert(7, ofnT.nFileOffset, "ofn offset")
+Assert(11, ofnT.nFileExtension, "ofn ext")
+
+' 拡張子なし（nFileExtension = 0）は 0 のまま
+FillMemory(VarPtr(ofnBuf), 64, 0)
+PathT_Hex(VarPtr(ofnBuf), "433A5C82A0")
+PathT_Ofn(0, 64)
+ofnT.nFileOffset = 3
+ofnT.nFileExtension = 0
+BasicOfnOut(ofnT)
+Assert(-1, MakeStr(VarPtr(ofnBuf)) = "C:\あ", "ofn noext")
+Assert(3, ofnT.nFileOffset, "ofn noext offset")
+Assert(0, ofnT.nFileExtension, "ofn noext ext")
+
+' 複数選択: "C:\表" 0 "あ.txt" 0 "b.txt" 0 0
+FillMemory(VarPtr(ofnBuf), 64, 0)
+PathT_Hex(VarPtr(ofnBuf), "433A5C955C0082A02E74787400622E7478740000")
+PathT_Ofn(&H80200, 64)
+ofnT.nFileOffset = 6
+BasicOfnOut(ofnT)
+Assert(-1, MakeStr(VarPtr(ofnBuf)) = "C:\表", "multi dir")
+Assert(0, ofnBuf[6], "multi nul1")
+Assert(&HE3, ofnBuf[7], "multi f1 0")
+Assert(&H82, ofnBuf[9], "multi f1 2")
+Assert(&H2E, ofnBuf[10], "multi f1 dot")
+Assert(0, ofnBuf[14], "multi nul2")
+Assert(&H62, ofnBuf[15], "multi f2")
+Assert(0, ofnBuf[21], "multi end")
+Assert(7, ofnT.nFileOffset, "multi offset")
+
+' 入らないときは CP932 のまま（UTF-8 は 15 バイト要る）
+FillMemory(VarPtr(ofnBuf), 64, 0)
+PathT_Hex(VarPtr(ofnBuf), "433A5C955C5C82A02E747874")
+PathT_Ofn(0, 13)
+ofnT.nFileOffset = 6
+BasicOfnOut(ofnT)
+Assert(&H95, ofnBuf[3], "ofn nofit keep")
+Assert(6, ofnT.nFileOffset, "ofn nofit offset")
+
+' 入る初期ファイル名は CP932 へ
+FillMemory(VarPtr(ofnBuf), 64, 0)
+lstrcpy(VarPtr(ofnBuf), "あ.txt")
+PathT_Ofn(0, 64)
+BasicOfnIn(ofnT)
+Assert(&H82, ofnBuf[0], "ofn in 0")
+Assert(&HA0, ofnBuf[1], "ofn in 1")
+Assert(&H2E, ofnBuf[2], "ofn in 2")
+Assert(0, ofnBuf[6], "ofn in end")
+
+' UTF-8 のファイル名で作る・調べる・消す
+PathT_TempA(260, VarPtr(pathTmp))
+pathU = MakeStr(VarPtr(pathTmp)) + "ユニット_utf8.txt"
+pathW = BasicWidePtr(StrPtr(pathU))
+pathH = CreateFile(StrPtr(pathU), GENERIC_WRITE, 0, ByVal 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0)
+Assert(-1, pathH <> INVALID_HANDLE_VALUE, "cf utf8 open")
+CloseHandle(pathH)
+Assert(-1, PathT_GetAttrW(pathW) <> &HFFFFFFFF, "cf utf8 wide name")
+Assert(-1, GetFileAttributes(StrPtr(pathU)) <> &HFFFFFFFF, "gfa utf8")
+Kill pathU
+Assert(-1, PathT_GetAttrW(pathW) = &HFFFFFFFF, "kill utf8")
+
+' CP932 のバイト列は A 版で開く
+pathA = BasicAnsiPtr(StrPtr(pathU))
+pathH = CreateFile(pathA, GENERIC_WRITE, 0, ByVal 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0)
+Assert(-1, pathH <> INVALID_HANDLE_VALUE, "cf cp932 open")
+CloseHandle(pathH)
+Assert(-1, PathT_GetAttrW(pathW) <> &HFFFFFFFF, "cf cp932 same file")
+Assert(-1, GetFileAttributes(pathA) <> &HFFFFFFFF, "gfa cp932")
+DeleteFileA(pathA)
+Assert(-1, PathT_GetAttrW(pathW) = &HFFFFFFFF, "cp932 cleanup")
+BasicFreeAnsi(pathA, StrPtr(pathU))
+free(pathW)

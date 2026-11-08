@@ -1,0 +1,195 @@
+' ファイル名の UTF-8。
+' ファイルを開く／保存ダイアログは A 版のまま呼び、入るファイル名を CP932 に、結果を UTF-8 に直す。
+' パスを取る API は、妥当な UTF-8 ならワイド文字 API へ、そうでなければ（CP932 など）A 版へ渡す。
+
+' ---------- CP932 → UTF-8（NUL を含む n バイトのまま） ----------
+
+Function BasicUtf8Span(wide As *Byte, chars As Long, ByRef outN As Long) As *Byte
+    Dim p As *Byte
+    BasicUtf8Span = 0
+    outN = WideCharToMultiByte(65001, 0, wide As *Word, chars, 0, 0, 0, 0)
+    If outN <= 0 Then Exit Function
+    p = malloc(outN)
+    If p = 0 Then Exit Function
+    WideCharToMultiByte(65001, 0, wide As *Word, chars, p, outN, 0, 0)
+    BasicUtf8Span = p
+End Function
+
+Function BasicCpToUtf8(raw As *Byte, n As Long, ByRef outN As Long) As *Byte
+    Dim chars As Long, wide As *Byte
+    BasicCpToUtf8 = 0
+    chars = MultiByteToWideChar(932, 0, raw, n, 0, 0)
+    wide = BasicWideBuf(chars)
+    If wide = 0 Then Exit Function
+    MultiByteToWideChar(932, 0, raw, n, wide As *Word, chars)
+    BasicCpToUtf8 = BasicUtf8Span(wide, chars, outN)
+    free(wide)
+End Function
+
+' CP932 の先頭 n バイトを UTF-8 にしたときのバイト数
+Function BasicCpUtf8Len(raw As *Byte, n As Long) As Long
+    Dim p As *Byte, m As Long
+    BasicCpUtf8Len = 0
+    If n <= 0 Then Exit Function
+    p = BasicCpToUtf8(raw, n, m)
+    If p = 0 Then Exit Function
+    free(p)
+    BasicCpUtf8Len = m
+End Function
+
+' room バイトに入れば書き換えて 1。入らなければそのまま 0。
+Function BasicCpInPlace(raw As *Byte, n As Long, room As Long) As Long
+    Dim p As *Byte, m As Long
+    BasicCpInPlace = 0
+    p = BasicCpToUtf8(raw, n, m)
+    If p = 0 Then Exit Function
+    If m <= room Then memcpy(raw, p, m)
+    If m <= room Then BasicCpInPlace = 1
+    free(p)
+End Function
+
+' ---------- ファイルを開く／保存ダイアログ ----------
+
+' 複数選択（フォルダ 0 ファイル 0 … 0 0）なら nFileOffset が最初の文字列の後ろ
+Function BasicOfnSpan(raw As *Byte, off As Long) As Long
+    Dim n As Long
+    n = lstrlen(raw)
+    BasicOfnSpan = n + 1
+    If off > n Then BasicOfnSpan = BasicMultiSpan(raw)
+End Function
+
+Sub BasicOfnSetPos(ByRef ofn As OPENFILENAME, off As Long, ext As Long)
+    ofn.nFileOffset = off
+    ofn.nFileExtension = ext
+End Sub
+
+Sub BasicOfnFile(ByRef ofn As OPENFILENAME)
+    Dim raw As *Byte, n As Long, off As Long, ext As Long
+    raw = ofn.lpstrFile As *Byte
+    If raw = 0 Then Exit Sub
+    n = BasicOfnSpan(raw, ofn.nFileOffset)
+    off = BasicCpUtf8Len(raw, ofn.nFileOffset)
+    ext = BasicCpUtf8Len(raw, ofn.nFileExtension)
+    If BasicCpInPlace(raw, n, ofn.nMaxFile) = 0 Then Exit Sub
+    BasicOfnSetPos(ofn, off, ext)
+End Sub
+
+Sub BasicOfnTitleOut(ByRef ofn As OPENFILENAME)
+    Dim p As *Byte
+    p = ofn.lpstrFileTitle As *Byte
+    If p = 0 Then Exit Sub
+    BasicCpInPlace(p, lstrlen(p) + 1, ofn.nMaxFileTitle)
+End Sub
+
+' ダイアログが書いた CP932 を UTF-8 へ
+Sub BasicOfnOut(ByRef ofn As OPENFILENAME)
+    BasicOfnFile(ofn)
+    BasicOfnTitleOut(ofn)
+End Sub
+
+' 入る UTF-8 のファイル名を CP932 へ（CP932 は UTF-8 より長くならない）
+Sub BasicOfnIn(ByRef ofn As OPENFILENAME)
+    Dim raw As *Byte, a As *Byte
+    raw = ofn.lpstrFile As *Byte
+    If raw = 0 Then Exit Sub
+    a = BasicAnsiPtr(raw)
+    If a = raw Then Exit Sub
+    lstrcpy(raw, a)
+    free(a)
+End Sub
+
+' ---------- パスを取る API ----------
+
+' 妥当な UTF-8 ならワイド文字列（呼び出し側が free）。違えば 0 で、A 版へ渡す。
+Function BasicPathWide(raw As *Byte) As *Byte
+    BasicPathWide = 0
+    If BasicAtom(raw) <> 0 Then Exit Function
+    BasicPathWide = BasicWideOf(raw, lstrlen(raw))
+End Function
+
+Function CreateFile(lpFileName As *Byte, dwDesiredAccess As DWord, dwShareMode As DWord, lpSecurityAttributes As Long, dwCreationDisposition As DWord, dwFlagsAndAttributes As DWord, hTemplateFile As Long) As HANDLE
+    Dim w As *Byte
+    w = BasicPathWide(lpFileName)
+    If w = 0 Then CreateFile = CreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile)
+    If w = 0 Then Exit Function
+    CreateFile = CreateFileW(w, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile)
+    free(w)
+End Function
+
+Function GetFileAttributes(lpFileName As *Byte) As DWord
+    Dim w As *Byte
+    w = BasicPathWide(lpFileName)
+    If w = 0 Then GetFileAttributes = GetFileAttributesA(lpFileName)
+    If w = 0 Then Exit Function
+    GetFileAttributes = GetFileAttributesW(w)
+    free(w)
+End Function
+
+Function BasicChDir(path As String) As Long
+    Dim w As *Byte
+    w = BasicPathWide(StrPtr(path))
+    If w = 0 Then BasicChDir = SetCurrentDirectoryA(StrPtr(path))
+    If w = 0 Then Exit Function
+    BasicChDir = SetCurrentDirectoryW(w)
+    free(w)
+End Function
+
+Function BasicMkDir(path As String) As Long
+    Dim w As *Byte
+    w = BasicPathWide(StrPtr(path))
+    If w = 0 Then BasicMkDir = CreateDirectoryA(StrPtr(path), 0)
+    If w = 0 Then Exit Function
+    BasicMkDir = CreateDirectoryW(w, 0)
+    free(w)
+End Function
+
+Function BasicKill(path As String) As Long
+    Dim w As *Byte
+    w = BasicPathWide(StrPtr(path))
+    If w = 0 Then BasicKill = DeleteFileA(StrPtr(path))
+    If w = 0 Then Exit Function
+    BasicKill = DeleteFileW(w)
+    free(w)
+End Function
+
+' ---------- ShellExecute ----------
+
+' 0・アトム・空・妥当な UTF-8 なら 1
+Function BasicShOk(raw As *Byte) As Long
+    BasicShOk = 1
+    If BasicAtom(raw) <> 0 Then Exit Function
+    If lstrlen(raw) = 0 Then Exit Function
+    If BasicUtf8Chars(raw, lstrlen(raw)) <= 0 Then BasicShOk = 0
+End Function
+
+Function BasicShAllOk(a As *Byte, b As *Byte, c As *Byte, d As *Byte) As Long
+    BasicShAllOk = 0
+    If BasicShOk(a) = 0 Or BasicShOk(b) = 0 Then Exit Function
+    If BasicShOk(c) = 0 Or BasicShOk(d) = 0 Then Exit Function
+    BasicShAllOk = 1
+End Function
+
+Sub BasicShFree(w1 As *Byte, r1 As *Byte, w2 As *Byte, r2 As *Byte)
+    BasicFreeAnsi(w1, r1)
+    BasicFreeAnsi(w2, r2)
+End Sub
+
+Function BasicShW(hwnd As HWND, op As *Byte, target As *Byte, params As *Byte, folder As *Byte, show As Long) As Long
+    Dim w1 As *Byte, w2 As *Byte, w3 As *Byte, w4 As *Byte
+    w1 = BasicWidePtr(op)
+    w2 = BasicWidePtr(target)
+    w3 = BasicWidePtr(params)
+    w4 = BasicWidePtr(folder)
+    BasicShW = ShellExecuteW(hwnd, w1, w2, w3, w4, show)
+    BasicShFree(w1, op, w2, target)
+    BasicShFree(w3, params, w4, folder)
+End Function
+
+' どれかが妥当な UTF-8 でなければ（CP932 など）すべて A 版へ
+Function ShellExecute(hwnd As HWND, lpOperation As *Byte, lpFile As *Byte, lpParameters As *Byte, lpDirectory As *Byte, nShowCmd As Long) As Long
+    If BasicShAllOk(lpOperation, lpFile, lpParameters, lpDirectory) = 0 Then
+        ShellExecute = ShellExecuteA(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShowCmd)
+        Exit Function
+    End If
+    ShellExecute = BasicShW(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShowCmd)
+End Function

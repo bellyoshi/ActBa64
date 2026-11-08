@@ -113,7 +113,8 @@ ActBa64 の文字列バイトは UTF-8 です。
 - `CreateFontIndirect` の `lfFaceName` は UTF-8 をワイド文字 API に渡す。呼び出し側の `LOGFONT` はそのまま。`GetObject` は A 版なので、読み戻した `lfFaceName` は CP932。
 - `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻し、`FindText` は戻ったあとも書くため。
 - `s[n]` は 0 始まりの 1 バイトです。
-- `GetOpenFileName` と `GetSaveFileName` は、呼ぶあいだだけフィルタ（二重 NUL）・タイトル・初期フォルダ・拡張子を CP932 にし、戻る前に呼び出し側のポインタへ戻します。ファイル名バッファはダイアログが書いた CP932 のままです。
+- `GetOpenFileName` と `GetSaveFileName` は、呼ぶあいだだけフィルタ（二重 NUL）・タイトル・初期フォルダ・拡張子を CP932 にし、戻る前に呼び出し側のポインタへ戻します。ファイル名バッファ（`lpstrFile`）に入れた初期ファイル名は呼ぶ前に CP932 にします。成功したら `lpstrFile` と `lpstrFileTitle` を UTF-8 に書き換え、`nFileOffset` / `nFileExtension` も UTF-8 のバイト位置に直します。複数選択（フォルダ 0 ファイル 0 … 0 0）も同じです。UTF-8 にすると `nMaxFile` / `nMaxFileTitle` に入らないときは、ダイアログが書いた CP932 のままです。ダイアログ自体は A 版なので、CP932 にない文字のファイル名は選べません。
+- `CreateFile` / `GetFileAttributes` / `ShellExecute` と、`ChDir` / `MkDir` / `Kill` / `Exec` は、パスが妥当な UTF-8 ならワイド文字 API に渡します。妥当な UTF-8 でないとき（`GetCmd` や `DragQueryFile` が返す CP932 など）は A 版に渡すので、CP932 のパスもそのまま開けます。`ShellExecute` は文字列のどれか 1 つでも妥当な UTF-8 でなければ、すべて A 版に渡します。末尾 `A` の Declare と、`ab_file.sbp` の `CopyFile` / `MoveFile` / `DeleteFile` / `FindFirstFile` などは変換しません。
 
 
 ## 改良点
