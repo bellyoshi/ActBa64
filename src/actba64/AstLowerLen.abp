@@ -1,0 +1,104 @@
+' AstLowerLen - Len の引数が文字列でないときのバイト数（ActiveBasic と同じ）
+' 数値のスカラー変数は型のバイト数、数値の配列は配列全体、数値リテラルと数値の式は式の型のバイト数。
+' String / BytePtr / Byte 配列 / 関数呼び出しは今までどおり文字列の長さ。
+' AB 4.20: Dim len(2) As Long : Len(len(0)) = 4、Len(len) = 12
+
+' ローカル変数のバイト数（ctx の記号表と同じ添字）。LowAddSym が記録する
+Dim g_symNb As *Long
+Dim g_symNbCap As Long
+
+Sub LowGrowSymBytes(need As Long)
+    Dim ncap As Long
+    Dim p As *Byte
+    ncap = g_symNbCap * 2
+    If ncap < need Then ncap = need + 64
+    p = MemGrow(g_symNb As BytePtr, BytesN(g_symNbCap, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Sub
+    g_symNb = p As *Long
+    g_symNbCap = ncap
+End Sub
+
+Sub LowNoteSymBytes(i As Long, n As Long)
+    If i >= g_symNbCap Then LowGrowSymBytes(i + 1)
+    If i >= g_symNbCap Then Exit Sub
+    g_symNb[i] = n
+End Sub
+
+' グローバル変数の切り上げ前のバイト数（g_globNbytes は配置用に 8 単位へ切り上げている）
+Dim g_globRawNb As *Long
+Dim g_globRawNbCap As Long
+
+Sub LowGrowGlobBytes(need As Long)
+    Dim ncap As Long
+    Dim p As *Byte
+    ncap = g_globRawNbCap * 2
+    If ncap < need Then ncap = need + 64
+    p = MemGrow(g_globRawNb As BytePtr, BytesN(g_globRawNbCap, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Sub
+    g_globRawNb = p As *Long
+    g_globRawNbCap = ncap
+End Sub
+
+Sub LowNoteGlobBytes(i As Long, n As Long)
+    If i >= g_globRawNbCap Then LowGrowGlobBytes(i + 1)
+    If i >= g_globRawNbCap Then Exit Sub
+    g_globRawNb[i] = n
+End Sub
+
+' 配列変数のバイト数。分からなければ -1
+Function LowVarArrBytes(ctx As *LowerCtx, name As *Byte) As Long
+    Dim si As Long
+    LowVarArrBytes = -1
+    si = LowFindSym(ctx, name)
+    If si >= 0 And si < g_symNbCap Then LowVarArrBytes = g_symNb[si]
+    If si >= 0 Then Exit Function
+    si = LowFindGlob(ctx, name)
+    If si >= 0 And si < g_globRawNbCap Then LowVarArrBytes = g_globRawNb[si]
+End Function
+
+Function LowLenNumArr(ty As Long) As Long
+    LowLenNumArr = 0
+    If ty = TY_LONG_ARR Or ty = TY_DOUBLE_ARR Or ty = TY_SINGLE_ARR Or ty = TY_UDT_ARR Then LowLenNumArr = 1
+End Function
+
+Function LowLenNumScalar(ty As Long) As Long
+    LowLenNumScalar = 0
+    If ty = TY_LONG Or ty = TY_DOUBLE Or ty = TY_SINGLE Or ty = TY_BYTE Then LowLenNumScalar = 1
+End Function
+
+' 変数のバイト数。文字列として扱うものは -1
+Function LowLenVarSize(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim off As Long, ty As Long, ti As Long, br As Long, gl As Long
+    LowLenVarSize = -1
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(off), VarPtr(ty), VarPtr(ti), VarPtr(br), VarPtr(gl)) Then Exit Function
+    If br <> 0 Then Exit Function
+    If LowLenNumScalar(ty) <> 0 Then LowLenVarSize = LowTyNbytes(ty)
+    If LowLenNumArr(ty) <> 0 Then LowLenVarSize = LowVarArrBytes(ctx, VarPtr(name))
+End Function
+
+Function LowLenNumSize(ctx As *LowerCtx, idx As Long) As Long
+    LowLenNumSize = LowTyNbytes(LowExprType(ctx, idx))
+End Function
+
+' 数値の式のバイト数。文字列・C 文字列・関数呼び出しなどは -1
+Function LowLenExprSize(ctx As *LowerCtx, idx As Long, kind As Long, num As Long) As Long
+    LowLenExprSize = -1
+    If kind = AST_NUM Then LowLenExprSize = LowLenNumSize(ctx, idx)
+    If kind = AST_BUILTIN And num = BIK_LEN Then LowLenExprSize = 4
+    If kind <> AST_BINOP And kind <> AST_UNARY Then Exit Function
+    If LowIsStringExpr(ctx, idx) <> 0 Or LowExprIsCStr(ctx, idx) <> 0 Then Exit Function
+    LowLenExprSize = LowLenNumSize(ctx, idx)
+End Function
+
+' Len の引数のバイト数。文字列の長さを数えるときは -1
+Function LowLenSize(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowLenSize = -1
+    If nodes[idx].kind = AST_VAR Then LowLenSize = LowLenVarSize(ctx, idx)
+    If nodes[idx].kind <> AST_VAR Then LowLenSize = LowLenExprSize(ctx, idx, nodes[idx].kind, nodes[idx].num)
+End Function
