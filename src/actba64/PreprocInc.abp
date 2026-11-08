@@ -268,6 +268,25 @@ Function PpResolveIncPath(inc As *Byte, isAngle As Long, curFile As *Byte, full 
     PpResolveIncPath = true
 End Function
 
+Declare Function PpGetFullPathA Lib "kernel32.dll" Alias "GetFullPathNameA" (ByVal lpFileName As *Byte, ByVal nBufferLength As DWord, ByVal lpBuffer As *Byte, ByVal lpFilePart As Long) As DWord
+
+' <...> が見つからないときに見せるパス: コンパイラ隣の Include\<名前>
+Sub PpAngleTried(inc As *Byte, dst As *Byte)
+    If Not PpToolDir(dst) Then dst[0] = CH_NUL
+    lstrcat(dst, "Include\")
+    lstrcat(dst, inc)
+End Sub
+
+' 開けなかった #include を、絶対パスで報告する
+Sub PpIncMissing(curFile As *Byte, inc As *Byte, full As *Byte)
+    Dim tried(PP_ONCE_PATH - 1) As Byte
+    Dim shown(PP_ONCE_PATH - 1) As Byte
+    lstrcpy(VarPtr(tried), full)
+    If tried[0] = CH_NUL Then PpAngleTried(inc, VarPtr(tried))
+    If PpGetFullPathA(VarPtr(tried), PP_ONCE_PATH, VarPtr(shown), 0) = 0 Then lstrcpy(VarPtr(shown), VarPtr(tried))
+    PpErrorIncMissing(curFile, VarPtr(shown))
+End Sub
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function PpExpandIncludeLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long, line As *Byte, n As Long, curFile As *Byte, depth As Long) As boolean
     Dim inc(PP_WITH_CUR_LEN - 1) As Byte
@@ -278,14 +297,20 @@ Function PpExpandIncludeLine(dst As *Byte, ByRef dstLen As Long, dstCap As Long,
     PpExpandIncludeLine = false
     isAngle = 0
     If Not PpExtractInclude(line, n, VarPtr(inc), isAngle) Then Exit Function
-    If Not PpResolveIncPath(VarPtr(inc), isAngle, curFile, VarPtr(full)) Then Exit Function
+    If Not PpResolveIncPath(VarPtr(inc), isAngle, curFile, VarPtr(full)) Then
+        If inc[0] <> CH_NUL Then PpIncMissing(curFile, VarPtr(inc), VarPtr(full))
+        Exit Function
+    End If
     If Not PpEmitLineCrlf(dst, dstLen, dstCap, line, n) Then Exit Function
     If PpOnceHas(VarPtr(full)) Then
         PpExpandIncludeLine = true
         Exit Function
     End If
     child = LoadText(VarPtr(full), childSize)
-    If child = NULL Then Exit Function
+    If child = NULL Then
+        PpIncMissing(curFile, VarPtr(inc), VarPtr(full))
+        Exit Function
+    End If
     PpOnceAdd(VarPtr(full))
     If Not PpExpandCond(dst, dstLen, dstCap, child, childSize, VarPtr(full), depth + 1) Then
         free(child)
@@ -360,6 +385,7 @@ Function PpExpandInto(dst As *Byte, ByRef dstLen As Long, dstCap As Long, src As
         If PpTryResourceLine(VarPtr(line), n, curFile) Then
             ' #resource 行は出力しない
         ElseIf PpIsIncludeLine(VarPtr(line), n) Then
+            g_ppIncLine = lineNo
             If Not PpExpandIncludeLine(dst, dstLen, dstCap, VarPtr(line), n, curFile, depth) Then Exit Function
         Else
             If Not PpExpandNormalLine(dst, dstLen, dstCap, VarPtr(line), n) Then Exit Function
