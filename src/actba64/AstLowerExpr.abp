@@ -296,11 +296,40 @@ Function LowExprCast(ctx As *LowerCtx, idx As Long) As Long
     typeIdxs = ctx->typeIdxs
     byRefs = ctx->byRefs
 
-    If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    If LowCastOperand(ctx, nodes[idx].left) = 0 Then Exit Function
     If nodes[idx].num <> 0 Then
         IrEmit(list, OP_AND_EAX_IMM, nodes[idx].num, 0)
     End If
     LowExprCast = 1
+End Function
+
+Function LowNodeIsVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowNodeIsVar = 0
+    If nodes[idx].kind = AST_VAR Then LowNodeIsVar = 1
+End Function
+
+' 配列変数なら 1（AST_VAR で配列型）
+Function LowIsArrVar(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim off As Long, ty As Long, ti As Long, br As Long, gl As Long
+    LowIsArrVar = 0
+    If LowNodeIsVar(ctx, idx) = 0 Then Exit Function
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(off), VarPtr(ty), VarPtr(ti), VarPtr(br), VarPtr(gl)) Then Exit Function
+    If LowIsArrTy(ty) Then LowIsArrVar = 1
+End Function
+
+' キャストの中身。配列名は値でなく先頭アドレス（sbSize As LPARAM。ActiveBasic と同じ）
+Function LowCastOperand(ctx As *LowerCtx, idx As Long) As Long
+    If LowIsArrVar(ctx, idx) <> 0 Then
+        LowCastOperand = LowAddr(ctx, idx)
+    Else
+        LowCastOperand = LowExpr(ctx, idx)
+    End If
 End Function
 
 ' 定数畳み込みできる式なら rax に積んで 1
