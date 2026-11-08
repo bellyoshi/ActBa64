@@ -37,7 +37,7 @@
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `rc` ファイル取り込み | リソース埋め込み | **部分対応**（`#resource "file"` → RCDATA 1。`.rc` の ICON は隣の `rc.exe`。MENU は未） |
+| `rc` ファイル取り込み | リソース埋め込み | **部分対応**（`#resource "file"` → RCDATA 1。`.rc` の ICON / BITMAP は隣の `rc.exe`。MENU は未） |
 
 ### GUI・対話・マルチメディア命令
 
@@ -160,7 +160,7 @@ ActBa64 の文字列バイトは UTF-8 です。
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | メモ |
 |---|---|---|
-| `rc` / `#resource` | リソースファイル取り込み | ファイル→RCDATA(1) は済。ICON は隣の `rc.exe`。MENU は未 |
+| `rc` / `#resource` | リソースファイル取り込み | ファイル→RCDATA(1) は済。ICON / BITMAP は隣の `rc.exe`。MENU は未 |
 
 ### GUI・Win32・マルチメディア
 

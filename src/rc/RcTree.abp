@@ -1,4 +1,4 @@
-' RcTree - RT_ICON / RT_GROUP_ICON と ABRS
+' RcTree - RT_BITMAP / RT_ICON / RT_GROUP_ICON と ABRS
 
 Function RcAlign4(n As Long) As Long
     Dim t As Long
@@ -41,10 +41,32 @@ Sub RcPlaceImgs(ByRef o As Long)
     Wend
 End Sub
 
+' 根の型の数（RT_BITMAP、RT_ICON と RT_GROUP_ICON の組）
+Function RcTypeCount() As Long
+    RcTypeCount = 0
+    If g_nBmp > 0 Then RcTypeCount = 1
+    If g_nImg > 0 Then RcTypeCount = RcTypeCount + 2
+End Function
+
+Function RcLayoutBmp(o As Long) As Long
+    Dim i As Long
+    g_bmpType = o
+    o = o + RcDirBytes(g_nBmp)
+    i = 0
+    While i < g_nBmp
+        g_bmpDir(i) = o
+        g_bmpData(i) = o + 24
+        o = o + 40
+        i = i + 1
+    Wend
+    RcLayoutBmp = o
+End Function
+
 Function RcLayoutHead() As Long
     Dim o As Long
-    g_iconType = 32
-    o = 32 + RcDirBytes(g_nImg)
+    o = RcLayoutBmp(RcDirBytes(RcTypeCount()))
+    g_iconType = o
+    o = o + RcDirBytes(g_nImg)
     RcPlaceImgs(o)
     RcLayoutHead = o
 End Function
@@ -105,7 +127,18 @@ Sub RcLayout()
     o = RcLayoutMid(o)
     RcPlacePay(o)
     RcPlaceGrpPay(o)
+    RcPlaceBmpPay(o)
     g_paySize = o
+End Sub
+
+Sub RcPlaceBmpPay(ByRef o As Long)
+    Dim i As Long
+    i = 0
+    While i < g_nBmp
+        g_bmpPay(i) = o
+        o = RcAlign4(o + g_bmpLen(i))
+        i = i + 1
+    Wend
 End Sub
 
 Function RcIdsSorted() As Long
@@ -117,6 +150,43 @@ Function RcIdsSorted() As Long
         i = i + 1
     Wend
 End Function
+
+Function RcBmpIdsSorted() As Long
+    Dim i As Long
+    RcBmpIdsSorted = 1
+    i = 1
+    While i < g_nBmp
+        If g_bmpId(i) <= g_bmpId(i - 1) Then RcBmpIdsSorted = 0
+        i = i + 1
+    Wend
+End Function
+
+Sub RcEmitBmpType(buf As *Byte)
+    Dim i As Long
+    RcPutDirHdr(buf, g_bmpType, g_nBmp)
+    i = 0
+    While i < g_nBmp
+        RcPutDirEnt(buf, g_bmpType + 16 + i * 8, g_bmpId(i), g_bmpDir(i), 1)
+        i = i + 1
+    Wend
+End Sub
+
+Sub RcEmitBmpNode(buf As *Byte, i As Long)
+    RcPutDirHdr(buf, g_bmpDir(i), 1)
+    RcPutDirEnt(buf, g_bmpDir(i) + 16, 0, g_bmpData(i), 0)
+    RcPut32(buf, g_bmpData(i), g_bmpPay(i))
+    RcPut32(buf, g_bmpData(i) + 4, g_bmpLen(i))
+    memcpy(RcAt(buf, g_bmpPay(i)), RcAt(g_blob, g_bmpAt(i)), g_bmpLen(i))
+End Sub
+
+Sub RcEmitBmps(buf As *Byte)
+    Dim i As Long
+    i = 0
+    While i < g_nBmp
+        RcEmitBmpNode(buf, i)
+        i = i + 1
+    Wend
+End Sub
 
 Sub RcEmitIconType(buf As *Byte)
     Dim i As Long
@@ -187,10 +257,20 @@ Sub RcEmitGrpNode(buf As *Byte, gi As Long)
     RcPut32(buf, g_grpData(gi) + 4, sz)
 End Sub
 
+' 根の型は ID 昇順（RT_BITMAP=2、RT_ICON=3、RT_GROUP_ICON=14）
+Sub RcEmitRoot(buf As *Byte)
+    Dim e As Long
+    RcPutDirHdr(buf, 0, RcTypeCount())
+    e = 16
+    If g_nBmp > 0 Then RcPutDirEnt(buf, e, 2, g_bmpType, 1)
+    If g_nBmp > 0 Then e = e + 8
+    If g_nImg > 0 Then RcPutDirEnt(buf, e, 3, g_iconType, 1)
+    If g_nImg > 0 Then RcPutDirEnt(buf, e + 8, 14, g_grpType, 1)
+End Sub
+
 Sub RcEmitDirs(buf As *Byte)
-    RcPutDirHdr(buf, 0, 2)
-    RcPutDirEnt(buf, 16, 3, g_iconType, 1)
-    RcPutDirEnt(buf, 24, 14, g_grpType, 1)
+    RcEmitRoot(buf)
+    RcEmitBmpType(buf)
     RcEmitIconType(buf)
     RcEmitGrpType(buf)
 End Sub
@@ -219,11 +299,12 @@ Sub RcEmitAll(buf As *Byte)
     RcEmitDirs(buf)
     RcEmitImgs(buf)
     RcEmitGrps(buf)
+    RcEmitBmps(buf)
 End Sub
 
 Function RcHdrBytes() As Long
     Dim n As Long
-    n = g_nImg + g_nGrp
+    n = g_nImg + g_nGrp + g_nBmp
     n = n * 4
     RcHdrBytes = 16 + n
 End Function
@@ -243,6 +324,16 @@ Sub RcFillOffs(buf As *Byte)
         i = i + 1
     Wend
     RcFillGrpOffs(buf)
+    RcFillBmpOffs(buf)
+End Sub
+
+Sub RcFillBmpOffs(buf As *Byte)
+    Dim i As Long
+    i = 0
+    While i < g_nBmp
+        RcPut32(buf, 16 + (g_nImg + g_nGrp + i) * 4, g_bmpData(i))
+        i = i + 1
+    Wend
 End Sub
 
 Sub RcFillGrpOffs(buf As *Byte)
@@ -262,17 +353,18 @@ Sub RcFill(buf As *Byte)
     RcMagic(buf)
     RcPut32(buf, 4, 1)
     RcPut32(buf, 8, g_paySize)
-    RcPut32(buf, 12, g_nImg + g_nGrp)
+    RcPut32(buf, 12, g_nImg + g_nGrp + g_nBmp)
     RcFillOffs(buf)
     RcFillBody(buf)
 End Sub
 
 Function RcReady() As Long
-    If g_nImg <= 0 Then Print "error: no icon image"
-    If g_nImg <= 0 Then Exit Function
+    If g_nImg <= 0 And g_nBmp <= 0 Then Print "error: no icon or bitmap"
+    If g_nImg <= 0 And g_nBmp <= 0 Then Exit Function
     If RcIdsSorted() = 0 Then Print "error: ICON ids must increase"
     If RcIdsSorted() = 0 Then Exit Function
-    RcReady = 1
+    If RcBmpIdsSorted() = 0 Then Print "error: BITMAP ids must increase"
+    RcReady = RcBmpIdsSorted()
 End Function
 
 Function RcWriteRes(path As *Byte) As Long

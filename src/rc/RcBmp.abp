@@ -1,0 +1,97 @@
+' RcBmp - BITMAP 文（RT_BITMAP）と resource.sbp の Const ID
+
+Function RcBmpSlot(i As Long) As *Byte
+    RcBmpSlot = VarPtr(g_bmpPath(i * 260))
+End Function
+
+Function RcAddBmp(id As Long, path As *Byte) As Long
+    If g_nBmp >= 16 Then Print "error: too many BITMAP lines"
+    If g_nBmp >= 16 Then Exit Function
+    lstrcpy(RcBmpSlot(g_nBmp), path)
+    g_bmpId(g_nBmp) = id
+    g_nBmp = g_nBmp + 1
+    RcAddBmp = 1
+End Function
+
+Function RcBmpPath(id As Long) As Long
+    If RcQuoted(VarPtr(g_qpath)) = 0 Then Exit Function
+    RcBmpPath = RcAddBmp(id, VarPtr(g_qpath))
+End Function
+
+' .bmp の BITMAPFILEHEADER（14 バイト）を除いた残りが RT_BITMAP の中身
+Function RcTakeBmp(i As Long, p As *Byte, n As Long) As Long
+    If n <= 14 Or RcU8(p, 0) <> 66 Or RcU8(p, 1) <> 77 Then Print "error: bad bmp"
+    If n <= 14 Or RcU8(p, 0) <> 66 Or RcU8(p, 1) <> 77 Then Exit Function
+    g_bmpLen(i) = n - 14
+    g_bmpAt(i) = RcAppend(RcAt(p, 14), n - 14)
+    If g_bmpAt(i) >= 0 Then RcTakeBmp = 1
+End Function
+
+Function RcLoadBmp(i As Long) As Long
+    Dim full(511) As Byte
+    Dim p As *Byte
+    Dim n As Long
+    RcJoin(RcBmpSlot(i), VarPtr(full))
+    p = RcLoad(VarPtr(full), n)
+    If p = 0 Then Print "error: cannot open " + MakeStr(VarPtr(full))
+    If p = 0 Then Exit Function
+    RcLoadBmp = RcTakeBmp(i, p, n)
+End Function
+
+Function RcLoadAllBmp() As Long
+    Dim i As Long
+    i = 0
+    While i < g_nBmp
+        If RcLoadBmp(i) = 0 Then Exit Function
+        i = i + 1
+    Wend
+    RcLoadAllBmp = 1
+End Function
+
+Sub RcSkipLine()
+    While g_pos < g_srcN And g_src[g_pos] <> 10
+        g_pos = g_pos + 1
+    Wend
+    If g_pos < g_srcN Then g_pos = g_pos + 1
+End Sub
+
+' Const 名前 = 数 の 1 行を #define と同じに登録する（読めない行は無視）
+Sub RcSbpConstRest()
+    Dim name(31) As Byte
+    RcSkipWs()
+    If RcTok(VarPtr(name)) = 0 Then Exit Sub
+    RcSkipWs()
+    If g_src[g_pos] <> 61 Then Exit Sub
+    g_pos = g_pos + 1
+    RcSkipWs()
+    If RcNum() >= 0 Then RcAddDef(VarPtr(name), g_num)
+End Sub
+
+Sub RcSbpLine()
+    Dim k(7) As Byte
+    RcSkipWs()
+    lstrcpy(VarPtr(k), "const")
+    If RcEatKw(VarPtr(k), 5) <> 0 Then RcSbpConstRest()
+    RcSkipLine()
+End Sub
+
+Sub RcSbpScan()
+    g_pos = 0
+    RcSkipBom()
+    While g_pos < g_srcN
+        RcSbpLine()
+    Wend
+End Sub
+
+' .rc と同じフォルダの resource.sbp（ActiveBasic のリソース ID 定義）があれば ID を読む
+Sub RcLoadSbpIds(rcPath As *Byte)
+    Dim full(511) As Byte
+    Dim n As Long
+    RcDirFrom(rcPath)
+    RcJoin("resource.sbp", VarPtr(full))
+    g_src = RcLoad(VarPtr(full), n)
+    If g_src = 0 Then Exit Sub
+    g_srcN = n
+    g_src[n] = 0
+    RcSbpScan()
+End Sub
