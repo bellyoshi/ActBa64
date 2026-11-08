@@ -300,11 +300,18 @@ End Function
 Sub ParseProgramTake(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPrev As Long, ByRef hadErr As Long)
     Dim nStmt As Long
     Dim nodes As *AstNode
+    Dim start As Long
+    Dim d0 As Long
 
+    start = p->pos
+    d0 = DiagCount()
     nStmt = ParseStmt(p)
     If nStmt < 0 Or p->err <> 0 Then
-        hadErr = 1
-        ParseRecoverStmt(p)
+        ' 最上位の Function / Sub は End まで飛ばし、呼ばれていなければ後でエラーを捨てる
+        If LazyTake(p, start, d0) = 0 Then
+            hadErr = 1
+            ParseRecoverStmt(p)
+        End If
         ' Continue at next line; do not link failed stmt
     Else
         If nFirst < 0 Then
@@ -337,12 +344,14 @@ Function ParseProgram(p As *Parser) As Long
     nPrev = -1
     hadErr = 0
     MacReset()
+    LazyReset()
 
     While ParseTokKind(p) <> TK_EOF
         ParseSkipColons(p)
         If ParseTokKind(p) = TK_EOF Then Exit While
         ParseProgramTake(p, ast, nFirst, nPrev, hadErr)
     Wend
+    If LazyResolve(p) <> 0 Then hadErr = 1
 
     If hadErr <> 0 Or DiagCount() > 0 Then
         Exit Function
