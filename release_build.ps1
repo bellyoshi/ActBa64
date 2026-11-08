@@ -1,7 +1,7 @@
 # release_build.ps1 - リリース一式を release\ に揃える
 #
-#   既定: actba64 ブートストラップ → ProjectEditor → コピー
-#   -SkipSelfHost: 既存 stage2 を使い、ProjectEditor 再コンパイルとコピーのみ
+#   既定: actba64 ブートストラップ → rc.exe → ProjectEditor → コピー
+#   -SkipSelfHost: 既存 stage2 を使い、rc.exe と ProjectEditor の再コンパイルとコピーのみ
 #   -SkipCompare: 子スクリプトのバイナリ比較をスキップ
 #
 # 使い方:
@@ -32,6 +32,8 @@ $IncludeSrc = Join-Path $Root "src\Include"
 $HelpSrc = Join-Path $EditorDir "help"
 $FontsSrc = Join-Path $EditorDir "fonts"
 $EditorPj = Join-Path $EditorDir "ProjectEditor.pj"
+$RcDir = Join-Path $Root "src\rc"
+$RcPj = Join-Path $RcDir "rc.pj"
 
 $EditorWbp = @("Callback.wbp", "MakeWindow.wbp")
 
@@ -80,6 +82,26 @@ foreach ($w in $EditorWbp) {
     Assert-File (Join-Path $EditorDir $w) "ProjectEditor RAD file missing (not in repo; needed to compile the editor)"
 }
 
+$tmpRc = Join-Path $RcDir "_release_rc.exe"
+if (Test-Path -LiteralPath $tmpRc) {
+    Remove-Item -LiteralPath $tmpRc -Force
+}
+
+Write-Host ""
+Write-Host "=== rc.pj -> $tmpRc ==="
+Push-Location $RcDir
+try {
+    $log = & $Actba64Exe $RcPj -o $tmpRc 2>&1 | ForEach-Object { "$_" }
+    $code = [int]$LASTEXITCODE
+} finally {
+    Pop-Location
+}
+foreach ($line in $log) { Write-Host $line }
+if ($code -ne 0 -or -not (Test-Path -LiteralPath $tmpRc)) {
+    Write-Error "rc.exe build failed exit=$code"
+    exit 1
+}
+
 $tmpEditor = Join-Path $EditorDir "_release_ProjectEditor.exe"
 if (Test-Path -LiteralPath $tmpEditor) {
     Remove-Item -LiteralPath $tmpEditor -Force
@@ -114,6 +136,9 @@ Copy-LockedAware $tmpEditor (Join-Path $ReleaseDir "ProjectEditor.exe")
 Remove-Item -LiteralPath $tmpEditor -Force
 
 Copy-Item -LiteralPath $Actba64Exe -Destination (Join-Path $ReleaseDir "actba64.exe") -Force
+# actba64.exe は #resource の .rc を隣の rc.exe で .res にする
+Copy-Item -LiteralPath $tmpRc -Destination (Join-Path $ReleaseDir "rc.exe") -Force
+Remove-Item -LiteralPath $tmpRc -Force
 Copy-Item -LiteralPath $IncludeSrc -Destination (Join-Path $ReleaseDir "Include") -Recurse -Force
 Copy-Item -LiteralPath $HelpSrc -Destination (Join-Path $ReleaseDir "help") -Recurse -Force
 Copy-Item -LiteralPath $FontsSrc -Destination (Join-Path $ReleaseDir "fonts") -Recurse -Force
