@@ -1,0 +1,87 @@
+' ParserLazyProc - 構文エラーのある最上位の Function / Sub を、呼ばれていなければ読み飛ばす
+' ActiveBasic 4.20 は呼ばれない手続きをコンパイルしないので、その中の誤りは報告されない。
+' 失敗した手続きは End Function / End Sub まで飛ばし、名前・トークン範囲・診断範囲を覚える。
+' 最後に、その名前が手続きの外のトークンにあれば（呼ばれていれば）エラーのまま、無ければ診断を捨てる。
+
+Const LAZY_MAX = 64
+
+Dim g_lazyN As Long
+Dim g_lazyName(LAZY_MAX * SYM_NAME_LEN) As Byte
+Dim g_lazyTok0(LAZY_MAX) As Long
+Dim g_lazyTok1(LAZY_MAX) As Long
+Dim g_lazyD0(LAZY_MAX) As Long
+Dim g_lazyD1(LAZY_MAX) As Long
+
+Sub LazyReset()
+    g_lazyN = 0
+End Sub
+
+Function LazyIsProcAt(p As *Parser, pos As Long) As Long
+    LazyIsProcAt = 1
+    If ParseIdentIsAt(p, pos, "function") <> 0 Then Exit Function
+    If ParseIdentIsAt(p, pos, "sub") <> 0 Then Exit Function
+    LazyIsProcAt = 0
+End Function
+
+Function LazyIsEndAt(p As *Parser, pos As Long) As Long
+    LazyIsEndAt = 0
+    If ParseIdentIsAt(p, pos, "end") = 0 Then Exit Function
+    LazyIsEndAt = LazyIsProcAt(p, pos + 1)
+End Function
+
+' start（Function / Sub）から最初の End Function / End Sub の行の終わりへ
+Sub LazySkipFrom(p As *Parser, start As Long)
+    p->pos = start + 1
+    While ParseTokKind(p) <> TK_EOF
+        If LazyIsEndAt(p, p->pos) <> 0 Then Exit While
+        p->pos = p->pos + 1
+    Wend
+    ParseRecoverStmt(p)
+    p->err = 0
+End Sub
+
+Sub LazyNote(p As *Parser, start As Long, d0 As Long)
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    lx = p->lx
+    toks = lx->toks
+    LexCopyText(lx, toks[start + 1].textSlot, VarPtr(g_lazyName[g_lazyN * SYM_NAME_LEN]))
+    g_lazyTok0[g_lazyN] = start
+    g_lazyTok1[g_lazyN] = p->pos
+    g_lazyD0[g_lazyN] = d0
+    g_lazyD1[g_lazyN] = DiagCount()
+    g_lazyN = g_lazyN + 1
+End Sub
+
+' 失敗した文が最上位の手続きなら飛ばして 1。違えば 0（ふつうのエラー）
+Function LazyTake(p As *Parser, start As Long, d0 As Long) As Long
+    LazyTake = 0
+    If g_lazyN >= LAZY_MAX Then Exit Function
+    If LazyIsProcAt(p, start) = 0 Then Exit Function
+    If ParseTokKindAt(p, start + 1) <> TK_IDENT Then Exit Function
+    LazySkipFrom(p, start)
+    LazyNote(p, start, d0)
+    LazyTake = 1
+End Function
+
+' i 番目の手続きの名前が、その手続きの外のトークンにあれば 1
+Function LazyUsed(p As *Parser, i As Long) As Long
+    Dim k As Long
+    Dim lx As *Lexer
+    lx = p->lx
+    LazyUsed = 1
+    For k = 0 To lx->count - 1
+        If (k < g_lazyTok0[i] Or k >= g_lazyTok1[i]) And ParseIdentIsAt(p, k, VarPtr(g_lazyName[i * SYM_NAME_LEN])) <> 0 Then Exit Function
+    Next
+    LazyUsed = 0
+End Function
+
+' 呼ばれる手続きが 1 つでもあれば 1（エラーのまま）。呼ばれないものの診断は捨てる
+Function LazyResolve(p As *Parser) As Long
+    Dim i As Long
+    LazyResolve = 0
+    For i = g_lazyN - 1 To 0 Step -1
+        If LazyUsed(p, i) <> 0 Then LazyResolve = 1
+        If LazyUsed(p, i) = 0 Then DiagDropRange(g_lazyD0[i], g_lazyD1[i])
+    Next
+End Function

@@ -66,6 +66,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `Int64` / `QWord` / `Char` | 基本型として定義 | **`Char` / `Int64` / `QWord` 型なし**（`Byte` / `Long` / `DWord` 等） |
 | DLL 再配置 | ロード時のベース再配置 | DLL は末尾に `.reloc` を出す。32bit は絶対アドレスの HIGHLOW。64bit は空の再配置表（コードは RIP 相対）。EXE は出さない。`DYNAMIC_BASE` は立てないので、優先ベースが空いていればそのまま、塞がっていればローダーが移動する |
 | ソース拡張子 | `.sbp` 推奨 | **`.abp`**（`.pj` で結合） |
+| 呼ばれない手続き | 呼ばれない Function / Sub はコンパイルしない | 構文エラーのある最上位の Function / Sub は、名前がほかから参照されていなければエラーにせず読み飛ばす（参照されていれば元のエラー）。構文エラーの無い手続きは今までどおりすべてコンパイルする |
 | Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`default.idx` + `api.idx` + `UnicodeApi.sbp` 自動挿入**。任意 `Declare Lib "dll"`（自作 DLL 含む）可。未登録呼び出しはエラー |
 | DirectX | DirectX 9 + `dx_*.sbp` | **DirectX 11**（[改良点](#directx-11)）。高レベル `dx_*` 一式はサンプルのみ |
 | 64bit | ver 4.20 はバグで実質困難 | **64bit PE32+ を正式サポート**（ポインタ・`String`・`HANDLE` = 8、`Long` = 4） |
