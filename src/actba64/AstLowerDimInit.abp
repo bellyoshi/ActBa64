@@ -89,3 +89,62 @@ Function LowStmtDimList(ctx As *LowerCtx, idx As Long) As Long
     slot = 0
     LowStmtDimList = LowDimListWalk(ctx, idx, cur, slot)
 End Function
+
+' ローカルの Type・配列は Dim で 0 にする（ActiveBasic と同じ）。スタックの残りが入らないように
+Function LowDimZeroBytes(ctx As *LowerCtx, idx As Long, vTy As Long, ByRef nbytes As Long) As boolean
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim len0 As Long, ti As Long
+    LowDimZeroBytes = false
+    nbytes = 0
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If vTy = TY_UDT Or vTy = TY_UDT_ARR Then
+        LowDimZeroBytes = LowDimFixedBytes(ctx, idx, vTy, VarPtr(name), nbytes, ti)
+    ElseIf vTy <> TY_STRING_ARR And LowIsArrTy(vTy) Then
+        LowDimZeroBytes = LowDimArrBytes(ctx, idx, vTy, nbytes, len0)
+    End If
+End Function
+
+' 32bit は stdcall なので右の引数から積む
+Sub LowEmitZeroArgs32(list As *IrList, vOff As Long, vGlob As Long, nbytes As Long)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, nbytes, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    LowEmitLeaOff(list, vOff, vGlob)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+End Sub
+
+' RtlFillMemory(addr, nbytes, 0)。64bit は FillMemory と同じ並びで rcx / rdx / r8 に置く
+Sub LowEmitZeroFill(ctx As *LowerCtx, vOff As Long, vGlob As Long, nbytes As Long)
+    Dim list As *IrList
+    Dim apiName(KW_LEN - 1) As Byte
+    list = ctx->list
+    lstrcpy(VarPtr(apiName), "RtlFillMemory")
+    If TyIs32() <> 0 Then
+        LowEmitZeroArgs32(list, vOff, vGlob, nbytes)
+        IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(apiName))
+        Exit Sub
+    End If
+    LowEmitLeaOff(list, vOff, vGlob)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_MOV_EAX_IMM, nbytes, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_XOR_EAX, 0, 0)
+    IrEmit(list, OP_MOV_R8_RAX, 0, 0)
+    IrEmit(list, OP_POP_RAX, 0, 0)
+    IrEmit(list, OP_MOV_RDX_RAX, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(apiName))
+End Sub
+
+Function LowDimZeroLocal(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    Dim nbytes As Long
+    LowDimZeroLocal = 1
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    If vGl <> 0 Or vBr <> 0 Then Exit Function
+    If Not LowDimZeroBytes(ctx, idx, vTy, nbytes) Then Exit Function
+    If nbytes > 0 Then LowEmitZeroFill(ctx, vOff, vGl, nbytes)
+End Function
