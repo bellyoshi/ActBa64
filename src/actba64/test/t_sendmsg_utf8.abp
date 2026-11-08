@@ -1,0 +1,35 @@
+' Expect: 31
+' Target: actba64
+' SendMessage で文字列を渡すメッセージ（CB_ADDSTRING など）は UTF-8 をワイドにして渡し、
+' CB_GETLBTEXT / CB_GETLBTEXTLEN は UTF-8 で返す。UTF-8 でないバイト列はそのまま A 版へ渡す。
+#console
+Declare Function TSendW Lib "user32.dll" Alias "SendMessageW" (ByVal hWnd As HWND, ByVal Msg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+
+Function WAt(p As *Byte, i As Long) As Long
+    WAt = GetWord(p + i * 2)
+End Function
+
+Dim h As HWND
+Dim s As *Byte
+Dim w[63] As Byte
+Dim b[31] As Byte
+Dim sj[7] As Byte
+Dim r As Long
+r = 0
+h = CreateWindowEx(0, "COMBOBOX", "", &H3, 0, 0, 100, 100, 0, 0, GetModuleHandle(0), 0)
+s = "日本語"
+SendMessage(h, CB_ADDSTRING, 0, s As LPARAM)
+TSendW(h, CB_GETLBTEXT, 0, VarPtr(w[0]) As LPARAM)
+If WAt(w, 0) = &H65E5 And WAt(w, 1) = &H672C And WAt(w, 2) = &H8A9E And WAt(w, 3) = 0 Then r = r + 1
+If SendMessage(h, CB_GETLBTEXTLEN, 0, 0) = 9 Then r = r + 2
+SendMessage(h, CB_GETLBTEXT, 0, VarPtr(b[0]) As LPARAM)
+If lstrcmp(b, s) = 0 Then r = r + 4
+SendMessage(h, CB_ADDSTRING, 0, "abc" As LPARAM)
+If SendMessage(h, CB_GETCOUNT, 0, 0) = 2 Then r = r + 8
+' CP932 の「日本」（UTF-8 として不正）は A 版でそのまま渡す
+sj[0] = &H93 : sj[1] = &HFA : sj[2] = &H96 : sj[3] = &H7B : sj[4] = 0
+SendMessage(h, CB_INSERTSTRING, 0, VarPtr(sj[0]) As LPARAM)
+TSendW(h, CB_GETLBTEXT, 0, VarPtr(w[0]) As LPARAM)
+If WAt(w, 0) = &H65E5 And WAt(w, 1) = &H672C And WAt(w, 2) = 0 Then r = r + 16
+DestroyWindow(h)
+ExitProcess(r)
