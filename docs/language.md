@@ -436,7 +436,7 @@ ExitProcess(式)
 | `If` / `ElseIf` / 単行 If | ○ |
 | `Select Case` | ○ |
 | `While` / `Wend` | ○ |
-| `For ... To ... [Step] Next` | ○（負の Step 可） |
+| `For ... To ... [Step] Next` | ○（負の Step 可。`Next` の後ろは変数名・式・文字列リテラルも含め行末まで読み飛ばす。AB 4.20 と同じ） |
 | `Do ... Loop` | ○（`While` / `Until` を先頭または末尾に可） |
 | `With ... End With` | ○（ネスト可） |
 | `Exit Do` / `Exit While` / `Exit For` | ○ |
