@@ -92,6 +92,46 @@ Function LowLenExprSize(ctx As *LowerCtx, idx As Long, kind As Long, num As Long
     LowLenExprSize = LowLenNumSize(ctx, idx)
 End Function
 
+' 配列の要素 1 つのバイト数（Type 配列は Type の大きさ）。String 配列・ポインタの配列は -1
+Function LowLenElemSize(ctx As *LowerCtx, ty As Long, ti As Long) As Long
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim sizes As *Long
+    LowLenElemSize = -1
+    If ty = TY_BYTE_ARR Then LowLenElemSize = 1
+    If ty = TY_WORD_ARR Then LowLenElemSize = 2
+    If ty = TY_LONG_ARR Or ty = TY_SINGLE_ARR Then LowLenElemSize = 4
+    If ty = TY_DOUBLE_ARR Then LowLenElemSize = 8
+    ' String 配列・*Byte 配列などポインタの要素は、これまでどおり文字列の長さ（-1）
+    If ty <> TY_UDT_ARR Or ti < 0 Then Exit Function
+    ast = ctx->ast
+    types = ast->types
+    sizes = types->typeSizes
+    LowLenElemSize = sizes[ti]
+End Function
+
+' a[i] / a(i) の要素のバイト数。配列でなければ -1
+Function LowLenIndexSize(ctx As *LowerCtx, idx As Long, kind As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim off As Long, ty As Long, ti As Long, br As Long, gl As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim base As Long
+    LowLenIndexSize = -1
+    ast = ctx->ast
+    nodes = ast->nodes
+    If kind = AST_INDEX Then
+        base = nodes[idx].left
+        If nodes[base].kind <> AST_VAR Then Exit Function
+        AstCopyStr(ast, base, VarPtr(name))
+    Else
+        AstCopyStr(ast, idx, VarPtr(name))
+    End If
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(off), VarPtr(ty), VarPtr(ti), VarPtr(br), VarPtr(gl)) Then Exit Function
+    If Not LowIsArrTy(ty) Then Exit Function
+    LowLenIndexSize = LowLenElemSize(ctx, ty, ti)
+End Function
+
 ' Len の引数のバイト数。文字列の長さを数えるときは -1
 Function LowLenSize(ctx As *LowerCtx, idx As Long) As Long
     Dim ast As *Ast
@@ -101,4 +141,5 @@ Function LowLenSize(ctx As *LowerCtx, idx As Long) As Long
     LowLenSize = -1
     If nodes[idx].kind = AST_VAR Then LowLenSize = LowLenVarSize(ctx, idx)
     If nodes[idx].kind <> AST_VAR Then LowLenSize = LowLenExprSize(ctx, idx, nodes[idx].kind, nodes[idx].num)
+    If nodes[idx].kind = AST_INDEX Or nodes[idx].kind = AST_CALL Then LowLenSize = LowLenIndexSize(ctx, idx, nodes[idx].kind)
 End Function
