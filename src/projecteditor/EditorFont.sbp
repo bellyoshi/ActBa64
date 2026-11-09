@@ -2,8 +2,8 @@ Const FR_PRIVATE = &H10
 Const EDITOR_FONT_FACE = "UDEV Gothic"
 Const EDITOR_FONT_FILE = "fonts\UDEVGothic-Regular.ttf"
 
-Declare Function AddFontResourceExA Lib "gdi32.dll" (ByVal lpszFilename As String, ByVal fl As Long, ByVal pdv As Long) As Long
-Declare Function RemoveFontResourceExA Lib "gdi32.dll" (ByVal lpFileName As String, ByVal fl As Long, ByVal pdv As Long) As Long
+Declare Function AddFontResourceExW Lib "gdi32.dll" (ByVal lpszFilename As *Byte, ByVal fl As Long, ByVal pdv As Long) As Long
+Declare Function RemoveFontResourceExW Lib "gdi32.dll" (ByVal lpFileName As *Byte, ByVal fl As Long, ByVal pdv As Long) As Long
 
 Dim g_editorFontLoaded As Long
 Dim g_editorFontPath As String
@@ -18,10 +18,25 @@ Function EditorFont_ResolvePath$() As String
     EditorFont_ResolvePath$ = dir + EDITOR_FONT_FILE
 End Function
 
+' パスは UTF-8 なので W 版で登録する（A 版では日本語を含むフォルダから起動するとフォントが読めない）
+Function EditorFont_Resource(ByVal add As Long) As Long
+    Dim wide As *Byte
+    Dim chars As Long
+    EditorFont_Resource = 0
+    wide = Enc_Utf8ToWide(g_editorFontPath, chars)
+    If wide = 0 Then Exit Function
+    If add <> 0 Then
+        EditorFont_Resource = AddFontResourceExW(wide, FR_PRIVATE, 0)
+    Else
+        EditorFont_Resource = RemoveFontResourceExW(wide, FR_PRIVATE, 0)
+    End If
+    free(wide)
+End Function
+
 Sub EditorFont_Init()
     If g_editorFontLoaded <> 0 Then Exit Sub
     g_editorFontPath = EditorFont_ResolvePath$()
-    If AddFontResourceExA(g_editorFontPath, FR_PRIVATE, 0) > 0 Then
+    If EditorFont_Resource(1) > 0 Then
         g_editorFontLoaded = 1
     End If
 End Sub
@@ -33,7 +48,7 @@ Sub EditorFont_Shutdown()
         g_editorFontMonoHeight = 0
     End If
     If g_editorFontLoaded = 0 Then Exit Sub
-    RemoveFontResourceExA(g_editorFontPath, FR_PRIVATE, 0)
+    EditorFont_Resource(0)
     g_editorFontLoaded = 0
 End Sub
 
@@ -51,7 +66,7 @@ Function EditorFont_Create(ByVal height As Long) As HFONT
     If g_editorFontLoaded <> 0 Then
         g_editorFontMono = CreateFont(height,0,0,0,400,0,0,0,1,3,2,1,49,EDITOR_FONT_FACE)
     Else
-        g_editorFontMono = CreateFont(height,0,0,0,400,0,0,0,1,3,2,1,49,"Consolas")
+        g_editorFontMono = CreateFont(height,0,0,0,400,0,0,0,128,3,2,1,49,"MS Gothic")
     End If
     EditorFont_Create = g_editorFontMono
 End Function
