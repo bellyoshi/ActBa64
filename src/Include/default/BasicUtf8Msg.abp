@@ -1,7 +1,7 @@
 ' BasicUtf8Msg - SendMessage の文字列メッセージ。ソースの文字列は UTF-8 なので、
 ' lParam に文字列を渡すメッセージはワイドにして SendMessageW へ渡す。
 ' UTF-8 として読めないバイト列（CP932 など）はそのまま SendMessageA へ渡す。
-' CB_GETLBTEXT / LB_GETTEXT とその LEN は UTF-8 で返す。ほかのメッセージは SendMessageA のまま。
+' CB_GETLBTEXT / LB_GETTEXT とその LEN は UTF-8 で返す。リストビューの LVCOLUMN / LVITEM の文字列も W 版で送る。ほかのメッセージは SendMessageA のまま。
 
 ' lParam に入力の文字列を取るメッセージなら 1
 Function BasicMsgTakesText(msg As DWord) As Long
@@ -60,6 +60,7 @@ End Function
 
 Function SendMessage(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
     Dim kind As Long
+    Dim lr As LRESULT
     kind = BasicMsgItemText(msg)
     If kind <> 0 Then
         SendMessage = BasicMsgItemOut(hWnd, msg, wParam, lParam, kind)
@@ -69,5 +70,84 @@ Function SendMessage(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPA
         SendMessage = BasicMsgSendText(hWnd, msg, wParam, lParam)
         Exit Function
     End If
+    If BasicLvTry(hWnd, msg, wParam, lParam, lr) <> 0 Then
+        SendMessage = lr
+        Exit Function
+    End If
     SendMessage = SendMessageA(hWnd, msg, wParam, lParam)
+End Function
+
+' ---- リストビュー: LVCOLUMN / LVITEM の pszText（UTF-8）をワイドにして W 版のメッセージで送る ----
+#ifdef _WIN64
+Const BASIC_LV_PTRSZ = 8
+Const BASIC_LVCOL_TEXT = 16
+Const BASIC_LVITEM_TEXT = 24
+#else
+Const BASIC_LV_PTRSZ = 4
+Const BASIC_LVCOL_TEXT = 12
+Const BASIC_LVITEM_TEXT = 20
+#endif
+
+' A 版のリストビューのメッセージに対応する W 版。対象でなければ 0
+Function BasicLvWideMsg(msg As DWord) As DWord
+    BasicLvWideMsg = 0
+    If msg = &H101B Then BasicLvWideMsg = &H1061
+    If msg = &H101A Then BasicLvWideMsg = &H1060
+    If msg = &H1007 Then BasicLvWideMsg = &H104D
+    If msg = &H1006 Then BasicLvWideMsg = &H104C
+    If msg = &H102E Then BasicLvWideMsg = &H1074
+End Function
+
+' 構造体の中の pszText の位置。文字列を持たない（マスクに TEXT が無い）なら -1
+Function BasicLvTextOff(msg As DWord, lParam As LPARAM) As Long
+    Dim p As *Byte
+    Dim mask As Long
+    BasicLvTextOff = -1
+    If lParam = 0 Then Exit Function
+    p = lParam As *Byte
+    mask = GetDWord(p)
+    If msg = &H101B Or msg = &H101A Then
+        If (mask And 4) <> 0 Then BasicLvTextOff = BASIC_LVCOL_TEXT
+        Exit Function
+    End If
+    If msg = &H102E Or (mask And 1) <> 0 Then BasicLvTextOff = BASIC_LVITEM_TEXT
+End Function
+
+' pszText をワイドに差し替えて W 版で送り、元に戻す。UTF-8 でなければ A 版のまま
+Function BasicLvSend(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM, off As Long) As LRESULT
+    Dim base As *Byte
+    Dim fld As *Byte
+    Dim raw As *Byte
+    Dim w As *Byte
+    ' キャストした式の + は 32bit の足し算になるので、いったん *Byte の変数に入れてから足す
+    base = lParam As *Byte
+    fld = base + off
+    raw = 0
+    RtlMoveMemory(VarPtr(raw), fld, BASIC_LV_PTRSZ)
+    w = 0
+    If BasicAtom(raw) = 0 And (raw As Long) <> -1 Then w = BasicWideOf(raw, lstrlen(raw))
+    If w = 0 Then
+        BasicLvSend = SendMessageA(hWnd, msg, wParam, lParam)
+        Exit Function
+    End If
+    RtlMoveMemory(fld, VarPtr(w), BASIC_LV_PTRSZ)
+    BasicLvSend = SendMessageW(hWnd, BasicLvWideMsg(msg), wParam, lParam)
+    RtlMoveMemory(fld, VarPtr(raw), BASIC_LV_PTRSZ)
+    free(w)
+End Function
+
+' 対象のリストビューのメッセージなら 1 を返し、r に結果を入れる
+Function BasicLvTry(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM, ByRef r As LRESULT) As Long
+    Dim off As Long
+    BasicLvTry = 0
+    If BasicLvWideMsg(msg) = 0 Then Exit Function
+    off = BasicLvTextOff(msg, lParam)
+    If off < 0 Then Exit Function
+    r = BasicLvSend(hWnd, msg, wParam, lParam, off)
+    BasicLvTry = 1
+End Function
+
+' SendDlgItemMessage も SendMessage と同じ変換を通す
+Function SendDlgItemMessage(hDlg As HWND, nIDDlgItem As Long, msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    SendDlgItemMessage = SendMessage(GetDlgItem(hDlg, nIDDlgItem), msg, wParam, lParam)
 End Function
