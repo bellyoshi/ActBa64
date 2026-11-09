@@ -7,6 +7,7 @@
     $expectErrors = -1
     $stdin = @()
     $prebuild = ""
+    $options = @()
     $base = [System.IO.Path]::GetFileName($path)
     foreach ($line in (Get-Content -LiteralPath $path -Encoding Default -ErrorAction Stop)) {
         # Single-quoted regex: Windows PowerShell 5.1 treats [01] inside "..." as a type name.
@@ -34,6 +35,10 @@
         if ($line -match '^\s*''\s*Prebuild\s*:\s*(\S+)\s*$') {
             $prebuild = $Matches[1]
         }
+        # ' Option: -pN88 など、コンパイラへ渡す追加オプション
+        if ($line -match '^\s*''\s*Option\s*:\s*(\S+)\s*$') {
+            $options += $Matches[1]
+        }
         if ($line -match '(?i)^\s*#USEWINDOW\s*=\s*1\s*$') {
             if ($null -eq $gui) { $gui = 1 }
         }
@@ -45,5 +50,5 @@
             $gui = 0
         }
     }
-    return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin; CompileFail = $compileFail; ExpectErrors = $expectErrors; Prebuild = $prebuild }
+    return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin; CompileFail = $compileFail; ExpectErrors = $expectErrors; Prebuild = $prebuild; Options = $options }
 }

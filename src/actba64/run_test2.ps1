@@ -216,6 +216,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     if ($Actba32) {
         $ccArgs += "-actba32"
     }
+    $ccArgs += $meta.Options
     $ccArgs += "-o"
     $ccArgs += $exePath
     $log = Get-CompilerLog $ccArgs

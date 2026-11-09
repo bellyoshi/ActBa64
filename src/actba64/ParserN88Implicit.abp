@@ -1,0 +1,154 @@
+' ===================================================
+'  ParserN88Implicit - -pN88: 宣言しないで使った変数
+' ===================================================
+' N88-BASIC は Dim なしで変数を使える。ユーザーコードの AST_VAR を見て、
+'   Include で宣言した名前（Dim / Const / Sub / Function / Declare）なら、その大小文字にそろえる
+'   それ以外は大文字にそろえ、ユーザーコードの先頭で Dim する（$ 付きは String、ほかは Double）
+'   関数呼び出しの名前も Include の宣言の表記にそろえる（RND → Rnd）
+'   括弧の無い関数名（X = RND）は引数なしの呼び出し（RND()）にする
+' 通常の構文（-pN88 なし）では Dim の省略はこれまでどおりエラー。
+
+' from 以降に作ったノードを調べ、Dim を足した先頭の文を返す
+Function ParseN88ImplicitDims(p As *Parser, from As Long, first As Long) As Long
+    Dim i As Long, upTo As Long
+    upTo = ParseN88AstCount(p->ast)
+    i = from
+    While i < upTo
+        first = ParseN88ImplicitAt(p, i, first)
+        i = i + 1
+    Wend
+    ParseN88ImplicitDims = first
+End Function
+
+Function ParseN88AstCount(ast As *Ast) As Long
+    ParseN88AstCount = ast->count
+End Function
+
+Function ParseN88Nodes(ast As *Ast) As *AstNode
+    ParseN88Nodes = ast->nodes
+End Function
+
+Function ParseN88ImplicitAt(p As *Parser, n As Long, first As Long) As Long
+    Dim name(AST_STR_LEN - 1) As Byte
+    Dim nodes As *AstNode
+    ParseN88ImplicitAt = first
+    nodes = ParseN88Nodes(p->ast)
+    If nodes[n].kind = AST_CALL Then ParseN88CallName(p->ast, n)
+    If nodes[n].kind <> AST_VAR Then Exit Function
+    AstCopyStr(p->ast, n, VarPtr(name))
+    If ParseN88HeadName(p->ast, n, VarPtr(name)) Then Exit Function
+    ParseN88ImplicitAt = ParseN88UpperVar(p, n, VarPtr(name), first)
+End Function
+
+' Include の宣言にあれば、ノードの名前をその表記にして true
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function ParseN88HeadName(ast As *Ast, n As Long, name As *Byte) As boolean
+    Dim decl(AST_STR_LEN - 1) As Byte
+    Dim nodes As *AstNode
+    Dim d As Long
+    ParseN88HeadName = false
+    nodes = ast->nodes
+    d = ParseN88ChainDecl(ast, nodes[ast->root].left, name, VarPtr(decl))
+    If d < 0 Then Exit Function
+    ParseN88PutName(ast, n, VarPtr(decl))
+    ParseN88VarToCall(ast, n, d)
+    ParseN88HeadName = true
+End Function
+
+' 括弧の無い関数名（X = RND）は引数なしの呼び出し RND() にする
+Sub ParseN88VarToCall(ast As *Ast, n As Long, d As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    If nodes[n].kind <> AST_VAR Then Exit Sub
+    If nodes[d].kind <> AST_FUNC And nodes[d].kind <> AST_DECLARE Then Exit Sub
+    nodes[n].kind = AST_CALL
+    nodes[n].left = -1
+    nodes[n].right = -1
+    nodes[n].num = 0
+End Sub
+
+' 関数呼び出し（RND() / INT(x) など）の名前を Include の宣言の表記にそろえる
+Sub ParseN88CallName(ast As *Ast, n As Long)
+    Dim name(AST_STR_LEN - 1) As Byte
+    AstCopyStr(ast, n, VarPtr(name))
+    ParseN88HeadName(ast, n, VarPtr(name))
+End Sub
+
+' 大文字にして、まだ Dim していなければ先頭に Dim を足す
+Function ParseN88UpperVar(p As *Parser, n As Long, name As *Byte, first As Long) As Long
+    Dim decl(AST_STR_LEN - 1) As Byte
+    ParseN88UpperName(name)
+    ParseN88PutName(p->ast, n, name)
+    ParseN88UpperVar = first
+    If ParseN88ChainDecl(p->ast, first, name, VarPtr(decl)) >= 0 Then Exit Function
+    ParseN88UpperVar = ParseN88PrependDim(p, name, first)
+End Function
+
+Function ParseN88PrependDim(p As *Parser, name As *Byte, first As Long) As Long
+    Dim ty As Long, ti As Long, n As Long
+    ParseN88DimNoAs(name, ty, ti)
+    n = ParseDimMakeNode(p, name, ty, -1, -1, ti)
+    ParseN88PrependDim = first
+    If n < 0 Then Exit Function
+    ParseN88SetNext(p->ast, n, first)
+    ParseN88PrependDim = n
+End Function
+
+Sub ParseN88SetNext(ast As *Ast, n As Long, nxt As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].nxt = nxt
+End Sub
+
+Sub ParseN88DimNoAs(name As *Byte, ByRef ty As Long, ByRef ti As Long)
+    ParseDimNoAs(name, -1, ty, ti)
+End Sub
+
+' 鎖 n の宣言（Dim / Const / Sub / Function / Declare）から name を大小文字を問わず探す
+' 見つかればその表記を decl へ。戻り値はノード（無ければ -1）
+Function ParseN88ChainDecl(ast As *Ast, n As Long, name As *Byte, decl As *Byte) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    While n >= 0
+        If ParseN88DeclIs(ast, n, name, decl) <> 0 Then Exit While
+        n = nodes[n].nxt
+    Wend
+    ParseN88ChainDecl = n
+End Function
+
+Function ParseN88DeclIs(ast As *Ast, n As Long, name As *Byte, decl As *Byte) As Long
+    ParseN88DeclIs = 0
+    If ParseN88IsDeclKind(ast, n) = 0 Then Exit Function
+    AstCopyStr(ast, n, decl)
+    If ByteNameEqCI(decl, name) <> 0 Then ParseN88DeclIs = 1
+End Function
+
+Function ParseN88IsDeclKind(ast As *Ast, n As Long) As Long
+    Dim nodes As *AstNode
+    Dim k As Long
+    nodes = ast->nodes
+    k = nodes[n].kind
+    ParseN88IsDeclKind = 0
+    If k = AST_DIM Or k = AST_CONST Or k = AST_FUNC Or k = AST_DECLARE Then ParseN88IsDeclKind = 1
+End Function
+
+Sub ParseN88UpperName(s As *Byte)
+    Dim i As Long
+    i = 0
+    While s[i] <> 0
+        If s[i] >= CH_La And s[i] <= CH_Lz Then s[i] = s[i] - 32
+        i = i + 1
+    Wend
+End Sub
+
+' 同じ長さの名前でノードの文字列を書き換える（num / extra はそのまま）
+Sub ParseN88PutName(ast As *Ast, n As Long, s As *Byte)
+    Dim strs As *Byte, off As Long, i As Long
+    strs = ast->strs
+    off = n * AST_STR_LEN
+    i = 0
+    While s[i] <> 0
+        strs[off + i] = s[i]
+        i = i + 1
+    Wend
+End Sub

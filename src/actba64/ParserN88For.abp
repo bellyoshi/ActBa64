@@ -1,0 +1,110 @@
+' ===================================================
+'  ParserN88For - -pN88 の FOR / NEXT（行をまたぐ）
+' ===================================================
+' FOR はその場で AST_FOR を置き、続く文を本体として集める。NEXT で本体を閉じる。
+' NEXT の後ろの変数名は読み飛ばす（照合しない）。NEXT I,J は 2 つ閉じる。
+
+Const N88_FOR_MAX = 32
+
+Dim g_n88ForTop As Long
+Dim g_n88ForNode(31) As Long
+Dim g_n88ForFirst(31) As Long
+Dim g_n88ForLast(31) As Long
+Dim g_n88ForLine(31) As Long
+
+Sub ParseN88ForReset()
+    g_n88ForTop = 0
+End Sub
+
+' 戻り値 -2=FOR / NEXT ではない 1=読めた 0=エラー
+Function ParseN88TakeLoop(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    ParseN88TakeLoop = -2
+    If ParseCmdKw(p, "for") <> 0 Then
+        ParseN88TakeLoop = ParseN88TakeFor(p, srcLn, first, last)
+    ElseIf ParseCmdKw(p, "next") <> 0 Then
+        ParseN88TakeLoop = ParseN88TakeNext(p, srcLn, first, last)
+    End If
+End Function
+
+Function ParseN88TakeFor(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    Dim n As Long
+    ParseN88TakeFor = 0
+    n = ParseN88ForHead(p, srcLn)
+    If n < 0 Then Exit Function
+    ParseN88LinkAt(p, first, last, n, srcLn)
+    If ParseN88ForPush(n, first, last, srcLn) = 0 Then Exit Function
+    first = -1
+    last = -1
+    ParseN88TakeFor = 1
+End Function
+
+Function ParseN88ForHead(p As *Parser, srcLn As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim fromE As Long, toE As Long, stepE As Long
+    ParseN88ForHead = -1
+    If Not ParseForHeader(p, p->ast, VarPtr(name), fromE, toE, stepE) Then Exit Function
+    If ParseN88StmtDone(p, srcLn) = 0 Then Exit Function
+    ParseN88ForHead = ParseForNode(p, VarPtr(name), fromE, toE, stepE, -1)
+End Function
+
+Function ParseN88ForPush(n As Long, first As Long, last As Long, srcLn As Long) As Long
+    Dim t As Long
+    ParseN88ForPush = 0
+    t = g_n88ForTop
+    If t >= N88_FOR_MAX Then DiagError(srcLn, "FOR nested too deeply")
+    If t >= N88_FOR_MAX Then Exit Function
+    g_n88ForNode(t) = n
+    g_n88ForFirst(t) = first
+    g_n88ForLast(t) = last
+    g_n88ForLine(t) = srcLn
+    g_n88ForTop = t + 1
+    ParseN88ForPush = 1
+End Function
+
+Function ParseN88TakeNext(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    p->pos = p->pos + 1
+    ParseN88TakeNext = ParseN88NextPop(p, srcLn, first, last)
+    If ParseN88TakeNext = 0 Then Exit Function
+    If ParseN88StmtDone(p, srcLn) <> 0 Then Exit Function
+    ParseN88TakeNext = ParseN88NextVars(p, srcLn, first, last)
+End Function
+
+' NEXT 変数 [, 変数 ...]。2 つ目からは 1 つずつ FOR を閉じる
+Function ParseN88NextVars(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    ParseN88NextVars = 0
+    Do
+        If ParseTokKind(p) <> TK_IDENT Then Exit Function
+        p->pos = p->pos + 1
+        If ParseN88StmtDone(p, srcLn) <> 0 Then Exit Do
+        If ParseTokKind(p) <> TK_COMMA Then Exit Function
+        p->pos = p->pos + 1
+        If ParseN88NextPop(p, srcLn, first, last) = 0 Then Exit Function
+    Loop
+    ParseN88NextVars = 1
+End Function
+
+' 一番内側の FOR の本体を first にして、外の鎖へ戻る
+Function ParseN88NextPop(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    Dim t As Long
+    ParseN88NextPop = 0
+    If g_n88ForTop <= 0 Then DiagError(srcLn, "NEXT without FOR")
+    If g_n88ForTop <= 0 Then Exit Function
+    t = g_n88ForTop - 1
+    g_n88ForTop = t
+    ParseN88SetBody(p->ast, g_n88ForNode(t), first)
+    first = g_n88ForFirst(t)
+    last = g_n88ForLast(t)
+    ParseN88NextPop = 1
+End Function
+
+Sub ParseN88SetBody(ast As *Ast, nFor As Long, body As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[nFor].num = body
+End Sub
+
+' プログラムの終わりで閉じていない FOR があればエラー
+Sub ParseN88ForCheckEnd()
+    If g_n88ForTop <= 0 Then Exit Sub
+    DiagError(g_n88ForLine(g_n88ForTop - 1), "FOR without NEXT")
+End Sub

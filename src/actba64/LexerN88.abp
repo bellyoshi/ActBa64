@@ -1,0 +1,201 @@
+' ===================================================
+'  LexerN88 - -pN88 の字句解析（N88-BASIC）
+' ===================================================
+' トークンの種類は通常の Lexer と同じ（AST を作る処理を共有するため）。
+' 通常の Lexer との違い:
+'   REM と ' は行末まで読み捨てる。? は PRINT
+'   #ディレクティブ、_ の行継続、/* */ 注釈、"" 以外のエスケープは無い
+'   文字列は閉じの " が無ければ行末で終わる
+
+Const LEX_N88_QMARK = 63
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LexTokenizeN88(lx As *Lexer, src As *Byte) As boolean
+    LexTokenizeN88 = false
+    LexN88Begin(lx, src)
+    While src[lx->pos] <> CH_NUL And lx->err = 0
+        LexN88Step(lx)
+    Wend
+    LexPush(lx, TK_EOF)
+    If lx->err <> 0 Then Exit Function
+    LexTokenizeN88 = true
+End Function
+
+Sub LexN88Begin(lx As *Lexer, src As *Byte)
+    lx->src = src
+    lx->pos = 0
+    lx->count = 0
+    lx->err = 0
+    lx->srcLine = 1
+    lx->joinNext = 0
+    lx->logLine = 0
+    lx->lastSrcLine = 0
+End Sub
+
+Sub LexN88Step(lx As *Lexer)
+    Dim src As *Byte
+    Dim c As Long
+    src = lx->src
+    c = src[lx->pos]
+    If LexAdvanceNewline(lx, c) Then Exit Sub
+    If LexN88TokenOne(lx, c) = 0 Then lx->err = 1
+End Sub
+
+' 戻り値 1=消費した 0=解釈できない文字
+Function LexN88TokenOne(lx As *Lexer, c As Long) As Long
+    LexN88TokenOne = 1
+    If IsHSpace(c) Then lx->pos = lx->pos + 1
+    If IsHSpace(c) Then Exit Function
+    If c = CH_SQUOTE Then LexSkipEol(lx)
+    If c = CH_SQUOTE Then Exit Function
+    LexN88TokenOne = LexN88TokenLit(lx, c)
+End Function
+
+Function LexN88TokenLit(lx As *Lexer, c As Long) As Long
+    If IsDigit(c) Then
+        LexN88TokenLit = LexNumber(lx)
+    ElseIf c = CH_DQUOTE Then
+        LexN88TokenLit = LexN88String(lx)
+    Else
+        LexN88TokenLit = LexN88TokenWord(lx, c)
+    End If
+End Function
+
+Function LexN88TokenWord(lx As *Lexer, c As Long) As Long
+    If IsIdentChar(c) Then
+        LexN88TokenWord = LexN88Ident(lx)
+    Else
+        LexN88TokenWord = LexN88TokenOp(lx, c)
+    End If
+End Function
+
+' ---- 識別子 / REM / ? ----
+
+Function LexN88Ident(lx As *Lexer) As Long
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+    Dim n As Long
+    n = LexN88IdentScan(lx, VarPtr(buf))
+    LexN88Ident = LexN88PushWord(lx, VarPtr(buf), n)
+End Function
+
+' 英数字の並びと、末尾の $ を buf へ。戻り値は長さ
+Function LexN88IdentScan(lx As *Lexer, buf As *Byte) As Long
+    Dim src As *Byte
+    Dim start As Long
+    src = lx->src
+    start = lx->pos
+    LexN88SkipIdent(lx, start)
+    If src[lx->pos] = CH_DOLLAR Then lx->pos = lx->pos + 1
+    LexN88IdentScan = LexFillSlice(buf, VarPtr(src[start]), lx->pos - start)
+End Function
+
+Sub LexN88SkipIdent(lx As *Lexer, start As Long)
+    Dim src As *Byte
+    src = lx->src
+    While IsIdentCont(src[lx->pos]) And lx->pos - start < LEX_TEXT_MAXIDX - 1
+        lx->pos = lx->pos + 1
+    Wend
+End Sub
+
+' REM なら行末まで読み捨て。それ以外は TK_IDENT
+Function LexN88PushWord(lx As *Lexer, w As *Byte, n As Long) As Long
+    Dim idx As Long
+    LexN88PushWord = 1
+    If ByteStrEqCI("rem", w) Then LexSkipEol(lx)
+    If ByteStrEqCI("rem", w) Then Exit Function
+    idx = LexPush(lx, TK_IDENT)
+    If idx < 0 Then LexN88PushWord = 0
+    If idx >= 0 Then LexStoreText(lx, idx, w, n)
+End Function
+
+' ? → PRINT
+Function LexN88Question(lx As *Lexer) As Long
+    Dim w(7) As Byte
+    lx->pos = lx->pos + 1
+    lstrcpy(VarPtr(w), "print")
+    LexN88Question = LexN88PushWord(lx, VarPtr(w), 5)
+End Function
+
+' ---- 文字列 ----
+
+' "..." 。閉じの " が無ければ行末まで
+Function LexN88String(lx As *Lexer) As Long
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+    Dim n As Long
+    lx->pos = lx->pos + 1
+    n = LexN88StrScan(lx, VarPtr(buf))
+    LexN88String = LexN88PushStr(lx, VarPtr(buf), n)
+End Function
+
+Function LexN88PushStr(lx As *Lexer, buf As *Byte, n As Long) As Long
+    Dim idx As Long
+    idx = LexPush(lx, TK_STRING)
+    LexN88PushStr = 0
+    If idx < 0 Then Exit Function
+    LexStoreText(lx, idx, buf, n)
+    LexN88PushStr = 1
+End Function
+
+Function LexN88StrScan(lx As *Lexer, buf As *Byte) As Long
+    Dim src As *Byte
+    Dim start As Long
+    src = lx->src
+    start = lx->pos
+    LexN88SkipStrBody(lx)
+    LexN88StrScan = LexFillSlice(buf, VarPtr(src[start]), LexN88Min(lx->pos - start, LEX_TEXT_MAXIDX))
+    If src[lx->pos] = CH_DQUOTE Then lx->pos = lx->pos + 1
+End Function
+
+Sub LexN88SkipStrBody(lx As *Lexer)
+    Dim src As *Byte
+    src = lx->src
+    While src[lx->pos] <> CH_NUL And src[lx->pos] <> CH_DQUOTE And Not IsEol(src[lx->pos])
+        lx->pos = lx->pos + 1
+    Wend
+End Sub
+
+Function LexN88Min(a As Long, b As Long) As Long
+    LexN88Min = a
+    If b < a Then LexN88Min = b
+End Function
+
+' ---- 演算子 ----
+
+Function LexN88TokenOp(lx As *Lexer, c As Long) As Long
+    LexN88TokenOp = 1
+    If c = LEX_N88_QMARK Then
+        LexN88TokenOp = LexN88Question(lx)
+    ElseIf c = CH_AMP Then
+        LexN88TokenOp = LexHexLit(lx)
+    Else
+        LexN88TokenOp = LexN88TokenSym(lx, c)
+    End If
+End Function
+
+Function LexN88TokenSym(lx As *Lexer, c As Long) As Long
+    LexN88TokenSym = 1
+    If c = CH_EQ Then
+        LexEqOp(lx)
+    ElseIf c = CH_MINUS Or c = CH_LESS Or c = CH_GREATER Then
+        LexTwoCharOp(lx, c)
+    Else
+        LexN88TokenSym = LexN88TokenOne1(lx, c)
+    End If
+End Function
+
+' 1 文字で決まる記号。解釈できなければ 0
+Function LexN88TokenOne1(lx As *Lexer, c As Long) As Long
+    Dim kind As Long
+    kind = LexN88SymKind(c)
+    LexN88TokenOne1 = 0
+    If kind < 0 Then Exit Function
+    LexSimpleOp(lx, kind)
+    LexN88TokenOne1 = 1
+End Function
+
+Function LexN88SymKind(c As Long) As Long
+    LexN88SymKind = LexSimpleOpKind(c)
+    If c = CH_SLASH Then LexN88SymKind = TK_SLASH
+    If c = CH_BSLASH Then LexN88SymKind = TK_BACKSLASH
+    If c = CH_HASH Then LexN88SymKind = TK_HASH
+End Function

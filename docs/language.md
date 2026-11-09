@@ -93,10 +93,10 @@ b.abp
 ### 1.5 CLI
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 ```
 
-`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。
+`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。`-pN88` は N88-BASIC のソースとして読む（[§1.7](#17-n88-basic-構文-pn88)。`.pj` には効かない）。
 
 EXE のエントリは結合後ソースのトップレベル文です。終了は `ExitProcess(n)` または `End`（終了コード 0）。  
 DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出力する)）。  
@@ -172,6 +172,33 @@ PSET (x, y) [, color]       ' 1 ドット。color 省略は 7（白）
 | 7 | 白（省略時） |
 
 サンプル: `src/actba64/samples/n88_shapes.abp`
+
+### 1.7 N88-BASIC 構文（-pN88）
+
+`-pN88` を付けると、ユーザーコードを専用の Lexer（`LexerN88`）と Parser（`ParserN88Prog`）で読む。AST と IR から先は通常と共通。
+
+```text
+actba64 a.abp -pN88 -o a.exe
+```
+
+- `#N88BASIC` はソースに書かなくても指定したものとして扱う（§1.6 のライブラリ挿入・GUI・窓待ち）。Include は通常の構文で読み、ユーザーコードはその後ろで実行する。最後に `N88_WaitClose()` で窓が閉じるまで待つ
+- 行頭の行番号は省略できる。付けた行番号は `GOTO` / `GOSUB` の飛び先。行番号のある行と無い行を混ぜてよい
+- 同じ行の文は `:` で区切る。`REM` と `'` は行末まで注釈。`?` は `PRINT`
+- 専用の文: `END`（`N88_End`）、`GOTO` / `GOSUB` / `RETURN`、`FOR` / `NEXT`、`PRINT`、`LET`、`LINE` / `CIRCLE` / `LOCATE` / `COLOR` / `PAINT` / `PSET`（§1.6 と同じ書式）
+- `名前 = 式` は代入。それ以外の `命令 引数, ...` は、Include にある同名の `Sub` の呼び出しになる（大文字小文字は問わない）。`SCREEN 3` → `Screen(3)`、`CLS 3` → `Cls(3)`（`Include\N88BASIC\n88screen.abp`）。無い命令は `unknown statement '…'`
+- 変数は宣言しないで使える（`$` 付きは `String`、ほかは `Double`）。大文字小文字は同じ変数。Include で宣言した名前（`Dim` / `Const` / `Sub` / `Function` / `Declare`）はそちらを指す。`-pN88` なしで `Dim` を省いた変数はこれまでどおり「無効な識別子」
+- `PRINT` の `;` は何も挟まない。`,` は次の 14 桁の区切りへ進み、文末の `,` は改行しない。数値は正なら先頭に符号の空白、後ろに空白 1 つ（`PRINT "A=";100` → `A= 100 `）
+- `FOR 変数=式 TO 式 [STEP 式]` から `NEXT` までが本体（行をまたいでよい。入れ子可）。`NEXT` の後ろの変数名は照合しない。`NEXT B,A` は内側から 2 つ閉じる。対応の無い `NEXT` は `NEXT without FOR`、閉じていない `FOR` は `FOR without NEXT`
+- 式の中の関数名（`RND()` / `INT(x)` / `SIN(x)` など）は大文字小文字を問わず Include の関数を指す。括弧の無い関数名（`X = RND`）は引数なしの呼び出し（`RND()`）になる
+- 実行は当時の機種よりずっと速い。`FOR J=1 TO 1000:NEXT` のような待ちのループはほぼ一瞬で終わる
+- 未対応: `IF` / `WHILE` などの制御文、配列の暗黙宣言、引数の省略（`SCREEN 3,,0`）
+
+```text
+10 REM 赤い円
+20 SCREEN 3:CLS 3
+30 CIRCLE(320,300),100,2
+40 END
+```
 
 ---
 
