@@ -324,13 +324,16 @@ Function ParseIfStmt(p As *Parser) As Long
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
-Function ParseDoHeadCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long) As boolean
+' Do / Loop と同じ行の While / Until だけを条件にする（次の行の While ... Wend は別の文）
+Function ParseDoHeadCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long, ln As Long) As boolean
     Dim kWhile(KW_SHORT_LEN - 1) As Byte
     Dim kUntil(KW_SHORT_LEN - 1) As Byte
 
-    ParseDoHeadCond = false
+    ParseDoHeadCond = true
     doMode = DO_PLAIN
     cond = -1
+    If ParseTokLogLine(p) <> ln Then Exit Function
+    ParseDoHeadCond = false
     lstrcpy(VarPtr(kWhile), "while")
     lstrcpy(VarPtr(kUntil), "until")
     If ParseIdentIs(p, VarPtr(kWhile)) <> 0 Then
@@ -348,10 +351,12 @@ Function ParseDoHeadCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long)
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
-Function ParseDoTailCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long) As boolean
+Function ParseDoTailCond(p As *Parser, ByRef cond As Long, ByRef doMode As Long, ln As Long) As boolean
     Dim kWhile(KW_SHORT_LEN - 1) As Byte
     Dim kUntil(KW_SHORT_LEN - 1) As Byte
 
+    ParseDoTailCond = true
+    If ParseTokLogLine(p) <> ln Then Exit Function
     ParseDoTailCond = false
     If doMode = DO_PLAIN Then
         lstrcpy(VarPtr(kWhile), "while")
@@ -380,12 +385,13 @@ Function ParseDoBody(p As *Parser, kLoop As *Byte) As Long
     LoopPop()
 End Function
 
-Function ParseDoLoopTok(p As *Parser, kLoop As *Byte) As boolean
+Function ParseDoLoopTok(p As *Parser, kLoop As *Byte, ByRef ln As Long) As boolean
     ParseDoLoopTok = false
     If ParseIdentIs(p, kLoop) = 0 Then
         p->err = 1
         Exit Function
     End If
+    ln = ParseTokLogLine(p)
     p->pos = p->pos + 1
     ParseDoLoopTok = true
 End Function
@@ -408,27 +414,30 @@ Function ParseDoNode(p As *Parser, cond As Long, doMode As Long, body As Long) A
     ParseDoFill(ast, nDo, cond, body, doMode)
 End Function
 
-Function ParseDoTailNode(p As *Parser, cond As Long, doMode As Long, body As Long) As Long
+Function ParseDoTailNode(p As *Parser, cond As Long, doMode As Long, body As Long, ln As Long) As Long
     ParseDoTailNode = -1
-    If Not ParseDoTailCond(p, cond, doMode) Then Exit Function
+    If Not ParseDoTailCond(p, cond, doMode, ln) Then Exit Function
     ParseDoTailNode = ParseDoNode(p, cond, doMode, body)
 End Function
 
 Function ParseDoRest(p As *Parser, cond As Long, doMode As Long) As Long
     Dim body As Long
     Dim kLoop(KW_SHORT_LEN - 1) As Byte
+    Dim ln As Long
     ParseDoRest = -1
     body = ParseDoBody(p, VarPtr(kLoop))
     If p->err <> 0 Then Exit Function
-    If Not ParseDoLoopTok(p, VarPtr(kLoop)) Then Exit Function
-    ParseDoRest = ParseDoTailNode(p, cond, doMode, body)
+    If Not ParseDoLoopTok(p, VarPtr(kLoop), ln) Then Exit Function
+    ParseDoRest = ParseDoTailNode(p, cond, doMode, body, ln)
 End Function
 
 Function ParseDoStmt(p As *Parser) As Long
     Dim cond As Long
     Dim doMode As Long
+    Dim ln As Long
     ParseDoStmt = -1
+    ln = ParseTokLogLine(p)
     p->pos = p->pos + 1
-    If Not ParseDoHeadCond(p, cond, doMode) Then Exit Function
+    If Not ParseDoHeadCond(p, cond, doMode, ln) Then Exit Function
     ParseDoStmt = ParseDoRest(p, cond, doMode)
 End Function
