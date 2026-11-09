@@ -1,5 +1,40 @@
 ' AstLowerConst - 定数登録と定数畳み込み
 
+' 診断に使う、いま登録している Const / Enum の文（-1 は組込み）
+Dim g_constStmt As Long
+' 組込み定数（TRUE / FALSE）の数。これより後ろだけ再定義を調べる
+Dim g_constBuiltinN As Long
+
+' 同じ名前の Const を違う値で定義し直したらエラー（同じ値なら標準ヘッダとユーザの重複として許す）
+Function LowConstRedefErr(ctx As *LowerCtx, name As *Byte) As boolean
+    LowConstRedefErr = false
+    LowerDiagError(ctx, g_constStmt, "Const '" + MakeStr(name) + "' is already defined with a different value")
+    ctx->err = 1
+End Function
+
+' 既にある数値定数 i と同じ値・同じ種類なら true
+Function LowConstSameNum(ctx As *LowerCtx, i As Long, lo As Long, hi As Long, isDbl As Long) As boolean
+    Dim vals As *Long
+    LowConstSameNum = false
+    vals = ctx->constVals
+    If vals[i] <> lo Or g_constIsDbl[i] <> isDbl Then Exit Function
+    If isDbl <> 0 And g_constHi[i] <> hi Then Exit Function
+    LowConstSameNum = true
+End Function
+
+' 既にあれば 1（同じ値）/ -1（違う値でエラー）、無ければ 0
+Function LowConstSeenNum(ctx As *LowerCtx, name As *Byte, lo As Long, hi As Long, isDbl As Long) As Long
+    Dim i As Long
+    LowConstSeenNum = 0
+    i = LowFindConst(ctx, name)
+    If i < 0 Then Exit Function
+    LowConstSeenNum = 1
+    If i < g_constBuiltinN Then Exit Function
+    If LowConstSameNum(ctx, i, lo, hi, isDbl) Then Exit Function
+    LowConstRedefErr(ctx, name)
+    LowConstSeenNum = -1
+End Function
+
 Function LowFindConst(ctx As *LowerCtx, name As *Byte) As Long
     LowFindConst = NhFind(VarPtr(g_nhConst(0)), ctx->constNames, name)
 End Function
@@ -9,12 +44,16 @@ Sub LowAddBuiltinConsts(ctx As *LowerCtx)
     Dim f(KW_SHORT_LEN - 1) As Byte
     lstrcpy(VarPtr(t), "TRUE")
     lstrcpy(VarPtr(f), "FALSE")
+    g_constStmt = -1
+    g_constBuiltinN = 0
     LowAddConst(ctx, VarPtr(t), 1)
     LowAddConst(ctx, VarPtr(f), 0)
+    g_constBuiltinN = ctx->constCount
 End Sub
 
 ' 戻り値 true : 正常終了  false : エラーあり
 Function LowAddConst(ctx As *LowerCtx, name As *Byte, v As Long) As boolean
+    Dim seen As Long
     Dim i As Long
     Dim names As *Byte
     Dim vals As *Long
@@ -22,7 +61,9 @@ Function LowAddConst(ctx As *LowerCtx, name As *Byte, v As Long) As boolean
     Dim off As Long
 
     LowAddConst = false
-    If LowFindConst(ctx, name) >= 0 Then
+    seen = LowConstSeenNum(ctx, name, v, 0, 0)
+    If seen < 0 Then Exit Function
+    If seen > 0 Then
         LowAddConst = true
         Exit Function
     End If
@@ -51,6 +92,12 @@ End Function
 
 Function LowAddDblConst(ctx As *LowerCtx, name As *Byte, lo As Long, hi As Long) As boolean
     Dim i As Long
+    Dim seen As Long
+    LowAddDblConst = false
+    seen = LowConstSeenNum(ctx, name, lo, hi, 1)
+    If seen < 0 Then Exit Function
+    LowAddDblConst = true
+    If seen > 0 Then Exit Function
     LowAddDblConst = false
     If Not LowAddConst(ctx, name, lo) Then Exit Function
     i = LowFindConst(ctx, name)
@@ -87,6 +134,14 @@ Function LowFindStrConst(ctx As *LowerCtx, name As *Byte) As Long
     Wend
 End Function
 
+' 文字列定数 i が s と同じなら true
+Function LowStrConstSame(ctx As *LowerCtx, i As Long, s As *Byte) As boolean
+    Dim vals As *Byte
+    vals = ctx->constStrVals
+    LowStrConstSame = false
+    If lstrcmp(VarPtr(vals[i * AST_STR_LEN]), s) = 0 Then LowStrConstSame = true
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function LowAddStrConst(ctx As *LowerCtx, name As *Byte, s As *Byte) As boolean
     Dim i As Long
@@ -96,8 +151,10 @@ Function LowAddStrConst(ctx As *LowerCtx, name As *Byte, s As *Byte) As boolean
     Dim off As Long
 
     LowAddStrConst = false
-    If LowFindStrConst(ctx, name) >= 0 Then
-        LowAddStrConst = true
+    i = LowFindStrConst(ctx, name)
+    If i >= 0 Then
+        If LowStrConstSame(ctx, i, s) Then LowAddStrConst = true
+        If Not LowAddStrConst Then LowConstRedefErr(ctx, name)
         Exit Function
     End If
     If Not LowEnsureConstStrCap(ctx) Then
