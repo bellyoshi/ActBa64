@@ -1,0 +1,183 @@
+' ===================================================
+'  ParserN88ProgStmt - -pN88 の文の振り分け
+' ===================================================
+' 戻り値は文のノード。読めなければ -1
+
+Function ParseN88Stmt(p As *Parser) As Long
+    Dim n As Long
+    n = ParseN88StmtKw(p)
+    If n = -2 Then n = ParseStmtN88Body(p)
+    If n = -2 Then n = ParseN88StmtGeneric(p)
+    ParseN88Stmt = n
+End Function
+
+' END / GOTO / GOSUB / RETURN / PRINT / LET
+Function ParseN88StmtKw(p As *Parser) As Long
+    Dim n As Long
+    n = ParseStmtKwJump(p)
+    If n = -2 Then n = ParseN88End(p)
+    If n = -2 Then n = ParseN88Print(p)
+    If n = -2 Then n = ParseN88Let(p)
+    ParseN88StmtKw = n
+End Function
+
+' END → N88_End()（窓を閉じるまで待って終了）
+Function ParseN88End(p As *Parser) As Long
+    Dim name(KW_LEN - 1) As Byte
+    ParseN88End = -2
+    If ParseCmdKw(p, "end") = 0 Then Exit Function
+    p->pos = p->pos + 1
+    lstrcpy(VarPtr(name), "N88_End")
+    ParseN88End = ParseN88MakeCall(p->ast, VarPtr(name), -1, 0)
+End Function
+
+Function ParseN88Print(p As *Parser) As Long
+    ParseN88Print = -2
+    If ParseCmdKw(p, "print") = 0 Then Exit Function
+    ParseN88Print = ParsePrintOrUsing(p)
+End Function
+
+Function ParseN88Let(p As *Parser) As Long
+    ParseN88Let = -2
+    If ParseCmdKw(p, "let") = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseN88Let = ParseAssignStmt(p)
+End Function
+
+' ---- 代入 / 命令 ----
+
+' 名前 = 式 / 名前(添字) = 式 は代入。それ以外は命令
+Function ParseN88StmtGeneric(p As *Parser) As Long
+    ParseN88StmtGeneric = -1
+    If ParseTokKind(p) <> TK_IDENT Then Exit Function
+    If ParseN88IsAssign(p) <> 0 Then
+        ParseN88StmtGeneric = ParseAssignStmt(p)
+    Else
+        ParseN88StmtGeneric = ParseN88Command(p)
+    End If
+End Function
+
+Function ParseN88IsAssign(p As *Parser) As Long
+    Dim i As Long
+    i = p->pos + 1
+    If ParseTokKindAt(p, i) = TK_LPAREN Then i = ParseN88SkipParen(p, i)
+    ParseN88IsAssign = 0
+    If ParseTokKindAt(p, i) = TK_EQ Then ParseN88IsAssign = 1
+End Function
+
+' at の ( に対応する ) の次の位置
+Function ParseN88SkipParen(p As *Parser, at As Long) As Long
+    Dim depth As Long, i As Long
+    depth = 1
+    i = at + 1
+    While depth > 0 And ParseTokKindAt(p, i) <> TK_EOF
+        depth = depth + ParseN88ParenDelta(ParseTokKindAt(p, i))
+        i = i + 1
+    Wend
+    ParseN88SkipParen = i
+End Function
+
+Function ParseN88ParenDelta(kind As Long) As Long
+    ParseN88ParenDelta = 0
+    If kind = TK_LPAREN Then ParseN88ParenDelta = 1
+    If kind = TK_RPAREN Then ParseN88ParenDelta = -1
+End Function
+
+' 命令 [引数, ...] → 同名の Sub 呼び出し（SCREEN 3 → Screen(3)）
+Function ParseN88Command(p As *Parser) As Long
+    Dim name(LEX_TEXT_LEN - 1) As Byte
+    Dim srcLn As Long
+    ParseN88Command = -1
+    If Not ParseN88CmdResolve(p, VarPtr(name)) Then Exit Function
+    srcLn = ParseTokLine(p)
+    p->pos = p->pos + 1
+    ParseN88Command = ParseN88CmdCall(p, VarPtr(name), srcLn)
+End Function
+
+' 前置きの Sub / Function を大小文字を問わず探し、定義どおりの名前を name へ
+' 戻り値 true : 成り立つ  false : 成り立たない（エラーを出した）
+Function ParseN88CmdResolve(p As *Parser, name As *Byte) As boolean
+    Dim word(LEX_TEXT_LEN - 1) As Byte
+    ParseN88CmdResolve = true
+    ParseStmtBadCopy(p, VarPtr(word))
+    If ParseN88FindSub(p->ast, VarPtr(word), name) >= 0 Then Exit Function
+    ParseN88CmdResolve = false
+    ParseFail(p, "unknown statement '" + MakeStr(VarPtr(word)) + "'")
+End Function
+
+' 戻り値は見つけた AST_FUNC（無ければ -1）
+Function ParseN88FindSub(ast As *Ast, word As *Byte, name As *Byte) As Long
+    Dim nodes As *AstNode, n As Long
+    nodes = ast->nodes
+    n = nodes[ast->root].left
+    While n >= 0
+        If ParseN88SubIs(ast, n, word, name) <> 0 Then Exit While
+        n = nodes[n].nxt
+    Wend
+    ParseN88FindSub = n
+End Function
+
+Function ParseN88SubIs(ast As *Ast, n As Long, word As *Byte, name As *Byte) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    ParseN88SubIs = 0
+    If nodes[n].kind <> AST_FUNC And nodes[n].kind <> AST_DECLARE Then Exit Function
+    AstCopyStr(ast, n, name)
+    If ByteNameEqCI(name, word) <> 0 Then ParseN88SubIs = 1
+End Function
+
+Function ParseN88CmdCall(p As *Parser, name As *Byte, srcLn As Long) As Long
+    Dim arg0 As Long, nPrev As Long, nArgs As Long
+    arg0 = -1
+    nPrev = -1
+    nArgs = 0
+    ParseN88CmdCall = -1
+    If Not ParseN88CmdArgs(p, srcLn, arg0, nPrev, nArgs) Then Exit Function
+    ParseN88CmdCall = ParseN88MakeCall(p->ast, name, arg0, nArgs)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88CmdArgs(p As *Parser, srcLn As Long, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As boolean
+    ParseN88CmdArgs = true
+    If ParseN88StmtDone(p, srcLn) <> 0 Then Exit Function
+    ParseN88CmdArgs = ParseN88CmdArgList(p, arg0, nPrev, nArgs)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88CmdArgList(p As *Parser, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As boolean
+    ParseN88CmdArgList = false
+    Do
+        If Not ParseN88CmdArg(p, arg0, nPrev, nArgs) Then Exit Function
+        If ParseTokKind(p) <> TK_COMMA Then Exit Do
+        p->pos = p->pos + 1
+    Loop
+    ParseN88CmdArgList = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88CmdArg(p As *Parser, ByRef arg0 As Long, ByRef nPrev As Long, ByRef nArgs As Long) As boolean
+    Dim e As Long
+    ParseN88CmdArg = false
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    ParseN88CmdArg = ParseLinkArg(p->ast, arg0, nPrev, nArgs, e)
+End Function
+
+' 名前(引数...) の AST_CALL
+Function ParseN88MakeCall(ast As *Ast, name As *Byte, arg0 As Long, nArgs As Long) As Long
+    Dim n As Long
+    ParseN88MakeCall = -1
+    n = AstAddNode(ast, AST_CALL)
+    If n < 0 Then Exit Function
+    ParseN88FillCall(ast, n, name, arg0, nArgs)
+    ParseN88MakeCall = n
+End Function
+
+Sub ParseN88FillCall(ast As *Ast, n As Long, name As *Byte, arg0 As Long, nArgs As Long)
+    Dim nodes As *AstNode
+    AstSetStr(ast, n, name)
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].right = -1
+    nodes[n].num = nArgs
+End Sub

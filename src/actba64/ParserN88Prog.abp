@@ -1,0 +1,230 @@
+' ===================================================
+'  ParserN88Prog - -pN88 の構文解析（N88-BASIC → 共通 AST）
+' ===================================================
+' Include（ActiveBasic 構文）は通常の ParseSource で読み、ユーザーコードはここで読む。
+' ユーザーコードの文は Include の文の後ろへつなぎ、最後に N88_WaitClose() を足す。
+' 行頭の行番号は省略できる。あれば AST_LINE（GOTO / GOSUB の飛び先）。
+' 式は共通の ParseExpr。LINE / CIRCLE などは ParserN88*.abp の文を使う。
+' 専用の文が無い命令は「名前 引数, ...」を Sub 呼び出しにする（SCREEN 3 → Screen(3)）。
+
+Dim g_parseN88E0 As Long
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseSourceN88(head As *Byte, user As *Byte, ast As *Ast) As boolean
+    ParseSourceN88 = false
+    If Not ParseSource(head, ast) Then Exit Function
+    DiagReset(user)
+    ParseSourceN88 = ParseN88User(user, ast)
+    If ParseSourceN88 Then Exit Function
+    DiagPrintAll()
+    DiagPrintSummary()
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88User(user As *Byte, ast As *Ast) As boolean
+    Dim lx As *Lexer
+    ParseN88User = false
+    lx = ParseN88Lex(user)
+    If lx = NULL Then Exit Function
+    ParseN88User = ParseN88WithLexer(lx, ast)
+    LexFree(lx)
+End Function
+
+Function ParseN88Lex(user As *Byte) As *Lexer
+    Dim lx As *Lexer
+    ParseN88Lex = NULL
+    lx = ParseN88NewLexer()
+    If lx = NULL Then Exit Function
+    ParseN88Lex = lx
+    If LexTokenizeN88(lx, user) Then Exit Function
+    ParseN88Lex = NULL
+    ParseN88LexFail(lx)
+End Function
+
+Function ParseN88NewLexer() As *Lexer
+    Dim lx As *Lexer
+    lx = LexCreate(LEX_MAX_TOKS)
+    If lx = NULL Then DiagError(1, "out of memory (lexer)")
+    ParseN88NewLexer = lx
+End Function
+
+Sub ParseN88LexFail(lx As *Lexer)
+    Dim errLine As Long
+    errLine = lx->srcLine
+    If errLine <= 0 Then errLine = 1
+    DiagError(errLine, "invalid character")
+    LexFree(lx)
+End Sub
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88WithLexer(lx As *Lexer, ast As *Ast) As boolean
+    Dim p As Parser
+    Dim first As Long
+    ParseN88WithLexer = false
+    ParseN88Init(VarPtr(p), lx, ast)
+    first = ParseN88Program(VarPtr(p))
+    If first < 0 Or DiagErrorCount() > 0 Then Exit Function
+    ParseN88WithLexer = ParseN88Attach(ast, first)
+End Function
+
+Sub ParseN88Init(p As *Parser, lx As *Lexer, ast As *Ast)
+    p->lx = lx
+    p->ast = ast
+    p->pos = 0
+    p->err = 0
+    p->n88Mode = 1
+    p->classTypeIdx = -1
+    p->withExprIdx = -1
+End Sub
+
+' Include の最後の文の後ろへユーザーコードをつなぐ
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88Attach(ast As *Ast, first As Long) As boolean
+    Dim nodes As *AstNode
+    Dim tail As Long
+    nodes = ast->nodes
+    tail = ParseN88ChainEnd(ast, nodes[ast->root].left)
+    nodes = ast->nodes
+    nodes[tail].nxt = first
+    ParseN88Attach = true
+End Function
+
+Function ParseN88ChainEnd(ast As *Ast, n As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    While nodes[n].nxt >= 0
+        n = nodes[n].nxt
+    Wend
+    ParseN88ChainEnd = n
+End Function
+
+Sub ParseN88Link(ast As *Ast, ByRef first As Long, ByRef last As Long, n As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    If first < 0 Then first = n
+    If last >= 0 Then nodes[last].nxt = n
+    last = ParseN88ChainEnd(ast, n)
+End Sub
+
+' ---- プログラム / 行 ----
+
+' 戻り値はユーザーコードの先頭の文（失敗時 -1）
+Function ParseN88Program(p As *Parser) As Long
+    Dim first As Long, last As Long, from As Long
+    first = -1
+    last = -1
+    from = ParseN88AstCount(p->ast)
+    ParseN88ForReset()
+    ParseN88TakeLines(p, first, last)
+    ParseN88ForCheckEnd()
+    first = ParseN88ImplicitDims(p, from, first)
+    ParseN88Program = -1
+    If ParseN88AddTail(p, first, last) Then ParseN88Program = first
+End Function
+
+Sub ParseN88TakeLines(p As *Parser, ByRef first As Long, ByRef last As Long)
+    While ParseTokKind(p) <> TK_EOF
+        ParseN88TakeLine(p, first, last)
+    Wend
+End Sub
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88AddTail(p As *Parser, ByRef first As Long, ByRef last As Long) As boolean
+    Dim name(KW_LEN - 1) As Byte
+    Dim n As Long
+    lstrcpy(VarPtr(name), "N88_WaitClose")
+    n = ParseN88MakeCall(p->ast, VarPtr(name), -1, 0)
+    ParseN88AddTail = false
+    If n < 0 Then Exit Function
+    ParseN88Link(p->ast, first, last, n)
+    ParseN88AddTail = true
+End Function
+
+Sub ParseN88TakeLine(p As *Parser, ByRef first As Long, ByRef last As Long)
+    Dim srcLn As Long
+    srcLn = ParseTokLine(p)
+    If ParseN88LineNo(p, srcLn, first, last) = 0 Then Exit Sub
+    ParseN88LineStmts(p, srcLn, first, last)
+End Sub
+
+' 行頭の行番号（あれば）→ AST_LINE。行番号は省略できる
+' 戻り値 1=続けて文を読む 0=エラー（その行は読み飛ばした）
+Function ParseN88LineNo(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    Dim n As Long
+    ParseN88LineNo = 1
+    If ParseTokKind(p) <> TK_NUMBER Then Exit Function
+    n = ParseLineNoStmt(p)
+    ParseN88LineNo = 0
+    If n < 0 Then ParseN88SkipLine(p, srcLn)
+    If n < 0 Then Exit Function
+    ParseN88LinkAt(p, first, last, n, srcLn)
+    ParseN88LineNo = 1
+End Function
+
+Sub ParseN88SkipLine(p As *Parser, srcLn As Long)
+    While ParseTokKind(p) <> TK_EOF And ParseTokLine(p) = srcLn
+        p->pos = p->pos + 1
+    Wend
+    p->err = 0
+End Sub
+
+Sub ParseN88LinkAt(p As *Parser, ByRef first As Long, ByRef last As Long, n As Long, srcLn As Long)
+    AstSetSrcLine(p->ast, n, srcLn)
+    ParseN88Link(p->ast, first, last, n)
+End Sub
+
+' 同じ行の文を : 区切りで読む
+Sub ParseN88LineStmts(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long)
+    While ParseN88OnLine(p, srcLn) <> 0
+        If ParseN88TakeStmt(p, srcLn, first, last) = 0 Then Exit Sub
+    Wend
+End Sub
+
+' : を読み飛ばし、まだ同じ行に文があれば 1
+Function ParseN88OnLine(p As *Parser, srcLn As Long) As Long
+    ParseN88OnLine = 0
+    While ParseTokKind(p) = TK_COLON And ParseTokLine(p) = srcLn
+        p->pos = p->pos + 1
+    Wend
+    If ParseTokKind(p) = TK_EOF Then Exit Function
+    If ParseTokLine(p) = srcLn Then ParseN88OnLine = 1
+End Function
+
+' 戻り値 1=読めた 0=エラー（その行の残りは読み飛ばした）
+Function ParseN88TakeStmt(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    g_parseN88E0 = DiagErrorCount()
+    ParseN88TakeStmt = ParseN88TakeLoop(p, srcLn, first, last)
+    If ParseN88TakeStmt = -2 Then ParseN88TakeStmt = ParseN88TakeOne(p, srcLn, first, last)
+    If ParseN88TakeStmt = 0 Then ParseN88StmtFail(p, srcLn)
+End Function
+
+' FOR / NEXT 以外の文。戻り値 1=読めた 0=エラー
+Function ParseN88TakeOne(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As Long
+    Dim n As Long
+    ParseN88TakeOne = 0
+    n = ParseN88StmtChecked(p, srcLn)
+    If n < 0 Then Exit Function
+    ParseN88LinkAt(p, first, last, n, srcLn)
+    ParseN88TakeOne = 1
+End Function
+
+Function ParseN88StmtChecked(p As *Parser, srcLn As Long) As Long
+    Dim n As Long
+    ParseN88StmtChecked = -1
+    n = ParseN88Stmt(p)
+    If n < 0 Or p->err <> 0 Then Exit Function
+    If ParseN88StmtDone(p, srcLn) <> 0 Then ParseN88StmtChecked = n
+End Function
+
+Sub ParseN88StmtFail(p As *Parser, srcLn As Long)
+    If DiagErrorCount() = g_parseN88E0 Then DiagError(srcLn, "syntax error")
+    ParseN88SkipLine(p, srcLn)
+End Sub
+
+' 文の終わり（: / 行末 / ファイル末）なら 1
+Function ParseN88StmtDone(p As *Parser, srcLn As Long) As Long
+    ParseN88StmtDone = 1
+    If ParseTokKind(p) = TK_EOF Or ParseTokKind(p) = TK_COLON Then Exit Function
+    If ParseTokLine(p) <> srcLn Then Exit Function
+    ParseN88StmtDone = 0
+End Function

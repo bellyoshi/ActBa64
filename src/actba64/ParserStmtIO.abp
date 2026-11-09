@@ -140,11 +140,15 @@ Function ParseIoArgNode(ast As *Ast, e As Long, ByRef nFirst As Long, ByRef nPre
     ParseIoArgNode = true
 End Function
 
+' 文末の , は区切りだけ残して項目を終える（Print a, は改行しない）
 Function ParseIoComma(p As *Parser, nodes As *AstNode, nArg As Long) As Long
+    Dim srcLine As Long
     ParseIoComma = 0
     If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    srcLine = ParseTokLogLine(p)
     p->pos = p->pos + 1
     nodes[nArg].num = PRINT_SEP_COMMA
+    If ParseIoSemiRewind(p, srcLine) Then Exit Function
     ParseIoComma = 1
 End Function
 
@@ -217,6 +221,14 @@ Function ParsePrintItems(p As *Parser, ByRef nFirst As Long, ByVal lineNo As Lon
     ParsePrintItems = ParseIoExprArgs(p, p->ast, nFirst, nPrev)
 End Function
 
+' 項目が , で終わったか（その Print は改行しない）
+' 戻り値 true : 成り立つ  false : 成り立たない
+Function ParsePrintTrailComma(p As *Parser, nFirst As Long) As boolean
+    ParsePrintTrailComma = false
+    If nFirst < 0 Or p->pos <= 0 Then Exit Function
+    If ParseTokKindAt(p, p->pos - 1) = TK_COMMA Then ParsePrintTrailComma = true
+End Function
+
 Function ParsePrintStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -236,6 +248,7 @@ Function ParsePrintStmt(p As *Parser) As Long
         p->pos = p->pos + 1
         stay = 1
     End If
+    If ParsePrintTrailComma(p, nFirst) Then stay = 1
 
     ast = p->ast
     nPrint = AstAddNode(ast, AST_PRINT)

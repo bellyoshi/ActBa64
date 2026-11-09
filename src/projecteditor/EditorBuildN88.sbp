@@ -1,0 +1,157 @@
+' EditorBuildN88 - Basic メニューの「N88BASIC 構文 (-pN88)」
+' 選ぶと actba64 に -pN88 を付けて訳す（32bit / 64bit とは別に入り切りする）。
+' N88BASIC 構文のとき、新規作成でまだ一度も保存していない（無題の）単独の文書は、
+' 今の内容を %TEMP%\ActBa64N88\untitled.abp に書いて訳し、実行する。文書そのものは
+' 保存しないので、閉じるときの「保存しますか？」はそのまま出る。
+' ファイルのある文書は、いつもどおり保存してから訳す。
+
+Declare Function EditorBuild_GetTempPathA Lib "kernel32" Alias "GetTempPathA" (ByVal nBufferLength As DWord, ByVal lpBuffer As *Byte) As DWord
+Declare Function EditorBuild_CreateDirectoryA Lib "kernel32" Alias "CreateDirectoryA" (ByVal lpPathName As *Byte, ByVal lpSecurityAttributes As Long) As Long
+
+Const IDM_SYNTAXN88 = 1301
+
+Dim g_buildN88 As Long
+Dim g_buildN88Menu As Long
+' 一時ファイルから訳しているときのソースのパス（それ以外は ""）
+Dim g_buildN88Src As String
+
+Function EditorBuild_IsN88() As Long
+    EditorBuild_IsN88 = g_buildN88
+End Function
+
+Function EditorBuild_N88Opt$() As String
+    EditorBuild_N88Opt$ = ""
+    If g_buildN88 <> 0 Then EditorBuild_N88Opt$ = " -pN88"
+End Function
+
+Sub EditorBuild_ToggleN88()
+    If g_buildN88 <> 0 Then
+        g_buildN88 = 0
+    Else
+        g_buildN88 = 1
+    End If
+    EditorBuild_SaveTarget()
+    EditorBuild_UpdateTargetMenu()
+    EditorDoc_UpdateFrameTitle()
+End Sub
+
+' ---- メニュー ----
+
+' 32bit の次（実行の前）に差し込む。2 回目からは表示名だけ更新
+Sub EditorBuild_ApplyN88Menu()
+    If g_buildN88Menu = 0 Then EditorBuild_InsertN88Menu()
+    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_SYNTAXN88, UI_MENU_SYNTAXN88)
+    EditorBuild_CheckN88Menu()
+End Sub
+
+Sub EditorBuild_InsertN88Menu()
+    Dim wide As *Byte
+    Dim chars As Long
+    wide = Enc_Utf8ToWide(UiText$(UI_MENU_SYNTAXN88), chars)
+    If wide = 0 Then Exit Sub
+    InsertMenuW(hMenu_M_MAIN_2, IDM_RUN, MF_BYCOMMAND Or MF_STRING, IDM_SYNTAXN88, wide)
+    free(wide)
+    g_buildN88Menu = 1
+End Sub
+
+Sub EditorBuild_CheckN88Menu()
+    Dim flags As Long
+    If g_buildN88Menu = 0 Then Exit Sub
+    flags = MF_BYCOMMAND
+    If g_buildN88 <> 0 Then flags = flags Or MF_CHECKED
+    CheckMenuItem(hMenu_M_MAIN_2, IDM_SYNTAXN88, flags)
+End Sub
+
+' ---- 設定ファイル（editor.target の "64" / "32" の後ろに " n88"）----
+
+Function EditorBuild_N88Tag$() As String
+    EditorBuild_N88Tag$ = ""
+    If g_buildN88 <> 0 Then EditorBuild_N88Tag$ = " n88"
+End Function
+
+Sub EditorBuild_LoadN88(s As String)
+    g_buildN88 = 0
+    If Mid$(s, 4, 3) = "n88" Then g_buildN88 = 1
+End Sub
+
+' ---- 一時ファイル ----
+
+' 戻り値 1 = 訳すソースの用意ができた
+Function EditorBuild_PrepareSource(hWnd As HWND) As Long
+    g_buildN88Src = ""
+    If EditorBuild_UseTemp() <> 0 Then
+        EditorBuild_PrepareSource = EditorBuild_WriteTemp(hWnd)
+    Else
+        EditorBuild_PrepareSource = ProjSaveForBuild(hWnd)
+    End If
+End Function
+
+Function EditorBuild_UseTemp() As Long
+    EditorBuild_UseTemp = 0
+    If g_buildN88 = 0 Or Len(g_projectPath) > 0 Then Exit Function
+    If Len(g_docPath) = 0 Then EditorBuild_UseTemp = 1
+End Function
+
+Function EditorBuild_WriteTemp(hWnd As HWND) As Long
+    Dim path As String
+    path = EditorBuild_TempSrc$()
+    EditorBuild_WriteTemp = EditorDoc_WriteTextFile(path, TextBuf_GetConfirmed$())
+    If EditorBuild_WriteTemp <> 0 Then g_buildN88Src = path
+    If EditorBuild_WriteTemp = 0 Then UiMsgBox(hWnd, UiText$(UI_SAVE_FAILED) + " " + path, "editor")
+End Function
+
+' %TEMP%\ActBa64N88\untitled.abp
+Function EditorBuild_TempSrc$() As String
+    Dim dir As String
+    dir = EditorBuild_TempDir$() + "ActBa64N88\"
+    EditorBuild_MakeDir(dir)
+    EditorBuild_TempSrc$ = dir + "untitled.abp"
+End Function
+
+Function EditorBuild_TempDir$() As String
+    Dim buf(519) As Byte
+    Dim n As Long
+    n = EditorBuild_GetTempPathA(520, VarPtr(buf))
+    EditorBuild_TempDir$ = ""
+    If n <= 0 Or n >= 520 Then Exit Function
+    EditorBuild_TempDir$ = PathEnc_Utf8$(VarPtr(buf), n)
+End Function
+
+Sub EditorBuild_MakeDir(dir As String)
+    Dim a As *Byte
+    a = BasicAnsiPtr(StrPtr(dir))
+    EditorBuild_CreateDirectoryA(a, 0)
+    BasicFreeAnsi(a, StrPtr(dir))
+End Sub
+
+' 訳すソースのパス（一時ファイルを使うときはそちら）
+Function EditorBuild_SrcPath$() As String
+    EditorBuild_SrcPath$ = g_docPath
+    If Len(g_buildN88Src) > 0 Then EditorBuild_SrcPath$ = g_buildN88Src
+End Function
+
+' 診断の一時ファイル名を文書のパスに戻す（無題なら空にして、今の文書の行へ飛べるようにする）
+Function EditorBuild_MapTempOut$(outText As String) As String
+    EditorBuild_MapTempOut$ = outText
+    If Len(g_buildN88Src) = 0 Then Exit Function
+    EditorBuild_MapTempOut$ = EditorBuild_ReplaceAll$(outText, g_buildN88Src, g_docPath)
+End Function
+
+Function EditorBuild_ReplaceAll$(s As String, a As String, b As String) As String
+    Dim out As String
+    Dim rest As String
+    out = ""
+    rest = s
+    While InStr(1, rest, a) > 0
+        out = out + EditorBuild_CutBefore$(rest, a) + b
+    Wend
+    EditorBuild_ReplaceAll$ = out + rest
+End Function
+
+' rest の最初の a より前を返し、rest を a の後ろからにする
+Function EditorBuild_CutBefore$(ByRef rest As String, a As String) As String
+    Dim i As Long
+    i = InStr(1, rest, a)
+    EditorBuild_CutBefore$ = Left$(rest, i - 1)
+    rest = Mid$(rest, i + Len(a))
+End Function

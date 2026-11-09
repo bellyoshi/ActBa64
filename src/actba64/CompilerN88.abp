@@ -1,0 +1,69 @@
+' ===================================================
+'  CompilerN88 - -pN88: N88-BASIC のソースを訳す
+' ===================================================
+' ユーザーコードは LexerN88 / ParserN88Prog で読む（#N88BASIC を指定したものとして扱う）。
+' 前置きの Include は通常の Lexer / Parser で読み、AST と IR から先は共通。
+
+Dim g_compN88 As Long
+Dim g_compN88User As *Byte
+
+Sub CompSetN88(on As Long)
+    g_compN88 = on
+End Sub
+
+Function CompIsN88() As Long
+    CompIsN88 = g_compN88
+End Function
+
+' CompSourceToIr から。-pN88 ならユーザーコードは別に読む
+' 戻り値 true : 正常終了  false : エラーあり
+Function CompParse(src As *Byte, ast As *Ast) As boolean
+    If g_compN88User <> NULL Then
+        CompParse = ParseSourceN88(src, g_compN88User, ast)
+    Else
+        CompParse = ParseSource(src, ast)
+    End If
+End Function
+
+Function CompileFileN88(srcPath As *Byte, outPath As *Byte) As Long
+    CompileFileN88 = 0
+    If Not CompN88Init() Then Exit Function
+    g_compN88User = CompN88LoadUser(srcPath)
+    If g_compN88User <> NULL Then CompileFileN88 = CompN88WithHead(outPath)
+    CompN88Done()
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function CompN88Init() As boolean
+    CompN88Init = PpStateInit()
+    If CompN88Init Then PpOnceReset()
+    If Not CompN88Init Then Print "error: out of memory (preproc)"
+End Function
+
+Function CompN88WithHead(outPath As *Byte) As Long
+    Dim head As *Byte
+    CompN88WithHead = 0
+    head = PpN88Head()
+    If head = NULL And g_ppDidPrintErr = 0 Then Print "error: preprocess failed (N88BASIC)"
+    If head = NULL Then Exit Function
+    CompN88WithHead = CompileSource(head, outPath, 1)
+    free(head)
+End Function
+
+Sub CompN88Done()
+    If g_compN88User <> NULL Then free(g_compN88User)
+    g_compN88User = NULL
+    PpStateFree()
+End Sub
+
+' 先頭にファイル目印を付けて、診断を「ファイル名(行)」で出す
+Function CompN88LoadUser(srcPath As *Byte) As *Byte
+    Dim src As *Byte
+    Dim srcSize As Long
+    CompN88LoadUser = NULL
+    src = LoadText(srcPath, srcSize)
+    If src = NULL Then Print "error: cannot open: " + MakeStr(srcPath)
+    If src = NULL Then Exit Function
+    CompN88LoadUser = PpN88MarkUser(src, srcPath)
+    free(src)
+End Function

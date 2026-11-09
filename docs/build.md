@@ -76,7 +76,7 @@ cd src\actba64
 
 | 接頭辞 | 役割 | 主なファイル（例。正本は `actba64.pj` の `#SOURCE`） |
 |---|---|---|
-| `Parser*` | トークン → AST | `Parser` / `ParserExpr` / `ParserFactor` / `ParserNew` / `ParserCmd` / `ParserStmtIO` / `ParserFileStmt` / `ParserN88*` / `ParserDim` / `ParserClass*` / `ParserCtrl` / `ParserSelect` / `ParserProc` / `ParserDriver` ほか |
+| `Parser*` | トークン → AST | `Parser` / `ParserExpr` / `ParserFactor` / `ParserNew` / `ParserCmd` / `ParserStmtIO` / `ParserFileStmt` / `ParserN88*`（`-pN88` は `LexerN88` + `ParserN88Prog*`） / `ParserDim` / `ParserClass*` / `ParserCtrl` / `ParserSelect` / `ParserProc` / `ParserDriver` ほか |
 | `AstLower*` | AST → IR（`AstToIr`） | `AstLower` / `AstLowerApi` / `AstLowerRt*` / `AstLowerAddr` / `AstLowerExpr*` / `AstLowerPrint` / `AstLowerStmt*` / `AstLowerNew` / `AstLowerFileStmt` / `AstLowerDriver` ほか |
 | `Preproc*` | `#include` / `.pj` 結合 | `Preproc` / `PreprocInc` / `PreprocCond` / `PreprocPj` / `PreprocPjSrc` / `PreprocRes` ほか |
 
@@ -84,8 +84,10 @@ cd src\actba64
 使い方:
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 ```
+
+`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#17-n88-basic-構文-pn88)）。
 
 `.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1` で、再配置は `PeReloc.abp` が `.reloc` に書く（[language.md §8.4](./language.md#84-dll-を出力する)）。
 
