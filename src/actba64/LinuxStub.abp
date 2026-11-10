@@ -1,0 +1,113 @@
+' ===================================================
+'  LinuxStub - -linux の機械語スタブ（.text の末尾、両パスで同じ大きさ）
+'   _start       : rsp を保存、x87 を Windows と同じ 53bit 精度に、
+'                  rsp を揃えて先頭（jmp main）を call。Windows の入口と同じ rsp≡8 (mod 16)
+'   Lx_Syscall   : Win64 の 7 引数（番号, a1..a6）を syscall の規約へ。rdi / rsi は保存する
+'   Lx_StackBase : _start が保存した rsp（GC のスタック底。[rsp]=argc, [rsp+8]=argv）
+'   未対応 API   : 名前ごとの踏み台 → "unsupported API: 名前" を stderr、終了コード 127
+' ===================================================
+
+Dim g_lxStackRva As DWord
+Dim g_lxGlobOff As Long
+Dim g_lxStartOff As Long
+Dim g_lxFailOff As Long
+Dim g_lxSysOff As Long
+Dim g_lxSpOff As Long
+Dim g_lxMsgOff As Long
+Dim g_lxTramp As *Long
+
+Function LxHexNib(c As Long) As Long
+    LxHexNib = 0
+    If c >= &H30 And c <= &H39 Then LxHexNib = c - &H30
+    If c >= &H41 And c <= &H46 Then LxHexNib = c - &H37
+End Function
+
+Sub LxHexPair(cb As *CodeBuffer, p As *Byte, ByRef i As Long)
+    If p[i] = &H20 Then
+        i = i + 1
+        Exit Sub
+    End If
+    EmitByte(cb, (LxHexNib(p[i]) * 16 + LxHexNib(p[i + 1])) As Byte)
+    i = i + 2
+End Sub
+
+' "48 89 C8" の並びをそのまま出す（1 回 255 文字まで）
+Sub LxHex(cb As *CodeBuffer, hex As String)
+    Dim p As *Byte
+    Dim i As Long
+    p = StrPtr(hex)
+    i = 0
+    While i < Len(hex)
+        LxHexPair(cb, p, i)
+    Wend
+End Sub
+
+Function LxOffRva(off As Long) As DWord
+    Dim t As DWord
+    t = TEXT_RVA
+    t = t + off
+    LxOffRva = t
+End Function
+
+' [rip+disp32] の disp32（targetRva は RVA）
+Sub LxRipDisp(cb As *CodeBuffer, targetRva As DWord)
+    Dim t As DWord
+    t = targetRva
+    t = t - LxOffRva(cb->size + 4)
+    EmitDword(cb, t)
+End Sub
+
+' call / jmp rel32 の rel32（targetOff はコード内オフセット）
+Sub LxRel(cb As *CodeBuffer, targetOff As Long)
+    Dim t As DWord
+    t = targetOff
+    t = t - (cb->size + 4)
+    EmitDword(cb, t)
+End Sub
+
+Sub LxEmitMsg(cb As *CodeBuffer)
+    g_lxMsgOff = cb->size
+    LxHex(cb, "75 6E 73 75 70 70 6F 72 74 65 64 20 41 50 49 3A 20 0A")
+End Sub
+
+' 入口: rsi = API 名, edx = 長さ
+Sub LxEmitFail(cb As *CodeBuffer)
+    g_lxFailOff = cb->size
+    LxHex(cb, "52 56 B8 01 00 00 00 BF 02 00 00 00 48 8D 35")
+    LxRipDisp(cb, LxOffRva(g_lxMsgOff))
+    LxHex(cb, "BA 11 00 00 00 0F 05 5E 5A B8 01 00 00 00 BF 02 00 00 00 0F 05 48 8D 35")
+    LxRipDisp(cb, LxOffRva(g_lxMsgOff + 17))
+    LxHex(cb, "BA 01 00 00 00 B8 01 00 00 00 BF 02 00 00 00 0F 05")
+    LxHex(cb, "B8 E7 00 00 00 BF 7F 00 00 00 0F 05")
+End Sub
+
+Sub LxEmitSys(cb As *CodeBuffer)
+    g_lxSysOff = cb->size
+    LxHex(cb, "57 56 48 89 C8 48 89 D7 4C 89 C6 4C 89 CA")
+    LxHex(cb, "4C 8B 54 24 38 4C 8B 44 24 40 4C 8B 4C 24 48 0F 05 5E 5F C3")
+End Sub
+
+Sub LxEmitSp(cb As *CodeBuffer)
+    g_lxSpOff = cb->size
+    LxHex(cb, "48 8B 05")
+    LxRipDisp(cb, g_lxStackRva)
+    LxHex(cb, "C3")
+End Sub
+
+Sub LxEmitStart(cb As *CodeBuffer)
+    g_lxStartOff = cb->size
+    LxHex(cb, "48 89 25")
+    LxRipDisp(cb, g_lxStackRva)
+    LxHex(cb, "68 7F 02 00 00 D9 2C 24 58 48 83 E4 F0 E8")
+    LxRel(cb, 0)
+    LxHex(cb, "31 FF B8 E7 00 00 00 0F 05")
+End Sub
+
+' 名前に依らないスタブ（未対応 API の共通部、Lx_Syscall、Lx_StackBase、_start）
+Sub LxEmitFixed(cb As *CodeBuffer)
+    LxEmitMsg(cb)
+    LxEmitFail(cb)
+    LxEmitSys(cb)
+    LxEmitSp(cb)
+    LxEmitStart(cb)
+End Sub

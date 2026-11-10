@@ -1,0 +1,63 @@
+' -linux の ELF64 ヘッダ。ET_EXEC / x86-64、ベース 0x400000 に RVA をそのまま置く
+Dim elfHdrBuf(511) As Byte
+Dim elfHdrLay As ElfLayout
+
+Function ElfHdrByte(off As Long) As Long
+    ElfHdrByte = elfHdrBuf(off)
+End Function
+
+Function ElfHdrDw(off As Long) As Long
+    ElfHdrDw = GetDWord(VarPtr(elfHdrBuf(off)))
+End Function
+
+Assert(&H401000, ElfVa(&H1000), "ElfVa(0x1000)")
+
+elfHdrLay.textEnd = &H1234
+elfHdrLay.dataRva = &H2000
+elfHdrLay.dataVirt = &H1000
+elfHdrLay.idataRva = &H3000
+elfHdrLay.idataSize = &H180
+elfHdrLay.idataVirt = &H1000
+elfHdrLay.entryRva = &H1200
+ElfPutHeaders(VarPtr(elfHdrBuf(0)), VarPtr(elfHdrLay))
+
+Assert(&H7F, ElfHdrByte(0), "e_ident[0]")
+Assert(&H46, ElfHdrByte(3), "e_ident[3] 'F'")
+Assert(2, ElfHdrByte(4), "ELFCLASS64")
+Assert(1, ElfHdrByte(5), "ELFDATA2LSB")
+Assert(&H3E0002, ElfHdrDw(16), "e_type=EXEC e_machine=x86-64")
+Assert(&H401200, ElfHdrDw(24), "e_entry")
+Assert(0, ElfHdrDw(28), "e_entry high")
+Assert(64, ElfHdrDw(32), "e_phoff")
+Assert(&H380040, ElfHdrDw(52), "e_ehsize / e_phentsize")
+Assert(4, ElfHdrByte(56), "e_phnum")
+
+' phdr[0] text R+X: file 0 .. textEnd を 0x400000 へ
+Assert(1, ElfHdrDw(64), "text PT_LOAD")
+Assert(5, ElfHdrDw(68), "text R+X")
+Assert(0, ElfHdrDw(72), "text p_offset")
+Assert(&H400000, ElfHdrDw(80), "text p_vaddr")
+Assert(&H1234, ElfHdrDw(96), "text p_filesz")
+Assert(&H1234, ElfHdrDw(104), "text p_memsz")
+Assert(&H1000, ElfHdrDw(112), "text p_align")
+
+' phdr[1] data R+W: ファイルには無い（BSS）
+Assert(1, ElfHdrDw(120), "data PT_LOAD")
+Assert(6, ElfHdrDw(124), "data R+W")
+Assert(&H2000, ElfHdrDw(128), "data p_offset")
+Assert(&H402000, ElfHdrDw(136), "data p_vaddr")
+Assert(0, ElfHdrDw(152), "data p_filesz")
+Assert(&H1000, ElfHdrDw(160), "data p_memsz")
+
+' phdr[2] idata R+W: 文字列リテラルと API スロット
+Assert(6, ElfHdrDw(180), "idata R+W")
+Assert(&H3000, ElfHdrDw(184), "idata p_offset")
+Assert(&H403000, ElfHdrDw(192), "idata p_vaddr")
+Assert(&H180, ElfHdrDw(208), "idata p_filesz")
+Assert(&H1000, ElfHdrDw(216), "idata p_memsz")
+
+' phdr[3] PT_GNU_STACK R+W（スタックを実行不可に）
+Assert(&H6474E551, ElfHdrDw(232), "PT_GNU_STACK")
+Assert(6, ElfHdrDw(236), "stack R+W")
+
+Assert(&H3180, ElfFileSize(VarPtr(elfHdrLay)), "ElfFileSize")

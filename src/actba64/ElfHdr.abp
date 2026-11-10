@@ -1,0 +1,104 @@
+' ===================================================
+'  ElfHdr - -linux の ELF64 ヘッダとプログラムヘッダ（静的 ET_EXEC / x86-64）
+'  PE と同じ RVA 配置（TEXT_RVA, .data, .idata）をそのまま ELF_BASE + RVA に置く。
+'  ファイル位置 = RVA なので、各 PT_LOAD は p_offset と p_vaddr がページ境界で揃う。
+' ===================================================
+
+Const ELF_BASE = &H00400000
+Const ELF_PAGE = &H1000
+Const ELF_EHDR_SIZE = 64
+Const ELF_PHDR_SIZE = 56
+Const ELF_PHNUM = 4
+Const ELF_PT_LOAD = 1
+Const ELF_PT_GNU_STACK = &H6474E551
+Const ELF_PF_RX = 5
+Const ELF_PF_RW = 6
+
+Type ElfLayout
+    textEnd As DWord
+    dataRva As DWord
+    dataVirt As DWord
+    idataRva As DWord
+    idataSize As DWord
+    idataVirt As DWord
+    entryRva As DWord
+End Type
+
+' AB4.20 の 16bit 演算を避けて DWord 局所へ段階代入する
+Function ElfVa(rva As DWord) As DWord
+    Dim t As DWord
+    t = ELF_BASE
+    t = t + rva
+    ElfVa = t
+End Function
+
+Function ElfFileSize(lay As *ElfLayout) As DWord
+    Dim t As DWord
+    t = lay->idataRva
+    t = t + lay->idataSize
+    ElfFileSize = t
+End Function
+
+' 上位 32bit は常に 0（ベース 0x400000 の静的 EXE）
+Sub ElfPutQ(p As *Byte, off As DWord, v As DWord)
+    PutDword(p, off, v)
+    PutDword(p, off + 4, 0)
+End Sub
+
+Sub ElfPutIdent(p As *Byte)
+    PutDword(p, 0, &H464C457F)
+    p[4] = 2
+    p[5] = 1
+    p[6] = 1
+End Sub
+
+Sub ElfPutEhdr(p As *Byte, entryRva As DWord)
+    ElfPutIdent(p)
+    PutWord(p, 16, 2)
+    PutWord(p, 18, &H3E)
+    PutDword(p, 20, 1)
+    ElfPutEhdrTail(p, entryRva)
+End Sub
+
+' e_entry / e_phoff / 大きさ。セクションヘッダは置かない（e_shoff = 0）
+Sub ElfPutEhdrTail(p As *Byte, entryRva As DWord)
+    ElfPutQ(p, 24, ElfVa(entryRva))
+    ElfPutQ(p, 32, ELF_EHDR_SIZE)
+    PutWord(p, 52, ELF_EHDR_SIZE)
+    PutWord(p, 54, ELF_PHDR_SIZE)
+    PutWord(p, 56, ELF_PHNUM)
+End Sub
+
+' idx 番目のプログラムヘッダの先頭オフセット
+Function ElfPhOff(idx As Long) As DWord
+    Dim t As DWord
+    t = idx * ELF_PHDR_SIZE
+    t = t + ELF_EHDR_SIZE
+    ElfPhOff = t
+End Function
+
+' p_offset = RVA、p_vaddr = p_paddr = ELF_BASE + RVA
+Sub ElfPutPhdrAddr(p As *Byte, o As DWord, rva As DWord)
+    ElfPutQ(p, o + 8, rva)
+    ElfPutQ(p, o + 16, ElfVa(rva))
+    ElfPutQ(p, o + 24, ElfVa(rva))
+End Sub
+
+Sub ElfPutPhdr(p As *Byte, idx As Long, kind As DWord, flags As DWord, rva As DWord, filesz As DWord, memsz As DWord)
+    Dim o As DWord
+    o = ElfPhOff(idx)
+    PutDword(p, o, kind)
+    PutDword(p, o + 4, flags)
+    ElfPutPhdrAddr(p, o, rva)
+    ElfPutQ(p, o + 32, filesz)
+    ElfPutQ(p, o + 40, memsz)
+    ElfPutQ(p, o + 48, ELF_PAGE)
+End Sub
+
+Sub ElfPutHeaders(p As *Byte, lay As *ElfLayout)
+    ElfPutEhdr(p, lay->entryRva)
+    ElfPutPhdr(p, 0, ELF_PT_LOAD, ELF_PF_RX, 0, lay->textEnd, lay->textEnd)
+    ElfPutPhdr(p, 1, ELF_PT_LOAD, ELF_PF_RW, lay->dataRva, 0, lay->dataVirt)
+    ElfPutPhdr(p, 2, ELF_PT_LOAD, ELF_PF_RW, lay->idataRva, lay->idataSize, lay->idataVirt)
+    ElfPutPhdr(p, 3, ELF_PT_GNU_STACK, ELF_PF_RW, 0, 0, 0)
+End Sub

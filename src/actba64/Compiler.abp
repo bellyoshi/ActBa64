@@ -66,7 +66,9 @@ End Function
 
 Function CompWritePe(outPath As *Byte, codeMem As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord, builder As *ImportBuilder, subsystem As Long) As Long
     CompWritePe = 0
-    If TyIs32() <> 0 Then
+    If TyIsLinux() <> 0 Then
+        CompWritePe = WriteElf64(outPath, codeMem, codeSize, globSize, idataBuf, idataSize)
+    ElseIf TyIs32() <> 0 Then
         CompWritePe = WritePe32(outPath, codeMem, codeSize, globSize, idataBuf, idataSize, builder, subsystem)
     Else
         CompWritePe = WritePe64(outPath, codeMem, codeSize, globSize, idataBuf, idataSize, builder, subsystem)
@@ -89,6 +91,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
 
     CompileIrToPe = 0
     If Not CompAllocScratch(builder, idataBuf, codeMem) Then Exit Function
+    If TyIsLinux() <> 0 Then LxReserveGlobals(list)
     IrCollect(list, builder)
     cb.buf = codeMem
     cb.capacity = CompCodeCap()
@@ -114,6 +117,7 @@ Function CompileIrToPe(list As *IrList, outPath As *Byte, subsystem As Long) As 
         CompFreePe(codeMem, idataBuf, builder)
         Exit Function
     End If
+    If TyIsLinux() <> 0 Then LxFillIat(idataBuf, builder, idataRva)
     CompileIrToPe = CompWritePe(outPath, codeMem, cb.size, list->globSize, idataBuf, idataSize, builder, subsystem)
     CompFreePe(codeMem, idataBuf, builder)
 End Function
@@ -299,6 +303,11 @@ Function CompilePj(pjPath As *Byte, outPath As *Byte) As Long
 End Function
 
 Function CompileInput(srcPath As *Byte, outPath As *Byte) As Long
+    If TyIsLinux() <> 0 And TyIs32() <> 0 Then
+        Print "error: -linux cannot be combined with -actba32"
+        CompileInput = 0
+        Exit Function
+    End If
     If CompIsN88() <> 0 And Not PpPathEndsWithPj(srcPath) Then
         CompileInput = CompileFileN88(srcPath, outPath)
     ElseIf PpPathEndsWithPj(srcPath) Then

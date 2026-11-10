@@ -157,6 +157,22 @@ actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 
 `SizeOf(UDT)` やポインタ幅に依存する期待値は、64bit 決め打ちせず `SizeOf(*Byte)` 相当（例: ポインタ用ダミー Type）や `' Skip32: 1` で扱う。
 
+### Linux（`-linux`）
+
+`actba64 src.abp -linux -o out` は x86-64 Linux の静的 ELF（libc なし）を出す。コードは PE32+ と同じ Win64 規約のまま、配置も同じ RVA を `0x400000` に置く（`ElfHdr` / `ElfWriter`）。
+
+- **API スロット**（`LinuxRt`）: 呼び出しは Windows と同じ `call [rip+IAT]`。スロットには `Include\linux` の BASIC 関数 `Lx_<API名>`（例: `Lx_WriteFile`）の絶対アドレスを書く。無い API は `unsupported API: 名前` を stderr に出して終了コード 127
+- **スタブ**（`LinuxStub`）: `_start`（rsp を保存し `jmp main` を call）、`Lx_Syscall(番号, a1..a6)`、`Lx_StackBase()`。GC のスタック底は `gs:[8]` の代わりに保存した rsp
+- `#ifdef _LINUX` が使える。`Print` の行末は LF。内部の UTF-8 をそのまま書く
+- 今あるのは標準出力・終了・メモリ／C 文字列だけ。ヒープ（数値の `Print`、文字列の生成）、`Input`、ファイルは未対応
+
+```powershell
+.\run_test_linux.ps1            # test\linux\*.abp を -linux でビルドし WSL で実行（WSL が無ければ SKIP）
+.\run_test_linux.ps1 stage2
+```
+
+終了コードは `' Expect: N`、標準出力・標準エラーは隣の `<name>.out.txt` / `<name>.stderr.txt` とバイト単位で比べる。`check.ps1 integration` は `run_test2.ps1` の後にこれも回す。
+
 ---
 
 ## 3. リリース一式（`release\`）
