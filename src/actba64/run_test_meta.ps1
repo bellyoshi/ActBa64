@@ -8,6 +8,7 @@
     $stdin = @()
     $prebuild = ""
     $options = @()
+    $runArgs = ""
     $base = [System.IO.Path]::GetFileName($path)
     foreach ($line in (Get-Content -LiteralPath $path -Encoding Default -ErrorAction Stop)) {
         # Single-quoted regex: Windows PowerShell 5.1 treats [01] inside "..." as a type name.
@@ -39,6 +40,10 @@
         if ($line -match '^\s*''\s*Option\s*:\s*(\S+)\s*$') {
             $options += $Matches[1]
         }
+        # ' Args: a "b c" ... 実行時の引数（run_test_linux.ps1 だけが使う）
+        if ($line -match '^\s*''\s*Args\s*:\s*(.*)$') {
+            $runArgs = $Matches[1]
+        }
         if ($line -match '(?i)^\s*#USEWINDOW\s*=\s*1\s*$') {
             if ($null -eq $gui) { $gui = 1 }
         }
@@ -50,5 +55,5 @@
             $gui = 0
         }
     }
-    return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin; CompileFail = $compileFail; ExpectErrors = $expectErrors; Prebuild = $prebuild; Options = $options }
+    return @{ Expect = $expect; Gui = $gui; Target = $target; Skip32 = $skip32; Stdin = $stdin; CompileFail = $compileFail; ExpectErrors = $expectErrors; Prebuild = $prebuild; Options = $options; Args = $runArgs }
 }

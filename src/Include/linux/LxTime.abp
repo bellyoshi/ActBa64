@@ -1,0 +1,76 @@
+' LxTime - 時刻と待ち（GetTickCount / GetLocalTime / GetSystemTime / Sleep の待ち）
+' GetLocalTime は今は UTC（タイムゾーンは読まない）。秒は Long なので 2038 年まで
+
+' ts（16 バイト）の +0=秒、+8=ナノ秒。id は CLOCK_REALTIME(0) / CLOCK_MONOTONIC(1)
+Sub LxClock(id As Long, ts As *Byte)
+    Lx_Syscall(LX_SYS_CLOCK_GETTIME, id, ts, 0, 0, 0, 0)
+End Sub
+
+Function LxClockMs(ts As *Byte) As Long
+    LxClockMs = (LxGetQ(ts, 8) As Long) \ 1000000
+End Function
+
+Function Lx_GetTickCount() As DWord
+    Dim ts(15) As Byte
+    Dim sec As DWord
+    LxClock(1, VarPtr(ts(0)))
+    sec = LxLow(LxGetQ(VarPtr(ts(0)), 0))
+    Lx_GetTickCount = sec * 1000 + LxClockMs(VarPtr(ts(0)))
+End Function
+
+' mp は 3 月を 0 とする月（Howard Hinnant の civil_from_days）
+Sub LxCivilSet(st As *Byte, y As Long, mp As Long, d As Long)
+    LxSetW(st, 1, mp + 3)
+    If mp >= 10 Then LxSetW(st, 1, mp - 9)
+    LxSetW(st, 0, y)
+    If mp >= 10 Then LxSetW(st, 0, y + 1)
+    LxSetW(st, 3, d)
+End Sub
+
+' 1970-01-01 からの日数 → SYSTEMTIME の年・月・日
+Sub LxCivil(days As Long, st As *Byte)
+    Dim z As Long, era As Long, doe As Long, yoe As Long, doy As Long, mp As Long
+    z = days + 719468
+    era = z \ 146097
+    doe = z - era * 146097
+    yoe = (doe - doe \ 1460 + doe \ 36524 - doe \ 146096) \ 365
+    doy = doe - (365 * yoe + yoe \ 4 - yoe \ 100)
+    mp = (5 * doy + 2) \ 153
+    LxCivilSet(st, yoe + era * 400, mp, doy - (153 * mp + 2) \ 5 + 1)
+End Sub
+
+Sub LxClockSet(st As *Byte, secs As Long, ms As Long)
+    LxSetW(st, 4, secs \ 3600)
+    LxSetW(st, 5, (secs \ 60) Mod 60)
+    LxSetW(st, 6, secs Mod 60)
+    LxSetW(st, 7, ms)
+End Sub
+
+' SYSTEMTIME: 年, 月, 曜日（日曜 0）, 日, 時, 分, 秒, ミリ秒（各 Word）
+Sub Lx_GetSystemTime(ByVal st As *Byte)
+    Dim ts(15) As Byte
+    Dim sec As Long, days As Long
+    LxClock(0, VarPtr(ts(0)))
+    sec = LxGetQ(VarPtr(ts(0)), 0) As Long
+    days = sec \ 86400
+    LxCivil(days, st)
+    LxSetW(st, 2, (days + 4) Mod 7)
+    LxClockSet(st, sec - days * 86400, LxClockMs(VarPtr(ts(0))))
+End Sub
+
+Sub Lx_GetLocalTime(ByVal st As *Byte)
+    Lx_GetSystemTime(st)
+End Sub
+
+' Sleep の待ち。メッセージは無いので ms だけ眠って WAIT_TIMEOUT
+Function Lx_MsgWaitForMultipleObjects(ByVal n As DWord, ByVal h As VoidPtr, ByVal waitAll As Long, ByVal ms As DWord, ByVal mask As DWord) As DWord
+    Dim ts(15) As Byte
+    LxSetQ(VarPtr(ts(0)), 0, ms \ 1000)
+    LxSetQ(VarPtr(ts(0)), 8, (ms Mod 1000) * 1000000)
+    Lx_Syscall(LX_SYS_NANOSLEEP, VarPtr(ts(0)), 0, 0, 0, 0, 0)
+    Lx_MsgWaitForMultipleObjects = &H102
+End Function
+
+Function Lx_PeekMessageA(ByVal msg As VoidPtr, ByVal hwnd As VoidPtr, ByVal lo As DWord, ByVal hi As DWord, ByVal rm As DWord) As Long
+    Lx_PeekMessageA = 0
+End Function

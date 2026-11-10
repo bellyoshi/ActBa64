@@ -1,0 +1,195 @@
+' LxHeap - プロセスヒープ（GetProcessHeap / HeapAlloc / HeapFree / HeapReAlloc / HeapSize の代わり）
+' ブロックの前に 16 バイトの見出し: [+0]=区分、[+8]=要求バイト数。利用者には見出しの後ろを返す。
+' 区分 k（0..16）は容量 16<<k。mmap した 4MB の領域から切り出し、解放したら区分ごとの空きリストへ。
+' 1MB を超えるものは区分 LX_HEAP_BIG で 1 つずつ mmap し、解放で munmap する。
+' アドレスは足し引きと 0 との比較だけにする（VoidPtr の掛け算は 32bit になる）。
+' 8 バイトの値は LxGetQ / LxSetQ で読み書きする（空きリストの先頭も 8 バイト刻みのバイト配列）。
+
+Const LX_HEAP_HDR = 16
+Const LX_HEAP_TOP = 16
+Const LX_HEAP_BIG = 99
+Const LX_HEAP_ARENA = &H400000
+Const LX_HEAP_ZERO = 8
+
+Dim g_lxFree(135) As Byte
+Dim g_lxArena As VoidPtr
+Dim g_lxArenaLeft As Long
+
+' mmap(0, n, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0)。失敗（-errno）は 0
+Function LxMapPages(n As Long) As VoidPtr
+    Dim r As VoidPtr
+    Dim w As *Long
+    r = Lx_Syscall(LX_SYS_MMAP, 0, n, 3, &H22, -1, 0)
+    w = VarPtr(r)
+    LxMapPages = r
+    If w[1] < 0 Then LxMapPages = 0
+End Function
+
+Function LxClassSize(k As Long) As Long
+    Dim c As Long, i As Long
+    c = 16
+    For i = 1 To k
+        c = c * 2
+    Next
+    LxClassSize = c
+End Function
+
+' n バイトが入る最小の区分。1MB を超えれば LX_HEAP_BIG
+Function LxHeapClass(n As Long) As Long
+    Dim k As Long
+    k = 0
+    While LxClassSize(k) < n And k < LX_HEAP_TOP
+        k = k + 1
+    Wend
+    LxHeapClass = k
+    If LxClassSize(k) < n Then LxHeapClass = LX_HEAP_BIG
+End Function
+
+' 大きいブロックの mmap の大きさ（見出し込み、4KB 単位）
+Function LxBigMap(n As Long) As Long
+    LxBigMap = (n + LX_HEAP_HDR + &HFFF) And &HFFFFF000
+End Function
+
+Function LxHeapMark(hdr As VoidPtr, k As Long, n As Long) As VoidPtr
+    LxSetQ(hdr, 0, k)
+    LxSetQ(hdr, 8, n)
+    LxHeapMark = hdr + LX_HEAP_HDR
+End Function
+
+Function LxHdrOf(p As VoidPtr) As VoidPtr
+    LxHdrOf = p - LX_HEAP_HDR
+End Function
+
+Function LxHdrKind(p As VoidPtr) As Long
+    LxHdrKind = LxGetQ(LxHdrOf(p), 0) As Long
+End Function
+
+Function LxHdrLen(p As VoidPtr) As Long
+    LxHdrLen = LxGetQ(LxHdrOf(p), 8) As Long
+End Function
+
+Function LxFreeHead(k As Long) As VoidPtr
+    LxFreeHead = LxGetQ(VarPtr(g_lxFree(0)), k * 8)
+End Function
+
+Sub LxSetFreeHead(k As Long, b As VoidPtr)
+    LxSetQ(VarPtr(g_lxFree(0)), k * 8, b)
+End Sub
+
+' 新しい 4MB の領域へ切り替える（前の残りは捨てる）
+Sub LxArenaRefill()
+    g_lxArena = LxMapPages(LX_HEAP_ARENA)
+    g_lxArenaLeft = LX_HEAP_ARENA
+    If g_lxArena = 0 Then g_lxArenaLeft = 0
+End Sub
+
+Function LxArenaTake(size As Long) As VoidPtr
+    LxArenaTake = 0
+    If g_lxArenaLeft < size Then LxArenaRefill()
+    If g_lxArenaLeft < size Then Exit Function
+    LxArenaTake = g_lxArena
+    g_lxArena = g_lxArena + size
+    g_lxArenaLeft = g_lxArenaLeft - size
+End Function
+
+' 空きリストから 1 つ取る（見出しの [+8] が次の空き）。無ければ 0
+Function LxFreePop(k As Long) As VoidPtr
+    Dim b As VoidPtr
+    b = LxFreeHead(k)
+    LxFreePop = b
+    If b = 0 Then Exit Function
+    LxSetFreeHead(k, LxGetQ(b, 8))
+End Function
+
+' 空きリストのブロックは汚れているので、HEAP_ZERO_MEMORY なら 0 で埋める
+Function LxSmallAlloc(k As Long, n As Long, flags As DWord) As VoidPtr
+    Dim b As VoidPtr
+    LxSmallAlloc = 0
+    b = LxFreePop(k)
+    If b <> 0 And (flags And LX_HEAP_ZERO) <> 0 Then Lx_RtlFillMemory(b + LX_HEAP_HDR, n, 0)
+    If b = 0 Then b = LxArenaTake(LxClassSize(k) + LX_HEAP_HDR)
+    If b = 0 Then Exit Function
+    LxSmallAlloc = LxHeapMark(b, k, n)
+End Function
+
+' mmap した直後のページは 0 なので埋めなくてよい
+Function LxBigAlloc(n As Long) As VoidPtr
+    Dim b As VoidPtr
+    LxBigAlloc = 0
+    b = LxMapPages(LxBigMap(n))
+    If b = 0 Then Exit Function
+    LxBigAlloc = LxHeapMark(b, LX_HEAP_BIG, n)
+End Function
+
+' 容量（区分の大きさ、または mmap の大きさから見出しを引いたもの）
+Function LxBlockCap(p As VoidPtr) As Long
+    LxBlockCap = LxBigMap(LxHdrLen(p)) - LX_HEAP_HDR
+    If LxHdrKind(p) <> LX_HEAP_BIG Then LxBlockCap = LxClassSize(LxHdrKind(p))
+End Function
+
+Function Lx_GetProcessHeap() As VoidPtr
+    Lx_GetProcessHeap = 1
+End Function
+
+Function Lx_HeapCreate(ByVal opt As DWord, ByVal init As VoidPtr, ByVal max As VoidPtr) As VoidPtr
+    Lx_HeapCreate = 1
+End Function
+
+Function Lx_HeapDestroy(ByVal heap As VoidPtr) As Long
+    Lx_HeapDestroy = 1
+End Function
+
+Function Lx_HeapAlloc(ByVal heap As VoidPtr, ByVal flags As DWord, ByVal n As DWord) As VoidPtr
+    Dim k As Long
+    Lx_HeapAlloc = 0
+    If (n As Long) < 0 Then Exit Function
+    k = LxHeapClass(n)
+    If k = LX_HEAP_BIG Then Lx_HeapAlloc = LxBigAlloc(n)
+    If k <> LX_HEAP_BIG Then Lx_HeapAlloc = LxSmallAlloc(k, n, flags)
+End Function
+
+Function Lx_HeapFree(ByVal heap As VoidPtr, ByVal flags As DWord, ByVal p As VoidPtr) As Long
+    Dim k As Long
+    Lx_HeapFree = 1
+    If p = 0 Then Exit Function
+    k = LxHdrKind(p)
+    If k = LX_HEAP_BIG Then Lx_Syscall(LX_SYS_MUNMAP, LxHdrOf(p), LxBigMap(LxHdrLen(p)), 0, 0, 0, 0)
+    If k = LX_HEAP_BIG Then Exit Function
+    LxSetQ(LxHdrOf(p), 8, LxFreeHead(k))
+    LxSetFreeHead(k, LxHdrOf(p))
+End Function
+
+Function Lx_HeapSize(ByVal heap As VoidPtr, ByVal flags As DWord, ByVal p As VoidPtr) As VoidPtr
+    Lx_HeapSize = LxHdrLen(p)
+End Function
+
+' 容量に収まればその場で長さだけ変える（伸ばした分は HEAP_ZERO_MEMORY なら 0 に）
+Function LxReAllocInPlace(p As VoidPtr, flags As DWord, n As Long) As VoidPtr
+    Dim old As Long
+    old = LxHdrLen(p)
+    If n > old And (flags And LX_HEAP_ZERO) <> 0 Then Lx_RtlFillMemory(p + old, n - old, 0)
+    LxSetQ(LxHdrOf(p), 8, n)
+    LxReAllocInPlace = p
+End Function
+
+Function LxReAllocMove(p As VoidPtr, flags As DWord, n As Long) As VoidPtr
+    Dim q As VoidPtr
+    LxReAllocMove = 0
+    q = Lx_HeapAlloc(1, flags, n)
+    If q = 0 Then Exit Function
+    Lx_RtlMoveMemory(q, p, LxHdrLen(p))
+    Lx_HeapFree(1, 0, p)
+    LxReAllocMove = q
+End Function
+
+Function Lx_HeapReAlloc(ByVal heap As VoidPtr, ByVal flags As DWord, ByVal p As VoidPtr, ByVal n As DWord) As VoidPtr
+    Lx_HeapReAlloc = 0
+    If (n As Long) < 0 Then Exit Function
+    If p = 0 Then
+        Lx_HeapReAlloc = Lx_HeapAlloc(heap, flags, n)
+    ElseIf (n As Long) <= LxBlockCap(p) Then
+        Lx_HeapReAlloc = LxReAllocInPlace(p, flags, n)
+    Else
+        Lx_HeapReAlloc = LxReAllocMove(p, flags, n)
+    End If
+End Function

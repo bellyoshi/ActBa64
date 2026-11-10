@@ -1,0 +1,71 @@
+' LxCmd - コマンドラインと実行ファイルのパス（GetCommandLineA / GetModuleFileNameA）
+' 起動時のスタック: [+0]=argc、[+8]=argv[0]...（Lx_StackBase）
+
+Dim g_lxCmdLine As *Byte
+
+Function LxArgc() As Long
+    LxArgc = LxGetQ(Lx_StackBase(), 0) As Long
+End Function
+
+Function LxArgv(i As Long) As *Byte
+    LxArgv = LxGetQ(Lx_StackBase(), (i + 1) * 8)
+End Function
+
+' 空か、空白・タブを含めば 1（"" で囲む）
+Function LxArgQuote(a As *Byte) As Long
+    Dim i As Long
+    LxArgQuote = 1
+    If a[0] = 0 Then Exit Function
+    i = 0
+    While a[i] <> 0
+        If a[i] = 32 Or a[i] = 9 Then Exit Function
+        i = i + 1
+    Wend
+    LxArgQuote = 0
+End Function
+
+' 引数 1 つと後ろの空白を dst+at に書き、次の位置を返す（dst=0 なら数えるだけ）
+Function LxArgPut(dst As *Byte, at As Long, a As *Byte) As Long
+    Dim q As Long, n As Long
+    q = LxArgQuote(a)
+    n = Lx_lstrlenA(a)
+    If dst <> 0 Then
+        If q <> 0 Then dst[at] = 34
+        Lx_RtlMoveMemory(dst + at + q, a, n)
+        If q <> 0 Then dst[at + q + n] = 34
+        dst[at + q + n + q] = 32
+    End If
+    LxArgPut = at + q + n + q + 1
+End Function
+
+Function LxArgJoin(dst As *Byte) As Long
+    Dim i As Long, at As Long
+    at = 0
+    For i = 0 To LxArgc() - 1
+        at = LxArgPut(dst, at, LxArgv(i))
+    Next
+    LxArgJoin = at
+End Function
+
+' argv を空白でつないだもの。最初の呼び出しで 1 度だけ作る（最後の空白を終端にする）
+Function Lx_GetCommandLineA() As *Byte
+    Dim n As Long
+    If g_lxCmdLine = 0 Then
+        n = LxArgJoin(0)
+        g_lxCmdLine = Lx_HeapAlloc(1, LX_HEAP_ZERO, n + 1)
+        LxArgJoin(g_lxCmdLine)
+        If n > 0 Then g_lxCmdLine[n - 1] = 0
+    End If
+    Lx_GetCommandLineA = g_lxCmdLine
+End Function
+
+' /proc/self/exe の指す先。戻り値は書いたバイト数（NUL を除く）
+Function Lx_GetModuleFileNameA(ByVal hmod As VoidPtr, ByVal buf As *Byte, ByVal n As DWord) As DWord
+    Dim r As VoidPtr
+    Lx_GetModuleFileNameA = 0
+    If n = 0 Then Exit Function
+    r = Lx_Syscall(LX_SYS_READLINK, "/proc/self/exe", buf, n - 1, 0, 0, 0)
+    If LxOk(r) = 0 Then Exit Function
+    buf[r As Long] = 0
+    Lx_GetModuleFileNameA = LxLow(r)
+End Function

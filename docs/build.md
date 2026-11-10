@@ -164,7 +164,11 @@ actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 - **API スロット**（`LinuxRt`）: 呼び出しは Windows と同じ `call [rip+IAT]`。スロットには `Include\linux` の BASIC 関数 `Lx_<API名>`（例: `Lx_WriteFile`）の絶対アドレスを書く。無い API は `unsupported API: 名前` を stderr に出して終了コード 127
 - **スタブ**（`LinuxStub`）: `_start`（rsp を保存し `jmp main` を call）、`Lx_Syscall(番号, a1..a6)`、`Lx_StackBase()`。GC のスタック底は `gs:[8]` の代わりに保存した rsp
 - `#ifdef _LINUX` が使える。`Print` の行末は LF。内部の UTF-8 をそのまま書く
-- 今あるのは標準出力・終了・メモリ／C 文字列だけ。ヒープ（数値の `Print`、文字列の生成）、`Input`、ファイルは未対応
+- 今あるのは標準入出力（`Print`、`Input`）・終了・メモリ／C 文字列・ヒープ・ファイル（`Open` / `Print #` / `Write #` / `Input #` / `Get` / `Put`、`Kill` / `MkDir` / `ChDir`）・時刻（`Date$` / `Time$` は今は UTC）・`Sleep`・`GetCommandLine` / `GetModuleFileName`
+- ファイルの行末も LF（`BaFileWriteNl`）。パスは UTF-8 のまま A 版の代わりへ渡す（`BasicPathWide` は `-linux` で 0）
+- `Include\linux` では `*VoidPtr` / `*Word` の添字と `VoidPtr` の配列を使わない（どれも 4 バイト刻みになる）。8 バイト・2 バイトは `LxGetQ` / `LxSetQ` / `LxSetW` で読み書きする
+- テストのメタ `' Args: …` で実行時の引数を渡せる（`run_test_linux.ps1` だけ）
+- **ヒープ**（`LxHeap`）: `HeapAlloc` などは mmap した 4MB の領域から 16<<k バイトの区分で切り出し、区分ごとの空きリストで使い回す。1MB を超えるものは 1 つずつ mmap / munmap
 
 ```powershell
 .\run_test_linux.ps1            # test\linux\*.abp を -linux でビルドし WSL で実行（WSL が無ければ SKIP）

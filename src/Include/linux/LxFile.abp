@@ -1,0 +1,117 @@
+' LxFile - ファイルとディレクトリ（パスは UTF-8 のまま渡す。BasicPath は -linux で A 版を呼ぶ）
+' HANDLE は fd + LX_FD_BIAS。失敗は INVALID_HANDLE_VALUE / 0（Win32 と同じ）
+
+Const LX_O_CREAT = &H40
+Const LX_O_EXCL = &H80
+Const LX_O_TRUNC = &H200
+Const LX_FILE_MODE = 420
+Const LX_DIR_MODE = 493
+
+' syscall の戻り値が 0 以上なら 1（-errno なら 0）
+Function LxOk(r As VoidPtr) As Long
+    LxOk = 1
+    If (r As Long) < 0 Then LxOk = 0
+End Function
+
+Function LxLow(r As VoidPtr) As DWord
+    Dim w As *DWord
+    w = VarPtr(r)
+    LxLow = w[0]
+End Function
+
+' GENERIC_READ / GENERIC_WRITE → O_RDONLY / O_WRONLY / O_RDWR
+Function LxOpenAccess(access As DWord) As Long
+    LxOpenAccess = 0
+    If (access And GENERIC_WRITE) <> 0 Then LxOpenAccess = 1
+    If (access And GENERIC_WRITE) <> 0 And (access And GENERIC_READ) <> 0 Then LxOpenAccess = 2
+End Function
+
+' CREATE_NEW / CREATE_ALWAYS / OPEN_EXISTING / OPEN_ALWAYS / TRUNCATE_EXISTING
+Function LxOpenDisp(disp As DWord) As Long
+    LxOpenDisp = 0
+    If disp = 1 Then LxOpenDisp = LX_O_CREAT Or LX_O_EXCL
+    If disp = 2 Then LxOpenDisp = LX_O_CREAT Or LX_O_TRUNC
+    If disp = 4 Then LxOpenDisp = LX_O_CREAT
+    If disp = 5 Then LxOpenDisp = LX_O_TRUNC
+End Function
+
+Function Lx_CreateFileA(ByVal name As *Byte, ByVal access As DWord, ByVal share As DWord, ByVal sa As VoidPtr, ByVal disp As DWord, ByVal flags As DWord, ByVal tmpl As VoidPtr) As VoidPtr
+    Dim r As VoidPtr
+    r = Lx_Syscall(LX_SYS_OPEN, name, LxOpenAccess(access) Or LxOpenDisp(disp), LX_FILE_MODE, 0, 0, 0)
+    Lx_CreateFileA = -1
+    If LxOk(r) = 0 Then Exit Function
+    Lx_CreateFileA = r + LX_FD_BIAS
+End Function
+
+Function Lx_CloseHandle(ByVal h As VoidPtr) As Long
+    Lx_CloseHandle = LxOk(Lx_Syscall(LX_SYS_CLOSE, LxFdOf(h), 0, 0, 0, 0, 0))
+End Function
+
+' struct stat の st_size は +48、st_mode は +24
+Function Lx_GetFileSize(ByVal h As VoidPtr, ByVal hi As *DWord) As DWord
+    Dim st(143) As Byte
+    Dim p As *DWord
+    Lx_GetFileSize = &HFFFFFFFF
+    If LxOk(Lx_Syscall(LX_SYS_FSTAT, LxFdOf(h), VarPtr(st(0)), 0, 0, 0, 0)) = 0 Then Exit Function
+    p = VarPtr(st(48))
+    If hi <> 0 Then hi[0] = p[1]
+    Lx_GetFileSize = p[0]
+End Function
+
+' 下位 dist と上位 hi[0]（hi=0 なら符号拡張）から 64bit の位置
+Function LxSeekOff(dist As Long, hi As *Long) As VoidPtr
+    Dim off As VoidPtr
+    Dim w As *Long
+    w = VarPtr(off)
+    w[0] = dist
+    w[1] = 0
+    If dist < 0 Then w[1] = -1
+    If hi <> 0 Then w[1] = hi[0]
+    LxSeekOff = off
+End Function
+
+' FILE_BEGIN / FILE_CURRENT / FILE_END は SEEK_SET / SEEK_CUR / SEEK_END と同じ値
+Function Lx_SetFilePointer(ByVal h As VoidPtr, ByVal dist As Long, ByVal hi As *Long, ByVal method As DWord) As DWord
+    Dim r As VoidPtr
+    Dim w As *Long
+    r = Lx_Syscall(LX_SYS_LSEEK, LxFdOf(h), LxSeekOff(dist, hi), method, 0, 0, 0)
+    Lx_SetFilePointer = &HFFFFFFFF
+    If LxOk(r) = 0 Then Exit Function
+    w = VarPtr(r)
+    If hi <> 0 Then hi[0] = w[1]
+    Lx_SetFilePointer = LxLow(r)
+End Function
+
+' 無ければ INVALID_FILE_ATTRIBUTES。ディレクトリは FILE_ATTRIBUTE_DIRECTORY、他は NORMAL
+Function Lx_GetFileAttributesA(ByVal name As *Byte) As DWord
+    Dim st(143) As Byte
+    Dim m As *DWord
+    Lx_GetFileAttributesA = &HFFFFFFFF
+    If LxOk(Lx_Syscall(LX_SYS_STAT, name, VarPtr(st(0)), 0, 0, 0, 0)) = 0 Then Exit Function
+    m = VarPtr(st(24))
+    Lx_GetFileAttributesA = &H80
+    If (m[0] And &HF000) = &H4000 Then Lx_GetFileAttributesA = FILE_ATTRIBUTE_DIRECTORY
+End Function
+
+Function Lx_DeleteFileA(ByVal name As *Byte) As Long
+    Lx_DeleteFileA = LxOk(Lx_Syscall(LX_SYS_UNLINK, name, 0, 0, 0, 0, 0))
+End Function
+
+Function Lx_CreateDirectoryA(ByVal name As *Byte, ByVal sa As VoidPtr) As Long
+    Lx_CreateDirectoryA = LxOk(Lx_Syscall(LX_SYS_MKDIR, name, LX_DIR_MODE, 0, 0, 0, 0))
+End Function
+
+Function Lx_RemoveDirectoryA(ByVal name As *Byte) As Long
+    Lx_RemoveDirectoryA = LxOk(Lx_Syscall(LX_SYS_RMDIR, name, 0, 0, 0, 0, 0))
+End Function
+
+Function Lx_SetCurrentDirectoryA(ByVal name As *Byte) As Long
+    Lx_SetCurrentDirectoryA = LxOk(Lx_Syscall(LX_SYS_CHDIR, name, 0, 0, 0, 0, 0))
+End Function
+
+' 戻り値は NUL を除く長さ（入らなければ 0）
+Function Lx_GetCurrentDirectoryA(ByVal n As DWord, ByVal buf As *Byte) As DWord
+    Lx_GetCurrentDirectoryA = 0
+    If LxOk(Lx_Syscall(LX_SYS_GETCWD, buf, n, 0, 0, 0, 0)) = 0 Then Exit Function
+    Lx_GetCurrentDirectoryA = Lx_lstrlenA(buf)
+End Function
