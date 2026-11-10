@@ -1,0 +1,39 @@
+' ===================================================
+'  ElfWriter - -linux: .text / .data / .idata を PE と同じ RVA で ELF に置く
+'  ファイル位置 = RVA。.data はファイルに持たない（BSS）
+' ===================================================
+
+Sub ElfMakeLayout(codeSize As Long, globSize As Long, idataSize As DWord, lay As *ElfLayout)
+    Dim pl As PeLayout
+    PeCalcLayoutBase(codeSize, globSize, idataSize, VarPtr(pl))
+    ElfFromPe(VarPtr(pl), lay)
+    lay->textEnd = LxOffRva(codeSize)
+    lay->idataSize = idataSize
+    lay->entryRva = LxOffRva(g_lxStartOff)
+End Sub
+
+Sub ElfFromPe(pl As *PeLayout, lay As *ElfLayout)
+    lay->dataRva = pl->dataRva
+    lay->dataVirt = pl->dataVirt
+    lay->idataRva = pl->idataRva
+    lay->idataVirt = pl->idataVirt
+End Sub
+
+' 戻り値 0 : 書けない
+Function WriteElf64(outPath As *Byte, codeBuf As *Byte, codeSize As Long, globSize As Long, idataBuf As *Byte, idataSize As DWord) As Long
+    Dim lay As ElfLayout
+    Dim outBuf As *Byte
+    WriteElf64 = 0
+    ElfMakeLayout(codeSize, globSize, idataSize, VarPtr(lay))
+    outBuf = calloc(ElfFileSize(VarPtr(lay)))
+    If outBuf = NULL Then Exit Function
+    ElfPutHeaders(outBuf, VarPtr(lay))
+    WriteElf64 = ElfFlush(outPath, outBuf, VarPtr(lay), codeBuf, codeSize, idataBuf)
+End Function
+
+Function ElfFlush(outPath As *Byte, outBuf As *Byte, lay As *ElfLayout, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte) As Long
+    MemCopyAt(outBuf, TEXT_RVA, codeBuf, codeSize)
+    MemCopyAt(outBuf, lay->idataRva, idataBuf, lay->idataSize)
+    ElfFlush = WriteAll(outPath, outBuf, ElfFileSize(lay))
+    free(outBuf)
+End Function

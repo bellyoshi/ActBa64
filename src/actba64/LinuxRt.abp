@@ -1,0 +1,180 @@
+' ===================================================
+'  LinuxRt - -linux の API スロット
+'  呼び出し側は Windows と同じ call [rip+IAT]。ELF ではローダが無いので、
+'  各スロットに次のどれかの絶対アドレスを書いておく（ELF_BASE + TEXT_RVA + オフセット）。
+'   1) LinuxStub の Lx_Syscall / Lx_StackBase
+'   2) Include\linux の BASIC 関数 Lx_<API名>（Win64 規約で呼ばれるのでそのまま代わりになる）
+'   3) 名前ごとの踏み台 → 未対応 API として終了
+' ===================================================
+
+Const LX_SHIM_MAX = 256
+Dim g_lxShimN As Long
+Dim g_lxShimName(LX_SHIM_MAX * SYM_NAME_LEN) As Byte
+Dim g_lxShimLab(LX_SHIM_MAX) As Long
+Dim g_lxSlotOff As *Long
+
+' 先頭が "Lx_" の関数名なら 1
+Function LxIsShimName(name As *Byte) As Long
+    LxIsShimName = 0
+    If name[0] <> &H4C Or name[1] <> &H78 Or name[2] <> &H5F Then Exit Function
+    If name[3] = 0 Then Exit Function
+    LxIsShimName = 1
+End Function
+
+Sub LxAddShim(name As *Byte, lab As Long)
+    Dim q As *Byte
+    If LxIsShimName(name) = 0 Then Exit Sub
+    If g_lxShimN >= LX_SHIM_MAX Then Exit Sub
+    PtrAddTo(VarPtr(g_lxShimName(0)), BytesN(g_lxShimN, SYM_NAME_LEN), q)
+    IbStrCpy(q, VarPtr(name[3]), SYM_NAME_LEN)
+    g_lxShimLab(g_lxShimN) = lab
+    g_lxShimN = g_lxShimN + 1
+End Sub
+
+' AstToIr の終わり（関数ラベルが決まったあと）
+Sub LxCollectShims(ctx As *LowerCtx)
+    Dim i As Long
+    Dim labs As *Long
+    g_lxShimN = 0
+    labs = ctx->funcLabs
+    For i = 0 To ctx->funcCount - 1
+        LxAddShim(LowFuncNameAt(ctx, i), labs[i])
+    Next
+End Sub
+
+Function LxFindShim(api As *Byte) As Long
+    Dim i As Long
+    LxFindShim = -1
+    For i = 0 To g_lxShimN - 1
+        If IbNameEqAt(VarPtr(g_lxShimName(0)), BytesN(i, SYM_NAME_LEN), api) <> 0 Then
+            LxFindShim = g_lxShimLab(i)
+            Exit Function
+        End If
+    Next
+End Function
+
+Function LxSlotName(builder As *ImportBuilder, slot As Long) As *Byte
+    Dim q As *Byte
+    PtrAddTo(g_ibFuncNames, BytesN(slot, IB_NAME_LEN), q)
+    LxSlotName = q
+End Function
+
+' ヒント/名前の項（2 バイトのヒントの後ろが名前）
+Function LxSlotNameRva(slot As Long) As DWord
+    Dim t As DWord
+    t = g_ibFuncHintRva[slot]
+    t = t + 2
+    LxSlotNameRva = t
+End Function
+
+' 未対応 API の踏み台: lea rsi,[rip+名前]; mov edx,長さ; jmp 共通
+Sub LxEmitTramp(cb As *CodeBuffer, builder As *ImportBuilder, slot As Long)
+    g_lxTramp[slot] = cb->size
+    LxHex(cb, "48 8D 35")
+    LxRipDisp(cb, LxSlotNameRva(slot))
+    LxHex(cb, "BA")
+    EmitDword(cb, IbStrLen(LxSlotName(builder, slot)))
+    LxHex(cb, "E9")
+    LxRel(cb, g_lxFailOff)
+End Sub
+
+Sub LxEmitTramps(cb As *CodeBuffer, builder As *ImportBuilder)
+    Dim i As Long, j As Long, fc As *Long
+    fc = g_ibFuncCount
+    For i = 0 To builder->dllCount - 1
+        For j = 0 To fc[i] - 1
+            LxEmitTramp(cb, builder, IbFuncSlot(builder, i, j))
+        Next
+    Next
+End Sub
+
+Function LxShimOff(name As *Byte) As Long
+    Dim lab As Long
+    LxShimOff = -1
+    lab = LxFindShim(name)
+    If lab < 0 Or lab >= g_cgLabCap Then Exit Function
+    LxShimOff = g_cgLabOff[lab]
+End Function
+
+' スロットの飛び先（コード内オフセット）
+Function LxSlotTarget(builder As *ImportBuilder, slot As Long) As Long
+    Dim name As *Byte
+    name = LxSlotName(builder, slot)
+    LxSlotTarget = g_lxTramp[slot]
+    If ByteStrEq("Lx_Syscall", name) Then LxSlotTarget = g_lxSysOff
+    If ByteStrEq("Lx_StackBase", name) Then LxSlotTarget = g_lxSpOff
+    If LxShimOff(name) >= 0 Then LxSlotTarget = LxShimOff(name)
+End Function
+
+Sub LxFreeSlots()
+    If g_lxTramp <> NULL Then free(g_lxTramp)
+    If g_lxSlotOff <> NULL Then free(g_lxSlotOff)
+    g_lxTramp = NULL
+    g_lxSlotOff = NULL
+End Sub
+
+Sub LxAllocSlots(builder As *ImportBuilder)
+    Dim n As Long
+    LxFreeSlots()
+    n = IbFuncSlots(builder) + 1
+    g_lxTramp = calloc(BytesN(n, SizeOf(Long)))
+    g_lxSlotOff = calloc(BytesN(n, SizeOf(Long)))
+End Sub
+
+Sub LxResolveSlots(builder As *ImportBuilder)
+    Dim i As Long, j As Long, fc As *Long
+    fc = g_ibFuncCount
+    For i = 0 To builder->dllCount - 1
+        For j = 0 To fc[i] - 1
+            g_lxSlotOff[IbFuncSlot(builder, i, j)] = LxSlotTarget(builder, IbFuncSlot(builder, i, j))
+        Next
+    Next
+End Sub
+
+' IrEmitCode の最初。.data の末尾に置いた「保存した rsp」の RVA
+Sub LxSetData(dataRva As DWord)
+    Dim t As DWord
+    t = dataRva
+    t = t + g_lxGlobOff
+    g_lxStackRva = t
+End Sub
+
+' IrEmitCode の最後（CgApplyFixups の前。関数ラベルの位置がまだ引ける）
+Sub LxEmitStubs(cb As *CodeBuffer, builder As *ImportBuilder)
+    LxAllocSlots(builder)
+    If g_lxTramp = NULL Or g_lxSlotOff = NULL Then Exit Sub
+    LxEmitFixed(cb)
+    LxEmitTramps(cb, builder)
+    LxResolveSlots(builder)
+End Sub
+
+' GC のスタック底: Windows は gs:[8]、Linux は _start が保存した rsp
+Sub LxEmitLoadStackBase(cb As *CodeBuffer)
+    LxHex(cb, "48 8B 05")
+    LxRipDisp(cb, g_lxStackRva)
+End Sub
+
+' .data の末尾に 16 バイト足す（保存した rsp）
+Sub LxReserveGlobals(list As *IrList)
+    g_lxGlobOff = AlignUp(list->globSize, 16)
+    list->globSize = g_lxGlobOff + 16
+End Sub
+
+Sub LxFillSlot(idataBuf As *Byte, slot As Long, idataRva As DWord)
+    Dim off As DWord
+    off = g_ibFuncIatRva[slot]
+    off = off - idataRva
+    PutDword(idataBuf, off, ElfVa(LxOffRva(g_lxSlotOff[slot])))
+    PutDword(idataBuf, off + 4, 0)
+End Sub
+
+' 2 回目の IrEmitCode と IbFinalize のあと。IAT に飛び先の絶対アドレスを書く
+Sub LxFillIat(idataBuf As *Byte, builder As *ImportBuilder, idataRva As DWord)
+    Dim i As Long, j As Long, fc As *Long
+    fc = g_ibFuncCount
+    For i = 0 To builder->dllCount - 1
+        For j = 0 To fc[i] - 1
+            LxFillSlot(idataBuf, IbFuncSlot(builder, i, j), idataRva)
+        Next
+    Next
+End Sub
