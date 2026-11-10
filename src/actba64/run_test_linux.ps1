@@ -11,6 +11,9 @@
 #   ' Stdin: text      … 標準入力の 1 行（LF で渡す。複数行可）
 #   ' Option: -x       … 追加のコンパイラオプション
 #   ' Args: a "b c"   … 実行時の引数（sh にそのまま渡す）
+#   ' Warn: N        … コンパイラの「has no Linux version」警告の数（省略時 0）
+#   ' WarnAt: text   … その警告の場所（コンパイラの出力にこの文字列があること）
+#   ' MaxSize: N     … 出力 ELF の上限バイト数（呼ばれない関数を消せているか）
 # 期待する出力（あれば一致を見る。バイト単位、LF のまま）:
 #   test\linux\<base>.out.txt     … 標準出力
 #   test\linux\<base>.stderr.txt  … 標準エラー
@@ -83,6 +86,26 @@ function Invoke-Wsl([string]$base, [bool]$hasStdin, [string]$runArgs) {
     return [int]$code
 }
 
+function Get-LinuxMeta([string]$path) {
+    $m = @{ Warn = 0; MaxSize = 0; WarnAt = "" }
+    foreach ($line in (Get-Content -LiteralPath $path -Encoding UTF8)) {
+        if ($line -match '^\s*''\s*Warn\s*:\s*(\d+)\s*$') { $m.Warn = [int]$Matches[1] }
+        if ($line -match '^\s*''\s*MaxSize\s*:\s*(\d+)\s*$') { $m.MaxSize = [int]$Matches[1] }
+        if ($line -match '^\s*''\s*WarnAt\s*:\s*(\S+)\s*$') { $m.WarnAt = $Matches[1] }
+    }
+    return $m
+}
+
+# 警告の数と ELF の大きさ。合わなければ理由、合えば空
+function Test-Build([hashtable]$lm, $log, [string]$exe) {
+    $warns = @($log | Where-Object { "$_" -match 'has no Linux version' }).Count
+    if ($warns -ne $lm.Warn) { return "warnings=$warns expect=$($lm.Warn)" }
+    if ($lm.WarnAt -and -not ("$log".Contains($lm.WarnAt))) { return "no warning at $($lm.WarnAt)" }
+    $size = (Get-Item -LiteralPath $exe).Length
+    if ($lm.MaxSize -gt 0 -and $size -gt $lm.MaxSize) { return "size=$size max=$($lm.MaxSize)" }
+    return ""
+}
+
 function Invoke-OneTest([System.IO.FileInfo]$file) {
     $name = $file.Name
     $meta = Get-Meta $file.FullName
@@ -95,6 +118,12 @@ function Invoke-OneTest([System.IO.FileInfo]$file) {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
         $stats.fail++
         Add-Result $name "FAIL" ((($log | Select-Object -Last 3) -join " / "))
+        return
+    }
+    $why = Test-Build (Get-LinuxMeta $file.FullName) $log $exe
+    if ($why) {
+        $stats.fail++
+        Add-Result $name "FAIL" $why
         return
     }
     $hasStdin = $meta.Stdin.Count -gt 0

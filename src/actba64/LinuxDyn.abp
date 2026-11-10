@@ -1,0 +1,195 @@
+' ===================================================
+'  LinuxDyn - -linux で Lib が .so の Declare を呼ぶ（動的リンク）
+'   呼び出し側は Windows と同じ call [rip+IAT]。引数はレジスタのほか [rsp+8+8i] にも全部ある。
+'   IAT スロットは取り込みごとの踏み台を指し、踏み台が SysV 規約に並べ替えて GOT 経由で呼ぶ。
+'   GOT はその DLL の ILT（Linux では使わない）で、ld.so が起動前に埋める（ElfDyn）。
+'   取り込みの名前は Declare の名前（Alias が同じでも引数の型ごとに踏み台が要る）。
+'   .so のシンボル名と引数の型は Declare から（LxCollectSoSigs）。
+' ===================================================
+
+Const LX_SO_MAX = 256
+Dim g_lxSoN As Long
+Dim g_lxSoKey(LX_SO_MAX * SYM_NAME_LEN) As Byte
+Dim g_lxSoSym(LX_SO_MAX * SYM_NAME_LEN) As Byte
+Dim g_lxSoArgs(LX_SO_MAX) As Long
+Dim g_lxSoFlt(LX_SO_MAX) As Long
+
+Sub LxDeclNameCopy(ctx As *LowerCtx, di As Long, dst As *Byte)
+    Dim q As *Byte
+    PtrAddTo(ctx->declNames, BytesN(di, SYM_NAME_LEN), q)
+    IbStrCpy(dst, q, SYM_NAME_LEN)
+End Sub
+
+' 呼び出しを組み立てるとき: .so なら取り込みの名前を Declare の名前にする
+Sub LxSoCallName(ctx As *LowerCtx, di As Long, dll As *Byte, api As *Byte)
+    If TyIsLinux() = 0 Then Exit Sub
+    If LxIsSoName(dll) = 0 Then Exit Sub
+    LxDeclNameCopy(ctx, di, api)
+End Sub
+
+Function LxDeclNargs(di As Long) As Long
+    Dim n As *Long
+    n = g_freeDeclNArgs As *Long
+    LxDeclNargs = n[di]
+End Function
+
+' ByVal の Double / Single の仮引数のビット（xmm で渡す）
+Function LxDeclFltMask(ctx As *LowerCtx, di As Long) As Long
+    Dim a As Long, pti As Long, ty As Long, bit As Long, bys As *Long
+    LxDeclFltMask = 0
+    bys = ctx->declByRefs
+    bit = 1
+    For a = 0 To LxDeclNargs(di) - 1
+        ty = LowStrictDeclAt(di, a, pti)
+        If (bys[di] And bit) = 0 And (ty = TY_DOUBLE Or ty = TY_SINGLE) Then LxDeclFltMask = LxDeclFltMask Or bit
+        bit = bit * 2
+    Next
+End Function
+
+Sub LxAddSoSig(ctx As *LowerCtx, di As Long)
+    Dim dll(SYM_NAME_LEN - 1) As Byte
+    LowDeclDllName(ctx, di, VarPtr(dll))
+    If LxIsSoName(VarPtr(dll)) = 0 Then Exit Sub
+    If g_lxSoN >= LX_SO_MAX Then Exit Sub
+    LxDeclNameCopy(ctx, di, VarPtr(g_lxSoKey(BytesN(g_lxSoN, SYM_NAME_LEN))))
+    LowDeclApiName(ctx, di, VarPtr(g_lxSoSym(BytesN(g_lxSoN, SYM_NAME_LEN))))
+    g_lxSoArgs(g_lxSoN) = LxDeclNargs(di)
+    g_lxSoFlt(g_lxSoN) = LxDeclFltMask(ctx, di)
+    g_lxSoN = g_lxSoN + 1
+End Sub
+
+' AstToIr の終わり（Declare の表がまだある）
+Sub LxCollectSoSigs(ctx As *LowerCtx)
+    Dim di As Long
+    g_lxSoN = 0
+    For di = 0 To ctx->declCount - 1
+        LxAddSoSig(ctx, di)
+    Next
+End Sub
+
+' 取り込みの名前（Declare の名前）から表の番号（無ければ -1）
+Function LxFindSoSig(key As *Byte) As Long
+    Dim i As Long
+    LxFindSoSig = -1
+    For i = 0 To g_lxSoN - 1
+        If IbNameEqAt(VarPtr(g_lxSoKey(0)), BytesN(i, SYM_NAME_LEN), key) <> 0 Then
+            LxFindSoSig = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' 表に無ければ整数 6 個（レジスタの分だけ渡す）
+Function LxSigArgs(sig As Long) As Long
+    LxSigArgs = 6
+    If sig >= 0 Then LxSigArgs = g_lxSoArgs(sig)
+End Function
+
+Function LxSigIsFlt(sig As Long, a As Long) As Long
+    LxSigIsFlt = 0
+    If sig < 0 Then Exit Function
+    If (g_lxSoFlt(sig) And LowArgBit(a)) <> 0 Then LxSigIsFlt = 1
+End Function
+
+Function LxDllName(i As Long) As *Byte
+    Dim q As *Byte
+    PtrAddTo(g_ibDllNames, BytesN(i, IB_NAME_LEN), q)
+    LxDllName = q
+End Function
+
+Function LxDllIsSo(i As Long) As Long
+    LxDllIsSo = LxIsSoName(LxDllName(i))
+End Function
+
+' .so のシンボル名（Declare の Alias。表に無ければ取り込みの名前のまま）
+Function LxSoSymName(builder As *ImportBuilder, slot As Long) As *Byte
+    Dim sig As Long
+    Dim key As *Byte
+    key = LxSlotName(builder, slot)
+    LxSoSymName = key
+    sig = LxFindSoSig(key)
+    If sig >= 0 Then LxSoSymName = VarPtr(g_lxSoSym(BytesN(sig, SYM_NAME_LEN)))
+End Function
+
+' i 番目の DLL の j 番目の GOT（ILT の項）
+Function LxGotRva(i As Long, j As Long) As DWord
+    Dim t As DWord
+    t = j * 8
+    t = t + g_ibDllIltRva[i]
+    LxGotRva = t
+End Function
+
+' ---- ELF に書く（WriteElf64 から）----
+Dim g_lxDynStr As DWord
+Dim g_lxDynNeed As Long
+Dim g_lxDynSym As Long
+Dim g_lxDyn As ElfDynInfo
+
+Sub LxDynMeasureDll(builder As *ImportBuilder, d As *ElfDynInfo, i As Long)
+    Dim j As Long, fc As *Long
+    fc = g_ibFuncCount
+    d->needN = d->needN + 1
+    d->strSize = d->strSize + IbDllNameLen(builder, i) + 1
+    For j = 0 To fc[i] - 1
+        d->symN = d->symN + 1
+        d->strSize = d->strSize + IbStrLen(LxSoSymName(builder, IbFuncSlot(builder, i, j))) + 1
+    Next
+End Sub
+
+' .so の取り込みが無ければ lay->dynSize = 0（静的な ELF のまま）
+Sub LxDynMeasure(builder As *ImportBuilder, lay As *ElfLayout)
+    Dim i As Long, d As *ElfDynInfo
+    d = VarPtr(g_lxDyn)
+    d->needN = 0
+    d->symN = 0
+    d->strSize = 1
+    For i = 0 To builder->dllCount - 1
+        If LxDllIsSo(i) <> 0 Then LxDynMeasureDll(builder, d, i)
+    Next
+    LxDynSetLay(d, lay)
+End Sub
+
+Sub LxDynSetLay(d As *ElfDynInfo, lay As *ElfLayout)
+    lay->dynSize = 0
+    lay->dynTabSize = 0
+    If d->symN = 0 Then Exit Sub
+    d->rva = ElfDynRva(lay)
+    lay->dynSize = ElfDynSize(d)
+    lay->dynTabSize = ElfDynTabSize(d->needN)
+End Sub
+
+Sub LxDynWriteSym(p As *Byte, d As *ElfDynInfo, builder As *ImportBuilder, i As Long, j As Long)
+    ElfDynPutSym(p, d, g_lxDynSym, g_lxDynStr, LxGotRva(i, j))
+    g_lxDynStr = ElfDynPutStr(p, d, g_lxDynStr, LxSoSymName(builder, IbFuncSlot(builder, i, j)))
+    g_lxDynSym = g_lxDynSym + 1
+End Sub
+
+Sub LxDynWriteDll(p As *Byte, d As *ElfDynInfo, builder As *ImportBuilder, i As Long)
+    Dim j As Long, fc As *Long
+    fc = g_ibFuncCount
+    ElfDynPutNeeded(p, g_lxDynNeed, g_lxDynStr)
+    g_lxDynStr = ElfDynPutStr(p, d, g_lxDynStr, LxDllName(i))
+    g_lxDynNeed = g_lxDynNeed + 1
+    For j = 0 To fc[i] - 1
+        LxDynWriteSym(p, d, builder, i, j)
+    Next
+End Sub
+
+Sub LxDynWriteInit()
+    g_lxDynStr = 1
+    g_lxDynNeed = 0
+    g_lxDynSym = 0
+End Sub
+
+' outBuf はファイル全体（0 で埋めてある）
+Sub LxDynWrite(outBuf As *Byte, lay As *ElfLayout, builder As *ImportBuilder)
+    Dim i As Long, p As *Byte, d As *ElfDynInfo
+    If lay->dynSize = 0 Then Exit Sub
+    d = VarPtr(g_lxDyn)
+    PtrAddTo(outBuf, ElfDynFileOff(lay), p)
+    ElfDynPutHead(p, d)
+    LxDynWriteInit()
+    For i = 0 To builder->dllCount - 1
+        If LxDllIsSo(i) <> 0 Then LxDynWriteDll(p, d, builder, i)
+    Next
+End Sub

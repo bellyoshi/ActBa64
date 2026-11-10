@@ -159,7 +159,7 @@ actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 
 ### Linux（`-linux`）
 
-`actba64 src.abp -linux -o out` は x86-64 Linux の静的 ELF（libc なし）を出す。コードは PE32+ と同じ Win64 規約のまま、配置も同じ RVA を `0x400000` に置く（`ElfHdr` / `ElfWriter`）。
+`actba64 src.abp -linux -o out` は x86-64 Linux の静的 ELF（libc なし）を出す（Lib が `.so` の Declare があるときだけ動的リンク、下記）。コードは PE32+ と同じ Win64 規約のまま、配置も同じ RVA を `0x400000` に置く（`ElfHdr` / `ElfWriter`）。
 
 - **API スロット**（`LinuxRt`）: 呼び出しは Windows と同じ `call [rip+IAT]`。スロットには `Include\linux` の BASIC 関数 `Lx_<API名>`（例: `Lx_WriteFile`）の絶対アドレスを書く。無い API は `unsupported API: 名前` を stderr に出して終了コード 127
 - **スタブ**（`LinuxStub`）: `_start`（rsp を保存し `jmp main` を call）、`Lx_Syscall(番号, a1..a6)`、`Lx_StackBase()`。GC のスタック底は `gs:[8]` の代わりに保存した rsp
@@ -167,7 +167,17 @@ actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 - 今あるのは標準入出力（`Print`、`Input`）・終了・メモリ／C 文字列・ヒープ・ファイル（`Open` / `Print #` / `Write #` / `Input #` / `Get` / `Put`、`Kill` / `MkDir` / `ChDir`）・時刻（`Date$` / `Time$` は今は UTC）・`Sleep`・`GetCommandLine` / `GetModuleFileName`
 - ファイルの行末も LF（`BaFileWriteNl`）。パスは UTF-8 のまま A 版の代わりへ渡す（`BasicPathWide` は `-linux` で 0）
 - `Include\linux` では `*VoidPtr` / `*Word` の添字と `VoidPtr` の配列を使わない（どれも 4 バイト刻みになる）。8 バイト・2 バイトは `LxGetQ` / `LxSetQ` / `LxSetW` で読み書きする
-- テストのメタ `' Args: …` で実行時の引数を渡せる（`run_test_linux.ps1` だけ）
+- **呼ばれない関数を消す**（`LinuxPrune`、`-linux` だけ）: IR を関数（`OP_LABEL` の直後が `OP_ENTER`）に分け、先頭（`jmp main`）から分岐・`OP_CALL_LAB`・`OP_LEA_RAX_LAB`（`AddressOf` / `Virtual`）・次の関数への落ち込み・API の Lx_ 版をたどる。届かない関数は `OP_NOP` にするので、コードも API の取り込みも文字列も出ない（Hello World は 212KB → 29KB）
+- **警告**（`LinuxCheck`）: 残った呼び出しのうち Linux 版の無い API は `warning: file(行): 'MessageBeep' has no Linux version; …` を出す。行は呼んだ文（`OP_CALL_API` の `arg2`）。実行時ルーチンの中なら `warning: (runtime): …`
+- 実際には通らないが静的には届く Windows 専用の呼び出し（`BasicPath` の W 版、`Sleep` のメッセージ処理など）は `#ifndef _LINUX` で外す
+- `MultiByteToWideChar` / `WideCharToMultiByte`（`LxUnicode`）: コードページは何でも UTF-8 として扱う（Linux に CP932 は無い）
+- ELF のファイルでは `.idata` を `.text` の直後のページに置く（`.data` の 0 はファイルに持たない）
+- **共有ライブラリ**（`ElfDyn` / `LinuxDyn` / `LinuxThunk`）: `Declare Function strlen Lib "libc.so.6" (s As BytePtr) As Long` のように Lib が `xxx.so` / `xxx.so.N` なら、その ELF は動的リンクになる（`PT_INTERP` = `/lib64/ld-linux-x86-64.so.2`、`PT_DYNAMIC`、`DT_NEEDED`、`R_X86_64_GLOB_DAT`）。ブロブは `.idata` の後ろのページ、GOT はその DLL の ILT（Linux では使わない）。`.so` が無ければ今までどおり静的
+  - IAT スロットは取り込みごとの踏み台を指す。踏み台は `[rsp+8+8i]` の引数を SysV 規約に並べ替える（整数 → rdi, rsi, rdx, rcx, r8, r9、ByVal の `Double` / `Single` → xmm0..7、残りはスタック、`al` = xmm の数なので `printf` のような可変長引数も呼べる）。rsi / rdi は踏み台が保存する
+  - 取り込みの名前は Declare の名前、シンボル名は Alias（同じ関数を型の違う Declare で呼べる）。Declare の `Double` / `Single` の仮引数へは呼び出し側でその型に変換する（Windows でも同じ）
+  - 未対応: 戻り値の `Double`（Declare の戻り値の型は読み捨てている）、構造体の値渡し、`.so` から BASIC へのコールバック（`qsort` など）。`ExitProcess` は exit_group なので libc の `stdio` はバッファが残る（`puts` などを使うなら `fflush(0)` を呼ぶ）
+  - 名前が実行時ルーチンと同じ（`rand` など）だとそちらが呼ばれるので、Alias で別の名前にする
+- テストのメタ（`run_test_linux.ps1` だけ）: `' Args: …` 実行時の引数、`' Warn: N` 警告の数（省略時 0）、`' WarnAt: file(行)` 警告の場所、`' MaxSize: N` ELF の上限バイト数
 - **ヒープ**（`LxHeap`）: `HeapAlloc` などは mmap した 4MB の領域から 16<<k バイトの区分で切り出し、区分ごとの空きリストで使い回す。1MB を超えるものは 1 つずつ mmap / munmap
 
 ```powershell

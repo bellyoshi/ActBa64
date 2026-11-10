@@ -1,0 +1,54 @@
+' ===================================================
+'  LinuxCheck - -linux の AstToIr の後始末
+'   シム（Lx_ 関数）を集め、呼ばれない関数を消し（LinuxPrune）、残った呼び出しのうち
+'   Linux 版の無い API を警告する（実行すると "unsupported API" で終了コード 127）。
+'   Lib が .so の Declare は動的リンクで呼ぶので警告しない（引数の型を LxCollectSoSigs で控える）
+' ===================================================
+
+' OP_CALL_API の API を受け持つ Lx_ 関数のラベル（無ければ -1）
+Function LxPrApiLab(list As *IrList, i As Long) As Long
+    Dim dll(SYM_NAME_LEN - 1) As Byte
+    Dim api(SYM_NAME_LEN - 1) As Byte
+    LxPrApiLab = -1
+    If Not IrResolveApiNames(list, i, VarPtr(dll), VarPtr(api)) Then Exit Function
+    LxPrApiLab = LxFindShim(VarPtr(api))
+End Function
+
+' Lx_Syscall / Lx_StackBase は機械語のスタブ、ほかは Lx_ 関数があれば 1
+Function LxApiHandled(api As *Byte) As Long
+    LxApiHandled = 1
+    If ByteStrEq("Lx_Syscall", api) Or ByteStrEq("Lx_StackBase", api) Then Exit Function
+    If LxFindShim(api) >= 0 Then Exit Function
+    LxApiHandled = 0
+End Function
+
+Function LxWarnMsg$(api As *Byte) As String
+    LxWarnMsg$ = "'" + MakeStr(api) + "' has no Linux version; calling it stops the program (exit code 127)"
+End Function
+
+' 行は呼び出した文（IrEmitStr が OP_CALL_API の arg2 に残す）。0 は実行時ルーチンの中
+Sub LxWarnApi(list As *IrList, i As Long)
+    Dim dll(SYM_NAME_LEN - 1) As Byte
+    Dim api(SYM_NAME_LEN - 1) As Byte
+    Dim ops As *IrOp
+    If Not IrResolveApiNames(list, i, VarPtr(dll), VarPtr(api)) Then Exit Sub
+    If LxIsSoName(VarPtr(dll)) <> 0 Or LxApiHandled(VarPtr(api)) <> 0 Then Exit Sub
+    ops = list->ops
+    If ops[i].arg2 > 0 Then DiagWarn(ops[i].arg2, LxWarnMsg$(VarPtr(api)))
+    If ops[i].arg2 = 0 Then Print "warning: (runtime): " + LxWarnMsg$(VarPtr(api))
+End Sub
+
+Sub LxWarnApis(list As *IrList)
+    Dim i As Long, ops As *IrOp
+    ops = list->ops
+    For i = 0 To list->count - 1
+        If ops[i].op = OP_CALL_API Then LxWarnApi(list, i)
+    Next
+End Sub
+
+Sub LxLowerDone(ctx As *LowerCtx)
+    LxCollectShims(ctx)
+    LxCollectSoSigs(ctx)
+    LxPrune(ctx->list, VarPtr(g_expLabs(0)), g_expCount)
+    LxWarnApis(ctx->list)
+End Sub

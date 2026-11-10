@@ -1,0 +1,194 @@
+' ===================================================
+'  LinuxPrune - -linux で呼ばれない関数を消す（IR の到達解析）
+'   領域: OP_LABEL の直後が OP_ENTER の所から次の領域の手前まで（先頭の jmp main は領域 0）
+'   辺:   分岐・OP_CALL_LAB・OP_LEA_RAX_LAB のラベルを含む領域。OP_CALL_API はその API の
+'         シム（LxPrApiLab。Lx_ 関数は API の呼び出しスロットからしか呼ばれない）
+'         最後が OP_LEAVE / OP_RET / OP_JMP でなければ次の領域へ落ちるので、次の領域も
+'   根:   領域 0 と roots（DLL のエクスポート）
+'   届かない領域の命令は OP_NOP にする（コードも、API の取り込みも、文字列も出ない）
+' ===================================================
+
+Dim g_lpRegOf As *Long
+Dim g_lpStart As *Long
+Dim g_lpLive As *Long
+Dim g_lpWork As *Long
+Dim g_lpRegN As Long
+Dim g_lpLabN As Long
+Dim g_lpWorkN As Long
+
+Function LxPrIsStart(ops As *IrOp, i As Long, n As Long) As Long
+    LxPrIsStart = 0
+    If i + 1 >= n Then Exit Function
+    If ops[i].op = OP_LABEL And ops[i + 1].op = OP_ENTER Then LxPrIsStart = 1
+End Function
+
+Function LxPrIsJump(opv As Long) As Long
+    LxPrIsJump = 0
+    If opv = OP_JMP Then LxPrIsJump = 1
+    If opv >= OP_JZ And opv <= OP_JGE Then LxPrIsJump = 1
+    If opv >= OP_JB And opv <= OP_JA Then LxPrIsJump = 1
+End Function
+
+Function LxPrIsLabRef(opv As Long) As Long
+    LxPrIsLabRef = LxPrIsJump(opv)
+    If opv = OP_CALL_LAB Or opv = OP_LEA_RAX_LAB Then LxPrIsLabRef = 1
+End Function
+
+Function LxPrHasLab(opv As Long) As Long
+    LxPrHasLab = LxPrIsLabRef(opv)
+    If opv = OP_LABEL Then LxPrHasLab = 1
+End Function
+
+' ラベル番号の上限 + 1
+Sub LxPrNoteLab(lab As DWord)
+    Dim t As Long
+    t = lab
+    t = t + 1
+    If t > g_lpLabN Then g_lpLabN = t
+End Sub
+
+Sub LxPrCount(list As *IrList)
+    Dim i As Long, ops As *IrOp
+    ops = list->ops
+    g_lpLabN = 0
+    g_lpRegN = 1
+    For i = 0 To list->count - 1
+        If LxPrHasLab(ops[i].op) <> 0 Then LxPrNoteLab(ops[i].arg1)
+        If i > 0 And LxPrIsStart(ops, i, list->count) <> 0 Then g_lpRegN = g_lpRegN + 1
+    Next
+End Sub
+
+Function LxPrCalloc(n As Long) As *Long
+    LxPrCalloc = calloc(BytesN(n + 1, SizeOf(Long)))
+End Function
+
+' 定義の無いラベルは領域 -1
+Sub LxPrInitLabs()
+    Dim i As Long
+    For i = 0 To g_lpLabN - 1
+        g_lpRegOf[i] = -1
+    Next
+End Sub
+
+Function LxPrAlloc() As Long
+    LxPrAlloc = 0
+    g_lpRegOf = LxPrCalloc(g_lpLabN)
+    g_lpStart = LxPrCalloc(g_lpRegN)
+    g_lpLive = LxPrCalloc(g_lpRegN)
+    g_lpWork = LxPrCalloc(g_lpRegN)
+    If g_lpRegOf = NULL Or g_lpStart = NULL Or g_lpLive = NULL Or g_lpWork = NULL Then Exit Function
+    LxPrInitLabs()
+    LxPrAlloc = 1
+End Function
+
+Sub LxPrFreeOne(ByRef p As *Long)
+    If p <> NULL Then free(p)
+    p = NULL
+End Sub
+
+Sub LxPrFree()
+    LxPrFreeOne(g_lpRegOf)
+    LxPrFreeOne(g_lpStart)
+    LxPrFreeOne(g_lpLive)
+    LxPrFreeOne(g_lpWork)
+End Sub
+
+Function LxPrNewReg(r As Long, i As Long) As Long
+    g_lpStart[r + 1] = i
+    LxPrNewReg = r + 1
+End Function
+
+' 領域の先頭を g_lpStart に、ラベルの領域を g_lpRegOf に
+Sub LxPrSplit(list As *IrList)
+    Dim i As Long, r As Long, ops As *IrOp
+    ops = list->ops
+    r = 0
+    g_lpStart[0] = 0
+    For i = 0 To list->count - 1
+        If i > 0 And LxPrIsStart(ops, i, list->count) <> 0 Then r = LxPrNewReg(r, i)
+        If ops[i].op = OP_LABEL Then g_lpRegOf[ops[i].arg1] = r
+    Next
+    g_lpStart[g_lpRegN] = list->count
+End Sub
+
+Sub LxPrMark(r As Long)
+    If r < 0 Then Exit Sub
+    If g_lpLive[r] <> 0 Then Exit Sub
+    g_lpLive[r] = 1
+    g_lpWork[g_lpWorkN] = r
+    g_lpWorkN = g_lpWorkN + 1
+End Sub
+
+Sub LxPrMarkLab(lab As Long)
+    If lab < 0 Or lab >= g_lpLabN Then Exit Sub
+    LxPrMark(g_lpRegOf[lab])
+End Sub
+
+Sub LxPrScanOp(list As *IrList, i As Long)
+    Dim ops As *IrOp
+    ops = list->ops
+    If LxPrIsLabRef(ops[i].op) <> 0 Then LxPrMarkLab(ops[i].arg1)
+    If ops[i].op = OP_CALL_API Then LxPrMarkLab(LxPrApiLab(list, i))
+End Sub
+
+Function LxPrEnds(opv As Long) As Long
+    LxPrEnds = 0
+    If opv = OP_LEAVE Or opv = OP_RET Or opv = OP_JMP Then LxPrEnds = 1
+End Function
+
+Sub LxPrScan(list As *IrList, r As Long)
+    Dim i As Long, e As Long, ops As *IrOp
+    ops = list->ops
+    e = g_lpStart[r + 1]
+    i = g_lpStart[r]
+    While i < e
+        LxPrScanOp(list, i)
+        i = i + 1
+    Wend
+    If r + 1 < g_lpRegN And LxPrEnds(ops[e - 1].op) = 0 Then LxPrMark(r + 1)
+End Sub
+
+Sub LxPrWalk(list As *IrList, roots As *Long, rootN As Long)
+    Dim i As Long
+    g_lpWorkN = 0
+    LxPrMark(0)
+    For i = 0 To rootN - 1
+        LxPrMarkLab(roots[i])
+    Next
+    While g_lpWorkN > 0
+        g_lpWorkN = g_lpWorkN - 1
+        LxPrScan(list, g_lpWork[g_lpWorkN])
+    Wend
+End Sub
+
+Function LxPrDropReg(ops As *IrOp, r As Long) As Long
+    Dim i As Long, e As Long
+    e = g_lpStart[r + 1]
+    i = g_lpStart[r]
+    LxPrDropReg = e - i
+    While i < e
+        ops[i].op = OP_NOP
+        i = i + 1
+    Wend
+End Function
+
+Function LxPrDrop(list As *IrList) As Long
+    Dim r As Long, n As Long
+    n = 0
+    For r = 0 To g_lpRegN - 1
+        If g_lpLive[r] = 0 Then n = n + LxPrDropReg(list->ops, r)
+    Next
+    LxPrDrop = n
+End Function
+
+' 戻り値は OP_NOP にした命令の数（メモリが取れなければ何も消さず 0）
+Function LxPrune(list As *IrList, roots As *Long, rootN As Long) As Long
+    LxPrune = 0
+    LxPrCount(list)
+    If LxPrAlloc() <> 0 Then
+        LxPrSplit(list)
+        LxPrWalk(list, roots, rootN)
+        LxPrune = LxPrDrop(list)
+    End If
+    LxPrFree()
+End Function

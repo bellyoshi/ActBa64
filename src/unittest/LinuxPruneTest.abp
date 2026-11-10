@@ -1,0 +1,83 @@
+' -linux の到達解析（LinuxPrune）。関数は OP_LABEL の直後が OP_ENTER の所から次の関数まで。
+' 呼ばれない関数の命令は OP_NOP になり、API の呼び出しも消える（取り込み表に載らない）
+Dim lpList As *IrList
+Dim lpAt(15) As Long
+
+' 偽のシム: ExitProcess は L6 の関数が受け持つ
+Function LxPrApiLab(list As *IrList, i As Long) As Long
+    Dim buf(IR_STR_LEN - 1) As Byte
+    IrCopyStrAt(list, i, VarPtr(buf(0)))
+    LxPrApiLab = -1
+    If ByteStrEq("ExitProcess", VarPtr(buf(0))) Then LxPrApiLab = 6
+End Function
+
+Sub LpFunc(tag As Long, lab As Long)
+    lpAt(tag) = IrEmit(lpList, OP_LABEL, lab, 0)
+    IrEmit(lpList, OP_ENTER, 32, 0)
+End Sub
+
+Function LpOp(idx As Long) As Long
+    Dim ops As *IrOp
+    ops = lpList->ops
+    LpOp = ops[idx].op
+End Function
+
+Function LpBuild() As Long
+    lpList = IrCreate(64)
+    IrEmit(lpList, OP_JMP, 1, 0)
+    LpFunc(0, 2)
+    IrEmitStr(lpList, OP_CALL_API, IR_DLL_USER32, "MessageBeep")
+    IrEmit(lpList, OP_LEAVE, 0, 0)
+    LpFunc(1, 1)
+    IrEmit(lpList, OP_CALL_LAB, 3, 0)
+    IrEmit(lpList, OP_LEA_RAX_LAB, 5, 0)
+    LpBuild = IrEmitStr(lpList, OP_CALL_API, IR_DLL_KERNEL32, "ExitProcess")
+End Function
+
+Sub LpBuildRest()
+    IrEmit(lpList, OP_LEAVE, 0, 0)
+    LpFunc(2, 3)
+    IrEmit(lpList, OP_JZ, 4, 0)
+    IrEmit(lpList, OP_LABEL, 4, 0)
+    IrEmit(lpList, OP_LEAVE, 0, 0)
+    LpFunc(3, 6)
+    IrEmit(lpList, OP_LEAVE, 0, 0)
+    LpFunc(4, 5)
+    IrEmit(lpList, OP_LEAVE, 0, 0)
+End Sub
+
+' 呼ばれない呼び出し元、エクスポート、そこから落ちる先、LEAVE の後
+Sub LpBuildTail()
+    LpFunc(5, 7)
+    IrEmit(lpList, OP_CALL_LAB, 2, 0)
+    LpFunc(6, 8)
+    IrEmit(lpList, OP_MOV_EAX_IMM, 1, 0)
+    LpFunc(7, 9)
+    IrEmit(lpList, OP_LEAVE, 0, 0)
+    LpFunc(8, 10)
+End Sub
+
+Dim lpExit As Long
+Dim lpRoots(0) As Long
+Dim lpDropped As Long
+lpExit = LpBuild()
+LpBuildRest()
+LpBuildTail()
+lpRoots(0) = 8
+lpDropped = LxPrune(lpList, VarPtr(lpRoots(0)), 1)
+
+Assert(OP_NOP, LpOp(lpAt(0)), "unused Sub (label 2) dropped")
+Assert(OP_NOP, LpOp(lpAt(0) + 2), "MessageBeep call in unused Sub dropped")
+Assert(OP_LABEL, LpOp(lpAt(1)), "main kept (jmp from entry)")
+Assert(OP_CALL_API, LpOp(lpExit), "ExitProcess call kept")
+Assert(OP_LABEL, LpOp(lpAt(2)), "called function kept")
+Assert(OP_LABEL, LpOp(lpAt(2) + 3), "inner label kept")
+Assert(OP_LABEL, LpOp(lpAt(3)), "shim reached through its API kept")
+Assert(OP_LABEL, LpOp(lpAt(4)), "AddressOf target kept")
+Assert(OP_NOP, LpOp(lpAt(5)), "unused caller of unused Sub dropped")
+Assert(OP_NOP, LpOp(lpAt(5) + 2), "its call dropped")
+Assert(OP_LABEL, LpOp(lpAt(6)), "export root kept")
+Assert(OP_LABEL, LpOp(lpAt(7)), "region reached by falling through kept")
+Assert(OP_NOP, LpOp(lpAt(8)), "no fall-through after LEAVE")
+Assert(9, lpDropped, "dropped op count")
+IrFree(lpList)
