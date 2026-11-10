@@ -1,0 +1,96 @@
+' ===================================================
+'  LinuxThunk - -linux: .so の関数を呼ぶ Win64 → SysV の踏み台（取り込みごと、両パスで同じ大きさ）
+'   push rsi; push rdi; push rbx; mov rbx,rsp     引数 i は [rbx+32+8i]（rsp≡0 mod 16）
+'   sub rsp,S                                      S = スタックに積む引数 x 8 を 16 に揃えたもの
+'   整数 → rdi, rsi, rdx, rcx, r8, r9、Double / Single → xmm0..xmm7、あふれた分は順に [rsp+8k]
+'   mov eax,xmm の数（可変長引数の al）; call [rip+GOT]; mov rsp,rbx; pop rbx; pop rdi; pop rsi; ret
+'   rsi / rdi は Win64 では呼ばれた側が保存するが SysV では壊れるので、踏み台が保存する
+'   戻り値は rax / xmm0 のまま（どちらの規約も同じ）。.so から BASIC へのコールバックは未対応
+' ===================================================
+
+Dim g_lxThInt As Long
+Dim g_lxThFlt As Long
+Dim g_lxThStk As Long
+
+' mov r64,[rbx+disp32] の頭（rdi, rsi, rdx, rcx, r8, r9 の順）
+Function LxThIntOp$(k As Long) As String
+    LxThIntOp$ = "48 8B BB"
+    If k = 1 Then LxThIntOp$ = "48 8B B3"
+    If k = 2 Then LxThIntOp$ = "48 8B 93"
+    If k = 3 Then LxThIntOp$ = "48 8B 8B"
+    If k = 4 Then LxThIntOp$ = "4C 8B 83"
+    If k = 5 Then LxThIntOp$ = "4C 8B 8B"
+End Function
+
+Function LxThIntReg(cb As *CodeBuffer, disp As Long, emit As Long) As Long
+    LxThIntReg = 0
+    If g_lxThInt >= 6 Then Exit Function
+    If emit <> 0 Then
+        LxHex(cb, LxThIntOp$(g_lxThInt))
+        EmitDword(cb, disp)
+    End If
+    g_lxThInt = g_lxThInt + 1
+    LxThIntReg = 1
+End Function
+
+' movsd xmmN,[rbx+disp32]
+Function LxThFltReg(cb As *CodeBuffer, disp As Long, emit As Long) As Long
+    LxThFltReg = 0
+    If g_lxThFlt >= 8 Then Exit Function
+    If emit <> 0 Then
+        LxHex(cb, "F2 0F 10")
+        EmitByte(cb, (&H83 + g_lxThFlt * 8) As Byte)
+        EmitDword(cb, disp)
+    End If
+    g_lxThFlt = g_lxThFlt + 1
+    LxThFltReg = 1
+End Function
+
+' mov rax,[rbx+disp32]; mov [rsp+8k],rax
+Sub LxThStk(cb As *CodeBuffer, disp As Long, emit As Long)
+    If emit <> 0 Then
+        LxHex(cb, "48 8B 83")
+        EmitDword(cb, disp)
+        LxHex(cb, "48 89 84 24")
+        EmitDword(cb, g_lxThStk * 8)
+    End If
+    g_lxThStk = g_lxThStk + 1
+End Sub
+
+Sub LxThArg(cb As *CodeBuffer, isFlt As Long, disp As Long, emit As Long)
+    Dim placed As Long
+    If isFlt <> 0 Then placed = LxThFltReg(cb, disp, emit)
+    If isFlt = 0 Then placed = LxThIntReg(cb, disp, emit)
+    If placed = 0 Then LxThStk(cb, disp, emit)
+End Sub
+
+' emit = 0 なら数えるだけ。戻り値は sub rsp の大きさ
+Function LxThArgs(cb As *CodeBuffer, sig As Long, emit As Long) As Long
+    Dim a As Long
+    g_lxThInt = 0
+    g_lxThFlt = 0
+    g_lxThStk = 0
+    For a = 0 To LxSigArgs(sig) - 1
+        LxThArg(cb, LxSigIsFlt(sig, a), 32 + a * 8, emit)
+    Next
+    LxThArgs = AlignUp(g_lxThStk * 8, 16)
+End Function
+
+Sub LxThCall(cb As *CodeBuffer, i As Long, j As Long)
+    LxHex(cb, "B8")
+    EmitDword(cb, g_lxThFlt)
+    LxHex(cb, "FF 15")
+    LxRipDisp(cb, LxGotRva(i, j))
+    LxHex(cb, "48 89 DC 5B 5F 5E C3")
+End Sub
+
+Sub LxEmitThunk(cb As *CodeBuffer, builder As *ImportBuilder, i As Long, j As Long)
+    Dim sig As Long, slot As Long
+    slot = IbFuncSlot(builder, i, j)
+    g_lxTramp[slot] = cb->size
+    sig = LxFindSoSig(LxSlotName(builder, slot))
+    LxHex(cb, "56 57 53 48 89 E3 48 81 EC")
+    EmitDword(cb, LxThArgs(cb, sig, 0))
+    LxThArgs(cb, sig, 1)
+    LxThCall(cb, i, j)
+End Sub

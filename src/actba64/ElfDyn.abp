@@ -1,0 +1,185 @@
+' ===================================================
+'  ElfDyn - -linux で .so を呼ぶときの動的リンク情報（.idata の後ろのページ、R+W）
+'   +0   インタプリタ名 /lib64/ld-linux-x86-64.so.2（PT_INTERP）
+'   +32  .dynamic: DT_NEEDED x needN, HASH, STRTAB, SYMTAB, STRSZ, SYMENT, RELA, RELASZ, RELAENT, NULL
+'   .hash（nbucket = 1、何も公開しない）, .dynsym（0 番は空）, .rela（R_X86_64_GLOB_DAT）, .dynstr（先頭は NUL）
+'   GOT は .idata の ILT（Linux では使わない）。ld.so が起動前に関数の番地を書く
+' ===================================================
+
+Const ELF_DYN_HEAD = 32
+Const ELF_DYN_FIXED = 9
+Const ELF_SYM_SIZE = 24
+Const ELF_RELA_SIZE = 24
+
+Type ElfDynInfo
+    rva As DWord
+    needN As Long
+    symN As Long
+    strSize As DWord
+End Type
+
+' "xxx.so" か "xxx.so.N…" なら 1（Linux の共有ライブラリ）
+Function LxIsSoName(name As *Byte) As Long
+    Dim i As Long
+    LxIsSoName = 0
+    i = 0
+    While name[i] <> 0
+        If LxIsSoAt(name, i) <> 0 Then LxIsSoName = 1
+        i = i + 1
+    Wend
+End Function
+
+Function LxIsSoAt(name As *Byte, i As Long) As Long
+    LxIsSoAt = 0
+    If name[i] <> &H2E Then Exit Function
+    If name[i + 1] <> &H73 Then Exit Function
+    If name[i + 2] <> &H6F Then Exit Function
+    If name[i + 3] = 0 Or name[i + 3] = &H2E Then LxIsSoAt = 1
+End Function
+
+Function ElfDynTabSize(needN As Long) As DWord
+    Dim t As DWord
+    t = needN + ELF_DYN_FIXED
+    t = t * 16
+    ElfDynTabSize = t
+End Function
+
+Function ElfDynHashOff(d As *ElfDynInfo) As DWord
+    Dim t As DWord
+    t = ElfDynTabSize(d->needN)
+    t = t + ELF_DYN_HEAD
+    ElfDynHashOff = t
+End Function
+
+' .hash は nbucket, nchain, bucket[0], chain[symN + 1]
+Function ElfDynSymOff(d As *ElfDynInfo) As DWord
+    Dim t As DWord
+    t = d->symN + 4
+    t = t * 4
+    t = t + ElfDynHashOff(d)
+    ElfDynSymOff = AlignUp(t, 8)
+End Function
+
+Function ElfDynRelaOff(d As *ElfDynInfo) As DWord
+    Dim t As DWord
+    t = d->symN + 1
+    t = t * ELF_SYM_SIZE
+    t = t + ElfDynSymOff(d)
+    ElfDynRelaOff = t
+End Function
+
+Function ElfDynRelaSize(d As *ElfDynInfo) As DWord
+    Dim t As DWord
+    t = d->symN
+    t = t * ELF_RELA_SIZE
+    ElfDynRelaSize = t
+End Function
+
+Function ElfDynStrOff(d As *ElfDynInfo) As DWord
+    Dim t As DWord
+    t = ElfDynRelaOff(d)
+    t = t + ElfDynRelaSize(d)
+    ElfDynStrOff = t
+End Function
+
+Function ElfDynSize(d As *ElfDynInfo) As DWord
+    Dim t As DWord
+    t = ElfDynStrOff(d)
+    t = t + d->strSize
+    ElfDynSize = t
+End Function
+
+Function ElfDynVa(d As *ElfDynInfo, off As DWord) As DWord
+    Dim t As DWord
+    t = d->rva
+    t = t + off
+    ElfDynVa = ElfVa(t)
+End Function
+
+' .dynamic の idx 番目（16 バイト: d_tag, d_val）
+Sub ElfDynPutTag(p As *Byte, idx As Long, tag As DWord, v As DWord)
+    Dim o As DWord
+    o = idx * 16
+    o = o + ELF_DYN_HEAD
+    ElfPutQ(p, o, tag)
+    ElfPutQ(p, o + 8, v)
+End Sub
+
+Sub ElfDynPutInterp(p As *Byte)
+    Dim s As String
+    Dim q As *Byte
+    Dim i As Long
+    s = "/lib64/ld-linux-x86-64.so.2"
+    q = StrPtr(s)
+    For i = 0 To Len(s) - 1
+        p[i] = q[i]
+    Next
+End Sub
+
+Sub ElfDynPutTabs(p As *Byte, d As *ElfDynInfo)
+    Dim i As Long
+    i = d->needN
+    ElfDynPutTag(p, i, 4, ElfDynVa(d, ElfDynHashOff(d)))
+    ElfDynPutTag(p, i + 1, 5, ElfDynVa(d, ElfDynStrOff(d)))
+    ElfDynPutTag(p, i + 2, 6, ElfDynVa(d, ElfDynSymOff(d)))
+    ElfDynPutTag(p, i + 3, 10, d->strSize)
+    ElfDynPutTag(p, i + 4, 11, ELF_SYM_SIZE)
+End Sub
+
+Sub ElfDynPutRelaTags(p As *Byte, d As *ElfDynInfo)
+    Dim i As Long
+    i = d->needN + 5
+    ElfDynPutTag(p, i, 7, ElfDynVa(d, ElfDynRelaOff(d)))
+    ElfDynPutTag(p, i + 1, 8, ElfDynRelaSize(d))
+    ElfDynPutTag(p, i + 2, 9, ELF_RELA_SIZE)
+    ElfDynPutTag(p, i + 3, 0, 0)
+End Sub
+
+' インタプリタ名、.dynamic の固定部、.hash（p は 0 で埋めたブロブの先頭）
+Sub ElfDynPutHead(p As *Byte, d As *ElfDynInfo)
+    Dim h As DWord
+    ElfDynPutInterp(p)
+    ElfDynPutTabs(p, d)
+    ElfDynPutRelaTags(p, d)
+    h = ElfDynHashOff(d)
+    PutDword(p, h, 1)
+    PutDword(p, h + 4, d->symN + 1)
+End Sub
+
+' k 番目の DT_NEEDED（nameOff は .dynstr の中の位置）
+Sub ElfDynPutNeeded(p As *Byte, k As Long, nameOff As DWord)
+    ElfDynPutTag(p, k, 1, nameOff)
+End Sub
+
+' k 番目の取り込み: シンボル k + 1（GLOBAL FUNC、未定義）と、GOT へのリロケーション
+Sub ElfDynPutSym(p As *Byte, d As *ElfDynInfo, k As Long, nameOff As DWord, gotRva As DWord)
+    Dim o As DWord
+    o = (k + 1) * ELF_SYM_SIZE
+    o = o + ElfDynSymOff(d)
+    PutDword(p, o, nameOff)
+    p[o + 4] = &H12
+    ElfDynPutRela(p, d, k, gotRva)
+End Sub
+
+Sub ElfDynPutRela(p As *Byte, d As *ElfDynInfo, k As Long, gotRva As DWord)
+    Dim o As DWord
+    o = k * ELF_RELA_SIZE
+    o = o + ElfDynRelaOff(d)
+    ElfPutQ(p, o, ElfVa(gotRva))
+    PutDword(p, o + 8, 6)
+    PutDword(p, o + 12, k + 1)
+End Sub
+
+' .dynstr の off に name を書く。戻り値は次の文字列の位置
+Function ElfDynPutStr(p As *Byte, d As *ElfDynInfo, off As DWord, name As *Byte) As DWord
+    Dim o As DWord
+    Dim i As Long
+    o = ElfDynStrOff(d)
+    o = o + off
+    i = 0
+    While name[i] <> 0
+        p[o + i] = name[i]
+        i = i + 1
+    Wend
+    ElfDynPutStr = off + i + 1
+End Function

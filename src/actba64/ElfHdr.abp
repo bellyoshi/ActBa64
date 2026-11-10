@@ -1,7 +1,10 @@
 ' ===================================================
 '  ElfHdr - -linux の ELF64 ヘッダとプログラムヘッダ（静的 ET_EXEC / x86-64）
 '  PE と同じ RVA 配置（TEXT_RVA, .data, .idata）をそのまま ELF_BASE + RVA に置く。
-'  ファイル位置 = RVA なので、各 PT_LOAD は p_offset と p_vaddr がページ境界で揃う。
+'  ファイルでは .text は位置 = RVA、.idata は .text の直後のページ（.data の 0 はファイルに持たない）。
+'  どちらもページ境界なので、各 PT_LOAD の p_offset と p_vaddr はページの中で揃う。
+'  .so を呼ぶとき（dynSize > 0）は .idata の後ろのページに ElfDyn のブロブを足し、
+'  PT_INTERP, PT_LOAD x4, PT_DYNAMIC, PT_GNU_STACK の 7 個にする（静的なときは 4 個）。
 ' ===================================================
 
 Const ELF_BASE = &H00400000
@@ -9,8 +12,14 @@ Const ELF_PAGE = &H1000
 Const ELF_EHDR_SIZE = 64
 Const ELF_PHDR_SIZE = 56
 Const ELF_PHNUM = 4
+Const ELF_PHNUM_DYN = 7
 Const ELF_PT_LOAD = 1
+Const ELF_PT_DYNAMIC = 2
+Const ELF_PT_INTERP = 3
+Const ELF_INTERP_LEN = 28
+Const ELF_DYN_TAB = 32
 Const ELF_PT_GNU_STACK = &H6474E551
+Const ELF_PF_R = 4
 Const ELF_PF_RX = 5
 Const ELF_PF_RW = 6
 
@@ -22,6 +31,8 @@ Type ElfLayout
     idataSize As DWord
     idataVirt As DWord
     entryRva As DWord
+    dynSize As DWord
+    dynTabSize As DWord
 End Type
 
 ' AB4.20 の 16bit 演算を避けて DWord 局所へ段階代入する
@@ -32,11 +43,42 @@ Function ElfVa(rva As DWord) As DWord
     ElfVa = t
 End Function
 
-Function ElfFileSize(lay As *ElfLayout) As DWord
+' .idata のファイル位置（.text の終わりをページに揃えたところ）
+Function ElfIdataOff(lay As *ElfLayout) As DWord
+    ElfIdataOff = AlignUp(lay->textEnd, ELF_PAGE)
+End Function
+
+Function ElfIdataEnd(lay As *ElfLayout) As DWord
+    Dim t As DWord
+    t = ElfIdataOff(lay)
+    t = t + lay->idataSize
+    ElfIdataEnd = t
+End Function
+
+' 動的リンクのブロブ（ElfDyn）のファイル位置と RVA（どちらも .idata の後ろのページ）
+Function ElfDynFileOff(lay As *ElfLayout) As DWord
+    ElfDynFileOff = AlignUp(ElfIdataEnd(lay), ELF_PAGE)
+End Function
+
+Function ElfDynRva(lay As *ElfLayout) As DWord
     Dim t As DWord
     t = lay->idataRva
-    t = t + lay->idataSize
+    t = t + lay->idataVirt
+    ElfDynRva = AlignUp(t, ELF_PAGE)
+End Function
+
+Function ElfFileSize(lay As *ElfLayout) As DWord
+    Dim t As DWord
+    ElfFileSize = ElfIdataEnd(lay)
+    If lay->dynSize = 0 Then Exit Function
+    t = ElfDynFileOff(lay)
+    t = t + lay->dynSize
     ElfFileSize = t
+End Function
+
+Function ElfPhNum(lay As *ElfLayout) As Long
+    ElfPhNum = ELF_PHNUM
+    If lay->dynSize <> 0 Then ElfPhNum = ELF_PHNUM_DYN
 End Function
 
 ' 上位 32bit は常に 0（ベース 0x400000 の静的 EXE）
@@ -52,21 +94,21 @@ Sub ElfPutIdent(p As *Byte)
     p[6] = 1
 End Sub
 
-Sub ElfPutEhdr(p As *Byte, entryRva As DWord)
+Sub ElfPutEhdr(p As *Byte, lay As *ElfLayout)
     ElfPutIdent(p)
     PutWord(p, 16, 2)
     PutWord(p, 18, &H3E)
     PutDword(p, 20, 1)
-    ElfPutEhdrTail(p, entryRva)
+    ElfPutEhdrTail(p, lay->entryRva, ElfPhNum(lay))
 End Sub
 
 ' e_entry / e_phoff / 大きさ。セクションヘッダは置かない（e_shoff = 0）
-Sub ElfPutEhdrTail(p As *Byte, entryRva As DWord)
+Sub ElfPutEhdrTail(p As *Byte, entryRva As DWord, phnum As Long)
     ElfPutQ(p, 24, ElfVa(entryRva))
     ElfPutQ(p, 32, ELF_EHDR_SIZE)
     PutWord(p, 52, ELF_EHDR_SIZE)
     PutWord(p, 54, ELF_PHDR_SIZE)
-    PutWord(p, 56, ELF_PHNUM)
+    PutWord(p, 56, phnum)
 End Sub
 
 ' idx 番目のプログラムヘッダの先頭オフセット
@@ -77,28 +119,49 @@ Function ElfPhOff(idx As Long) As DWord
     ElfPhOff = t
 End Function
 
-' p_offset = RVA、p_vaddr = p_paddr = ELF_BASE + RVA
-Sub ElfPutPhdrAddr(p As *Byte, o As DWord, rva As DWord)
-    ElfPutQ(p, o + 8, rva)
+' p_offset = off、p_vaddr = p_paddr = ELF_BASE + RVA
+Sub ElfPutPhdrAddr(p As *Byte, o As DWord, off As DWord, rva As DWord)
+    ElfPutQ(p, o + 8, off)
     ElfPutQ(p, o + 16, ElfVa(rva))
     ElfPutQ(p, o + 24, ElfVa(rva))
 End Sub
 
-Sub ElfPutPhdr(p As *Byte, idx As Long, kind As DWord, flags As DWord, rva As DWord, filesz As DWord, memsz As DWord)
+Sub ElfPutPhdr(p As *Byte, idx As Long, kind As DWord, flags As DWord, off As DWord, rva As DWord, filesz As DWord, memsz As DWord)
     Dim o As DWord
     o = ElfPhOff(idx)
     PutDword(p, o, kind)
     PutDword(p, o + 4, flags)
-    ElfPutPhdrAddr(p, o, rva)
+    ElfPutPhdrAddr(p, o, off, rva)
     ElfPutQ(p, o + 32, filesz)
     ElfPutQ(p, o + 40, memsz)
     ElfPutQ(p, o + 48, ELF_PAGE)
 End Sub
 
+' .text / .data / .idata の PT_LOAD を idx, idx + 1, idx + 2 に
+Sub ElfPutLoads(p As *Byte, idx As Long, lay As *ElfLayout)
+    ElfPutPhdr(p, idx, ELF_PT_LOAD, ELF_PF_RX, 0, 0, lay->textEnd, lay->textEnd)
+    ElfPutPhdr(p, idx + 1, ELF_PT_LOAD, ELF_PF_RW, lay->dataRva, lay->dataRva, 0, lay->dataVirt)
+    ElfPutPhdr(p, idx + 2, ELF_PT_LOAD, ELF_PF_RW, ElfIdataOff(lay), lay->idataRva, lay->idataSize, lay->idataVirt)
+End Sub
+
+' 動的: [0] PT_INTERP [1..3] PT_LOAD [4] ブロブの PT_LOAD [5] PT_DYNAMIC [6] PT_GNU_STACK
+Sub ElfPutDynPhdrs(p As *Byte, lay As *ElfLayout)
+    Dim off As DWord, rva As DWord
+    off = ElfDynFileOff(lay)
+    rva = ElfDynRva(lay)
+    ElfPutPhdr(p, 0, ELF_PT_INTERP, ELF_PF_R, off, rva, ELF_INTERP_LEN, ELF_INTERP_LEN)
+    ElfPutLoads(p, 1, lay)
+    ElfPutPhdr(p, 4, ELF_PT_LOAD, ELF_PF_RW, off, rva, lay->dynSize, lay->dynSize)
+    ElfPutPhdr(p, 5, ELF_PT_DYNAMIC, ELF_PF_RW, off + ELF_DYN_TAB, rva + ELF_DYN_TAB, lay->dynTabSize, lay->dynTabSize)
+    ElfPutPhdr(p, 6, ELF_PT_GNU_STACK, ELF_PF_RW, 0, 0, 0, 0)
+End Sub
+
 Sub ElfPutHeaders(p As *Byte, lay As *ElfLayout)
-    ElfPutEhdr(p, lay->entryRva)
-    ElfPutPhdr(p, 0, ELF_PT_LOAD, ELF_PF_RX, 0, lay->textEnd, lay->textEnd)
-    ElfPutPhdr(p, 1, ELF_PT_LOAD, ELF_PF_RW, lay->dataRva, 0, lay->dataVirt)
-    ElfPutPhdr(p, 2, ELF_PT_LOAD, ELF_PF_RW, lay->idataRva, lay->idataSize, lay->idataVirt)
-    ElfPutPhdr(p, 3, ELF_PT_GNU_STACK, ELF_PF_RW, 0, 0, 0)
+    ElfPutEhdr(p, lay)
+    If lay->dynSize <> 0 Then
+        ElfPutDynPhdrs(p, lay)
+        Exit Sub
+    End If
+    ElfPutLoads(p, 0, lay)
+    ElfPutPhdr(p, 3, ELF_PT_GNU_STACK, ELF_PF_RW, 0, 0, 0, 0)
 End Sub

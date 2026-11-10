@@ -1,0 +1,111 @@
+' -linux で .so を呼ぶときの動的リンク情報（ElfDyn）とその ELF ヘッダ
+'  ブロブ: +0 インタプリタ名, +32 .dynamic（DT_NEEDED… の後ろに 9 個）, .hash, .dynsym, .rela, .dynstr
+Dim edBuf(1023) As Byte
+Dim edHdr(1023) As Byte
+Dim edInfo As ElfDynInfo
+Dim edLay As ElfLayout
+
+Function EdDw(off As Long) As Long
+    EdDw = GetDWord(VarPtr(edBuf(off)))
+End Function
+
+Function EdHdrDw(off As Long) As Long
+    EdHdrDw = GetDWord(VarPtr(edHdr(off)))
+End Function
+
+Assert(1, LxIsSoName("libc.so.6"), "libc.so.6 is a shared object")
+Assert(1, LxIsSoName("libfoo.so"), "libfoo.so is a shared object")
+Assert(0, LxIsSoName("kernel32.dll"), "kernel32.dll is not")
+Assert(0, LxIsSoName("my.soda.dll"), "my.soda.dll is not")
+
+edInfo.rva = &H5000
+edInfo.needN = 2
+edInfo.symN = 3
+edInfo.strSize = &H40
+Assert(208, ElfDynHashOff(VarPtr(edInfo)), "hash after 11 dynamic entries")
+Assert(240, ElfDynSymOff(VarPtr(edInfo)), "dynsym (8-byte aligned)")
+Assert(336, ElfDynRelaOff(VarPtr(edInfo)), "rela after 4 symbols")
+Assert(408, ElfDynStrOff(VarPtr(edInfo)), "dynstr after rela")
+Assert(472, ElfDynSize(VarPtr(edInfo)), "blob size")
+
+ElfDynPutHead(VarPtr(edBuf(0)), VarPtr(edInfo))
+ElfDynPutNeeded(VarPtr(edBuf(0)), 0, &H40)
+ElfDynPutNeeded(VarPtr(edBuf(0)), 1, &H50)
+ElfDynPutSym(VarPtr(edBuf(0)), VarPtr(edInfo), 0, &H10, &H3100)
+ElfDynPutSym(VarPtr(edBuf(0)), VarPtr(edInfo), 1, &H20, &H3108)
+ElfDynPutSym(VarPtr(edBuf(0)), VarPtr(edInfo), 2, &H30, &H3200)
+Assert(6, ElfDynPutStr(VarPtr(edBuf(0)), VarPtr(edInfo), 1, "puts"), "next string offset")
+
+Assert(&H2F, edBuf(0), "interp starts with /")
+Assert(&H32, edBuf(26), "interp ends with 2")
+Assert(0, edBuf(27), "interp NUL")
+Assert(1, EdDw(32), "DT_NEEDED")
+Assert(&H40, EdDw(40), "DT_NEEDED name")
+Assert(&H50, EdDw(56), "second DT_NEEDED name")
+Assert(4, EdDw(64), "DT_HASH")
+Assert(&H4050D0, EdDw(72), "DT_HASH va")
+Assert(5, EdDw(80), "DT_STRTAB")
+Assert(&H405198, EdDw(88), "DT_STRTAB va")
+Assert(6, EdDw(96), "DT_SYMTAB")
+Assert(&H4050F0, EdDw(104), "DT_SYMTAB va")
+Assert(10, EdDw(112), "DT_STRSZ")
+Assert(&H40, EdDw(120), "DT_STRSZ")
+Assert(11, EdDw(128), "DT_SYMENT")
+Assert(24, EdDw(136), "DT_SYMENT = 24")
+Assert(7, EdDw(144), "DT_RELA")
+Assert(&H405150, EdDw(152), "DT_RELA va")
+Assert(8, EdDw(160), "DT_RELASZ")
+Assert(72, EdDw(168), "DT_RELASZ = 3 * 24")
+Assert(9, EdDw(176), "DT_RELAENT")
+Assert(24, EdDw(184), "DT_RELAENT = 24")
+Assert(0, EdDw(192), "DT_NULL")
+Assert(1, EdDw(208), "hash nbucket")
+Assert(4, EdDw(212), "hash nchain = symbols + 1")
+Assert(0, EdDw(216), "hash bucket[0] (nothing exported)")
+Assert(0, EdDw(240), "null symbol")
+Assert(&H10, EdDw(264), "sym 1 name")
+Assert(&H12, edBuf(268), "sym 1 GLOBAL FUNC")
+Assert(0, edBuf(270), "sym 1 undefined")
+Assert(&H30, EdDw(312), "sym 3 name")
+Assert(&H403100, EdDw(336), "rela 0 offset (GOT slot va)")
+Assert(6, EdDw(344), "rela 0 R_X86_64_GLOB_DAT")
+Assert(1, EdDw(348), "rela 0 symbol 1")
+Assert(&H403200, EdDw(384), "rela 2 offset")
+Assert(3, EdDw(396), "rela 2 symbol 3")
+Assert(0, edBuf(408), "dynstr starts with NUL")
+Assert(&H70, edBuf(409), "dynstr 'p'")
+Assert(&H73, edBuf(412), "dynstr 's'")
+Assert(0, edBuf(413), "dynstr NUL after puts")
+
+' 動的な ELF: PT_INTERP, PT_LOAD x4, PT_DYNAMIC, PT_GNU_STACK
+edLay.textEnd = &H1234
+edLay.dataRva = &H2000
+edLay.dataVirt = &H1000
+edLay.idataRva = &H3000
+edLay.idataSize = &H180
+edLay.idataVirt = &H1000
+edLay.entryRva = &H1200
+edLay.dynSize = 408
+edLay.dynTabSize = 176
+Assert(&H4000, ElfDynRva(VarPtr(edLay)), "blob rva after .idata")
+Assert(&H3000, ElfDynFileOff(VarPtr(edLay)), "blob file offset after .idata")
+Assert(&H3198, ElfFileSize(VarPtr(edLay)), "file size with blob")
+ElfPutHeaders(VarPtr(edHdr(0)), VarPtr(edLay))
+Assert(7, edHdr(56), "e_phnum")
+Assert(3, EdHdrDw(64), "PT_INTERP first")
+Assert(&H3000, EdHdrDw(72), "interp p_offset")
+Assert(&H404000, EdHdrDw(80), "interp p_vaddr")
+Assert(28, EdHdrDw(96), "interp p_filesz")
+Assert(1, EdHdrDw(120), "text PT_LOAD")
+Assert(5, EdHdrDw(124), "text R+X")
+Assert(&H2000, EdHdrDw(240), "idata p_offset")
+Assert(1, EdHdrDw(288), "blob PT_LOAD")
+Assert(6, EdHdrDw(292), "blob R+W")
+Assert(&H3000, EdHdrDw(296), "blob p_offset")
+Assert(&H404000, EdHdrDw(304), "blob p_vaddr")
+Assert(408, EdHdrDw(320), "blob p_filesz")
+Assert(2, EdHdrDw(344), "PT_DYNAMIC")
+Assert(&H3020, EdHdrDw(352), "dynamic p_offset")
+Assert(&H404020, EdHdrDw(360), "dynamic p_vaddr")
+Assert(176, EdHdrDw(376), "dynamic p_filesz")
+Assert(&H6474E551, EdHdrDw(400), "PT_GNU_STACK last")

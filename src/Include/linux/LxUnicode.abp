@@ -1,0 +1,178 @@
+' LxUnicode - MultiByteToWideChar / WideCharToMultiByte（UTF-8 ⇔ UTF-16）
+' Linux の文字列は UTF-8 なので、コードページは何でも（CP932 も）UTF-8 として扱う。
+' 長さ -1 は NUL まで（NUL も数える）。書き先の大きさ 0 なら要る数だけ返し、足りなければ 0。
+' UTF-16 は *Word の添字が 4 バイト刻みになるので、バイトで読み書きする（LxSetW / LxGetW）
+
+Const LX_MB_ERR_INVALID = 8
+
+Function LxGetW(p As *Byte, i As Long) As Long
+    LxGetW = p[i * 2] + p[i * 2 + 1] * 256
+End Function
+
+Function LxWLen(p As *Byte) As Long
+    Dim n As Long
+    n = 0
+    While LxGetW(p, n) <> 0
+        n = n + 1
+    Wend
+    LxWLen = n
+End Function
+
+' 書き先の大きさ room（0 なら数えるだけ）。超えたら 0
+Function LxConvDone(out As Long, room As Long) As Long
+    LxConvDone = out
+    If room > 0 And out > room Then LxConvDone = 0
+End Function
+
+' ---------- UTF-8 → UTF-16 ----------
+
+' 先頭バイトから長さ（不正なら 0）
+Function LxU8Len(c As Long) As Long
+    LxU8Len = 0
+    If c < &H80 Then LxU8Len = 1
+    If c >= &HC2 And c < &HE0 Then LxU8Len = 2
+    If c >= &HE0 And c < &HF0 Then LxU8Len = 3
+    If c >= &HF0 And c < &HF5 Then LxU8Len = 4
+End Function
+
+Function LxU8Mask(ln As Long) As Long
+    LxU8Mask = &H7F
+    If ln = 2 Then LxU8Mask = &H1F
+    If ln = 3 Then LxU8Mask = &H0F
+    If ln = 4 Then LxU8Mask = &H07
+End Function
+
+Function LxU8Value(p As *Byte, i As Long, ln As Long) As Long
+    Dim j As Long, cp As Long
+    cp = p[i] And LxU8Mask(ln)
+    For j = 1 To ln - 1
+        cp = cp * 64 + (p[i + j] And &H3F)
+    Next
+    LxU8Value = cp
+End Function
+
+' p[i] からの 1 文字。ln に長さ。不正なら -1（ln は 1）
+Function LxU8At(p As *Byte, i As Long, n As Long, ByRef ln As Long) As Long
+    Dim j As Long
+    LxU8At = -1
+    ln = 1
+    If LxU8Len(p[i]) = 0 Or i + LxU8Len(p[i]) > n Then Exit Function
+    For j = 1 To LxU8Len(p[i]) - 1
+        If (p[i + j] And &HC0) <> &H80 Then Exit Function
+    Next
+    ln = LxU8Len(p[i])
+    LxU8At = LxU8Value(p, i, ln)
+End Function
+
+' 1 文字を UTF-16 で dst の out 番目へ（入らなければ書かない）。次の位置を返す
+Function LxPutW16(dst As *Byte, room As Long, out As Long, c As Long) As Long
+    Dim t As Long
+    t = c - &H10000
+    LxPutW16 = out + 1
+    If c >= &H10000 Then LxPutW16 = out + 2
+    If room <= 0 Or LxPutW16 > room Then Exit Function
+    If c < &H10000 Then LxSetW(dst, out, c)
+    If c < &H10000 Then Exit Function
+    LxSetW(dst, out, &HD800 + t \ 1024)
+    LxSetW(dst, out + 1, &HDC00 + (t And &H3FF))
+End Function
+
+' 1 文字を変換して out を進める。戻り値は読んだバイト数（MB_ERR_INVALID_CHARS で不正なら 0）
+Function LxMbStep(src As *Byte, i As Long, n As Long, dst As *Byte, room As Long, ByRef out As Long, flags As DWord) As Long
+    Dim c As Long, ln As Long
+    LxMbStep = 0
+    c = LxU8At(src, i, n, ln)
+    If c < 0 And (flags And LX_MB_ERR_INVALID) <> 0 Then Exit Function
+    If c < 0 Then c = &HFFFD
+    out = LxPutW16(dst, room, out, c)
+    LxMbStep = ln
+End Function
+
+' 書いた（数えた）単位数。MB_ERR_INVALID_CHARS で不正なバイトがあれば -1
+Function LxMbLoop(src As *Byte, n As Long, dst As *Byte, room As Long, flags As DWord) As Long
+    Dim i As Long, ln As Long, out As Long
+    LxMbLoop = -1
+    i = 0
+    out = 0
+    While i < n
+        ln = LxMbStep(src, i, n, dst, room, out, flags)
+        If ln = 0 Then Exit Function
+        i = i + ln
+    Wend
+    LxMbLoop = out
+End Function
+
+Function Lx_MultiByteToWideChar(ByVal cp As DWord, ByVal flags As DWord, ByVal src As *Byte, ByVal n As Long, ByVal dst As *Byte, ByVal room As Long) As Long
+    Dim out As Long
+    If n < 0 Then n = Lx_lstrlenA(src) + 1
+    out = LxMbLoop(src, n, dst, room, flags)
+    Lx_MultiByteToWideChar = 0
+    If out >= 0 Then Lx_MultiByteToWideChar = LxConvDone(out, room)
+End Function
+
+' ---------- UTF-16 → UTF-8 ----------
+
+Function LxU8Bytes(c As Long) As Long
+    LxU8Bytes = 1
+    If c >= &H80 Then LxU8Bytes = 2
+    If c >= &H800 Then LxU8Bytes = 3
+    If c >= &H10000 Then LxU8Bytes = 4
+End Function
+
+Function LxU8Lead(k As Long) As Long
+    LxU8Lead = 0
+    If k = 2 Then LxU8Lead = &HC0
+    If k = 3 Then LxU8Lead = &HE0
+    If k = 4 Then LxU8Lead = &HF0
+End Function
+
+Sub LxU8Write(p As *Byte, c As Long, k As Long)
+    Dim j As Long, v As Long
+    v = c
+    j = k - 1
+    While j >= 1
+        p[j] = &H80 Or (v And &H3F)
+        v = v \ 64
+        j = j - 1
+    Wend
+    p[0] = v Or LxU8Lead(k)
+End Sub
+
+Function LxPutU8(dst As *Byte, room As Long, out As Long, c As Long) As Long
+    Dim k As Long
+    k = LxU8Bytes(c)
+    LxPutU8 = out + k
+    If room <= 0 Or out + k > room Then Exit Function
+    LxU8Write(dst + out, c, k)
+End Function
+
+' src の i 番目からの 1 文字（サロゲートペアなら 2 単位）。単独のサロゲートは U+FFFD
+Function LxW16At(src As *Byte, i As Long, n As Long, ByRef ln As Long) As Long
+    Dim u As Long, v As Long
+    u = LxGetW(src, i)
+    ln = 1
+    LxW16At = u
+    If u >= &HD800 And u < &HE000 Then LxW16At = &HFFFD
+    If u < &HD800 Or u >= &HDC00 Or i + 1 >= n Then Exit Function
+    v = LxGetW(src, i + 1)
+    If v < &HDC00 Or v >= &HE000 Then Exit Function
+    ln = 2
+    LxW16At = &H10000 + (u - &HD800) * 1024 + (v - &HDC00)
+End Function
+
+Sub LxClearBool(p As *Long)
+    If p <> 0 Then p[0] = 0
+End Sub
+
+Function Lx_WideCharToMultiByte(ByVal cp As DWord, ByVal flags As DWord, ByVal src As *Byte, ByVal n As Long, ByVal dst As *Byte, ByVal room As Long, ByVal def As VoidPtr, ByVal used As *Long) As Long
+    Dim i As Long, out As Long, ln As Long
+    If n < 0 Then n = LxWLen(src) + 1
+    LxClearBool(used)
+    i = 0
+    out = 0
+    While i < n
+        out = LxPutU8(dst, room, out, LxW16At(src, i, n, ln))
+        i = i + ln
+    Wend
+    Lx_WideCharToMultiByte = LxConvDone(out, room)
+End Function
