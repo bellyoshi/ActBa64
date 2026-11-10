@@ -10,6 +10,7 @@
 #   ' Expect: N        … 終了コード（省略時 0）
 #   ' Stdin: text      … 標準入力の 1 行（LF で渡す。複数行可）
 #   ' Option: -x       … 追加のコンパイラオプション
+#   ' Args: a "b c"   … 実行時の引数（sh にそのまま渡す）
 # 期待する出力（あれば一致を見る。バイト単位、LF のまま）:
 #   test\linux\<base>.out.txt     … 標準出力
 #   test\linux\<base>.stderr.txt  … 標準エラー
@@ -71,12 +72,14 @@ function Write-Stdin([string]$path, [string[]]$lines) {
     [System.IO.File]::WriteAllBytes($path, [System.Text.Encoding]::UTF8.GetBytes($text))
 }
 
-function Invoke-Wsl([string]$base, [bool]$hasStdin) {
+function Invoke-Wsl([string]$base, [bool]$hasStdin, [string]$runArgs) {
     $dir = Get-WslPath $OutDir
     $in = "/dev/null"
     if ($hasStdin) { $in = "./$base.stdin" }
-    $cmd = "cd '$dir' && timeout 5 ./$base < $in > $base.stdout 2> $base.stderr; echo `$?"
-    $code = (& wsl.exe -e sh -c $cmd) | Select-Object -Last 1
+    # 引数の " を Windows PowerShell が崩さないよう、コマンドはファイルに書いて sh で読む
+    $run = "timeout 5 ./$base $runArgs < $in > $base.stdout 2> $base.stderr; echo `$?`n"
+    [System.IO.File]::WriteAllBytes((Join-Path $OutDir "$base.run"), [System.Text.Encoding]::UTF8.GetBytes($run))
+    $code = (& wsl.exe -e sh -c "cd '$dir' && sh ./$base.run") | Select-Object -Last 1
     return [int]$code
 }
 
@@ -96,7 +99,7 @@ function Invoke-OneTest([System.IO.FileInfo]$file) {
     }
     $hasStdin = $meta.Stdin.Count -gt 0
     if ($hasStdin) { Write-Stdin (Join-Path $OutDir "$base.stdin") $meta.Stdin }
-    $actual = Invoke-Wsl $base $hasStdin
+    $actual = Invoke-Wsl $base $hasStdin $meta.Args
     Test-Outcome $name $base $meta $actual
     if (-not $KeepArtifacts) {
         Get-ChildItem -LiteralPath $OutDir -Filter "$base*" | Remove-Item -Force -ErrorAction SilentlyContinue
