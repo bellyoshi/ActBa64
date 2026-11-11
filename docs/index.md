@@ -18,6 +18,7 @@ ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 | [build.md](./build.md) | ビルド手順（AB4.20 stage0 → 自己ホスト → リリース一式）、統合テスト、[コンパイラソース分割](./build.md#コンパイラソースの分割) |
 | [projecteditor.md](./projecteditor.md) | ProjectEditor（MDI、プロジェクト、コンパイル / 実行、ヘルプ、表示言語） |
 | [coding.md](./coding.md) | コーディング規約（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**） |
+| [activebasic-versions.md](./activebasic-versions.md) | 対応する ActiveBasic のバージョン（3.10 / 3.13 / 4.23 / 4.24。5.0 と 2.62 以前の扱い） |
 | [different.md](./different.md) | ActiveBasic との相違点（非対応・改良点・今後の予定） |
 | [known.md](./known.md) | 既知の問題（AB 4.20 と同じ挙動。`TRUE` と関係演算、識別子の大小区別） |
 | [todo.md](./todo.md) | 未実装・今後の作業メモ |

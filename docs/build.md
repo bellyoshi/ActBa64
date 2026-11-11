@@ -87,7 +87,7 @@ cd src\actba64
 actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 ```
 
-`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#17-n88-basic-構文-pn88)）。
+`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。
 
 `.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1` で、再配置は `PeReloc.abp` が `.reloc` に書く（[language.md §8.4](./language.md#84-dll-を出力する)）。
 
