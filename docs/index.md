@@ -11,6 +11,20 @@ ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 
 リポジトリ全体の概要は [README.md](../README.md) を参照してください。
 
+## Hello World
+
+1. `ProjectEditor.exe` を起動します。
+2. 次のコードを書きます。
+
+   ```
+   Print "Hello World!"
+   ```
+
+3. メニュー **Basic** → **実行（終了後に待機）** を選びます。
+4. 保存ダイアログで適切なファイル名を入力します（例: `Hello.abp`）。
+
+コンソールが開き、`Hello World!` が表示されます。
+
 ## 仕様・手順
 
 | 文書 | 内容 |
