@@ -1,0 +1,80 @@
+' ParserFieldConst - Type のフィールド要素数 Title[NUS_TITLE_LEN-1] を読むときに整数の定数式を畳む
+' 配置は構文解析の時点で決めるので、それより前の Const だけを見る（演算は AstLowerCFold と同じ）
+Dim g_pcevBad As Long
+Dim g_pcevDepth As Long
+
+' 名前が一致する最後の Const 文。無ければ -1
+Function ParseCEvalFindConst(ast As *Ast, name As *Byte) As Long
+    Dim nodes As *AstNode
+    Dim strs As *Byte
+    Dim i As Long
+    Dim off As Long
+    ParseCEvalFindConst = -1
+    nodes = ast->nodes
+    strs = ast->strs
+    For i = ast->count - 1 To 0 Step -1
+        off = i * AST_STR_LEN
+        If nodes[i].kind = AST_CONST And nodes[i].extra = AST_CONST_EXTRA_EXPR Then
+            If ByteNameEqCI(VarPtr(strs[off]), name) Then ParseCEvalFindConst = i
+        End If
+        If ParseCEvalFindConst >= 0 Then Exit Function
+    Next
+End Function
+
+Function ParseCEvalVar(ast As *Ast, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim nodes As *AstNode
+    Dim ci As Long
+    ParseCEvalVar = 0
+    AstCopyStr(ast, idx, VarPtr(name))
+    ci = ParseCEvalFindConst(ast, VarPtr(name))
+    If ci < 0 Or g_pcevDepth > 32 Then g_pcevBad = 1
+    If g_pcevBad <> 0 Then Exit Function
+    nodes = ast->nodes
+    ParseCEvalVar = ParseCEval(ast, nodes[ci].left)
+End Function
+
+Function ParseCEvalOp(ast As *Ast, nodes As *AstNode, idx As Long, k As Long) As Long
+    Dim lv As Long
+    Dim rv As Long
+    lv = ParseCEval(ast, nodes[idx].left)
+    If k = AST_UNARY Then ParseCEvalOp = LowCFoldUnaryOp(nodes[idx].num, lv)
+    If k = AST_UNARY Then Exit Function
+    rv = ParseCEval(ast, nodes[idx].right)
+    ParseCEvalOp = LowCFoldBinOp(nodes[idx].num, lv, rv)
+End Function
+
+Function ParseCEvalNode(ast As *Ast, nodes As *AstNode, idx As Long) As Long
+    Dim k As Long
+    k = nodes[idx].kind
+    ParseCEvalNode = 0
+    If k = AST_NUM And nodes[idx].extra > 0 Then g_pcevBad = 1
+    If k = AST_NUM Then ParseCEvalNode = nodes[idx].num
+    If k = AST_VAR Then ParseCEvalNode = ParseCEvalVar(ast, idx)
+    If k = AST_UNARY Or k = AST_BINOP Then ParseCEvalNode = ParseCEvalOp(ast, nodes, idx, k)
+    If k <> AST_NUM And k <> AST_VAR And k <> AST_UNARY And k <> AST_BINOP Then g_pcevBad = 1
+End Function
+
+Function ParseCEval(ast As *Ast, idx As Long) As Long
+    ParseCEval = 0
+    If idx < 0 Then g_pcevBad = 1
+    If g_pcevBad <> 0 Then Exit Function
+    g_pcevDepth = g_pcevDepth + 1
+    ParseCEval = ParseCEvalNode(ast, ast->nodes, idx)
+    g_pcevDepth = g_pcevDepth - 1
+End Function
+
+' 整数の定数式を読んで値を返す。畳めなければ p->err
+Function ParseConstIntExpr(p As *Parser, ByRef v As Long) As boolean
+    Dim e As Long
+    ParseConstIntExpr = false
+    e = ParseExprNoAs(p)
+    If e < 0 Then Exit Function
+    g_pcevBad = 0
+    g_pcevDepth = 0
+    LowCFoldTakeBad()
+    v = ParseCEval(p->ast, e)
+    If LowCFoldTakeBad() <> 0 Then g_pcevBad = 1
+    If g_pcevBad = 0 Then ParseConstIntExpr = true
+    If g_pcevBad <> 0 Then p->err = 1
+End Function

@@ -63,8 +63,21 @@ Function ParseConstHead(p As *Parser, name As *Byte) As Long
     ParseConstHead = 0
     p->pos = p->pos + 1
     If Not ParseCopyIdent(p, name) Then Exit Function
+    ParseConstSkipAs(p)
     ParseConstHead = 1
 End Function
+
+' Const X As Long = 1 の As 型は読み飛ばす（値は右辺の式で決まる）
+Sub ParseConstSkipAs(p As *Parser)
+    Dim kAs(KW_SHORT_LEN - 1) As Byte
+    lstrcpy(VarPtr(kAs), "as")
+    If ParseIdentIs(p, VarPtr(kAs)) = 0 Then Exit Sub
+    p->pos = p->pos + 1
+    While ParseTokKind(p) = TK_STAR
+        p->pos = p->pos + 1
+    Wend
+    If ParseTokKind(p) = TK_IDENT Then p->pos = p->pos + 1
+End Sub
 
 Function ParseConstEq(p As *Parser, name As *Byte) As Long
     ParseConstEq = -1
@@ -316,6 +329,11 @@ End Function
 Function ParseAssignIndexOr(p As *Parser, name As *Byte) As Long
     ParseAssignIndexOr = ParseAssignMem(p, name)
     If ParseAssignIndexOr <> -2 Then Exit Function
+    ' メソッドの中のフィールド tbl[i] = v は This.tbl[i] = v
+    If ParseTokKind(p) = TK_LBRACK And ParseIsSelfField(p, name) <> 0 Then
+        ParseAssignIndexOr = ParseAssignMemberLhs(p, name)
+        Exit Function
+    End If
     ParseAssignIndexOr = ParseAssignBracket(p, name)
     If ParseAssignIndexOr <> -2 Then Exit Function
     ParseAssignIndexOr = ParseAssignOrCall(p, name)

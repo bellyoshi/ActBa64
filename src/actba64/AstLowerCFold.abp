@@ -1,6 +1,12 @@
 ' AstLowerCFold - Const 右辺の整数式を登録前に畳む
 Dim g_cfoldBad As Long
 
+' 畳めなかった印を返して消す（ParserFieldConst から）
+Function LowCFoldTakeBad() As Long
+    LowCFoldTakeBad = g_cfoldBad
+    g_cfoldBad = 0
+End Function
+
 Function LowCFoldNum(nodes As *AstNode, idx As Long) As Long
     LowCFoldNum = nodes[idx].num
     If nodes[idx].extra > 0 Then g_cfoldBad = 1
@@ -184,7 +190,7 @@ Function LowCFold(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 Function LowCFoldFail(ctx As *LowerCtx, name As *Byte) As Long
-    Print "error: bad const expression for '" + MakeStr(name) + "'"
+    LowPrintErr("error: bad const expression for '" + MakeStr(name) + "'")
     ctx->err = 1
     LowCFoldFail = 0
 End Function
@@ -284,6 +290,27 @@ Function LowRegConstOne(ctx As *LowerCtx, nodes As *AstNode, stmt As Long) As Lo
     If nodes[stmt].kind = AST_ENUM Then LowRegConstOne = LowRegEnumNode(ctx, stmt)
 End Function
 
+' 手続きやブロックの中の Const も登録する（名前は手続きの外と共有。まだ無い名前だけ）
+Function LowRegConstLocals(ctx As *LowerCtx) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim i As Long
+    LowRegConstLocals = 1
+    ast = ctx->ast
+    For i = 0 To ast->count - 1
+        nodes = ast->nodes
+        If nodes[i].kind = AST_CONST Then LowRegConstLocals = LowRegConstLocal(ctx, nodes, i)
+        If LowRegConstLocals = 0 Then Exit Function
+    Next
+End Function
+
+Function LowRegConstLocal(ctx As *LowerCtx, nodes As *AstNode, i As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowRegConstLocal = 1
+    AstCopyStrTo(ctx->ast, i, VarPtr(name), SYM_NAME_LEN - 1)
+    If LowFindConst(ctx, VarPtr(name)) < 0 Then LowRegConstLocal = LowRegConstOne(ctx, nodes, i)
+End Function
+
 Function LowRegConstWalk(ctx As *LowerCtx, nodes As *AstNode, stmt As Long) As Long
     LowRegConstWalk = 0
     While stmt >= 0
@@ -301,4 +328,5 @@ Function LowRegConstList(ctx As *LowerCtx, prog As Long) As Long
     nodes = ast->nodes
     stmt = nodes[prog].left
     LowRegConstList = LowRegConstWalk(ctx, nodes, stmt)
+    If LowRegConstList <> 0 Then LowRegConstList = LowRegConstLocals(ctx)
 End Function

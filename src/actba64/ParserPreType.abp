@@ -1,5 +1,5 @@
-' ParserPreType - 本体を読む前に Type / Class の名前を登録する
-' 後ろで定義する Type や Class も Dim x As T で使えるようにする（ActiveBasic と同じ）
+' ParserPreType - 本体を読む前に Type / Class / TypeDef / Enum の名前を登録する
+' 後ろで定義する型も Dim x As T や Declare の仮引数で使えるようにする（ActiveBasic と同じ）
 
 ' pos の 1 つ前の字句と論理行が違えば文頭
 Function ParsePreAtStmtStart(p As *Parser, at As Long) As boolean
@@ -14,7 +14,7 @@ Function ParsePreAtStmtStart(p As *Parser, at As Long) As boolean
     p->pos = at
 End Function
 
-' Type なら 0、Class なら 1、どちらでもなければ -1
+' Type なら 0、Class なら 1、TypeDef なら 2、Enum なら 3、どれでもなければ -1
 Function ParsePreTypeKind(p As *Parser) As Long
     Dim kw(KW_LEN - 1) As Byte
     ParsePreTypeKind = -1
@@ -22,6 +22,10 @@ Function ParsePreTypeKind(p As *Parser) As Long
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParsePreTypeKind = 0
     lstrcpy(VarPtr(kw), "class")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParsePreTypeKind = 1
+    lstrcpy(VarPtr(kw), "typedef")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParsePreTypeKind = 2
+    lstrcpy(VarPtr(kw), "enum")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParsePreTypeKind = 3
 End Function
 
 ' 文頭の Type / Class の直後の名前を写す。名前が無ければ false
@@ -31,6 +35,7 @@ Function ParsePreTypeName(p As *Parser, at As Long, name As *Byte) As boolean
     ParsePreTypeName = false
     ln = ParseTokLogLine(p)
     p->pos = at + 1
+    If ParseTypeIsAlignAt(p, at + 1) <> 0 Then p->pos = at + 5
     lstrcpy(VarPtr(kAs), "as")
     If ParseTokKind(p) = TK_IDENT And ParseTokLogLine(p) = ln And ParseIdentIs(p, VarPtr(kAs)) = 0 Then
         ParsePreTypeName = ParseCopyIdent(p, name)
@@ -50,6 +55,47 @@ Sub ParsePreTypeAt(p As *Parser, at As Long)
     ast = p->ast
     ti = TyAdd(ast->types, VarPtr(name))
     If kind = 1 And ti >= 0 Then TySetClass(ast->types, ti)
+    If kind = 2 And ti >= 0 Then ParsePreTypeDefSize(p, at + 3, ti)
+    If kind = 3 And ti >= 0 Then ParsePreEnumSize(p, ti)
+End Sub
+
+' 後ろの Enum を戻り値の型にもできるよう、Long と同じ 4 バイトで先に入れる
+Sub ParsePreEnumSize(p As *Parser, ti As Long)
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim sizes As *Long
+    ast = p->ast
+    types = ast->types
+    sizes = types->typeSizes
+    sizes[ti] = 4
+End Sub
+
+' TypeDef A = B の B の大きさ（*B はポインタ幅）。分からなければ 0
+Function ParsePreTypeDefTargetSize(p As *Parser, at As Long) As Long
+    Dim tname(SYM_NAME_LEN - 1) As Byte
+    Dim ast As *Ast
+    ParsePreTypeDefTargetSize = 0
+    p->pos = at
+    If ParseTokKind(p) = TK_STAR Then ParsePreTypeDefTargetSize = TyPtrSize()
+    If ParseTokKind(p) <> TK_IDENT Then Exit Function
+    If Not ParseCopyIdent(p, VarPtr(tname)) Then Exit Function
+    ast = p->ast
+    ParsePreTypeDefTargetSize = TySizeOfName(ast->types, VarPtr(tname))
+End Function
+
+' 後ろで TypeDef する名前も前の Declare / Dim で使えるよう、大きさも先に入れる
+Sub ParsePreTypeDefSize(p As *Parser, at As Long, ti As Long)
+    Dim sizes As *Long
+    Dim types As *TypeTable
+    Dim ast As *Ast
+    Dim save As Long
+    save = p->pos
+    If ParseTokKindAt(p, at - 1) <> TK_EQ Then Exit Sub
+    ast = p->ast
+    types = ast->types
+    sizes = types->typeSizes
+    If sizes[ti] = 0 Then sizes[ti] = ParsePreTypeDefTargetSize(p, at)
+    p->pos = save
 End Sub
 
 Sub ParsePreTypes(p As *Parser)

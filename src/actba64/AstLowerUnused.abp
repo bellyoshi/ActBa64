@@ -1,0 +1,155 @@
+' AstLowerUnused - 呼ばれない Function / Sub の中の誤りは報告しない（ActiveBasic 4 と同じ）
+' ActiveBasic は使われない手続きをコンパイルしないので、未定義の名前などがあっても通る。
+' 手続きの本体で失敗したら、そこまでの IR と出力を捨てて空の本体で作り直し、失敗を覚えておく。
+' 呼び出し（LowFindFunc）を辺として覚え、本体（main / Startup）と Export から
+' たどれる失敗だけをエラーにする。たどれない失敗の診断は捨てる。
+Const UN_MAX = 256
+
+Dim g_unCur As Long
+Dim g_unDefer As Long
+' 辺を覚えるのは手続き・本体の命令を作っている間だけ（登録などの引き当ては数えない）
+Dim g_unRec As Long
+Dim g_unN As Long
+Dim g_unFi(UN_MAX) As Long
+Dim g_unD0(UN_MAX) As Long
+Dim g_unD1(UN_MAX) As Long
+Dim g_unMsg(UN_MAX) As String
+Dim g_unBuf As String
+Dim g_unDone As Long
+' 呼び出しの辺（from, to は関数の番号。from = -1 は本体）
+Dim g_unEdgeN As Long
+Dim g_unEdgeCap As Long
+Dim g_unFrom As *Long
+Dim g_unTo As *Long
+
+Sub UnReset()
+    g_unCur = -1
+    g_unDefer = 0
+    g_unRec = 0
+    g_unN = 0
+    g_unDone = 0
+    g_unEdgeN = 0
+    g_unBuf = ""
+End Sub
+
+' 低レベル化のエラー表示。手続きの本体を作っている間は後で出すかどうか決めるため溜める
+Sub LowPrintErr(msg As String)
+    If g_unDefer = 0 Then
+        Print msg
+        Exit Sub
+    End If
+    If Len(g_unBuf) > 0 Then g_unBuf = g_unBuf + Chr$(10)
+    g_unBuf = g_unBuf + msg
+End Sub
+
+Function UnGrowEdges() As Long
+    Dim n1 As Long
+    UnGrowEdges = 1
+    If g_unEdgeN < g_unEdgeCap Then Exit Function
+    n1 = g_unEdgeCap * 2
+    If n1 < 1024 Then n1 = 1024
+    g_unFrom = MemGrow(g_unFrom As BytePtr, BytesN(g_unEdgeCap, SizeOf(Long)), BytesN(n1, SizeOf(Long))) As *Long
+    g_unTo = MemGrow(g_unTo As BytePtr, BytesN(g_unEdgeCap, SizeOf(Long)), BytesN(n1, SizeOf(Long))) As *Long
+    g_unEdgeCap = n1
+    If g_unFrom = NULL Or g_unTo = NULL Then UnGrowEdges = 0
+End Function
+
+' いま作っている手続き（本体は -1）から関数 fi を参照した
+Sub UnNoteEdge(fi As Long)
+    If fi < 0 Or fi = g_unCur Or g_unRec = 0 Then Exit Sub
+    If UnGrowEdges() = 0 Then Exit Sub
+    g_unFrom[g_unEdgeN] = g_unCur
+    g_unTo[g_unEdgeN] = fi
+    g_unEdgeN = g_unEdgeN + 1
+End Sub
+
+' Export は呼ばれなくても根
+Sub UnNoteRoot(fi As Long)
+    g_unRec = 1
+    UnNoteEdge(fi)
+    g_unRec = 0
+End Sub
+
+' 手続き stmt を作り始める
+Sub UnBegin(ctx As *LowerCtx, stmt As Long)
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    AstCopyStr(ctx->ast, stmt, VarPtr(name))
+    g_unCur = LowFuncIndex(ctx, VarPtr(name))
+    g_unRec = 1
+    g_unDefer = 1
+    g_unBuf = ""
+End Sub
+
+' 手続きを作り終えた
+Sub UnEnd()
+    g_unCur = -1
+    g_unDefer = 0
+    g_unRec = 0
+End Sub
+
+' ここから本体（main / Startup / ランタイム）。辺の元は -1
+Sub UnBeginMain()
+    g_unCur = -1
+    g_unRec = 1
+End Sub
+
+Sub UnNoteFail(d0 As Long)
+    If g_unN >= UN_MAX Then Exit Sub
+    g_unFi[g_unN] = g_unCur
+    g_unD0[g_unN] = d0
+    g_unD1[g_unN] = DiagCount()
+    g_unMsg[g_unN] = g_unBuf
+    g_unN = g_unN + 1
+End Sub
+
+' 根（本体と Export からの辺）に印を付ける。メソッドも呼ばれたものだけ（ActiveBasic と同じ）
+Sub UnMarkRoots(ctx As *LowerCtx, mark As *Long)
+    Dim i As Long
+    For i = 0 To g_unEdgeN - 1
+        If g_unFrom[i] < 0 Then mark[g_unTo[i]] = 1
+    Next
+End Sub
+
+' 印の付いた手続きから辺をたどる。新しく付けたら 1
+Function UnSpread(mark As *Long) As Long
+    Dim i As Long
+    UnSpread = 0
+    For i = 0 To g_unEdgeN - 1
+        If g_unFrom[i] >= 0 Then
+            If mark[g_unFrom[i]] <> 0 And mark[g_unTo[i]] = 0 Then
+                mark[g_unTo[i]] = 1
+                UnSpread = 1
+            End If
+        End If
+    Next
+End Function
+
+' 呼ばれる失敗があれば 1（そのエラーを出す）。呼ばれない失敗の診断は捨てる
+Function UnResolve(ctx As *LowerCtx) As Long
+    Dim mark As *Long
+    Dim i As Long
+    UnResolve = 0
+    If g_unDone <> 0 Or g_unN = 0 Then Exit Function
+    g_unDone = 1
+    mark = calloc(BytesN(ctx->funcCount + 1, SizeOf(Long)))
+    UnMarkRoots(ctx, mark)
+    While UnSpread(mark) <> 0
+    Wend
+    For i = g_unN - 1 To 0 Step -1
+        If g_unFi[i] < 0 Then UnResolve = 1
+        If g_unFi[i] < 0 And Len(g_unMsg[i]) > 0 Then Print g_unMsg[i]
+        If g_unFi[i] >= 0 Then UnResolveOne(ctx, mark, i, UnResolve)
+    Next
+    free(mark)
+    If UnResolve <> 0 Then ctx->err = 1
+End Function
+
+Sub UnResolveOne(ctx As *LowerCtx, mark As *Long, i As Long, ByRef used As Long)
+    If mark[g_unFi[i]] <> 0 Then
+        used = 1
+        If Len(g_unMsg[i]) > 0 Then Print g_unMsg[i]
+        If Len(g_unMsg[i]) = 0 And DiagErrorsIn(g_unD0[i], g_unD1[i]) = 0 Then Print "error: codegen in function '" + MakeStr(LowFuncNameAt(ctx, g_unFi[i])) + "'"
+        Exit Sub
+    End If
+    DiagDropRange(g_unD0[i], g_unD1[i])
+End Sub

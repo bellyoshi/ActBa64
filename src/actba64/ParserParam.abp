@@ -30,7 +30,7 @@ Function ParseParamStarType(p As *Parser, ByRef pty As Long, ByRef pti As Long, 
         ParseParamStarType = 1
         Exit Function
     End If
-    If ParseEatStarWord(p, pti) <> 0 Then
+    If ParseEatStarElem(p, pti) <> 0 Then
         pty = TY_PTR_LONG
         ParseParamStarType = 1
         Exit Function
@@ -191,6 +191,7 @@ Function ParseParamOne(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nP
     End If
     p->pos = p->pos + 1
     If ParseParamType(p, pty, pti, isByRef, allowDblStar, allowDouble) = 0 Then Exit Function
+    ParseParamFnPtrAlias(p, pty, pti)
     If ParseUdtNeedsByRef(p, pty, isByRef, pti) <> 0 Then ParseFail(p, "構造体パラメータはポインタ参照にしてください")
     If ParseUdtNeedsByRef(p, pty, isByRef, pti) <> 0 Then Exit Function
     nParam = AstAddNode(ast, AST_VAR)
@@ -304,6 +305,11 @@ Function ParseFuncRetStar(p As *Parser, ByRef retTy As Long) As Long
         ParseFuncRetStar = 1
         Exit Function
     End If
+    If ParseEatStarElem(p, pti) <> 0 Then
+        retTy = TY_PTR_LONG
+        ParseFuncRetStar = 1
+        Exit Function
+    End If
     If ParseEatLongAlias(p) Then
         retTy = TY_PTR_LONG
         ParseFuncRetStar = 1
@@ -360,13 +366,14 @@ Function ParseFuncRetTail(p As *Parser, ByRef retTy As Long) As Long
 End Function
 
 Function ParseFuncRetUser(p As *Parser, ByRef retTy As Long) As Long
-    ParseFuncRetUser = 0
-    If ParseEatUserLong(p) = 0 Then
-        p->err = 1
-        Exit Function
-    End If
-    retTy = TY_LONG
     ParseFuncRetUser = 1
+    retTy = TY_LONG
+    If ParseEatUserLong(p) <> 0 Then Exit Function
+    ' TypeDef WordPtr = *Word などポインタ幅の別名（64bit では 8 バイト）はポインタ値で返す
+    retTy = TY_PTR_BYTE
+    If ParseEatUserPtr(p) <> 0 Then Exit Function
+    ParseFuncRetUser = 0
+    p->err = 1
 End Function
 
 Function ParseFuncRetType(p As *Parser, ByRef retTy As Long) As Long
@@ -404,3 +411,9 @@ Function ParseUdtNeedsByRef(p As *Parser, pty As Long, isByRef As Long, pti As L
     If ParseUdtFirst(p, pti) < 0 Then Exit Function
     ParseUdtNeedsByRef = 1
 End Function
+
+' TypeDef F = *Function(...) の仮引数は関数ポインタ（Dim と同じく TY_PTR_FUNC、pti は戻り型）
+Sub ParseParamFnPtrAlias(p As *Parser, ByRef pty As Long, ByRef pti As Long)
+    Dim params As Long
+    ParseDimResolveFnPtrAlias(p, pty, pti, params)
+End Sub

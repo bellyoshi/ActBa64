@@ -58,7 +58,9 @@ Function LowExprTypeBin(ctx As *LowerCtx, nodes As *AstNode, idx As Long) As Lon
     Dim op As Long
     op = nodes[idx].num
     LowExprTypeBin = TY_LONG
+    ' / は Double。Single どうし（Single と整数）なら Single（ActiveBasic と同じ）
     If op = BOP_DIV Then LowExprTypeBin = TY_DOUBLE
+    If op = BOP_DIV And LowExprTypePromoted(ctx, nodes, idx) = TY_SINGLE Then LowExprTypeBin = TY_SINGLE
     If op = BOP_DIV Or LowExprTypeIsLongOp(op) <> 0 Then Exit Function
     LowExprTypeBin = LowExprTypePromoted(ctx, nodes, idx)
 End Function
@@ -83,6 +85,9 @@ Function LowExprTypeCall(ctx As *LowerCtx, idx As Long) As Long
     Dim vByRef As Long
     Dim vGlob As Long
 
+    OvlFixCall(ctx, idx)
+    LowExprTypeCall = LowMethodRetTy(ctx, idx)
+    If LowExprTypeCall >= 0 Then Exit Function
     LowExprTypeCall = TY_LONG
     ast = ctx->ast
     nodes = ast->nodes
@@ -129,17 +134,7 @@ Function LowExprTypeRef(ctx As *LowerCtx, idx As Long, kind As Long) As Long
         LowExprTypeRef = LowExprTypeCall(ctx, idx)
         Exit Function
     End If
-    base = nodes[idx].left
-    If nodes[base].kind = AST_VAR Then
-        AstCopyStr(ast, base, VarPtr(name))
-        If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
-            If vTy = TY_DOUBLE_ARR Then
-                LowExprTypeRef = TY_DOUBLE
-            ElseIf vTy = TY_SINGLE_ARR Then
-                LowExprTypeRef = TY_SINGLE
-            End If
-        End If
-    End If
+    If LowIndexFloatTy(ctx, idx) <> 0 Then LowExprTypeRef = LowIndexFloatTy(ctx, idx)
 End Function
 
 Function LowExprType(ctx As *LowerCtx, idx As Long) As Long
@@ -179,6 +174,9 @@ Function LowExprType(ctx As *LowerCtx, idx As Long) As Long
     If kind = AST_MEMBER Then
         If LowMemberFloatTy(ctx, idx) <> 0 Then LowExprType = LowMemberFloatTy(ctx, idx)
     End If
+    If kind = AST_CAST Then
+        If LowCastFloatTy(ctx, idx) > 0 Then LowExprType = LowCastFloatTy(ctx, idx)
+    End If
 End Function
 
 Function LowExprIsDoubleBitsTail(ctx As *LowerCtx, idx As Long, kind As Long) As Long
@@ -195,6 +193,9 @@ Function LowExprIsDoubleBitsTail(ctx As *LowerCtx, idx As Long, kind As Long) As
     End If
     If kind = AST_NUM Then
         If nodes[idx].extra = AST_NUM_EXTRA_DOUBLE Then LowExprIsDoubleBitsTail = 1
+    End If
+    If kind = AST_CAST Then
+        If LowCastFloatTy(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBitsTail = 1
     End If
 End Function
 
@@ -227,6 +228,9 @@ Function LowExprIsDoubleBits(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     If kind = AST_CALL Then
+        OvlFixCall(ctx, idx)
+        If LowMethodRetTy(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
+        If LowMethodRetTy(ctx, idx) >= 0 Then Exit Function
         AstCopyStr(ast, idx, VarPtr(name))
         If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
             If vTy = TY_PTR_FUNC Then
@@ -242,13 +246,7 @@ Function LowExprIsDoubleBits(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     If kind = AST_INDEX Then
-        base = nodes[idx].left
-        If nodes[base].kind = AST_VAR Then
-            AstCopyStr(ast, base, VarPtr(name))
-            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
-                If vTy = TY_DOUBLE_ARR Then LowExprIsDoubleBits = 1
-            End If
-        End If
+        If LowIndexFloatTy(ctx, idx) = TY_DOUBLE Then LowExprIsDoubleBits = 1
     End If
     If kind = AST_MEMBER Then
         If LowMemberFieldTy(ctx, idx) = FIELDTY_DOUBLE Then LowExprIsDoubleBits = 1
@@ -327,6 +325,10 @@ Function LowExprIsSingleBits(ctx As *LowerCtx, idx As Long) As Long
     End If
     If kind = AST_MEMBER Then
         If LowMemberFloatTy(ctx, idx) = TY_SINGLE Then LowExprIsSingleBits = 1
+    End If
+    ' Single の演算・キャストの結果も Single のビット
+    If kind = AST_BINOP Or kind = AST_UNARY Or kind = AST_CAST Then
+        If LowExprType(ctx, idx) = TY_SINGLE Then LowExprIsSingleBits = 1
     End If
 End Function
 

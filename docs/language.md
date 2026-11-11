@@ -210,7 +210,7 @@ actba64 a.abp -pN88 -o a.exe
 |---|---|---|---|
 | `Byte` | 1 | 1 | |
 | `Word` | 2 | 2 | |
-| `Single` | 4 | 4 | サイズと格納。汎用 IEEE 演算は未（`Double` を使う） |
+| `Single` | 4 | 4 | 四則演算は Double で計算して Single に戻す。`Print` は有効 6 桁（`StrS$`） |
 | `Long` / `DWord` / `Integer` | 4 | 4 | 別名あり |
 | `Double` | 8 | **8** | IEEE 倍精度。加減乗除・比較・`Function As Double` / Double 仮引数、配列要素、UDT フィールドは 64bit と `-actba32` の両方。32bit の値は `edx:eax` |
 | `Enum` 名 | 4 | 4 | 列挙。メンバは整数定数（[§3.4](#34-enum)） |
@@ -909,7 +909,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 ## 10. 非対応（意図的）
 
 - ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは COM vtable。`Super` / `New` / `Delete` は対応）
-- `Single` の汎用演算。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールド、`Print` の自動変換は IEEE Double（64bit と `-actba32`）
+- `Single` の四則演算は Double で計算して Single に戻す（`Print` は `StrS$` で有効 6 桁）。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールド、`Print` の自動変換は IEEE Double（64bit と `-actba32`）
 - ネスト手続き
 - `#resource` の MENU / DIALOG / VERSIONINFO（ICON / BITMAP 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
 - 高度な最適化

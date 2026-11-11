@@ -31,7 +31,6 @@
 
 - **ネスト手続き**
 - **`Int64` / `QWord` / `Char`** と算術
-- **`Single` IEEE 演算**（格納と Input 変換が中心。汎用 SSE は未）
 - **符号無し演算**の AB 4.20 ルール完全化
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
@@ -53,13 +52,12 @@
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
-| `Char` / `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は `Byte`/`Long`/`DWord` 中心 |
+| `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は 32bit として読み警告を出す（`Char` は `Byte`） |
 
 ## 数値・型
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| `Single` の汎用演算 | 4.20 は IEEE 浮動小数。格納と Input 変換が中心 |
 | 符号無し演算 | 4.20: 両オペランドが符号無し型なら符号無し演算 |
 | `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |
 

@@ -183,21 +183,42 @@ Function ParseEatVoidPtrMark(p As *Parser, ByRef pty As Long, ByRef pti As Long)
     Dim kw(KW_LEN - 1) As Byte
     ParseEatVoidPtrMark = 0
     lstrcpy(VarPtr(kw), "voidptr")
-    If ParseEatAliasIf(p, VarPtr(kw)) = 0 Then Exit Function
+    If ParseEatAliasIf(p, VarPtr(kw)) = 0 Then
+        ' Declare の ByRef x As Any は何でもアドレスで渡す。VoidPtr と同じに読む
+        lstrcpy(VarPtr(kw), "any")
+        If ParseEatAliasIf(p, VarPtr(kw)) = 0 Then Exit Function
+    End If
     pty = TY_LONG
     pti = -2
     ParseEatVoidPtrMark = 1
 End Function
 
-' *Word はポインタ幅は *Long と同じ。pti で #strict の *Byte 警告に使う
-Function ParseEatStarWord(p As *Parser, ByRef pti As Long) As Long
+' *Double / *Single / *Word / *BytePtr は TY_PTR_LONG と同じ幅で、pti に要素の型の印を置く
+Function ParseEatStarElem(p As *Parser, ByRef pti As Long) As Long
     Dim kw(KW_LEN - 1) As Byte
-    ParseEatStarWord = 0
-    lstrcpy(VarPtr(kw), "word")
-    If ParseIdentIs(p, VarPtr(kw)) = 0 Then Exit Function
+    Dim mark As Long
+    ParseEatStarElem = 0
+    mark = ParseStarPtrMark(p)
+    lstrcpy(VarPtr(kw), "double")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then mark = LOW_PTI_DBL
+    lstrcpy(VarPtr(kw), "single")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then mark = LOW_PTI_SGL
+    If mark = 0 Then Exit Function
     p->pos = p->pos + 1
-    pti = LOW_PTI_WORD
-    ParseEatStarWord = 1
+    pti = mark
+    ParseEatStarElem = 1
+End Function
+
+' *BytePtr / *VoidPtr（要素はポインタ幅）、*Word（要素は 2 バイト）の印。違えば 0
+Function ParseStarPtrMark(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseStarPtrMark = 0
+    lstrcpy(VarPtr(kw), "byteptr")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParseStarPtrMark = LOW_PTI_PTRV
+    lstrcpy(VarPtr(kw), "voidptr")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParseStarPtrMark = LOW_PTI_PTRV
+    lstrcpy(VarPtr(kw), "word")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then ParseStarPtrMark = LOW_PTI_WORD
 End Function
 
 ' BytePtr → バイトポインタ型（Long 別名ではない）
@@ -249,6 +270,21 @@ Function ParseUserLongOk(p As *Parser, name As *Byte) As Long
     types = ast->types
     ti = TyFind(types, name)
     ParseUserLongOk = TyIsBareLong(types, ti)
+End Function
+
+' フィールドの無いポインタ幅の TypeDef（WordPtr など）なら読み進めて 1
+Function ParseEatUserPtr(p As *Parser) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim ast As *Ast
+    Dim ti As Long
+    Dim pos0 As Long
+    pos0 = p->pos
+    ParseEatUserPtr = 0
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    ast = p->ast
+    ti = TyFind(ast->types, VarPtr(name))
+    If TyIsBareAlias(ast->types, ti) <> 0 And TySizeOfName(ast->types, VarPtr(name)) = TyPtrSize() Then ParseEatUserPtr = 1
+    If ParseEatUserPtr = 0 Then p->pos = pos0
 End Function
 
 Function ParseEatUserLong(p As *Parser) As Long

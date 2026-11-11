@@ -202,9 +202,9 @@ Function ParseFactorVarPtr(p As *Parser) As Long
     p->pos = p->pos + 1
     If Not ParseExpect(p, TK_LPAREN) Then Exit Function
     If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
-    n = AstAddNode(ast, AST_VAR)
+    ' メソッドの中の VarPtr(戻り値) / VarPtr(フィールド) も読む（ParseClassIdentExpr）
+    n = ParseClassIdentExpr(p, VarPtr(name))
     If n < 0 Then Exit Function
-    AstSetStr(ast, n, VarPtr(name))
     arg0 = n
     Do
         If ParseTokKind(p) = TK_DOT Then
@@ -355,7 +355,7 @@ Function ParseFactorIdent(p As *Parser) As Long
         ParseFactorIdent = n
         Exit Function
     End If
-    If ParseTokKind(p) = TK_LBRACK Then
+    If ParseTokKind(p) = TK_LBRACK And ParseIsSelfField(p, VarPtr(name)) = 0 Then
         n = ParseFactorIdentIndex(p, VarPtr(name))
         If n >= 0 Then AstSetSrcLine(p->ast, n, idLine)
         ParseFactorIdent = n
@@ -379,6 +379,11 @@ End Function
 
 Function ParseFactor(p As *Parser) As Long
     ParseFactor = -1
+    If g_parseCastLeft > 0 Then
+        ParseFactor = g_parseCastLeft - 1
+        g_parseCastLeft = 0
+        Exit Function
+    End If
     If ParseTokKind(p) = TK_NUMBER Then
         ParseFactor = ParseFactorNum(p)
         Exit Function

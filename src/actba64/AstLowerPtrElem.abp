@@ -1,0 +1,45 @@
+' AstLowerPtrElem - *Double / *Single / *Word / *BytePtr の添字（TY_PTR_LONG の right に要素の型の印）
+' 番地は要素の大きさで進め、読み書きはその型の配列の要素と同じにする
+
+' 添字で読み書きする要素の型（印のない TY_PTR_LONG はそのまま）
+Function LowElemTyOf(vTy As Long, ti As Long) As Long
+    LowElemTyOf = vTy
+    If vTy <> TY_PTR_LONG Then Exit Function
+    If ti = LOW_PTI_DBL Then LowElemTyOf = TY_DOUBLE_ARR
+    If ti = LOW_PTI_SGL Then LowElemTyOf = TY_SINGLE_ARR
+    If ti = LOW_PTI_WORD Then LowElemTyOf = TY_WORD_ARR
+    If ti = LOW_PTI_PTRV Then LowElemTyOf = TY_PTR_BYTE_ARR
+End Function
+
+' TY_PTR_LONG の要素の大きさ
+Function LowPtrLongScale(ti As Long) As Long
+    LowPtrLongScale = 4
+    If ti = LOW_PTI_DBL Then LowPtrLongScale = 8
+    If ti = LOW_PTI_WORD Then LowPtrLongScale = 2
+    If ti = LOW_PTI_PTRV Then LowPtrLongScale = TyPtrSize()
+End Function
+
+' 名前の変数を添字で読み書きするときの要素の型。見つからなければ -1
+Function LowNameElemTy(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowNameElemTy = -1
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    LowNameElemTy = LowElemTyOf(vTy, vTi)
+End Function
+
+' a[i] の要素の実数の型（TY_DOUBLE / TY_SINGLE）。実数でなければ 0
+Function LowIndexFloatTy(ctx As *LowerCtx, idx As Long) As Long
+    Dim base As Long
+    Dim ty As Long
+    LowIndexFloatTy = 0
+    base = LowNodeLeft(ctx, idx)
+    If LowNodeKind(ctx, base) = AST_MEMBER Then ty = LowMemberFieldTy(ctx, base)
+    If LowNodeKind(ctx, base) = AST_MEMBER And ty = FIELDTY_PTR_DOUBLE Then LowIndexFloatTy = TY_DOUBLE
+    If LowNodeKind(ctx, base) = AST_MEMBER And ty = FIELDTY_PTR_SINGLE Then LowIndexFloatTy = TY_SINGLE
+    If LowNodeKind(ctx, base) <> AST_VAR Then Exit Function
+    ty = LowNameElemTy(ctx, base)
+    If ty = TY_DOUBLE_ARR Then LowIndexFloatTy = TY_DOUBLE
+    If ty = TY_SINGLE_ARR Then LowIndexFloatTy = TY_SINGLE
+End Function

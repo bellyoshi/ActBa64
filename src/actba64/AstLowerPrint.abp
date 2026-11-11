@@ -53,7 +53,7 @@ Function LowEmitPrintLong(ctx As *LowerCtx, exprIdx As Long) As boolean
     LowEmitPrintLong = true
 End Function
 
-' 0 文字列、1 Byte 配列、2 *Byte、3 Double、4 その他の数値
+' 0 文字列、1 Byte 配列、2 *Byte、3 Double、4 その他の数値、5 Single
 Function LowEmitPrintKind(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Long
     LowEmitPrintKind = 0
     If vTy = TY_BYTE_ARR Then LowEmitPrintKind = 1
@@ -63,6 +63,7 @@ Function LowEmitPrintKind(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Lon
     If LowIsStringExpr(ctx, exprIdx) <> 0 Then Exit Function
     LowEmitPrintKind = 4
     If LowExprType(ctx, exprIdx) = TY_DOUBLE Then LowEmitPrintKind = 3
+    If LowExprType(ctx, exprIdx) = TY_SINGLE And LowExprIsDoubleBits(ctx, exprIdx) = 0 Then LowEmitPrintKind = 5
 End Function
 
 Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As boolean
@@ -74,6 +75,7 @@ Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As bo
     If kind = 1 Then LowEmitPrintValue = LowEmitPrintCStr(ctx, exprIdx, 1)
     If kind = 3 Then LowEmitPrintValue = LowEmitPrintNumD(ctx, exprIdx)
     If kind = 4 Then LowEmitPrintValue = LowEmitPrintNumL(ctx, exprIdx)
+    If kind = 5 Then LowEmitPrintValue = LowEmitPrintNumS(ctx, exprIdx)
 End Function
 
 ' 数値の Print の整形。-pN88 は N88_NumStr$（符号の桁と後ろの空白）
@@ -83,7 +85,7 @@ Function LowBaPrintNumLab(ctx As *LowerCtx) As Long
     If CompIsN88() <> 0 Then lstrcpy(VarPtr(name), "N88_NumStr$")
     LowBaPrintNumLab = LowFindFunc(ctx, VarPtr(name))
     If LowBaPrintNumLab >= 0 Then Exit Function
-    Print "error: missing '" + MakeStr(VarPtr(name)) + "'"
+    LowPrintErr("error: missing '" + MakeStr(VarPtr(name)) + "'")
     ctx->err = 1
 End Function
 
@@ -100,6 +102,18 @@ Function LowEmitPrintNumD(ctx As *LowerCtx, exprIdx As Long) As boolean
     LowEmitPrintNumD = false
     If Not LowEmitExprStrD(ctx, exprIdx) Then Exit Function
     LowEmitPrintNumD = LowEmitPrintPad(ctx)
+End Function
+
+' Single は Double にしてから StrS$ で書く（有効 6 桁。ActiveBasic と同じ）
+Function LowEmitPrintNumS(ctx As *LowerCtx, exprIdx As Long) As boolean
+    Dim lab As Long
+    LowEmitPrintNumS = false
+    lab = LowStrSLab(ctx)
+    If lab < 0 Then Exit Function
+    If LowExpr(ctx, exprIdx) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+    LowEmitCallStrD(ctx->list, lab)
+    LowEmitPrintNumS = LowEmitPrintPad(ctx)
 End Function
 
 Function LowEmitPrintNumL(ctx As *LowerCtx, exprIdx As Long) As boolean
@@ -128,7 +142,7 @@ Function LowEmitPrintCall(ctx As *LowerCtx, stay As Long) As boolean
         End If
         lab = LowFindFunc(ctx, VarPtr(name))
         If lab < 0 Then
-            Print "error: missing '" + MakeStr(VarPtr(name)) + "'"
+            LowPrintErr("error: missing '" + MakeStr(VarPtr(name)) + "'")
             ctx->err = 1
             Exit Function
         End If
@@ -280,7 +294,7 @@ Function LowStmtPrintFile(ctx As *LowerCtx, idx As Long, fileIdx As Long) As Lon
     lstrcpy(VarPtr(name), "BaFileWriteNl")
     labNl = LowFindFunc(ctx, VarPtr(name))
     If labItem < 0 Or labSp < 0 Or labNl < 0 Then
-        Print "error: missing BaFileWrite*"
+        LowPrintErr("error: missing BaFileWrite*")
         ctx->err = 1
         Exit Function
     End If
