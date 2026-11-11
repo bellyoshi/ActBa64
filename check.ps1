@@ -2,7 +2,7 @@
 #
 #   .\check.ps1              # unit（src\unittest\rununittest.ps1）
 #   .\check.ps1 unit
-#   .\check.ps1 integration  # src\actba64\run_test2.ps1（既定 stage1・64bit）+ run_test_linux.ps1（WSL）
+#   .\check.ps1 integration  # src\actba64\run_test2.ps1（既定 stage1・64bit）+ run_test_linux.ps1 + run_selfhost_linux.ps1（WSL）
 
 param(
     [Parameter(Position = 0)]
@@ -33,4 +33,9 @@ if ($LASTEXITCODE -ne 0 -or $Kind -ne "integration") {
 # -linux の出力を WSL で実行（WSL が無ければ SKIP で 0）
 $linux = Join-Path $Root "src\actba64\run_test_linux.ps1"
 & powershell -NoProfile -ExecutionPolicy Bypass -File $linux
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Linux 版の actba64 が自分自身・rc・PE を Windows と同じバイト列で出すか（WSL が無ければ SKIP で 0）
+$selfhost = Join-Path $Root "src\actba64\run_selfhost_linux.ps1"
+& powershell -NoProfile -ExecutionPolicy Bypass -File $selfhost
 exit $LASTEXITCODE
