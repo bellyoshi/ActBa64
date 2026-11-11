@@ -357,10 +357,28 @@ Function EditorBuild_DocHasConsole() As Long
     Next
 End Function
 
-Function EditorBuild_WantConsole() As Long
+' 出来上がった exe の PE ヘッダが GUI サブシステム（2）なら 1。#N88BASIC などは #USEWINDOW=0 でも GUI。
+Function EditorBuild_ExeIsGui(exePath As String) As Long
+    Dim n As Long
+    Dim p As *Byte
+    Dim o As Long
+    EditorBuild_ExeIsGui = 0
+    p = LoadFile(StrPtr(exePath), n)
+    If p = 0 Then Exit Function
+    If n >= &H40 And p[0] = &H4D And p[1] = &H5A Then
+        o = p[&H3C] + p[&H3D] * &H100 + p[&H3E] * &H10000
+        If o > 0 And o + 94 <= n Then
+            If p[o + 92] = 2 And p[o + 93] = 0 Then EditorBuild_ExeIsGui = 1
+        End If
+    End If
+    free(p)
+End Function
+
+Function EditorBuild_WantConsole(exePath As String) As Long
     If g_runKeepConsole <> 0 Then EditorBuild_WantConsole = 1
     If g_runKeepConsole <> 0 Then Exit Function
     EditorBuild_WantConsole = 0
+    If EditorBuild_ExeIsGui(exePath) <> 0 Then Exit Function
     If Len(g_projectPath) > 0 Then
         If g_projUseWindow = 0 Then EditorBuild_WantConsole = 1
         Exit Function
@@ -377,7 +395,7 @@ End Function
 Function EditorBuild_LaunchExe(hWnd As HWND, exePath As String) As Long
     Dim runDir As String
     runDir = RunDir_Of$(exePath)
-    If EditorBuild_WantConsole() <> 0 Then
+    If EditorBuild_WantConsole(exePath) <> 0 Then
         EditorBuild_LaunchExe = EditorBuild_Shell(hWnd, "cmd.exe", "/k " + Chr$(34) + exePath + Chr$(34), runDir)
     Else
         EditorBuild_LaunchExe = EditorBuild_Shell(hWnd, exePath, "", runDir)
