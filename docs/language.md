@@ -96,7 +96,7 @@ b.abp
 actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 ```
 
-`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。`-pN88` は N88-BASIC のソースとして読む（[§1.7](#17-n88-basic-構文-pn88)。`.pj` には効かない）。
+`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。`-pN88` は N88-BASIC のソースとして読む（[§1.7](#pn88)。`.pj` には効かない）。
 
 EXE のエントリは結合後ソースのトップレベル文です。終了は `ExitProcess(n)` または `End`（終了コード 0）。  
 DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出力する)）。  
@@ -172,6 +172,8 @@ PSET (x, y) [, color]       ' 1 ドット。color 省略は 7（白）
 | 7 | 白（省略時） |
 
 サンプル: `src/actba64/samples/n88_shapes.abp`
+
+<a id="pn88"></a>
 
 ### 1.7 N88-BASIC 構文（-pN88）
 
