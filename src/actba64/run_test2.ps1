@@ -166,6 +166,20 @@ function Get-CompilerLog([string[]]$ccArgs) {
     return ,$lines.ToArray()
 }
 
+# 標準入力の StreamWriter は Console.InputEncoding で作られる。端末が UTF-8（65001）だと先頭に BOM を書き、
+# Input が BOM 付きの値を読んで失敗する。起動のあいだだけ BOM の無い UTF-8 にする
+function Start-TestProcess([System.Diagnostics.Process]$p) {
+    $old = [Console]::InputEncoding
+    if ($old.CodePage -eq 65001) {
+        [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+    }
+    try {
+        [void]$p.Start()
+    } finally {
+        if ($old.CodePage -eq 65001) { [Console]::InputEncoding = $old }
+    }
+}
+
 function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     if ($meta.Gui -eq 1 -and -not $IncludeGui) {
         $stats.skip++
@@ -310,7 +324,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         $psi.RedirectStandardInput = ($meta.Stdin.Count -gt 0)
         $p = New-Object System.Diagnostics.Process
         $p.StartInfo = $psi
-        [void]$p.Start()
+        Start-TestProcess $p
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()
         if ($meta.Stdin.Count -gt 0) {
