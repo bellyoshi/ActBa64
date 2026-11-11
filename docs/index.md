@@ -30,6 +30,7 @@ ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 | 文書 | 内容 |
 |---|---|
 | [language.md](./language.md) | 言語仕様（ソース・構文・型・IEEE Double・ファイル I/O・標準ライブラリ、32/64 ターゲット） |
+| [PE+32.md](./PE+32.md) | PE32+（64bit）と PE32（32bit、`-actba32`）の出力 |
 | [string-gc.md](./string-gc.md) | String GC（ハイブリッドマーク掃き出しの設計・BSS レイアウト・セーフポイント） |
 | [build.md](./build.md) | ビルド手順（AB4.20 stage0 → 自己ホスト → リリース一式）、統合テスト、[コンパイラソース分割](./build.md#コンパイラソースの分割) |
 | [projecteditor.md](./projecteditor.md) | ProjectEditor（MDI、プロジェクト、コンパイル / 実行、ヘルプ、表示言語） |
@@ -52,4 +53,4 @@ ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 
 ## ソース側の関連文書
 
-旧 `actba32` / `abc` / `abassembler` / `ablinker` は廃止済み。32bit 出力は `actba64 -actba32`（共通 IR → x86 + PE32）。試作は `src/prototype*`。
+旧 `actba32` / `abc` / `abassembler` / `ablinker` は廃止済み。32bit 出力は `actba64 -actba32`（共通 IR → x86 + PE32、[PE+32.md](./PE+32.md)）。試作は `src/prototype*`。
