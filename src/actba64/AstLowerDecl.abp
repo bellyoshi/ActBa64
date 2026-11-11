@@ -80,7 +80,7 @@ Function AstToIrRegDecls(ctx As *LowerCtx, prog As Long) As boolean
                 AstCopyStr(ast, stmt, VarPtr(apiBuf))
             End If
             If Not LowNormLibName(VarPtr(libBuf), VarPtr(dllNorm)) Then
-                Print "error: empty or too long Declare Lib for '" + MakeStr(VarPtr(namePtr)) + "'"
+                LowPrintErr("error: empty or too long Declare Lib for '" + MakeStr(VarPtr(namePtr)) + "'")
                 Exit Function
             End If
             byRefBits = AstToIrDeclByRefBits(nodes, stmt)
@@ -117,7 +117,7 @@ Function AstToIrRegEnum(ctx As *LowerCtx, enumIdx As Long) As boolean
             v = LowConstEval(ctx, nodes[mem].left)
             If v < 0 Then
                 AstCopyStr(ast, mem, VarPtr(namePtr))
-                Print "error: invalid enum value for '" + MakeStr(VarPtr(namePtr)) + "'"
+                LowPrintErr("error: invalid enum value for '" + MakeStr(VarPtr(namePtr)) + "'")
                 ctx->err = 1
                 Exit Function
             End If
@@ -157,6 +157,8 @@ Function AstToIrRegFuncs(ctx As *LowerCtx, prog As Long) As boolean
     Dim bit As Long
 
     AstToIrRegFuncs = false
+    OvlReset()
+    UnReset()
     ast = ctx->ast
     nodes = ast->nodes
     stmt = nodes[prog].left
@@ -164,6 +166,7 @@ Function AstToIrRegFuncs(ctx As *LowerCtx, prog As Long) As boolean
         If nodes[stmt].kind = AST_FUNC Then
             labFn = LowNewLabel(ctx)
             AstCopyStr(ast, stmt, VarPtr(namePtr))
+            OvlRenameDup(ctx, stmt, VarPtr(namePtr))
             If LowFuncFresh(ctx, stmt, VarPtr(namePtr)) = 0 Then Exit Function
             byRefBits = 0
             bit = 1
@@ -177,6 +180,7 @@ Function AstToIrRegFuncs(ctx As *LowerCtx, prog As Long) As boolean
             Wend
             If Not LowAddFunc(ctx, VarPtr(namePtr), labFn, byRefBits) Then Exit Function
             LowRegFuncSig(nodes, stmt, ctx->funcCount - 1)
+            If (nodes[stmt].num And AST_FUNC_EXPORT) <> 0 Then UnNoteRoot(ctx->funcCount - 1)
             If LowNoteFunc(VarPtr(namePtr), labFn, nodes[stmt].num) = 0 Then Exit Function
             ' extra は Parser が書いた戻り型のまま残す（lab は funcLabs）。
             ' extra を lab で上書きすると TY_STRING/TY_DOUBLE と衝突し、
@@ -266,6 +270,7 @@ Function AstToIrBindFuncSyms(ctx As *LowerCtx, stmt As Long, retBuf As *Byte) As
         retBuf[0] = 0
     Else
         AstCopyStr(ast, stmt, retBuf)
+        OvlStripSuffix(retBuf)
     End If
     param = nodes[stmt].left
     While param >= 0
@@ -324,7 +329,7 @@ Function AstToIrEmitFuncSetup(ctx As *LowerCtx, stmt As Long, retBuf As *Byte) A
     g_lowClassTi = AccClassOfName(ast->types, VarPtr(namePtr))
     labFn = LowFindFunc(ctx, VarPtr(namePtr))
     If labFn < 0 Then
-        Print "error: missing function label '" + MakeStr(VarPtr(namePtr)) + "'"
+        LowPrintErr("error: missing function label '" + MakeStr(VarPtr(namePtr)) + "'")
         Exit Function
     End If
     IrEmit(list, OP_LABEL, labFn, 0)

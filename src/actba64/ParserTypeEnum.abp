@@ -30,6 +30,42 @@ Function ParseTypeAlign(p As *Parser, types As *TypeTable, ti As Long) As boolea
     ParseTypeAlign = true
 End Function
 
+' Type Align(1) Name のように名前の前の Align / Pack なら、その位置を返して飛ばす。無ければ -1
+Function ParseTypeLeadAlign(p As *Parser) As Long
+    ParseTypeLeadAlign = -1
+    If ParseTypeIsAlignAt(p, p->pos) = 0 Then Exit Function
+    ParseTypeLeadAlign = p->pos
+    p->pos = p->pos + 4
+End Function
+
+' at が Align( / Pack( なら 1
+Function ParseTypeIsAlignAt(p As *Parser, at As Long) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseTypeIsAlignAt = 0
+    If ParseTokKindAt(p, at + 1) <> TK_LPAREN Then Exit Function
+    lstrcpy(VarPtr(kw), "align")
+    If ParseIdentIsAt(p, at, VarPtr(kw)) <> 0 Then ParseTypeIsAlignAt = 1
+    lstrcpy(VarPtr(kw), "pack")
+    If ParseIdentIsAt(p, at, VarPtr(kw)) <> 0 Then ParseTypeIsAlignAt = 1
+End Function
+
+' 名前の前に Align があればそこで読み、名前の後ろへ戻る。無ければ名前の後ろで読む
+' 前置きの Type Align(n) Name（ActiveBasic 4）はメンバを n バイトに詰める Pack(n) と同じ
+Function ParseTypeAlignAt(p As *Parser, types As *TypeTable, ti As Long, alignAt As Long) As boolean
+    Dim save As Long
+    Dim a As Long
+    If alignAt < 0 Then
+        ParseTypeAlignAt = ParseTypeAlign(p, types, ti)
+        Exit Function
+    End If
+    save = p->pos
+    p->pos = alignAt
+    ParseTypeAlignAt = ParseTypeAlign(p, types, ti)
+    p->pos = save
+    a = types->typeExplicitAlign[ti]
+    If a > 0 Then TySetExplicitAlign(types, ti, 0 - a)
+End Function
+
 Function ParseTypeStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim types As *TypeTable
@@ -38,9 +74,11 @@ Function ParseTypeStmt(p As *Parser) As Long
     Dim kType(KW_SHORT_LEN - 1) As Byte
     Dim ti As Long
     Dim nType As Long
+    Dim alignAt As Long
 
     ParseTypeStmt = -1
     p->pos = p->pos + 1
+    alignAt = ParseTypeLeadAlign(p)
     If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
     ast = p->ast
     types = ast->types
@@ -49,7 +87,7 @@ Function ParseTypeStmt(p As *Parser) As Long
         p->err = 1
         Exit Function
     End If
-    If Not ParseTypeAlign(p, types, ti) Then Exit Function
+    If Not ParseTypeAlignAt(p, types, ti, alignAt) Then Exit Function
     lstrcpy(VarPtr(kEnd), "end")
     lstrcpy(VarPtr(kType), "type")
     Do
@@ -89,6 +127,8 @@ Function ParseEnumMem(p As *Parser, ast As *Ast, ByRef nFirst As Long, ByRef nPr
         e = ParseExpr(p)
         If e < 0 Or p->err <> 0 Then Exit Function
     End If
+    ' A, B, C のように , で区切ってもよい
+    If ParseTokKind(p) = TK_COMMA Then p->pos = p->pos + 1
     nMem = AstAddNode(ast, AST_ENUMMEM)
     If nMem < 0 Then Exit Function
     AstSetStr(ast, nMem, VarPtr(mname))

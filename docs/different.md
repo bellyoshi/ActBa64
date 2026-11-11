@@ -57,18 +57,21 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 の動作 |
 |---|---|---|
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 変数代入に加え、`Long`→`Byte`（呼び出し結果を含む）と引数の `String`→`VoidPtr`・`VoidPtr`→`Long` を warning（`As` で抑制）。数値リテラルは対象外。`Include\default` は抑制 |
-| `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の汎用演算は未（格納と `Input` 変換のみ）。`Double` の配列要素と UDT フィールドは `-actba32` でも 8 バイト転送。`Print` の Double は 64bit と `-actba32` で `StrD$`。科学記法（`1.0e10`）は未対応 |
+| `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の `+` `-` `*` `/` と符号反転は Double で計算して Single に戻す（Single どうしの `/` は Single）。`Print` の Single は `StrS$`（有効 6 桁。`4/3` は `1.33333`）。`Double` の配列要素と UDT フィールドは `-actba32` でも 8 バイト転送。`Print` の Double は 64bit と `-actba32` で `StrD$`。科学記法（`1.0e10`）は未対応 |
 | `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、アクセス制御 | `Inherits` は親フィールドを先頭に置く。`Virtual` 呼び出しは COM vtable。`Super` は親関数の直接呼び出し（基底 ctor/dtor は自動では呼ばない）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。メソッドはマングル名 + 暗黙 `This` |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |
 | 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp` のマクローリン展開**。複雑な入れ子は一時変数経由が安全 |
-| `Int64` / `QWord` / `Char` | 基本型として定義 | **`Char` / `Int64` / `QWord` 型なし**（`Byte` / `Long` / `DWord` 等） |
+| `Int64` / `QWord` / `Char` | 基本型として定義 | **64bit 整数は未対応**。`QWord` は `DWord`、`Int64` は `Long`（32bit）として読み、`64-bit integers are not supported` の警告を出す。型の位置（`As` / `SizeOf(` の後ろ）の **`Char` は `Byte`**（変数名の `char` はそのまま） |
 | DLL 再配置 | ロード時のベース再配置 | DLL は末尾に `.reloc` を出す。32bit は絶対アドレスの HIGHLOW。64bit は空の再配置表（コードは RIP 相対）。EXE は出さない。`DYNAMIC_BASE` は立てないので、優先ベースが空いていればそのまま、塞がっていればローダーが移動する |
 | `Function` の `As` 省略 | 戻り値の型を省くと既定の型（Double） | 戻り値は **Double**。戻り値に代入しなければ 0。型を推定できないので `cannot infer the type of Function 'f'; treated as Double` の警告を出す（コンパイルは続ける）。クラスのメソッドで `As` を省いた `Function` は従来どおり Long |
 | `Const` の再定義 | 同じ名前の定数は一度だけ定義する | **同じ名前・同じ値（数値・Double・文字列とも）の再定義はエラーにしない**。標準ヘッダ（`default.idx`）が定義する `MB_OK` などを、ユーザのソースでも同じ値で定義していることがあるため。**値が違えば、後ろの定義の行で `Const 'a' is already defined with a different value` のエラー**。組込みの `TRUE` / `FALSE` は対象外（ソースで定義し直しても、組込みの値のまま） |
 | ソース拡張子 | `.sbp` 推奨 | **`.abp`**（`.pj` で結合） |
-| 呼ばれない手続き | 呼ばれない Function / Sub はコンパイルしない | 構文エラーのある最上位の Function / Sub は、名前がほかから参照されていなければエラーにせず読み飛ばす（参照されていれば元のエラー）。構文エラーの無い手続きは今までどおりすべてコンパイルする |
+| 呼ばれない手続き | 呼ばれない Function / Sub はコンパイルしない | 構文エラーのある最上位の Function / Sub は、名前がほかから参照されていなければエラーにせず読み飛ばす（参照されていれば元のエラー）。**構文は通るがコード生成で失敗した手続き・メソッド（未定義の名前など）も、本体（main）と Export からたどれなければエラーにせず、空の本体で出す**。たどれれば元のエラー |
+| 名前の大文字小文字 | 区別しない | **型・フィールド・メソッド名は区別しない**。関数・`Declare`・`Const` は完全一致を先に探し、無ければ区別せずに探す（`printf` を `Printf` で呼べる。組込みの `TRUE` と、`commonool.abp` の `true` = -1 は別のまま） |
+| オーバーロード | 引数の数・型の違う同名の Function / Sub / メソッド / コンストラクタ | 2 つ目からの定義を内部で `name#2` … にし、呼び出しの引数の数と種類（整数・実数・ポインタ・構造体・文字列）で選ぶ。引数まで同じ定義は `already defined` |
+| 前方参照の型 | 後ろで定義する型を使える | `TypeDef` / `Enum` も先に名前と大きさを登録する。値で持つフィールドの型が後ろで定義される `Type` / `Class` は、字句の並びでその型の後ろへ移してから読む |
 | `Len` | 文字列は文字数、それ以外は変数・式のバイト数 | 文字列・`BytePtr`・Byte 配列・関数の戻り値は文字列の長さ。数値のスカラー変数・数値の配列・数値リテラル・数値の式はバイト数（`Len(len)` = 配列全体、`Len(0)` = 4）。`len` のように組み込み関数と同じ名前の変数も、`(` が続かなければ変数 |
 | Win32 API | `api_*.sbp` に `Declare` 定義が同梱 | **`default.idx` + `api.idx` + `UnicodeApi.sbp` 自動挿入**。任意 `Declare Lib "dll"`（自作 DLL 含む）可。未登録呼び出しはエラー |
 | DirectX | DirectX 9 + `dx_*.sbp` | **DirectX 11**（[改良点](#directx-11)）。高レベル `dx_*` 一式はサンプルのみ |

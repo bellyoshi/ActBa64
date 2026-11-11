@@ -28,32 +28,129 @@ End Function
 
 ' メソッド呼び出しのユーザー引数を rsp+8.. のホーム領域へ
 ' 戻り値 true : 正常終了  false : エラーあり
-Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As boolean
+' 呼ぶメソッドの関数名（Class_Method）。引数の型を引くのに使う。LowEmitMethodArgs が入口で写す
+Dim g_methSig(MANGLED_LEN - 1) As Byte
+
+' メソッド idx（クラス ti）の関数名を dst へ
+Sub LowMethodSigTo(ctx As *LowerCtx, idx As Long, ti As Long, dst As *Byte)
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim off As Long
+    Dim ast As *Ast
+    Dim typeTable As *TypeTable
+    Dim names As *Byte
+    ast = ctx->ast
+    typeTable = ast->types
+    names = typeTable->typeNames
+    AstCopyStr(ast, idx, VarPtr(name))
+    off = LowMethodDefTi(ti, VarPtr(name)) * TYNAME_LEN
+    LowMangleClass(VarPtr(names[off]), VarPtr(name), dst)
+End Sub
+
+Sub LowSetMethodSig(ctx As *LowerCtx, idx As Long, ti As Long)
+    LowMethodSigTo(ctx, idx, ti, VarPtr(g_methSig))
+End Sub
+
+' obj.M(...) / This なしの M(...) なら呼ぶメソッドのクラス番号。メソッドでなければ -1
+Function LowCallMethodTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowCallMethodTi = -1
+    If nodes[idx].extra = -3 Then LowCallMethodTi = LowRecvClassTi(ctx, nodes[idx].right)
+    If nodes[idx].extra = -3 Or nodes[idx].extra = -4 Then Exit Function
+    AstCopyStr(ast, idx, VarPtr(name))
+    If LowFuncIndex(ctx, VarPtr(name)) < 0 Then LowCallMethodTi = LowSelfMethodTi(ctx, VarPtr(name))
+End Function
+
+' メソッド呼び出しの戻り値の型。メソッドでなければ -1
+Function LowMethodRetTy(ctx As *LowerCtx, idx As Long) As Long
+    Dim sig(MANGLED_LEN - 1) As Byte
+    Dim ti As Long
+    LowMethodRetTy = -1
+    ti = LowCallMethodTi(ctx, idx)
+    If ti < 0 Then Exit Function
+    LowMethodSigTo(ctx, idx, ti, VarPtr(sig))
+    LowMethodRetTy = LowFindFuncRetTy(ctx, VarPtr(sig))
+End Function
+
+Function LowMethodCallBytes(ctx As *LowerCtx, idx As Long, nArgs As Long) As Long
+    Dim nodes As *AstNode
+    nodes = LowAstNodes(ctx)
+    LowMethodCallBytes = LowMethodCallBytesFrom(ctx, nodes[idx].left, nArgs)
+End Function
+
+' 32bit は Double の引数を 8 バイトで積む。This を含めた積む大きさ（argNode から nArgs - 1 個）
+Function LowMethodCallBytesFrom(ctx As *LowerCtx, argNode As Long, nArgs As Long) As Long
+    Dim nodes As *AstNode
+    Dim argIdx As Long
+    Dim byBits As Long
+    LowMethodCallBytesFrom = LowCallBytes(nArgs)
+    If TyIs32() = 0 Then Exit Function
+    nodes = LowAstNodes(ctx)
+    byBits = LowFindFuncByRefs(ctx, VarPtr(g_methSig))
+    LowMethodCallBytesFrom = TyPtrSize()
+    For argIdx = 1 To nArgs - 1
+        LowMethodCallBytesFrom = LowMethodCallBytesFrom + LowNextArgBytes(ctx, VarPtr(g_methSig), argIdx, LowCallArgNeedsAddr(ctx, argNode, byBits, LowArgBit(argIdx), 1), 0)
+        argNode = nodes[argNode].nxt
+    Next
+End Function
+
+' Double / Single の仮引数へ整数を渡すときは変換する
+Sub LowEmitMethodArgCvt(ctx As *LowerCtx, expr As Long, sig As *Byte, argIdx As Long)
+    Dim ty As Long
+    If LowFuncIndex(ctx, sig) < 0 Then Exit Sub
+    ty = LowFindFuncParamTy(ctx, sig, argIdx)
+    If ty = TY_DOUBLE Or ty = TY_SINGLE Then LowEmitArgCvtFlt(ctx, expr, ty)
+End Sub
+
+Function LowEmitMethodArg(ctx As *LowerCtx, argNode As Long, sig As *Byte, argIdx As Long, ByRef home As Long) As boolean
     Dim nodes As *AstNode
     Dim ast As *Ast
-    Dim list As *IrList
-    Dim argIdx As Long
-    Dim argNode As Long
     Dim useAddr As Long
-
-    LowEmitMethodArgs = false
+    Dim slot As Long
+    LowEmitMethodArg = false
     ast = ctx->ast
-    list = ctx->list
     nodes = ast->nodes
+    useAddr = LowCallArgNeedsAddr(ctx, argNode, LowFindFuncByRefs(ctx, sig), LowArgBit(argIdx), 1)
+    If useAddr <> 0 Then
+        If LowAddr(ctx, nodes[argNode].left) = 0 Then Exit Function
+    Else
+        If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
+        LowEmitMethodArgCvt(ctx, nodes[argNode].left, sig, argIdx)
+    End If
+    slot = LowNextArgBytes(ctx, sig, argIdx, useAddr, 0)
+    If TyIs32() = 0 Then home = argIdx * TyPtrSize()
+    LowEmitHomeStore(ctx->list, home, slot)
+    home = home + slot
+    LowEmitMethodArg = true
+End Function
+
+Function LowEmitMethodArgs(ctx As *LowerCtx, idx As Long, nArgs As Long) As boolean
+    Dim nodes As *AstNode
+    nodes = LowAstNodes(ctx)
+    LowEmitMethodArgs = LowEmitMethodArgsFrom(ctx, nodes[idx].left, nArgs)
+End Function
+
+' argNode から nArgs - 1 個の実引数を This の後ろへ積む（仮引数の型は g_methSig の定義）
+Function LowEmitMethodArgsFrom(ctx As *LowerCtx, argNode As Long, nArgs As Long) As boolean
+    Dim sig(MANGLED_LEN - 1) As Byte
+    Dim nodes As *AstNode
+    Dim argIdx As Long
+    Dim home As Long
+
+    LowEmitMethodArgsFrom = false
+    lstrcpy(VarPtr(sig), VarPtr(g_methSig))
+    nodes = LowAstNodes(ctx)
     argIdx = 1
-    argNode = nodes[idx].left
+    home = TyPtrSize()
     While argIdx < nArgs
-        useAddr = LowCallArgNeedsAddr(ctx, argNode, 0, 0, 1)
-        If useAddr <> 0 Then
-            If LowAddr(ctx, nodes[argNode].left) = 0 Then Exit Function
-        Else
-            If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
-        End If
-        IrEmit(list, OP_STORE_RSP_RAX, argIdx * TyPtrSize(), 0)
+        If Not LowEmitMethodArg(ctx, argNode, VarPtr(sig), argIdx, home) Then Exit Function
         argIdx = argIdx + 1
         argNode = nodes[argNode].nxt
     Wend
-    LowEmitMethodArgs = true
+    LowEmitMethodArgsFrom = true
 End Function
 
 Sub LowEmitMethodRegArgs(list As *IrList, nArgs As Long)
@@ -118,7 +215,7 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     ' obj.Method(...) / p->Method(...) — right=receiver, left=user args, str=short name
     typeIdx = LowRecvClassTi(ctx, nodes[idx].right)
     If typeIdx < 0 Then
-        Print "error: method call on non-class"
+        LowerDiagError(ctx, idx, "method call on non-class '" + MakeStr(VarPtr(name)) + "'")
         ctx->err = 1
         Exit Function
     End If
@@ -133,7 +230,8 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
         ctx->err = 1
         Exit Function
     End If
-    callBytes = LowCallBytes(nArgs)
+    LowSetMethodSig(ctx, idx, typeIdx)
+    callBytes = LowMethodCallBytes(ctx, idx, nArgs)
     IrEmit(list, OP_SUB_RSP, callBytes, 0)
     ' user args 1..n-1 into home/stack; this (rcx) set last
     If Not LowEmitMethodArgs(ctx, idx, nArgs) Then Exit Function
@@ -416,7 +514,7 @@ Function LowExprCallMethodInvoke(ctx As *LowerCtx, idx As Long, typeIdx As Long,
         LowMangleClass(VarPtr(names[j]), VarPtr(name), VarPtr(buf))
         lab = LowFindFunc(ctx, VarPtr(buf))
         If lab < 0 Then
-            Print "error: unknown method '" + MakeStr(VarPtr(buf)) + "'"
+            LowPrintErr("error: unknown method '" + MakeStr(VarPtr(buf)) + "'")
             ctx->err = 1
             Exit Function
         End If

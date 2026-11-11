@@ -1,0 +1,278 @@
+' AstLowerOverload - 同じ名前の Function / Sub / メソッド / コンストラクタ（引数の数や型が違う）を呼び分ける
+' 2 つ目からの定義は登録のときに name#2, name#3 ... と名前を変える。呼び出しでは引数の数と種類で選び、
+' 呼び出しノードの名前を選んだ定義の名前に書き換える（以降の型や ByRef の引き当てもその定義を見る）
+Const OVL_MAX = 512
+Const OVL_K_INT = 0
+Const OVL_K_FLT = 1
+Const OVL_K_PTR = 2
+Const OVL_K_UDT = 3
+Const OVL_K_STR = 4
+
+Dim g_ovlN As Long
+Dim g_ovlNames As *Byte
+
+Sub OvlReset()
+    g_ovlN = 0
+    If g_ovlNames = NULL Then g_ovlNames = calloc(BytesN(OVL_MAX, SYM_NAME_LEN))
+End Sub
+
+' 名前を変えた i 番目の定義の名前
+Function OvlNameAt(i As Long) As *Byte
+    Dim off As Long
+    off = i * SYM_NAME_LEN
+    OvlNameAt = VarPtr(g_ovlNames[off])
+End Function
+
+' name#k の # より前の長さ
+Function OvlBaseLen(name As *Byte) As Long
+    OvlBaseLen = 0
+    While name[OvlBaseLen] <> 0 And name[OvlBaseLen] <> CH_HASH
+        OvlBaseLen = OvlBaseLen + 1
+    Wend
+End Function
+
+' AST_FUNC の戻り値の名前は # より前（arg#2 の中の arg = ... は arg）
+Sub OvlStripSuffix(name As *Byte)
+    name[OvlBaseLen(name)] = 0
+End Sub
+
+Sub OvlAppendNum(dst As *Byte, k As Long)
+    Dim n As Long
+    n = lstrlen(dst)
+    dst[n] = CH_HASH
+    If k >= 10 Then
+        dst[n + 1] = OvlDigit(k \ 10)
+        n = n + 1
+    End If
+    dst[n + 1] = OvlDigit(k)
+    dst[n + 2] = 0
+End Sub
+
+' k の一の位の数字の文字
+Function OvlDigit(k As Long) As Byte
+    Dim d As Long
+    d = (k Mod 10) + CH_0
+    OvlDigit = d As Byte
+End Function
+
+' AstSetStr は num / extra も書くので、名前だけ書き換えて残りは戻す
+Sub OvlSetName(ast As *Ast, idx As Long, s As *Byte)
+    Dim nodes As *AstNode
+    Dim num As Long
+    Dim extra As Long
+    nodes = ast->nodes
+    num = nodes[idx].num
+    extra = nodes[idx].extra
+    AstSetStr(ast, idx, s)
+    nodes = ast->nodes
+    nodes[idx].num = num
+    nodes[idx].extra = extra
+End Sub
+
+Sub OvlNameK(dst As *Byte, name As *Byte, k As Long)
+    lstrcpy(dst, name)
+    OvlAppendNum(dst, k)
+End Sub
+
+' cand の # より前が full と同じ（大文字小文字を区別しない）なら 1
+Function OvlBaseEq(cand As *Byte, full As *Byte) As Long
+    Dim i As Long
+    OvlBaseEq = 0
+    If OvlBaseLen(cand) <> lstrlen(full) Then Exit Function
+    For i = 0 To lstrlen(full) - 1
+        If ToLowerChar(cand[i]) <> ToLowerChar(full[i]) Then Exit Function
+    Next
+    OvlBaseEq = 1
+End Function
+
+' 既に登録した名前なら name#k に変えて AST へ書き戻す。変えたら 1
+Function OvlRenameDup(ctx As *LowerCtx, stmt As Long, name As *Byte) As Long
+    Dim cand(SYM_NAME_LEN - 1) As Byte
+    Dim k As Long
+    OvlRenameDup = 0
+    If LowFuncSeen(ctx, name) = 0 Or g_ovlN >= OVL_MAX Then Exit Function
+    ' 引数の数と型まで同じなら重ねた定義ではなく、二重定義（already defined のまま）
+    If OvlSameSigAny(ctx, stmt, name) <> 0 Then Exit Function
+    k = 2
+    OvlNameK(VarPtr(cand), name, k)
+    While LowFuncSeen(ctx, VarPtr(cand)) <> 0 And k < 99
+        k = k + 1
+        OvlNameK(VarPtr(cand), name, k)
+    Wend
+    OvlSetName(ctx->ast, stmt, VarPtr(cand))
+    lstrcpy(name, VarPtr(cand))
+    lstrcpy(OvlNameAt(g_ovlN), VarPtr(cand))
+    g_ovlN = g_ovlN + 1
+    OvlRenameDup = 1
+End Function
+
+' 定義 fi と AST_FUNC stmt の仮引数の数と型が同じなら 1
+Function OvlSameSig(ctx As *LowerCtx, fi As Long, stmt As Long) As Long
+    Dim nodes As *AstNode
+    Dim param As Long
+    Dim k As Long
+    Dim ty As Long
+    OvlSameSig = 0
+    If fi < 0 Then Exit Function
+    nodes = LowAstNodes(ctx)
+    param = nodes[stmt].left
+    k = 0
+    While param >= 0
+        ty = nodes[param].extra
+        If ty < 0 Then ty = TY_LONG
+        If ty <> LowSigTy(g_freeFuncPty As *Long, g_freeFuncNArgs As *Long, fi, k) Then Exit Function
+        k = k + 1
+        param = nodes[param].nxt
+    Wend
+    If k = LowNargsAt(fi) Then OvlSameSig = 1
+End Function
+
+' 同じ名前の既にある定義のどれかと仮引数が同じなら 1
+Function OvlSameSigAny(ctx As *LowerCtx, stmt As Long, name As *Byte) As Long
+    Dim i As Long
+    OvlSameSigAny = OvlSameSig(ctx, LowFuncIndex(ctx, name), stmt)
+    For i = 0 To g_ovlN - 1
+        If OvlBaseEq(OvlNameAt(i), name) <> 0 Then
+            If OvlSameSig(ctx, LowFuncIndex(ctx, OvlNameAt(i)), stmt) <> 0 Then OvlSameSigAny = 1
+        End If
+    Next
+End Function
+
+' 実引数の種類
+Function OvlArgKind(ctx As *LowerCtx, e As Long) As Long
+    Dim nodes As *AstNode
+    Dim ty As Long
+    OvlArgKind = OVL_K_INT
+    nodes = LowAstNodes(ctx)
+    If LowExprIsDoubleBits(ctx, e) <> 0 Then OvlArgKind = OVL_K_FLT
+    ty = LowExprType(ctx, e)
+    If ty = TY_DOUBLE Or ty = TY_SINGLE Then OvlArgKind = OVL_K_FLT
+    If ty = TY_STRING Or nodes[e].kind = AST_STRING Then OvlArgKind = OVL_K_STR
+    If LowExprIsPtr(ctx, e) <> 0 Then OvlArgKind = OVL_K_PTR
+    If LowArgIsUdtVar(ctx, e) <> 0 Then OvlArgKind = OVL_K_UDT
+End Function
+
+' 定義 fi の仮引数 argIdx の種類
+Function OvlParamKind(fi As Long, argIdx As Long, byRefs As Long) As Long
+    Dim ty As Long
+    Dim bit As Long
+    OvlParamKind = OVL_K_INT
+    ty = LowSigTy(g_freeFuncPty As *Long, g_freeFuncNArgs As *Long, fi, argIdx)
+    bit = LowArgBit(argIdx)
+    If ty = TY_DOUBLE Or ty = TY_SINGLE Then OvlParamKind = OVL_K_FLT
+    If ty = TY_STRING Then OvlParamKind = OVL_K_STR
+    If ty = TY_PTR_BYTE Or ty = TY_PTR_LONG Or ty = TY_PTR_UDT Then OvlParamKind = OVL_K_PTR
+    If ty = TY_UDT And (byRefs And bit) <> 0 Then OvlParamKind = OVL_K_UDT
+End Function
+
+Function OvlKindScore(a As Long, b As Long) As Long
+    OvlKindScore = 0
+    If a = b Then OvlKindScore = 2
+    If (a = OVL_K_INT And b = OVL_K_PTR) Or (a = OVL_K_PTR And b = OVL_K_INT) Then OvlKindScore = 1
+End Function
+
+' 定義 cand が実引数（arg から nUser 個、先頭の This を数える skip）にどれだけ合うか。合わなければ -1
+Function OvlScore(ctx As *LowerCtx, cand As *Byte, arg As Long, nUser As Long, skip As Long) As Long
+    Dim fi As Long
+    Dim k As Long
+    Dim nodes As *AstNode
+    OvlScore = -1
+    fi = LowFuncIndex(ctx, cand)
+    If fi < 0 Then Exit Function
+    If LowNargsAt(fi) <> nUser + skip Then Exit Function
+    nodes = LowAstNodes(ctx)
+    OvlScore = 1
+    For k = 0 To nUser - 1
+        OvlScore = OvlScore + OvlKindScore(OvlArgKind(ctx, nodes[arg].left), OvlParamKind(fi, k + skip, LowFindFuncByRefs(ctx, cand)))
+        arg = nodes[arg].nxt
+    Next
+End Function
+
+' full（Class_ を付けた名前）と同じ名前の定義から、実引数に一番合うものを full へ写す
+Sub OvlPickFull(ctx As *LowerCtx, full As *Byte, arg As Long, nUser As Long, skip As Long)
+    Dim best(SYM_NAME_LEN - 1) As Byte
+    Dim cand As *Byte
+    Dim bestScore As Long
+    Dim s As Long
+    Dim i As Long
+    If g_ovlN = 0 Then Exit Sub
+    lstrcpy(VarPtr(best), full)
+    bestScore = OvlScore(ctx, full, arg, nUser, skip)
+    For i = 0 To g_ovlN - 1
+        cand = OvlNameAt(i)
+        s = -1
+        If OvlBaseEq(cand, full) <> 0 Then s = OvlScore(ctx, cand, arg, nUser, skip)
+        If s > bestScore Then
+            bestScore = s
+            lstrcpy(VarPtr(best), cand)
+        End If
+    Next
+    lstrcpy(full, VarPtr(best))
+End Sub
+
+Function OvlCountArgs(ctx As *LowerCtx, arg As Long) As Long
+    Dim nodes As *AstNode
+    nodes = LowAstNodes(ctx)
+    OvlCountArgs = 0
+    While arg >= 0
+        OvlCountArgs = OvlCountArgs + 1
+        arg = nodes[arg].nxt
+    Wend
+End Function
+
+' 普通の関数呼び出し idx の名前を、重ねた定義のうち合うものへ書き換える
+Sub OvlFixFreeCall(ctx As *LowerCtx, idx As Long)
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim nodes As *AstNode
+    nodes = LowAstNodes(ctx)
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If LowFuncIndex(ctx, VarPtr(name)) < 0 Then Exit Sub
+    OvlPickFull(ctx, VarPtr(name), nodes[idx].left, OvlCountArgs(ctx, nodes[idx].left), 0)
+    OvlSetName(ctx->ast, idx, VarPtr(name))
+End Sub
+
+' obj.M(...) の短い名前 M を M#k へ書き換える（Class_M#k の定義を呼ぶ）
+Sub OvlFixMethodCall(ctx As *LowerCtx, idx As Long, ti As Long)
+    Dim full(MANGLED_LEN - 1) As Byte
+    Dim nodes As *AstNode
+    Dim n As Long
+    If ti < 0 Then Exit Sub
+    nodes = LowAstNodes(ctx)
+    LowMethodSigTo(ctx, idx, ti, VarPtr(full))
+    n = OvlBaseLen(VarPtr(full))
+    OvlPickFull(ctx, VarPtr(full), nodes[idx].left, OvlCountArgs(ctx, nodes[idx].left), 1)
+    If full[n] = 0 Then Exit Sub
+    OvlFixMethodName(ctx, idx, VarPtr(full[n]))
+End Sub
+
+' 短い名前の後ろに #k を付ける
+Sub OvlFixMethodName(ctx As *LowerCtx, idx As Long, suffix As *Byte)
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    OvlStripSuffix(VarPtr(name))
+    lstrcat(VarPtr(name), suffix)
+    OvlSetName(ctx->ast, idx, VarPtr(name))
+End Sub
+
+' 呼び出しノードの名前を合う定義に直す（何度呼んでも同じ）
+Sub OvlFixCall(ctx As *LowerCtx, idx As Long)
+    Dim nodes As *AstNode
+    Dim ti As Long
+    If g_ovlN = 0 Or idx < 0 Then Exit Sub
+    nodes = LowAstNodes(ctx)
+    If nodes[idx].kind <> AST_CALL Or nodes[idx].extra = -4 Then Exit Sub
+    ti = LowCallMethodTi(ctx, idx)
+    If ti >= 0 Then OvlFixMethodCall(ctx, idx, ti)
+    If ti < 0 Then OvlFixFreeCall(ctx, idx)
+End Sub
+
+' Dim x As C(args) のコンストラクタ。合う定義の名前とラベル
+Function OvlPickCtor(ctx As *LowerCtx, idx As Long, name As *Byte, lab As Long) As Long
+    Dim nodes As *AstNode
+    OvlPickCtor = lab
+    If g_ovlN = 0 Or lab < 0 Then Exit Function
+    nodes = LowAstNodes(ctx)
+    If LowCtorArgCount(ctx, idx) <= 0 Then Exit Function
+    OvlPickFull(ctx, name, nodes[idx].right, LowCtorArgCount(ctx, idx) - 1, 1)
+    OvlPickCtor = LowFindFunc(ctx, name)
+End Function

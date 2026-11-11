@@ -5,6 +5,8 @@
 Dim g_nhConst(8191) As Long
 Dim g_nhDecl(8191) As Long
 Dim g_nhFunc(8191) As Long
+' 1 のあいだは大文字小文字を区別せずに比べる（NhFind が完全一致で見つからなかったとき）
+Dim g_nhCI As Long
 
 Function NhMix(h As Long, c As Long) As Long
     NhMix = ((h And 16777215) * 33) Xor c
@@ -15,7 +17,7 @@ Function NhHash(name As *Byte) As Long
     h = 0
     i = 0
     While name[i] <> 0
-        h = NhMix(h, name[i])
+        h = NhMix(h, ToLowerChar(name[i]))
         i = i + 1
     Wend
     NhHash = h And 8191
@@ -29,7 +31,8 @@ Function NhEq(names As *Byte, idx As Long, name As *Byte) As Long
     Dim off As Long
     off = idx * SYM_NAME_LEN
     NhEq = 0
-    If LowNameEqExact(VarPtr(names[off]), name) Then NhEq = 1
+    If g_nhCI = 0 And LowNameEqExact(VarPtr(names[off]), name) Then NhEq = 1
+    If g_nhCI <> 0 And LowNameEq(VarPtr(names[off]), name) Then NhEq = 1
 End Function
 
 Function NhHit(slots As *Long, names As *Byte, name As *Byte, h As Long) As Long
@@ -52,7 +55,7 @@ Function NhDone(hit As Long) As Long
     If hit = -2 Then NhDone = -1
 End Function
 
-Function NhFind(slots As *Long, names As *Byte, name As *Byte) As Long
+Function NhFindExact(slots As *Long, names As *Byte, name As *Byte) As Long
     Dim h As Long, n As Long, hit As Long
     h = NhHash(name)
     n = 0
@@ -60,7 +63,17 @@ Function NhFind(slots As *Long, names As *Byte, name As *Byte) As Long
     While (n < 8192) And (hit = -1)
         hit = NhProbe(slots, names, name, VarPtr(h), VarPtr(n))
     Wend
-    NhFind = NhDone(hit)
+    NhFindExact = NhDone(hit)
+End Function
+
+' 完全一致を先に探し、無ければ大文字小文字を区別せずに探す（ActiveBasic と同じく printf も Printf で呼べる。
+' 完全一致を優先するので、プロジェクト内の true（-1）と組み込みの TRUE（1）のような名前は別のまま）
+Function NhFind(slots As *Long, names As *Byte, name As *Byte) As Long
+    NhFind = NhFindExact(slots, names, name)
+    If NhFind >= 0 Then Exit Function
+    g_nhCI = 1
+    NhFind = NhFindExact(slots, names, name)
+    g_nhCI = 0
 End Function
 
 Function NhSlot(slots As *Long, h As Long, idx As Long) As Long

@@ -26,9 +26,10 @@ Function LowNameTy(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 Function LowBaseWide(ctx As *LowerCtx, base As Long) As Long
-    LowBaseWide = LowTyIsDblArr(LowNameTy(ctx, base))
+    LowBaseWide = LowTyIsDblArr(LowNameElemTy(ctx, base))
     If LowNodeKind(ctx, base) = AST_MEMBER Then
         LowBaseWide = LowSizeIs8(LowMemberFieldSize(ctx, base))
+        If LowMemberFieldTy(ctx, base) = FIELDTY_PTR_DOUBLE Then LowBaseWide = 1
     End If
 End Function
 
@@ -103,16 +104,8 @@ Function LowStoreIndexMember(ctx As *LowerCtx, base As Long) As boolean
     ast = ctx->ast
     typeTable = ast->types
     AstCopyStr(ast, base, VarPtr(fname))
-    If Not LowMemberBaseName(ctx, base, VarPtr(name)) Then
-        ctx->err = 1
-        Exit Function
-    End If
-    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
-        ctx->err = 1
-        Exit Function
-    End If
-    typeIdx = vTypeIdx
-    If TyFindFieldEx(typeTable, typeIdx, VarPtr(fname), fieldOff, fieldSize, fieldCount, fieldTy) = 0 Then
+    ' ネストしたメンバ（h.Raw.GameID[3]）や *T の -> もたどる
+    If Not LowResolveMemberField(ctx, base, fieldOff, fieldSize, fieldCount, fieldTy) Then
         ctx->err = 1
         Exit Function
     End If
@@ -156,7 +149,7 @@ Function LowStmtAssignIndexStore(ctx As *LowerCtx, leftIdx As Long, leftK As Lon
         Else
             AstCopyStr(ast, base, VarPtr(name))
             If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
-                LowStoreArrElem(ctx, vTy, 1)
+                LowStoreArrElem(ctx, LowElemTyOf(vTy, vTypeIdx), 1)
             Else
                 IrEmit(ctx->list, OP_STORE_BYTE_RAX_CL, 0, 0)
             End If
@@ -199,17 +192,9 @@ Function LowStmtAssignIndex(ctx As *LowerCtx, idx As Long) As Long
             End If
         End If
     Else
-        base = nodes[leftIdx].left
-        If nodes[base].kind = AST_VAR Then
-            AstCopyStr(ast, base, VarPtr(name))
-            If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
-                If vTy = TY_SINGLE_ARR Then
-                    LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
-                ElseIf vTy = TY_DOUBLE_ARR Then
-                    LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
-                End If
-            End If
-        End If
+        ' a[i] = v（*Double の添字や *Double のメンバも含む）は要素の実数の型へ変換する
+        If LowIndexFloatTy(ctx, leftIdx) = TY_SINGLE Then LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
+        If LowIndexFloatTy(ctx, leftIdx) = TY_DOUBLE Then LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
     End If
     wide = LowIndexAssignWide(ctx, leftIdx, leftK)
     LowPushWide(ctx->list, wide)
@@ -243,7 +228,7 @@ End Function
 Sub LowBadMember(ctx As *LowerCtx, leftIdx As Long)
     Dim name(SYM_NAME_LEN - 1) As Byte
     AstCopyStr(ctx->ast, leftIdx, VarPtr(name))
-    Print "error: bad member field '" + MakeStr(VarPtr(name)) + "'"
+    LowPrintErr("error: bad member field '" + MakeStr(VarPtr(name)) + "'")
     ctx->err = 1
 End Sub
 

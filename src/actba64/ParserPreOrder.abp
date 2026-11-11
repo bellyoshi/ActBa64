@@ -1,0 +1,240 @@
+' ParserPreOrder - Type / Class のブロックを、値で持つフィールドの型（と Inherits の基底）の後ろへ移す
+' 配置は構文解析の時点で決めるので、Class File の path As FilePath のように後ろで定義する型を
+' 値で持つと大きさが分からない。ActiveBasic は通るので、字句の並びでブロックごと後ろへ動かす
+Const PRE_ORD_MAX_BLOCKS = 8192
+Const PRE_ORD_MAX_MOVES = 256
+
+Dim g_poN As Long
+Dim g_poStart As *Long
+Dim g_poEnd As *Long
+Dim g_poTi As *Long
+' 行の種類を読むときの、メソッド本体の深さ
+Dim g_poDepth As Long
+
+' at の論理行の次の字句の位置
+Function PreOrdLineEnd(p As *Parser, at As Long) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim k As Long
+    lx = p->lx
+    toks = lx->toks
+    k = at
+    While k < lx->count - 1 And toks[k].kind <> TK_EOF And toks[k].logLine = toks[at].logLine
+        k = k + 1
+    Wend
+    PreOrdLineEnd = k
+End Function
+
+Function PreOrdIsAt(p As *Parser, at As Long, lit As *Byte) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kw), lit)
+    PreOrdIsAt = ParseIdentIsAt(p, at, VarPtr(kw))
+End Function
+
+' End Type / End Class の行の次の位置。見つからなければ -1
+Function PreOrdBlockEnd(p As *Parser, at As Long, kind As Long) As Long
+    Dim k As Long
+    Dim tail(KW_SHORT_LEN - 1) As Byte
+    PreOrdBlockEnd = -1
+    lstrcpy(VarPtr(tail), "type")
+    If kind = 1 Then lstrcpy(VarPtr(tail), "class")
+    k = PreOrdLineEnd(p, at)
+    While ParseTokKindAt(p, k) <> TK_EOF
+        If PreOrdIsAt(p, k, "end") <> 0 And ParseIdentIsAt(p, k + 1, VarPtr(tail)) <> 0 Then
+            PreOrdBlockEnd = PreOrdLineEnd(p, k)
+            Exit Function
+        End If
+        k = PreOrdLineEnd(p, k)
+    Wend
+End Function
+
+Sub PreOrdAlloc()
+    If g_poStart <> NULL Then Exit Sub
+    g_poStart = calloc(BytesN(PRE_ORD_MAX_BLOCKS, SizeOf(Long)))
+    g_poEnd = calloc(BytesN(PRE_ORD_MAX_BLOCKS, SizeOf(Long)))
+    g_poTi = calloc(BytesN(PRE_ORD_MAX_BLOCKS, SizeOf(Long)))
+End Sub
+
+' 文頭の Type / Class なら、ブロックを 1 つ記録して終わりの位置を返す。違えば at
+Function PreOrdTakeBlock(p As *Parser, at As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim kind As Long
+    Dim e As Long
+    PreOrdTakeBlock = at
+    p->pos = at
+    kind = ParsePreTypeKind(p)
+    If kind < 0 Or kind > 1 Then Exit Function
+    If Not ParsePreTypeName(p, at, VarPtr(name)) Then Exit Function
+    e = PreOrdBlockEnd(p, at, kind)
+    If e < 0 Or g_poN >= PRE_ORD_MAX_BLOCKS Then Exit Function
+    PreOrdAddBlock(at, e, PreOrdTyFind(p, VarPtr(name)))
+    PreOrdTakeBlock = e
+End Function
+
+Sub PreOrdAddBlock(s As Long, e As Long, ti As Long)
+    g_poStart[g_poN] = s
+    g_poEnd[g_poN] = e
+    g_poTi[g_poN] = ti
+    g_poN = g_poN + 1
+End Sub
+
+' 文頭だけを見て、字句列の Type / Class ブロックを集める
+Sub PreOrdScan(p As *Parser)
+    Dim at As Long
+    Dim e As Long
+    g_poN = 0
+    at = 0
+    While ParseTokKindAt(p, at) <> TK_EOF
+        e = -1
+        p->pos = at
+        If ParsePreAtStmtStart(p, at) Then e = PreOrdTakeBlock(p, at)
+        If e <= at Then e = at + 1
+        at = e
+    Wend
+End Sub
+
+Function PreOrdTyFind(p As *Parser, name As *Byte) As Long
+    Dim ast As *Ast
+    ast = p->ast
+    PreOrdTyFind = TyFind(ast->types, name)
+End Function
+
+' 型の番号のブロック。無ければ -1
+Function PreOrdBlockOf(ti As Long) As Long
+    Dim i As Long
+    PreOrdBlockOf = -1
+    If ti < 0 Then Exit Function
+    For i = 0 To g_poN - 1
+        If g_poTi[i] = ti Then PreOrdBlockOf = i
+    Next
+End Function
+
+' at の名前の型のブロックが b より後ろにあれば、その終わりの位置。そうでなければ 0
+Function PreOrdDepEnd(p As *Parser, at As Long, b As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim d As Long
+    PreOrdDepEnd = 0
+    If ParseTokKindAt(p, at) <> TK_IDENT Then Exit Function
+    lx = p->lx
+    toks = lx->toks
+    LexCopyText(lx, toks[at].textSlot, VarPtr(name))
+    d = PreOrdBlockOf(PreOrdTyFind(p, VarPtr(name)))
+    If d < 0 Then Exit Function
+    If g_poStart[d] > g_poStart[b] Then PreOrdDepEnd = g_poEnd[d]
+End Function
+
+' 行頭の修飾子（Public / Virtual など）を飛ばした位置
+Function PreOrdSkipMods(p As *Parser, at As Long) As Long
+    Dim k As Long
+    k = at
+    While PreOrdIsAt(p, k, "public") Or PreOrdIsAt(p, k, "private") Or PreOrdIsAt(p, k, "protected") Or PreOrdIsAt(p, k, "virtual") Or PreOrdIsAt(p, k, "override") Or PreOrdIsAt(p, k, "static")
+        k = k + 1
+    Wend
+    PreOrdSkipMods = k
+End Function
+
+' メソッドの見出し行なら 1（本体の深さも進める）、End Sub / End Function なら 2、それ以外は 0
+Function PreOrdLineKind(p As *Parser, at As Long) As Long
+    Dim k As Long
+    PreOrdLineKind = 2
+    If PreOrdIsAt(p, at, "end") <> 0 And (PreOrdIsAt(p, at + 1, "sub") <> 0 Or PreOrdIsAt(p, at + 1, "function") <> 0) Then Exit Function
+    PreOrdLineKind = 1
+    If PreOrdIsAt(p, at, "abstract") <> 0 Then Exit Function
+    k = PreOrdSkipMods(p, at)
+    If PreOrdIsAt(p, k, "sub") <> 0 Or PreOrdIsAt(p, k, "function") <> 0 Then g_poDepth = g_poDepth + 1
+    If PreOrdIsAt(p, k, "sub") <> 0 Or PreOrdIsAt(p, k, "function") <> 0 Then Exit Function
+    PreOrdLineKind = 0
+End Function
+
+' フィールド行の As X / Inherits X のうち、後ろにあるブロックの終わりの最大
+Function PreOrdLineDeps(p As *Parser, s As Long, e As Long, b As Long) As Long
+    Dim k As Long
+    Dim d As Long
+    PreOrdLineDeps = 0
+    For k = s To e - 2
+        d = 0
+        If PreOrdIsAt(p, k, "as") <> 0 Or PreOrdIsAt(p, k, "inherits") <> 0 Then d = PreOrdDepEnd(p, k + 1, b)
+        If d > PreOrdLineDeps Then PreOrdLineDeps = d
+    Next
+End Function
+
+' ブロック b を置くべき位置（後ろへ動かさなくてよければ 0）
+Function PreOrdBlockDeps(p As *Parser, b As Long) As Long
+    Dim k As Long
+    Dim e As Long
+    Dim kind As Long
+    Dim d As Long
+    PreOrdBlockDeps = 0
+    g_poDepth = 0
+    k = g_poStart[b]
+    While k < g_poEnd[b]
+        e = PreOrdLineEnd(p, k)
+        kind = PreOrdLineKind(p, k)
+        If kind = 2 And g_poDepth > 0 Then g_poDepth = g_poDepth - 1
+        d = 0
+        If kind = 0 And g_poDepth = 0 Then d = PreOrdLineDeps(p, k, e, b)
+        If d > PreOrdBlockDeps Then PreOrdBlockDeps = d
+        If e <= k Then e = k + 1
+        k = e
+    Wend
+End Function
+
+Sub PreOrdCopyTok(dst As *Tok, di As Long, src As *Tok, si As Long)
+    dst[di].kind = src[si].kind
+    dst[di].textSlot = src[si].textSlot
+    dst[di].num = src[si].num
+    dst[di].srcLine = src[si].srcLine
+    dst[di].join = src[si].join
+    dst[di].logLine = src[si].logLine
+End Sub
+
+' [s, e) を d の直前へ移す（e <= d）
+Sub PreOrdMove(p As *Parser, s As Long, e As Long, d As Long)
+    Dim tmp As *Tok
+    Dim toks As *Tok
+    Dim lx As *Lexer
+    Dim i As Long
+    lx = p->lx
+    toks = lx->toks
+    tmp = calloc(BytesN(e - s, SizeOf(Tok)))
+    For i = s To e - 1
+        PreOrdCopyTok(tmp, i - s, toks, i)
+    Next
+    For i = e To d - 1
+        PreOrdCopyTok(toks, i - (e - s), toks, i)
+    Next
+    For i = 0 To e - s - 1
+        PreOrdCopyTok(toks, d - (e - s) + i, tmp, i)
+    Next
+    free(tmp)
+End Sub
+
+' 1 つ動かしたら 1
+Function PreOrdStep(p As *Parser) As Long
+    Dim b As Long
+    Dim d As Long
+    PreOrdStep = 0
+    PreOrdScan(p)
+    For b = 0 To g_poN - 1
+        d = PreOrdBlockDeps(p, b)
+        If d > g_poEnd[b] Then
+            PreOrdMove(p, g_poStart[b], g_poEnd[b], d)
+            PreOrdStep = 1
+            Exit Function
+        End If
+    Next
+End Function
+
+Sub ParsePreOrder(p As *Parser)
+    Dim save As Long
+    Dim n As Long
+    save = p->pos
+    PreOrdAlloc()
+    n = 0
+    While n < PRE_ORD_MAX_MOVES And PreOrdStep(p) <> 0
+        n = n + 1
+    Wend
+    p->pos = save
+End Sub

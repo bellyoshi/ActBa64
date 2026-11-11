@@ -119,7 +119,9 @@ Function LowArgIsUdtVar(ctx As *LowerCtx, idx As Long) As Long
     If nodes[idx].kind <> AST_VAR Then Exit Function
     AstCopyStr(ast, idx, VarPtr(name))
     If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
-    If vTy = TY_UDT Then LowArgIsUdtVar = 1
+    If vTy <> TY_UDT Then Exit Function
+    ' TypeDef H = Long などフィールドの無い別名は値で渡す
+    If TyIsBareAlias(ast->types, vTypeIdx) = 0 Then LowArgIsUdtVar = 1
 End Function
 
 Function LowCallArgNeedsAddr(ctx As *LowerCtx, argNode As Long, byBits As Long, bit As Long, isApi As Long) As Long
@@ -171,6 +173,7 @@ Function LowRecvClassTi(ctx As *LowerCtx, recvIdx As Long) As Long
     If recvIdx < 0 Then Exit Function
     ast = ctx->ast
     nodes = ast->nodes
+    If nodes[recvIdx].kind = AST_MEMBER Then LowRecvClassTi = LowRecvMemberTi(ctx, recvIdx)
     If nodes[recvIdx].kind <> AST_VAR Then Exit Function
     AstCopyStr(ast, recvIdx, VarPtr(name))
     If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
@@ -178,6 +181,16 @@ Function LowRecvClassTi(ctx As *LowerCtx, recvIdx As Long) As Long
     typeTable = ast->types
     If TyIsClass(typeTable, vTypeIdx) = 0 Then Exit Function
     LowRecvClassTi = vTypeIdx
+End Function
+
+' obj.field.M() / メソッドの中の field.M()（This.field）: 値で持つ Class のフィールドの型
+Function LowRecvMemberTi(ctx As *LowerCtx, recvIdx As Long) As Long
+    Dim off As Long, sz As Long, cnt As Long, fty As Long
+    Dim ast As *Ast
+    LowRecvMemberTi = -1
+    If Not LowResolveMemberField(ctx, recvIdx, off, sz, cnt, fty) Then Exit Function
+    ast = ctx->ast
+    If fty >= 0 And cnt = 1 And TyIsClass(ast->types, fty) <> 0 Then LowRecvMemberTi = fty
 End Function
 
 Function LowRecvIsPtr(ctx As *LowerCtx, recvIdx As Long) As Long
@@ -297,6 +310,7 @@ Function LowExprCast(ctx As *LowerCtx, idx As Long) As Long
     byRefs = ctx->byRefs
 
     If LowCastOperand(ctx, nodes[idx].left) = 0 Then Exit Function
+    If LowIsArrVar(ctx, nodes[idx].left) = 0 Then LowCastConvert(ctx, nodes[idx].left, nodes[idx].extra)
     If nodes[idx].num <> 0 Then
         IrEmit(list, OP_AND_EAX_IMM, nodes[idx].num, 0)
     End If
@@ -324,6 +338,28 @@ Function LowIsArrVar(ctx As *LowerCtx, idx As Long) As Long
 End Function
 
 ' キャストの中身。配列名は値でなく先頭アドレス（sbSize As LPARAM。ActiveBasic と同じ）
+' x As Long / x As Double: 実数と整数の間は値を変換する（同じ種類どうしは何もしない）
+Sub LowCastConvert(ctx As *LowerCtx, e As Long, tgt As Long)
+    Dim src As Long
+    src = LowExprType(ctx, e)
+    If LowExprIsDoubleBits(ctx, e) <> 0 Then src = TY_DOUBLE
+    If src <> TY_DOUBLE And src <> TY_SINGLE Then src = TY_LONG
+    If tgt = src Or tgt < 0 Then Exit Sub
+    If tgt = TY_LONG And src = TY_SINGLE Then IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+    If tgt = TY_LONG Then IrEmit(ctx->list, OP_CVT_SD_TO_I32, 0, 0)
+    If tgt = TY_DOUBLE Then LowEmitCvtRaxToDoubleFromTy(ctx, src)
+    If tgt = TY_SINGLE And src = TY_DOUBLE Then IrEmit(ctx->list, OP_CVT_SD_TO_SS, 0, 0)
+    If tgt = TY_SINGLE And src = TY_LONG Then IrEmit(ctx->list, OP_CVT_I32_TO_SS, 0, 0)
+End Sub
+
+' キャストの結果の型（実数へのキャストなら TY_DOUBLE / TY_SINGLE、ほかは -1）
+Function LowCastFloatTy(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    nodes = LowAstNodes(ctx)
+    LowCastFloatTy = -1
+    If nodes[idx].extra = TY_DOUBLE Or nodes[idx].extra = TY_SINGLE Then LowCastFloatTy = nodes[idx].extra
+End Function
+
 Function LowCastOperand(ctx As *LowerCtx, idx As Long) As Long
     If LowIsArrVar(ctx, idx) <> 0 Then
         LowCastOperand = LowAddr(ctx, idx)
@@ -401,7 +437,7 @@ Function LowExpr(ctx As *LowerCtx, idx As Long) As Long
     ElseIf kind = AST_CAST Then
         LowExpr = LowExprCast(ctx, idx)
     Else
-        Print "error: unsupported expr kind " + Str$(kind)
+        LowPrintErr("error: unsupported expr kind " + Str$(kind))
         ctx->err = 1
     End If
 End Function

@@ -24,6 +24,10 @@ Function LowExprUnary(ctx As *LowerCtx, idx As Long) As Long
         If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
         If LowExprType(ctx, nodes[idx].left) = TY_DOUBLE Then
             IrEmit(list, OP_NEG_SD, 0, 0)
+        ElseIf LowExprType(ctx, nodes[idx].left) = TY_SINGLE Then
+            IrEmit(list, OP_CVT_SS_TO_SD, 0, 0)
+            IrEmit(list, OP_NEG_SD, 0, 0)
+            IrEmit(list, OP_CVT_SD_TO_SS, 0, 0)
         Else
             IrEmit(list, OP_NEG_EAX, 0, 0)
         End If
@@ -174,6 +178,7 @@ End Function
 Function LowExprBinopDiv(ctx As *LowerCtx, idx As Long, op As Long, fty As Long) As Long
     LowExprBinopDiv = 0
     If op = BOP_DIV Then LowExprBinopDiv = LowExprBinopDivOp(ctx, idx, TY_DOUBLE)
+    If op = BOP_DIV And LowExprType(ctx, idx) = TY_SINGLE Then IrEmit(ctx->list, OP_CVT_SD_TO_SS, 0, 0)
     If op = BOP_IDIV Then LowExprBinopDiv = LowExprBinopIdiv(ctx, idx, fty)
     If op = BOP_MOD Then LowExprBinopDiv = LowExprBinopMod(ctx, idx)
     If op = BOP_SHL Or op = BOP_SHR Then LowExprBinopDiv = LowExprBinopShift(ctx, idx, op)
@@ -333,7 +338,8 @@ Function LowExprBinopArith(ctx As *LowerCtx, idx As Long, op As Long, fty As Lon
     ast = ctx->ast
     list = ctx->list
     nodes = ast->nodes
-    If fty = TY_DOUBLE And (op = BOP_ADD Or op = BOP_MUL Or op = BOP_SUB) Then
+    ' Single は Double で計算して Single へ戻す
+    If (fty = TY_DOUBLE Or fty = TY_SINGLE) And (op = BOP_ADD Or op = BOP_MUL Or op = BOP_SUB) Then
         If LowExpr(ctx, nodes[idx].left) = 0 Then Exit Function
         LowEmitCvtRaxToDoubleFromTy(ctx, LowExprType(ctx, nodes[idx].left))
         LowEmitPushOperand(list, TY_DOUBLE)
@@ -347,6 +353,7 @@ Function LowExprBinopArith(ctx As *LowerCtx, idx As Long, op As Long, fty As Lon
         Else
             IrEmit(list, OP_MUL_SD, 0, 0)
         End If
+        If fty = TY_SINGLE Then IrEmit(list, OP_CVT_SD_TO_SS, 0, 0)
         LowExprBinopArith = 1
         Exit Function
     End If
@@ -408,6 +415,6 @@ Function LowExprBinop(ctx As *LowerCtx, idx As Long) As Long
         LowExprBinop = LowExprBinopCmp(ctx, idx, op, fty)
         Exit Function
     End If
-    Print "error: unsupported binop " + Str$(op)
+    LowPrintErr("error: unsupported binop " + Str$(op))
     ctx->err = 1
 End Function
