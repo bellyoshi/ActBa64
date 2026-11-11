@@ -5,6 +5,8 @@ Actba64はActiveBasic 互換サブセットコンパイラ です。
 ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 という実験プロジェクトです。完全に同じ動きをするわけではありませんのでご了承ください。
 
+ダウンロードは[こちら](https://github.com/bellyoshi/ActBa64/releases)
+
 
 
 リポジトリ全体の概要は [README.md](../README.md) を参照してください。
@@ -30,7 +32,7 @@ ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 
 | 文書 | 内容 |
 |---|---|
-| [book/ActiveBasicについて.md](./book/ActiveBasicについて.md) | ActiveBasic の来歴と入手先 |
+| [book/ActiveBasic.md](./book/ActiveBasic.md) | ActiveBasic の来歴と入手先 |
 | [book/ActiveBasicで作られたソフト.md](./book/ActiveBasicで作られたソフト.md) | ActiveBasic 製ソフトのリンク集 |
 | [notes/abassembler-const-limit.md](./notes/abassembler-const-limit.md) | abassembler の `too many Const` 失敗と対処の記録 |
 

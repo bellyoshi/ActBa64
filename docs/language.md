@@ -37,7 +37,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 - 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）。単行 `If ... Then` では、同じ行の `:` で続く文と `Else` はその `If` の一部です
 - `If` / `Select Case` などのブロックの中で、後ろに語が続かない単独の `End` はプログラム終了の文。`End If` / `End Select` のように同じ行に語が続くときだけブロックの終わり
 
-行の継続:
+<a id="line-continuation"></a>行の継続:
 
 ```
 Print a +_
@@ -61,7 +61,7 @@ Print a +_
 | `#resource` | リソース埋め込み（[§5.2.2](#522-リソース埋め込み)） |
 | その他 `#...` | 字句レベルで行スキップ、または実装依存で無視 |
 
-ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#12-行継続) の `_` や括弧内改行）。
+ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#line-continuation) の `_` や括弧内改行）。
 
 `Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`CvtNum.abp`、`Pow.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Val.abp`、`Using.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
@@ -641,7 +641,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 | 超過時 | コンパイル失敗。`error: …: too long line (実長 > 1024)` |
 
 `#include` 展開・条件付きプリプロセス・`With` 書き換え後の行にも同じ上限がかかる。  
-長い条件式は `_` 継続や括弧内改行で分割する（[§1.2](#12-行継続)）。
+長い条件式は `_` 継続や括弧内改行で分割する（[§1.2](#line-continuation)）。
 
 ### 7.2 `#include`
 
