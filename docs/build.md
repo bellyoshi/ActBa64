@@ -164,9 +164,10 @@ actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 - **API スロット**（`LinuxRt`）: 呼び出しは Windows と同じ `call [rip+IAT]`。スロットには `Include\linux` の BASIC 関数 `Lx_<API名>`（例: `Lx_WriteFile`）の絶対アドレスを書く。無い API は `unsupported API: 名前` を stderr に出して終了コード 127
 - **スタブ**（`LinuxStub`）: `_start`（rsp を保存し `jmp main` を call）、`Lx_Syscall(番号, a1..a6)`、`Lx_StackBase()`。GC のスタック底は `gs:[8]` の代わりに保存した rsp
 - `#ifdef _LINUX` が使える。`Print` の行末は LF。内部の UTF-8 をそのまま書く
-- 今あるのは標準入出力（`Print`、`Input`）・終了・メモリ／C 文字列・ヒープ・ファイル（`Open` / `Print #` / `Write #` / `Input #` / `Get` / `Put`、`Kill` / `MkDir` / `ChDir`）・時刻（`Date$` / `Time$` は今は UTC）・`Sleep`・`GetCommandLine` / `GetModuleFileName`
+- 今あるのは標準入出力（`Print`、`Input`）・終了・メモリ／C 文字列・ヒープ・ファイル（`Open` / `Print #` / `Write #` / `Input #` / `Get` / `Put`、`Kill` / `MkDir` / `ChDir`）・時刻（`Date$` / `Time$` は今は UTC）・`Sleep`・`GetCommandLine` / `GetModuleFileName`・`lstrcat`・`GetFullPathName`・子プロセス（`CreateProcess` / `WaitForSingleObject` / `GetExitCodeProcess`、`LxProc`）
+- ファイルの API（`LxFile`）はパスの `\` を `/` として扱う（コンパイラが `"Include\"` のように組み立てるため）。`CreateProcess` はコマンドラインを空白で分け（`""` の中は 1 つ）、先頭のプログラムだけ `\` を `/` にして fork + execve。ハンドルは pid + `LX_PROC_BIAS`
 - ファイルの行末も LF（`BaFileWriteNl`）。パスは UTF-8 のまま A 版の代わりへ渡す（`BasicPathWide` は `-linux` で 0）
-- `Include\linux` では `*VoidPtr` / `*Word` の添字と `VoidPtr` の配列を使わない（どれも 4 バイト刻みになる）。8 バイト・2 バイトは `LxGetQ` / `LxSetQ` / `LxSetW` で読み書きする
+- `Include\linux` では `*VoidPtr` / `*Word` の添字と `VoidPtr` の配列を使わない（どれも 4 バイト刻みになる）。8 バイト・2 バイトは `LxGetQ` / `LxSetQ` / `LxSetW` で読み書きする。`VoidPtr` を返す関数の呼び出しに式を足すと（`Lx_StackBase() + n * 8`）32bit に切れるので、いったん局所変数に入れてから足す
 - **呼ばれない関数を消す**（`LinuxPrune`、`-linux` だけ）: IR を関数（`OP_LABEL` の直後が `OP_ENTER`）に分け、先頭（`jmp main`）から分岐・`OP_CALL_LAB`・`OP_LEA_RAX_LAB`（`AddressOf` / `Virtual`）・次の関数への落ち込み・API の Lx_ 版をたどる。届かない関数は `OP_NOP` にするので、コードも API の取り込みも文字列も出ない（Hello World は 212KB → 29KB）
 - **警告**（`LinuxCheck`）: 残った呼び出しのうち Linux 版の無い API は `warning: file(行): 'MessageBeep' has no Linux version; …` を出す。行は呼んだ文（`OP_CALL_API` の `arg2`）。実行時ルーチンの中なら `warning: (runtime): …`
 - 実際には通らないが静的には届く Windows 専用の呼び出し（`BasicPath` の W 版、`Sleep` のメッセージ処理など）は `#ifndef _LINUX` で外す
@@ -186,6 +187,19 @@ actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
 ```
 
 終了コードは `' Expect: N`、標準出力・標準エラーは隣の `<name>.out.txt` / `<name>.stderr.txt` とバイト単位で比べる。`check.ps1 integration` は `run_test2.ps1` の後にこれも回す。
+
+#### Linux でのセルフホスト
+
+`actba64.pj` と `src\rc\rc.pj` を `-linux` で作れば、Linux で動くコンパイラと rc になる（隣に `Include` を置く。`.rc` の `#resource` は隣の `rc` を起動する）。Linux 版のコンパイラは Windows 版と同じバイト列を出す（`-linux` の ELF も PE も）。
+
+```powershell
+.\run_selfhost_linux.ps1          # bin\linux へ Linux 版を作り、WSL で次を確かめる
+.\run_selfhost_linux.ps1 stage2
+```
+
+- Linux 版が `actba64.pj -linux` で出す ELF = Linux 版そのもの（不動点）、`rc.pj -linux` の ELF = Linux 版の rc
+- Linux 版が出す `actba64.exe` と `#resource` のテスト（`t_resource` / `t_iconres` / `t_bmpres`）の PE = Windows の同じコンパイラが出すもの
+- `check.ps1 integration` は `run_test_linux.ps1` の後にこれも回す（WSL が無ければ SKIP）
 
 ---
 

@@ -1,0 +1,140 @@
+' LxProc - 子プロセス（CreateProcessA / WaitForSingleObject / GetExitCodeProcess）
+'  CreateProcessA: コマンドラインを空白で argv に分け（"" の中は空白も含み、" 自体は取る）、
+'  argv[0] の \ を / にし、実行できるか access で確かめてから fork + execve（環境は起動時の envp）。
+'  hProcess = pid + LX_PROC_BIAS（CloseHandle は何もしない）。終了コードは wait4 の status から
+'  （シグナルで終わったら 128 + 番号）
+
+Const LX_ARG_MAX = 64
+Const LX_ARG_BUF = 4096
+Dim g_lxWaitPid As Long
+Dim g_lxWaitCode As DWord
+
+Function LxSkipSp(cmd As *Byte, i As Long) As Long
+    Dim k As Long
+    k = i
+    While cmd[k] = 32 Or cmd[k] = 9
+        k = k + 1
+    Wend
+    LxSkipSp = k
+End Function
+
+Function LxArgEnd(c As Long, q As Long) As Long
+    LxArgEnd = 0
+    If c = 0 Then LxArgEnd = 1
+    If q = 0 And (c = 32 Or c = 9) Then LxArgEnd = 1
+End Function
+
+' cmd[i..] の引数 1 つを buf[o..] へ（NUL 終端）。i と o を進める
+Sub LxArgCopy(cmd As *Byte, ByRef i As Long, buf As *Byte, ByRef o As Long)
+    Dim q As Long
+    q = 0
+    While LxArgEnd(cmd[i], q) = 0 And o < LX_ARG_BUF - 1
+        If cmd[i] = 34 Then q = 1 - q
+        If cmd[i] <> 34 Then buf[o] = cmd[i]
+        If cmd[i] <> 34 Then o = o + 1
+        i = i + 1
+    Wend
+    buf[o] = 0
+    o = o + 1
+End Sub
+
+' argv は 8 バイトずつ（最後は 0）。戻り値は引数の数
+Function LxSplitArgs(cmd As *Byte, buf As *Byte, argv As *Byte) As Long
+    Dim i As Long, o As Long, n As Long
+    n = 0
+    o = 0
+    i = LxSkipSp(cmd, 0)
+    While cmd[i] <> 0 And n < LX_ARG_MAX - 1 And o < LX_ARG_BUF - 1
+        LxSetQ(argv, n * 8, VarPtr(buf[o]))
+        LxArgCopy(cmd, i, buf, o)
+        n = n + 1
+        i = LxSkipSp(cmd, i)
+    Wend
+    LxSetQ(argv, n * 8, 0)
+    LxSplitArgs = n
+End Function
+
+Sub LxSlashInPlace(p As *Byte)
+    Dim i As Long
+    i = 0
+    While p[i] <> 0
+        If p[i] = &H5C Then p[i] = &H2F
+        i = i + 1
+    Wend
+End Sub
+
+' 起動時のスタック: argc, argv..., 0, envp...
+' （base + off を 1 つの式にすると 32bit に切れるので、局所変数へ分けて足す）
+Function LxEnvp() As VoidPtr
+    Dim base As VoidPtr
+    Dim off As Long
+    base = Lx_StackBase()
+    off = (LxArgc() + 2) * 8
+    LxEnvp = base + off
+End Function
+
+' 子: execve。戻ってきたら（失敗）終了コード 127
+Sub LxExecChild(path As *Byte, argv As *Byte)
+    Lx_Syscall(LX_SYS_EXECVE, path, argv, LxEnvp(), 0, 0, 0)
+    Lx_Syscall(LX_SYS_EXIT_GROUP, 127, 0, 0, 0, 0, 0)
+End Sub
+
+' 戻り値は pid（失敗は負）
+Function LxSpawn(path As *Byte, argv As *Byte) As VoidPtr
+    Dim pid As VoidPtr
+    LxSpawn = -1
+    If LxOk(Lx_Syscall(LX_SYS_ACCESS, path, 1, 0, 0, 0, 0)) = 0 Then Exit Function
+    pid = Lx_Syscall(LX_SYS_FORK, 0, 0, 0, 0, 0, 0)
+    If pid = 0 Then LxExecChild(path, argv)
+    LxSpawn = pid
+End Function
+
+' PROCESS_INFORMATION: hProcess +0, hThread +8, dwProcessId +16, dwThreadId +20
+Sub LxFillPi(pi As *Byte, pid As VoidPtr)
+    Dim w As *DWord
+    LxSetQ(pi, 0, pid + LX_PROC_BIAS)
+    LxSetQ(pi, 8, LX_PROC_BIAS)
+    w = VarPtr(pi[16])
+    w[0] = LxLow(pid)
+    w[1] = 0
+End Sub
+
+Function Lx_CreateProcessA(ByVal app As VoidPtr, ByVal cmd As *Byte, ByVal pa As VoidPtr, ByVal ta As VoidPtr, ByVal inherit As Long, ByVal flags As DWord, ByVal env As VoidPtr, ByVal dir As VoidPtr, ByVal si As VoidPtr, ByVal pi As *Byte) As Long
+    Dim buf(LX_ARG_BUF - 1) As Byte
+    Dim argv(LX_ARG_MAX * 8 - 1) As Byte
+    Dim pid As VoidPtr
+    Lx_CreateProcessA = 0
+    If LxSplitArgs(cmd, VarPtr(buf(0)), VarPtr(argv(0))) = 0 Then Exit Function
+    LxSlashInPlace(VarPtr(buf(0)))
+    pid = LxSpawn(VarPtr(buf(0)), VarPtr(argv(0)))
+    If LxOk(pid) = 0 Then Exit Function
+    LxFillPi(pi, pid)
+    Lx_CreateProcessA = 1
+End Function
+
+' wait4 の status → 終了コード
+Function LxExitCode(st As Long) As DWord
+    LxExitCode = (st \ 256) And 255
+    If (st And &H7F) <> 0 Then LxExitCode = 128 + (st And &H7F)
+End Function
+
+' 子の終わりを待つ（ms は見ない）。WAIT_OBJECT_0 / WAIT_FAILED
+Function Lx_WaitForSingleObject(ByVal h As VoidPtr, ByVal ms As DWord) As DWord
+    Dim st As Long
+    Lx_WaitForSingleObject = &HFFFFFFFF
+    If (h As Long) < LX_PROC_BIAS Then Exit Function
+    st = 0
+    If LxOk(Lx_Syscall(LX_SYS_WAIT4, h - LX_PROC_BIAS, VarPtr(st), 0, 0, 0, 0)) = 0 Then Exit Function
+    g_lxWaitPid = (h As Long) - LX_PROC_BIAS
+    g_lxWaitCode = LxExitCode(st)
+    Lx_WaitForSingleObject = 0
+End Function
+
+' 待ち終わった子ならその終了コード、まだなら STILL_ACTIVE (259)
+Function Lx_GetExitCodeProcess(ByVal h As VoidPtr, ByVal code As *DWord) As Long
+    Lx_GetExitCodeProcess = 0
+    If (h As Long) < LX_PROC_BIAS Then Exit Function
+    code[0] = 259
+    If (h As Long) - LX_PROC_BIAS = g_lxWaitPid Then code[0] = g_lxWaitCode
+    Lx_GetExitCodeProcess = 1
+End Function
