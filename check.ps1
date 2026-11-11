@@ -3,15 +3,22 @@
 #   .\check.ps1              # unit（src\unittest\rununittest.ps1）
 #   .\check.ps1 unit
 #   .\check.ps1 integration  # src\actba64\run_test2.ps1（既定 stage1・64bit）+ run_test_linux.ps1 + run_selfhost_linux.ps1（WSL）
+#   .\check.ps1 docs         # check-links.ps1（.md / .mdc の相対リンクと #見出し）
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("unit", "integration")]
+    [ValidateSet("unit", "integration", "docs")]
     [string]$Kind = "unit"
 )
 
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
+
+if ($Kind -eq "docs") {
+    Write-Host "=== check docs ==="
+    & (Join-Path $Root "check-links.ps1")
+    exit $LASTEXITCODE
+}
 
 if ($Kind -eq "unit") {
     $script = Join-Path $Root "src\unittest\rununittest.ps1"
