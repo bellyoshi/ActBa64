@@ -31,6 +31,16 @@ End If
 
 AB 4.20 では **`true` / `false` は識別子として無効**。ActBa64 も **`TRUE` / `FALSE`（大文字）のみ**組み込み。小文字は未定義変数としてエラーになる。
 
+#### 解決策
+
+ソースの先頭で定義する。`true` を関係演算と同じ **-1** にしておくと、`(true = true) = true` も真になる。
+
+```basic
+TypeDef boolean = Long
+Const true = -1
+Const false = 0
+```
+
 ### 識別子の大小区別（AB 4.20 同様）
 
 **定数・変数・Sub/Function・Declare 名・Type/Class 名**は定義どおりの綴りで参照する（`TRUE` ≠ `true`、`Foo` ≠ `foo`）。**言語キーワード**、**組み込みランタイム**（`FillMemory` / `memcpy` / `malloc` 等）だけ大小無視。Win32 API は `api.idx` の Declare 名（および Alias の裸名）と一致させる。
