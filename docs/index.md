@@ -7,10 +7,6 @@ ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 
 ダウンロードは[こちら](https://github.com/bellyoshi/ActBa64/releases)
 
-
-
-リポジトリ全体の概要は [README.md](../README.md) を参照してください。
-
 ## Hello World
 
 1. `ProjectEditor.exe` を起動します。
