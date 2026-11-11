@@ -117,6 +117,7 @@ ActBa64 の文字列バイトは UTF-8 です。
 - `InsertMenuItem` / `SetMenuItemInfo` / `GetMenuItemInfo` は、`MIIM_STRING` または文字列の `MIIM_TYPE` のとき `dwTypeData` をワイド文字にする。`GetMenuItemInfo` は UTF-8 を書き、`cch` はそのバイト数。区切り・ビットマップ・オーナードローは変換しない。
 - `TextOut` / `GetTextExtentPoint32` / `DrawText` / `DrawTextEx` は UTF-8 をワイド文字数で渡す。長さが負のときは NUL まで。末尾 `A` はバイト数のまま。`DT_MODIFYSTRING` の書き換えは呼び出し側のバッファへ戻さない。
 - `CreateStatusWindow` の見出し、`RegisterClassEx` のクラス名とメニュー名、`UnregisterClass` は UTF-8 をワイド文字 API に渡す。65535 以下はアトムなので変換しない。`RegisterClassEx` は呼び出し側の `WNDCLASSEX` を変えない。登録はワイドなので窓は Unicode になり、無印の `DefWindowProc` / `DefFrameProc` / `DefMDIChildProc` は W 版。`GetClassName` は UTF-8 を書く。`GetClassInfoEx` が返すクラス名とメニュー名のポインタは、次に `GetClassInfoEx` を呼ぶまで有効な UTF-8。クラス名がアトム、NULL、または問い合わせに使った変換バッファのときは、引いた名前の UTF-8 を複製して返す。
+- ステータスバーへの `SendMessage` の `SB_SETTEXT` / `SB_SETTIPTEXT` は、UTF-8 をワイド文字にして `SB_SETTEXTW` / `SB_SETTIPTEXTW` で送る。`CreateStatusWindow` の窓は Unicode なので、A 版のままだと UTF-8 が CP932 として表示され文字化けするため。窓のクラスが `msctls_statusbar32` のときだけ変換し、ほかのコントロールの `WM_USER+1` などはそのまま。妥当な UTF-8 でなければ A 版のまま。`SB_GETTEXT` は A 版のままなので CP932 を返す。
 - `CreateFontIndirect` の `lfFaceName` は UTF-8 をワイド文字 API に渡す。呼び出し側の `LOGFONT` はそのまま。`GetObject` は A 版なので、読み戻した `lfFaceName` は CP932。
 - `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻し、`FindText` は戻ったあとも書くため。
 - `s[n]` は 0 始まりの 1 バイトです。

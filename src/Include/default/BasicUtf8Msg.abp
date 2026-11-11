@@ -1,7 +1,7 @@
 ' BasicUtf8Msg - SendMessage の文字列メッセージ。ソースの文字列は UTF-8 なので、
 ' lParam に文字列を渡すメッセージはワイドにして SendMessageW へ渡す。
 ' UTF-8 として読めないバイト列（CP932 など）はそのまま SendMessageA へ渡す。
-' CB_GETLBTEXT / LB_GETTEXT とその LEN は UTF-8 で返す。リストビューの LVCOLUMN / LVITEM の文字列も W 版で送る。ほかのメッセージは SendMessageA のまま。
+' CB_GETLBTEXT / LB_GETTEXT とその LEN は UTF-8 で返す。リストビューの LVCOLUMN / LVITEM の文字列も W 版で送る。ステータスバーの SB_SETTEXT / SB_SETTIPTEXT も W 版で送る。ほかのメッセージは SendMessageA のまま。
 
 ' lParam に入力の文字列を取るメッセージなら 1
 Function BasicMsgTakesText(msg As DWord) As Long
@@ -58,9 +58,34 @@ Function BasicMsgItemOut(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As
     BasicMsgItemOut = n
 End Function
 
+' ステータスバーの SB_SETTEXT / SB_SETTIPTEXT（A 版）に対応する W 版。対象でなければ 0。
+' WM_USER+n はコントロールごとに意味が違うので、窓のクラスがステータスバーのときだけ
+Function BasicSbWideMsg(hWnd As HWND, msg As DWord) As DWord
+    Dim cls[31] As Byte
+    BasicSbWideMsg = 0
+    If msg <> &H0401 And msg <> &H0410 Then Exit Function
+    If GetClassNameA(hWnd, cls, 32) = 0 Then Exit Function
+    If lstrcmpi(cls, "msctls_statusbar32") <> 0 Then Exit Function
+    If msg = &H0401 Then BasicSbWideMsg = &H040B
+    If msg = &H0410 Then BasicSbWideMsg = &H0411
+End Function
+
 Function SendMessage(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
     Dim kind As Long
     Dim lr As LRESULT
+    Dim sbw As DWord
+    Dim w As *Byte
+    If lParam <> 0 Then
+        sbw = BasicSbWideMsg(hWnd, msg)
+        If sbw <> 0 Then
+            w = BasicWideOf(lParam As *Byte, lstrlen(lParam As *Byte))
+            If w <> 0 Then
+                SendMessage = SendMessageW(hWnd, sbw, wParam, w As LPARAM)
+                free(w)
+                Exit Function
+            End If
+        End If
+    End If
     kind = BasicMsgItemText(msg)
     If kind <> 0 Then
         SendMessage = BasicMsgItemOut(hWnd, msg, wParam, lParam, kind)
