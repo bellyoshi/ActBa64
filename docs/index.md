@@ -21,6 +21,12 @@ ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 
 コンソールが開き、`Hello World!` が表示されます。
 
+## 動かないコードの報告
+
+「私の ActiveBasic で作ったコードが動かないよ」という方は、[Issues](https://github.com/bellyoshi/ActBa64/issues) に投稿していただけると対応していきます。
+
+動かないコードと、お使いの ActiveBasic のバージョンもあると助かります。
+
 ## 仕様・手順
 
 | 文書 | 内容 |
