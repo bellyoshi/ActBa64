@@ -1,0 +1,210 @@
+' ab2misc - -pAB2 の Data / Read、ClipStr$ / SetClipStr、CmdLine$ / CurDir$、KLen / KMid$
+'   Data の項目はパーサがプログラムの先頭へ移す（AB2_DataStr / AB2_DataNum）。
+'   KLen / KMid$ は文字単位（文字列は UTF-8 なので、日本語の 1 文字は 3 バイト）。
+
+Declare Function GetCommandLineW Lib "kernel32.dll" () As *Byte
+Declare Function GetCurrentDirectoryW Lib "kernel32.dll" (ByVal nBufferLength As DWord, ByVal lpBuffer As *Byte) As DWord
+
+Const AB2_DATA_MAX = 8192
+
+Dim g_ab2DS(AB2_DATA_MAX - 1) As *Byte
+Dim g_ab2DD(AB2_DATA_MAX - 1) As Double
+Dim g_ab2DIsNum(AB2_DATA_MAX - 1) As Long
+Dim g_ab2DN As Long
+Dim g_ab2DPos As Long
+
+' 何もしない文（Data の跡 / On Error）
+Sub AB2_Nop()
+End Sub
+
+' ---- Data / Read ----
+
+Sub AB2_DataStr(s As *Byte)
+    Dim p As *Byte
+    If g_ab2DN >= AB2_DATA_MAX Then Exit Sub
+    p = malloc(lstrlen(s) + 1)
+    If p = 0 Then Exit Sub
+    lstrcpy(p, s)
+    g_ab2DS(g_ab2DN) = p
+    g_ab2DIsNum(g_ab2DN) = 0
+    g_ab2DN = g_ab2DN + 1
+End Sub
+
+Sub AB2_DataNum(d As Double)
+    If g_ab2DN >= AB2_DATA_MAX Then Exit Sub
+    g_ab2DD(g_ab2DN) = d
+    g_ab2DIsNum(g_ab2DN) = 1
+    g_ab2DN = g_ab2DN + 1
+End Sub
+
+' Read 変数$ … 項目が尽きたら ""
+Function AB2_ReadStr$() As String
+    Dim i As Long
+    AB2_ReadStr$ = ""
+    If g_ab2DPos >= g_ab2DN Then Exit Function
+    i = g_ab2DPos
+    g_ab2DPos = i + 1
+    If g_ab2DIsNum(i) <> 0 Then AB2_ReadStr$ = Str$(g_ab2DD(i))
+    If g_ab2DIsNum(i) = 0 Then AB2_ReadStr$ = MakeStr(g_ab2DS(i))
+End Function
+
+' Read 変数 … 項目が尽きたら 0
+Function AB2_ReadNum() As Double
+    Dim i As Long
+    AB2_ReadNum = 0
+    If g_ab2DPos >= g_ab2DN Then Exit Function
+    i = g_ab2DPos
+    g_ab2DPos = i + 1
+    If g_ab2DIsNum(i) <> 0 Then AB2_ReadNum = g_ab2DD(i)
+    If g_ab2DIsNum(i) = 0 Then AB2_ReadNum = Val(MakeStr(g_ab2DS(i)))
+End Function
+
+' ---- クリップボード ----
+
+Function AB2_WideOf(s As String) As *Byte
+    Dim w As *Byte
+    AB2_WideOf = BasicWideEmpty()
+    If Len(s) = 0 Then Exit Function
+    w = BasicWideOf(StrPtr(s), Len(s))
+    If w = 0 Then w = BasicWideCp(StrPtr(s), Len(s))
+    If w = 0 Then Exit Function
+    free(AB2_WideOf)
+    AB2_WideOf = w
+End Function
+
+' s をワイド文字列の GlobalAlloc メモリにする
+Function AB2_WideGlobal(s As String) As HGLOBAL
+    Dim w As *Byte
+    AB2_WideGlobal = 0
+    w = AB2_WideOf(s)
+    If w = 0 Then Exit Function
+    AB2_WideGlobal = AB2_GlobalCopy(w, (BasicWideChars(w) + 1) * 2)
+    free(w)
+End Function
+
+' src の n バイトを写した GlobalAlloc メモリ
+Function AB2_GlobalCopy(src As *Byte, n As Long) As HGLOBAL
+    Dim p As *Byte
+    AB2_GlobalCopy = GlobalAlloc(GMEM_MOVEABLE, n)
+    If AB2_GlobalCopy = 0 Then Exit Function
+    p = GlobalLock(AB2_GlobalCopy)
+    If p <> 0 Then RtlMoveMemory(p, src, n)
+    GlobalUnlock(AB2_GlobalCopy)
+End Function
+
+' SetClipStr 文字列
+Sub SetClipStr(s As String)
+    Dim hMem As HGLOBAL
+    hMem = AB2_WideGlobal(s)
+    If hMem = 0 Then Exit Sub
+    If OpenClipboard(0) = 0 Then Exit Sub
+    EmptyClipboard()
+    SetClipboardData(CF_UNICODETEXT, hMem)
+    CloseClipboard()
+End Sub
+
+Function AB2_ClipText$(hMem As HANDLE) As String
+    Dim w As *Byte
+    AB2_ClipText$ = ""
+    w = GlobalLock(hMem)
+    If w = 0 Then Exit Function
+    AB2_ClipText$ = AB2_WideStr$(w)
+    GlobalUnlock(hMem)
+End Function
+
+' ClipStr$ … クリップボードの文字列
+Function ClipStr$() As String
+    Dim hMem As HANDLE
+    ClipStr$ = ""
+    If OpenClipboard(0) = 0 Then Exit Function
+    hMem = GetClipboardData(CF_UNICODETEXT)
+    If hMem <> 0 Then ClipStr$ = AB2_ClipText$(hMem)
+    CloseClipboard()
+End Function
+
+' ---- CmdLine$ / CurDir$ ----
+
+Function AB2_WideStr$(w As *Byte) As String
+    Dim u As *Byte
+    AB2_WideStr$ = ""
+    If w = 0 Then Exit Function
+    u = BasicUtf8OfWide(w)
+    If u = 0 Then Exit Function
+    AB2_WideStr$ = MakeStr(u)
+    free(u)
+End Function
+
+' 実行ファイル名の次の位置（1 始まり）
+Function AB2_ArgStart(s As String) As Long
+    Dim i As Long
+    i = InStr(1, s, " ")
+    If Left$(s, 1) = Chr$(34) Then i = InStr(2, s, Chr$(34)) + 1
+    If i <= 0 Then i = Len(s) + 1
+    While Mid$(s, i, 1) = " "
+        i = i + 1
+    Wend
+    AB2_ArgStart = i
+End Function
+
+' CmdLine$ … 実行ファイル名を除いたコマンドライン（末尾の空白も除く）
+Function CmdLine$() As String
+    Dim s As String
+    s = AB2_WideStr$(GetCommandLineW())
+    s = Mid$(s, AB2_ArgStart(s))
+    While Right$(s, 1) = " "
+        s = Left$(s, Len(s) - 1)
+    Wend
+    CmdLine$ = s
+End Function
+
+' CurDir$ … カレントディレクトリ（末尾に \ を付ける）
+Function CurDir$() As String
+    Dim buf(MAX_PATH * 2 + 1) As Byte
+    Dim s As String
+    buf[0] = 0
+    buf[1] = 0
+    GetCurrentDirectoryW(MAX_PATH, VarPtr(buf))
+    s = AB2_WideStr$(VarPtr(buf))
+    If Right$(s, 1) <> "\" Then s = s + "\"
+    CurDir$ = s
+End Function
+
+' ---- KLen / KMid$ ----
+
+' s の i バイト目（0 始まり）から始まる 1 文字のバイト数
+Function AB2_CharBytes(s As String, i As Long) As Long
+    AB2_CharBytes = GwLeadLen(s[i])
+End Function
+
+' k 文字目（1 始まり）のバイト位置（1 始まり）
+Function AB2_KPos(s As String, k As Long) As Long
+    Dim i As Long, c As Long
+    i = 0
+    c = 1
+    While c < k And i < Len(s)
+        i = i + AB2_CharBytes(s, i)
+        c = c + 1
+    Wend
+    AB2_KPos = i + 1
+End Function
+
+Function KLen(s As String) As Long
+    Dim i As Long, n As Long
+    i = 0
+    n = 0
+    While i < Len(s)
+        i = i + AB2_CharBytes(s, i)
+        n = n + 1
+    Wend
+    KLen = n
+End Function
+
+Function KMid$(s As String, start As Long) As String
+    KMid$ = Mid$(s, AB2_KPos(s, start))
+End Function
+
+Function KMid$(s As String, start As Long, n As Long) As String
+    Dim a As Long
+    a = AB2_KPos(s, start)
+    KMid$ = Mid$(s, a, AB2_KPos(s, start + n) - a)
+End Function

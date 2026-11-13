@@ -1,0 +1,164 @@
+' ===================================================
+'  ParserAB2 - -pAB2: ActiveBasic 2.62 だけの書き方
+' ===================================================
+'   Delete は文ではない（変数名に使える）
+'   Lof(#1) … 式の先頭の # は読み飛ばす
+'   LogFont.lfFaceName(0) … Type の配列メンバは ( ) でも添字
+'   Field #n,長さ As 変数 → Get #n,rec / Put #n,rec はその変数を読み書きする
+
+Const AB2_FILE_MAX = 16
+
+' ファイル番号ごとに Field の As で結んだ変数名（番号 * SYM_NAME_LEN から）
+Dim g_ab2FieldVar((AB2_FILE_MAX + 1) * SYM_NAME_LEN) As Byte
+
+' Delete を文として扱わないとき 1
+Function ParseAB2NoDelete(p As *Parser) As Long
+    ParseAB2NoDelete = 0
+    If CompIsAB2() = 0 Then Exit Function
+    If ParseCmdKw(p, "delete") <> 0 Then ParseAB2NoDelete = 1
+End Function
+
+Sub ParseAB2SkipHash(p As *Parser)
+    If CompIsAB2() = 0 Then Exit Sub
+    If ParseTokKind(p) = TK_HASH Then p->pos = p->pos + 1
+End Sub
+
+' ---- 配列メンバの ( ) ----
+
+' どれかの Type（Class でない）に name という配列メンバがあれば 1
+Function ParseAB2IsArrField(ast As *Ast, name As *Byte) As Long
+    Dim t As *TypeTable, fi As Long
+    ParseAB2IsArrField = 0
+    If CompIsAB2() = 0 Then Exit Function
+    t = ast->types
+    If t = NULL Then Exit Function
+    For fi = 0 To t->nFields - 1
+        If ParseAB2FieldHit(t, fi, name) <> 0 Then ParseAB2IsArrField = 1
+    Next
+End Function
+
+Function ParseAB2FieldHit(t As *TypeTable, fi As Long, name As *Byte) As Long
+    Dim names As *Byte, counts As *Long
+    names = t->fieldNames
+    counts = t->fieldCounts
+    ParseAB2FieldHit = 0
+    If counts[fi] <= 1 Then Exit Function
+    If TyNameEq(VarPtr(names[fi * TYNAME_LEN]), name) <> 0 Then ParseAB2FieldHit = 1
+End Function
+
+' n は AST_MEMBER。( 添字 [, 添字] ) を AST_INDEX にする
+Function ParseAB2MemIndex(p As *Parser, n As Long) As Long
+    Dim e As Long, e2 As Long
+    ParseAB2MemIndex = -1
+    p->pos = p->pos + 1
+    e = ParseExpr(p)
+    If e < 0 Then Exit Function
+    If Not ParseAB2Idx2(p, e2) Then Exit Function
+    If Not ParseExpect(p, TK_RPAREN) Then Exit Function
+    ParseAB2MemIndex = ParseAB2MakeIndex(p->ast, n, e, e2)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAB2Idx2(p As *Parser, ByRef e2 As Long) As boolean
+    ParseAB2Idx2 = true
+    e2 = -1
+    If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    e2 = ParseExpr(p)
+    If e2 < 0 Then ParseAB2Idx2 = false
+End Function
+
+Function ParseAB2MakeIndex(ast As *Ast, n As Long, e As Long, e2 As Long) As Long
+    Dim k As Long
+    ParseAB2MakeIndex = -1
+    k = AstAddNode(ast, AST_INDEX)
+    If k < 0 Then Exit Function
+    ParseAB2SetIndex(ast, k, n, e, e2)
+    ParseAB2MakeIndex = k
+End Function
+
+Sub ParseAB2SetIndex(ast As *Ast, k As Long, n As Long, e As Long, e2 As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[k].left = n
+    nodes[k].right = e
+    nodes[k].extra = e2
+    nodes[k].num = 1
+End Sub
+
+' ---- Field #n,長さ As 変数 ----
+
+' Field の長さを読む間は 1（後ろの As 変数 をキャストにしない）
+Dim g_ab2NoCast As Long
+
+Function ParseAB2NoCast() As Long
+    ParseAB2NoCast = g_ab2NoCast
+End Function
+
+Function ParseAB2FieldLen(p As *Parser) As Long
+    g_ab2NoCast = CompIsAB2()
+    ParseAB2FieldLen = ParseExpr(p)
+    g_ab2NoCast = 0
+End Function
+
+' nFile が 1〜AB2_FILE_MAX の定数ならその番号。でなければ 0
+Function ParseAB2FileNum(ast As *Ast, nFile As Long) As Long
+    Dim nodes As *AstNode, v As Long
+    ParseAB2FileNum = 0
+    nodes = ast->nodes
+    If nodes[nFile].kind <> AST_NUM Then Exit Function
+    v = nodes[nFile].num
+    If v >= 1 And v <= AB2_FILE_MAX Then ParseAB2FileNum = v
+End Function
+
+' Field の長さの後。As 変数 があれば番号に結ぶ
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAB2FieldAs(p As *Parser, nFile As Long) As boolean
+    ParseAB2FieldAs = true
+    If CompIsAB2() = 0 Then Exit Function
+    If ParseCmdKw(p, "as") = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseAB2FieldAs = ParseAB2BindVar(p, ParseAB2NeedNum(p, nFile))
+End Function
+
+' 番号 num に As の後ろの変数名を結ぶ。num = 0（エラー済み）なら false
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAB2BindVar(p As *Parser, num As Long) As boolean
+    ParseAB2BindVar = false
+    If num = 0 Then Exit Function
+    ParseAB2BindVar = ParseCopyIdent(p, VarPtr(g_ab2FieldVar[num * SYM_NAME_LEN]))
+End Function
+
+Function ParseAB2NeedNum(p As *Parser, nFile As Long) As Long
+    ParseAB2NeedNum = ParseAB2FileNum(p->ast, nFile)
+    If ParseAB2NeedNum <> 0 Then Exit Function
+    ParseFail(p, "Field の As にはファイル番号の定数（1〜16）が要ります")
+End Function
+
+' Get / Put の rec の後に , が無いとき 1（AB2 の Field 変数を使う）
+Function ParseAB2NoVar(p As *Parser) As Long
+    ParseAB2NoVar = 0
+    If CompIsAB2() = 0 Then Exit Function
+    If ParseTokKind(p) <> TK_COMMA Then ParseAB2NoVar = 1
+End Function
+
+' Field #n,... As で変数を結んだ番号。無ければ 0
+Function ParseAB2BoundNum(ast As *Ast, nFile As Long) As Long
+    Dim num As Long
+    ParseAB2BoundNum = 0
+    num = ParseAB2FileNum(ast, nFile)
+    If num = 0 Then Exit Function
+    If g_ab2FieldVar[num * SYM_NAME_LEN] <> 0 Then ParseAB2BoundNum = num
+End Function
+
+' Field #n で結んだ変数の AST_VAR。無ければエラーで -1
+Function ParseAB2BoundVar(p As *Parser, nFile As Long) As Long
+    Dim num As Long, n As Long
+    ParseAB2BoundVar = -1
+    num = ParseAB2BoundNum(p->ast, nFile)
+    If num = 0 Then ParseFail(p, "Get / Put の前に Field #n,長さ As 変数 が要ります")
+    If num = 0 Then Exit Function
+    n = AstAddNode(p->ast, AST_VAR)
+    If n >= 0 Then AstSetStr(p->ast, n, VarPtr(g_ab2FieldVar[num * SYM_NAME_LEN]))
+    ParseAB2BoundVar = n
+End Function

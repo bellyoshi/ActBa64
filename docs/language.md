@@ -93,10 +93,10 @@ b.abp
 ### 1.5 CLI
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-pN88] [-pAB2] [-o <out>]
 ```
 
-`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。`-pN88` は N88-BASIC のソースとして読む（[§1.7](#pn88)。`.pj` には効かない）。
+`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。`-pN88` は N88-BASIC のソースとして読む（[§1.7](#pn88)。`.pj` には効かない）。`-pAB2` は ActiveBasic 2.62 のソースとして読む（[§1.8](#pab2)）。
 
 EXE のエントリは結合後ソースのトップレベル文です。終了は `ExitProcess(n)` または `End`（終了コード 0）。  
 DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出力する)）。  
@@ -193,7 +193,8 @@ actba64 a.abp -pN88 -o a.exe
 - `FOR 変数=式 TO 式 [STEP 式]` から `NEXT` までが本体（行をまたいでよい。入れ子可）。`NEXT` の後ろの変数名は照合しない。`NEXT B,A` は内側から 2 つ閉じる。対応の無い `NEXT` は `NEXT without FOR`、閉じていない `FOR` は `FOR without NEXT`
 - 式の中の関数名（`RND()` / `INT(x)` / `SIN(x)` など）は大文字小文字を問わず Include の関数を指す。括弧の無い関数名（`X = RND`）は引数なしの呼び出し（`RND()`）になる
 - 実行は当時の機種よりずっと速い。`FOR J=1 TO 1000:NEXT` のような待ちのループはほぼ一瞬で終わる
-- 未対応: `IF` / `WHILE` などの制御文、配列の暗黙宣言、引数の省略（`SCREEN 3,,0`）
+- 命令の途中の引数は省略できる（`CONSOLE ,,,1`）。省いた引数には `-2` を渡す。`-2` を省略として扱うのは `COLOR` と `CONSOLE` だけ
+- 未対応: `IF` / `WHILE` などの制御文、配列の暗黙宣言
 
 ```text
 10 REM 赤い円
@@ -201,6 +202,28 @@ actba64 a.abp -pN88 -o a.exe
 30 CIRCLE(320,300),100,2
 40 END
 ```
+
+<a id="pab2"></a>
+
+### 1.8 ActiveBasic 2.62 構文（-pAB2）
+
+`-pAB2` を付けると、ActiveBasic 2.62 で書いたソースを読む。ソースは通常の Lexer / Parser で読み、AB2 にしか無い書き方だけを受け付ける。Include は `Include\AB2` を足す（`-pAB2` のときだけ）。
+
+```text
+actba64 old.bas -pAB2 -o old.exe
+```
+
+- `Window` 文のクラス `"NORMAL"`（または空）は AB2 の窓。窓の手続きは `WM_COMMAND` / `WM_CLOSE` / `WM_SIZE` などを待ち行列に積み、`WM_CLOSE` では閉じない（プログラムが `DelWnd` で閉じる）。位置が `-1` なら画面の中央、幅か高さが `-1` なら Windows の既定
+- `GetWndMsg hWnd, Message, wParam, lParam` は待ち行列のメッセージ、無ければ受け取って配ったメッセージを返す
+- `SendWndMsg h, msg, wParam, lParam [, 戻り値]`。`lParam` に文字列の変数を書くと、`WM_GETTEXT` ではその変数に受け取る。`WM_GETTEXTLENGTH` / `WM_GETTEXT` は UTF-8 のバイト数と文字列。`wParam` と `lParam` が両方変数の `EM_GETSEL` は両方に結果が入る
+- `ShowWnd` / `WndPos` / `OwnerWnd()`、`ClipStr$` / `SetClipStr`、`CmdLine$` / `CurDir$`（括弧なしで書ける。`CurDir$` は末尾に `\`）、`KLen` / `KMid$`（文字単位）、`SelectPrinter` / `LPrint`（`LPrint Chr$(12)` で改ページして印刷を終える）
+- `Data` / `Read`。`Data` は書いた場所にかかわらず、プログラムの先頭で読んだものとして扱う。`Read` の変数は `$` 付きなら文字列、ほかは数値
+- `Field #n, 長さ As 変数` で変数をバッファにし、`Get #n, rec` / `Put #n, rec` はその変数を読み書きする（ファイル番号は定数）
+- `Lof(#1)` のように式の中のファイル番号に `#` を付けられる
+- `Type` の配列メンバは `( )` でも添字にできる（`LogFont.lfFaceName(0) = ...`）
+- `Delete` は文ではなく、変数名に使える
+- `On Error Goto` は読み飛ばす（エラーの横取りは未対応）
+- 文字列は UTF-8。保存したファイルも UTF-8 になる（読むときは Shift-JIS のファイルも窓に出せる）
 
 ---
 
