@@ -104,6 +104,44 @@ Function LowEmitPrintNumD(ctx As *LowerCtx, exprIdx As Long) As boolean
     LowEmitPrintNumD = LowEmitPrintPad(ctx)
 End Function
 
+' Str$(x)。Double は StrD$、Single は StrS$（Print と同じ整形）、それ以外は整数の Str$
+Function LowExprBuiltinStrNum(ctx As *LowerCtx, e As Long) As Long
+    Dim kind As Long
+    LowExprBuiltinStrNum = 0
+    kind = LowStrNumKind(ctx, e)
+    If kind = 3 And LowEmitExprStrD(ctx, e) Then LowExprBuiltinStrNum = 1
+    If kind = 5 And LowEmitExprStrS(ctx, e) Then LowExprBuiltinStrNum = 1
+    If kind = 4 Then LowExprBuiltinStrNum = LowEmitExprStrL(ctx, e)
+End Function
+
+' 3 = Double、5 = Single、4 = 整数（LowEmitPrintKind と同じ番号）
+Function LowStrNumKind(ctx As *LowerCtx, e As Long) As Long
+    LowStrNumKind = 4
+    If LowExprType(ctx, e) = TY_DOUBLE Then LowStrNumKind = 3
+    If LowExprType(ctx, e) = TY_SINGLE And LowExprIsDoubleBits(ctx, e) = 0 Then LowStrNumKind = 5
+End Function
+
+Function LowEmitExprStrL(ctx As *LowerCtx, e As Long) As Long
+    Dim lab As Long
+    LowEmitExprStrL = 0
+    lab = LowEnsureRtStr(ctx)
+    If LowExpr(ctx, e) = 0 Then Exit Function
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitExprStrL = 1
+End Function
+
+' Single を Double にして StrS$
+Function LowEmitExprStrS(ctx As *LowerCtx, e As Long) As boolean
+    Dim lab As Long
+    LowEmitExprStrS = false
+    lab = LowStrSLab(ctx)
+    If lab < 0 Then Exit Function
+    If LowExpr(ctx, e) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+    LowEmitCallStrD(ctx->list, lab)
+    LowEmitExprStrS = true
+End Function
+
 ' Single は Double にしてから StrS$ で書く（有効 6 桁。ActiveBasic と同じ）
 Function LowEmitPrintNumS(ctx As *LowerCtx, exprIdx As Long) As boolean
     Dim lab As Long
