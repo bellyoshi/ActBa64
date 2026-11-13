@@ -3,9 +3,14 @@
 '   WM_CLOSE では閉じない（AB2 のプログラムが DelWnd で閉じる）。
 '   GetWndMsg は待ち行列があれば 1 つ取り出し、無ければメッセージを 1 つ配って返す。
 '   位置が -1 の窓は画面の中央、幅か高さが -1 の窓は Windows の既定の位置と大きさ。
+'   Window 文に窓プロシージャ（11 番目の引数）を渡した "NORMAL" の窓は、待ち行列を使わず
+'   すべてのメッセージをそのプロシージャへ渡す（RAD ツールが作るコード）。
 
 Declare Function GetMessageW Lib "user32.dll" (ByRef lpMsg As MSG, ByVal hWnd As HWND, ByVal wMsgFilterMin As DWord, ByVal wMsgFilterMax As DWord) As Long
 Declare Function DispatchMessageW Lib "user32.dll" (ByRef lpMsg As MSG) As LRESULT
+Declare Function CallWindowProcW Lib "user32.dll" (ByVal lpPrevWndFunc As LONG_PTR, ByVal hWnd As HWND, ByVal Msg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+
+Const AB2_GWLP_USERDATA = -21
 
 Const AB2_QMAX = 256
 
@@ -18,6 +23,10 @@ Dim g_ab2QN As Long
 Dim g_ab2WndOk As Long
 Dim g_ab2ClsName As String
 Dim g_ab2Msg As MSG
+' これから作る "NORMAL" の窓の窓プロシージャ（無ければ 0）。最初のメッセージで窓に結ぶ
+Dim g_ab2PendProc As LONG_PTR
+' これから作る窓のハンドルを入れる変数のアドレス（無ければ 0）。WM_CREATE より前に入れる
+Dim g_ab2PendVar As *Long
 
 ' 待ち行列に積むメッセージなら 1
 Function AB2_WantMsg(m As DWord) As Long
@@ -51,11 +60,39 @@ Sub AB2_Pop(ByRef h As Long, ByRef m As Long, ByRef wp As Long, ByRef lp As Long
 End Sub
 
 Function AB2_WndProc(hWnd As HWND, m As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
-    If AB2_WantMsg(m) <> 0 Then AB2_Push(hWnd, m, wp, lp)
-    AB2_WndProc = 0
-    If m = WM_CLOSE Then Exit Function
-    AB2_WndProc = DefWindowProc(hWnd, m, wp, lp)
+    Dim proc As LONG_PTR
+    proc = AB2_ProcOf(hWnd)
+    If proc <> 0 Then
+        AB2_WndProc = CallWindowProcW(proc, hWnd, m, wp, lp)
+        Exit Function
+    End If
+    AB2_WndProc = AB2_QueueProc(hWnd, m, wp, lp)
 End Function
+
+' 窓プロシージャの無い窓: 待ち行列に積み、WM_CLOSE では閉じない
+Function AB2_QueueProc(hWnd As HWND, m As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    If AB2_WantMsg(m) <> 0 Then AB2_Push(hWnd, m, wp, lp)
+    AB2_QueueProc = 0
+    If m = WM_CLOSE Then Exit Function
+    AB2_QueueProc = DefWindowProc(hWnd, m, wp, lp)
+End Function
+
+' 窓に結んだ窓プロシージャ。作っている途中の窓なら g_ab2PendProc を結ぶ
+Function AB2_ProcOf(hWnd As HWND) As LONG_PTR
+    AB2_ProcOf = GetWindowLong(hWnd, AB2_GWLP_USERDATA)
+    If AB2_ProcOf <> 0 Or g_ab2PendProc = 0 Then Exit Function
+    AB2_ProcOf = g_ab2PendProc
+    SetWindowLongPtr(hWnd, AB2_GWLP_USERDATA, g_ab2PendProc)
+    AB2_FillPendVar(hWnd)
+End Function
+
+' Window hMainWnd,... の hMainWnd を、窓プロシージャの WM_CREATE より前に入れる（RAD のコードが使う）。
+' 下位 32 ビットだけ書く（Long の変数でも隣を壊さない）。CreateWindowEx の後に全体を入れ直す
+Sub AB2_FillPendVar(hWnd As HWND)
+    If g_ab2PendVar = 0 Then Exit Sub
+    g_ab2PendVar[0] = hWnd As Long
+    g_ab2PendVar = 0
+End Sub
 
 Sub AB2_FillWnd(ByRef wc As WNDCLASSEX)
     FillMemory(VarPtr(wc), Len(wc), 0)
@@ -101,12 +138,28 @@ Sub AB2_DefaultPos(ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As
     h = CW_USEDEFAULT
 End Sub
 
-' Window 文（-pAB2）。引数は BasicWindow と同じ
-Function AB2_Window(ByRef hWnd As HWND, hOwner As HWND, x As Long, y As Long, w As Long, h As Long, title As String, style As DWord, className As String, id As HMENU, proc As Long, exStyle As DWord) As HWND
-    Dim wndCls As String
-    wndCls = AB2_PickClass$(className, x, y, w, h)
-    hWnd = CreateWindowEx(exStyle, StrPtr(wndCls), StrPtr(title), style, x, y, w, h, hOwner, id, GetModuleHandle(0), proc)
+' Window 文（-pAB2）。引数は BasicWindow と同じ（proc は窓プロシージャのアドレス）
+Function AB2_Window(ByRef hWnd As HWND, hOwner As HWND, x As Long, y As Long, w As Long, h As Long, title As String, style As DWord, className As String, id As HMENU, proc As LONG_PTR, exStyle As DWord) As HWND
+    g_ab2PendVar = VarPtr(hWnd) As *Long
+    hWnd = AB2_Create(hOwner, x, y, w, h, title, style, className, id, proc, exStyle)
     AB2_Window = hWnd
+End Function
+
+' Window ,hParent,... のようにハンドルの変数を省いたとき
+Function AB2_WindowNoVar(hNone As HWND, hOwner As HWND, x As Long, y As Long, w As Long, h As Long, title As String, style As DWord, className As String, id As HMENU, proc As LONG_PTR, exStyle As DWord) As HWND
+    AB2_WindowNoVar = AB2_Create(hOwner, x, y, w, h, title, style, className, id, proc, exStyle)
+End Function
+
+Function AB2_Create(hOwner As HWND, x As Long, y As Long, w As Long, h As Long, title As String, style As DWord, className As String, id As HMENU, proc As LONG_PTR, exStyle As DWord) As HWND
+    Dim wndCls As String
+    Dim save As LONG_PTR
+    save = g_ab2PendProc
+    g_ab2PendProc = 0
+    If AB2_IsNormal(className) <> 0 Then g_ab2PendProc = proc
+    wndCls = AB2_PickClass$(className, x, y, w, h)
+    AB2_Create = CreateWindowEx(exStyle, StrPtr(wndCls), StrPtr(title), style, x, y, w, h, hOwner, id, GetModuleHandle(0), 0)
+    g_ab2PendProc = save
+    g_ab2PendVar = 0
 End Function
 
 ' "NORMAL" なら AB2 のクラス名にし、-1 の位置・大きさを直す

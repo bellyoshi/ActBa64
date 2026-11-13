@@ -1,0 +1,66 @@
+' ===================================================
+'  AstLowerAB2 - -pAB2 の呼び出しの前処理
+' ===================================================
+' AB2 の代入は文字列を複製するが、ここでは代入で同じ文字列を共有する（a = PatNul）。
+' String の変数を String でない引数（API の書き込み先の *Byte など）へ渡す前に、
+' 変数 = AB2_StrDup$(変数) で自分だけの複製にして、書き込みがほかの変数へ波及しないようにする。
+
+Sub LowAB2UniqArgs(ctx As *LowerCtx, idx As Long, name As *Byte, isApi As Long)
+    Dim nodes As *AstNode, a As Long, k As Long
+    If CompIsAB2() = 0 Then Exit Sub
+    nodes = LowAstNodes(ctx)
+    a = nodes[idx].left
+    k = 0
+    While a >= 0 And ctx->err = 0
+        LowAB2UniqOne(ctx, LowAB2ArgExpr(ctx, a), name, k, isApi)
+        a = LowAB2ArgNext(ctx, a)
+        k = k + 1
+    Wend
+End Sub
+
+Function LowAB2ArgExpr(ctx As *LowerCtx, a As Long) As Long
+    Dim nodes As *AstNode
+    nodes = LowAstNodes(ctx)
+    LowAB2ArgExpr = nodes[a].left
+End Function
+
+Function LowAB2ArgNext(ctx As *LowerCtx, a As Long) As Long
+    Dim nodes As *AstNode
+    nodes = LowAstNodes(ctx)
+    LowAB2ArgNext = nodes[a].nxt
+End Function
+
+Sub LowAB2UniqOne(ctx As *LowerCtx, e As Long, name As *Byte, k As Long, isApi As Long)
+    If LowAB2NeedUniq(ctx, e, name, k, isApi) = 0 Then Exit Sub
+    LowStmtAssign(ctx, LowAB2DupAssign(ctx->ast, e))
+End Sub
+
+' String の変数を、String でない仮引数（Declare の引数はすべて）へ渡すなら 1
+Function LowAB2NeedUniq(ctx As *LowerCtx, e As Long, name As *Byte, k As Long, isApi As Long) As Long
+    Dim nodes As *AstNode
+    LowAB2NeedUniq = 0
+    nodes = LowAstNodes(ctx)
+    If nodes[e].kind <> AST_VAR Then Exit Function
+    If LowIsStringExpr(ctx, e) = 0 Then Exit Function
+    If isApi = 0 And LowFuncIndex(ctx, name) < 0 Then Exit Function
+    If isApi = 0 And LowFindFuncParamTy(ctx, name, k) = TY_STRING Then Exit Function
+    LowAB2NeedUniq = 1
+End Function
+
+' e = AB2_StrDup$(e) の代入文
+Function LowAB2DupAssign(ast As *Ast, e As Long) As Long
+    Dim fn(SYM_NAME_LEN - 1) As Byte
+    Dim arg As Long, c As Long
+    arg = AstAddNode(ast, AST_ARG)
+    LowAB2SetArg(ast, arg, e)
+    lstrcpy(VarPtr(fn), "AB2_StrDup$")
+    c = ParseMakeCall(ast, VarPtr(fn), arg, 1)
+    LowAB2DupAssign = ParseMakeAssign(ast, e, c)
+End Function
+
+Sub LowAB2SetArg(ast As *Ast, arg As Long, e As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[arg].left = e
+    nodes[arg].nxt = -1
+End Sub

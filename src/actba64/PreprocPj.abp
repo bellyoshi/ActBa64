@@ -70,16 +70,50 @@ Function PpFindRelIdx(rel As *Byte, dst As *Byte) As Long
 End Function
 
 Function PpResolveAngleInclude(rel As *Byte, dst As *Byte) As Long
-    Dim path(PP_ONCE_PATH - 1) As Byte
-    PpResolveAngleInclude = 0
     dst[0] = CH_NUL
-    lstrcpy(VarPtr(path), "Include\")
-    lstrcat(VarPtr(path), rel)
-    If PpFindRelIdx(VarPtr(path), dst) <> 0 Then
-        PpResolveAngleInclude = 1
-        Exit Function
-    End If
+    PpResolveAngleInclude = PpFindUnder("Include\", rel, dst)
+    If PpResolveAngleInclude <> 0 Then Exit Function
     PpResolveAngleInclude = PpFindRelIdx(rel, dst)
+End Function
+
+' <名前> が Include には無く Include\default にあるなら true（<windows.sbp> など）。
+' Include\default はいつも先頭に読むので、その #include は読み飛ばす
+Function PpAngleIsDefault(inc As *Byte, isAngle As Long) As boolean
+    Dim full(PP_ONCE_PATH - 1) As Byte
+    PpAngleIsDefault = false
+    If isAngle = 0 Then Exit Function
+    If PpFindUnder("Include\", inc, VarPtr(full)) <> 0 Then Exit Function
+    If PpFindUnder("Include\default\", inc, VarPtr(full)) <> 0 Then PpAngleIsDefault = true
+End Function
+
+Function PpFindUnder(dir As *Byte, rel As *Byte, dst As *Byte) As Long
+    Dim path(PP_ONCE_PATH - 1) As Byte
+    lstrcpy(VarPtr(path), dir)
+    lstrcat(VarPtr(path), rel)
+    PpFindUnder = PpFindRelIdx(VarPtr(path), dst)
+End Function
+
+' 既定の Include を読んだフォルダ（末尾に \ 付き）。見つからなければ ""
+Dim g_ppIncRoot As String
+Dim g_ppIncRootOk As Long
+
+Function PpIncludeRoot$() As String
+    Dim idx(PP_ONCE_PATH - 1) As Byte
+    If g_ppIncRootOk = 0 Then
+        g_ppIncRoot = ""
+        If PpFindDefaultIdx(VarPtr(idx)) <> 0 Then g_ppIncRoot = Left$(MakeStr(VarPtr(idx)), lstrlen(VarPtr(idx)) - 19)
+        g_ppIncRootOk = 1
+    End If
+    PpIncludeRoot$ = g_ppIncRoot
+End Function
+
+' Include のフォルダの外のファイルなら 1（"" は最初のソース）
+Function PpIsUserFile(file As String) As Long
+    Dim root As String
+    PpIsUserFile = 1
+    root = PpIncludeRoot$()
+    If Len(file) = 0 Or Len(root) = 0 Or Len(file) < Len(root) Then Exit Function
+    If lstrcmpi(StrPtr(Left$(file, Len(root))), StrPtr(root)) = 0 Then PpIsUserFile = 0
 End Function
 
 Function PpFindDefaultIdx(dst As *Byte) As Long
