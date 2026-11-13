@@ -1,0 +1,114 @@
+' ===================================================
+'  ParserN88If - -pN88 の 1 行の IF
+' ===================================================
+'   IF 条件 THEN 文[:文...] [ELSE 文[:文...]]
+'   IF 条件 THEN 行番号 [ELSE 行番号]   … 行番号は GOTO
+'   IF 条件 GOTO 行番号
+' THEN / ELSE の後ろは同じ行の終わりまで（: で文を続けられる）。結果は AST_IF
+
+Function ParseN88If(p As *Parser) As Long
+    Dim srcLn As Long, cond As Long
+    ParseN88If = -2
+    If ParseCmdKw(p, "if") = 0 Then Exit Function
+    srcLn = ParseTokLine(p)
+    p->pos = p->pos + 1
+    ParseN88If = -1
+    cond = ParseExpr(p)
+    If cond < 0 Then Exit Function
+    ParseN88If = ParseN88IfRest(p, srcLn, cond)
+End Function
+
+' 条件の後ろ（THEN ... / GOTO 行番号）と ELSE
+Function ParseN88IfRest(p As *Parser, srcLn As Long, cond As Long) As Long
+    Dim thenL As Long, elseL As Long
+    ParseN88IfRest = -1
+    thenL = ParseN88IfThen(p, srcLn)
+    If thenL < 0 Then Exit Function
+    elseL = -1
+    If ParseCmdKw(p, "else") <> 0 Then elseL = ParseN88IfElse(p, srcLn)
+    If p->err <> 0 Then Exit Function
+    ParseN88IfRest = ParseN88MakeIf(p->ast, cond, thenL, elseL)
+End Function
+
+Function ParseN88IfThen(p As *Parser, srcLn As Long) As Long
+    ParseN88IfThen = -1
+    If ParseCmdKw(p, "goto") <> 0 Then
+        ParseN88IfThen = ParseStmtKwJump(p)
+        Exit Function
+    End If
+    If Not ParseN88EatThen(p) Then Exit Function
+    ParseN88IfThen = ParseN88IfPart(p, srcLn)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88EatThen(p As *Parser) As boolean
+    ParseN88EatThen = false
+    If ParseCmdKw(p, "then") = 0 Then ParseFail(p, "expected THEN")
+    If ParseCmdKw(p, "then") = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseN88EatThen = true
+End Function
+
+Function ParseN88IfElse(p As *Parser, srcLn As Long) As Long
+    p->pos = p->pos + 1
+    ParseN88IfElse = ParseN88IfPart(p, srcLn)
+End Function
+
+' THEN / ELSE の後ろ。行番号なら GOTO、それ以外は ELSE か行末までの文
+Function ParseN88IfPart(p As *Parser, srcLn As Long) As Long
+    If ParseTokKind(p) = TK_NUMBER Then
+        ParseN88IfPart = ParseGoNum(p, AST_GOTO)
+        Exit Function
+    End If
+    ParseN88IfPart = ParseN88IfStmts(p, srcLn)
+End Function
+
+Function ParseN88IfStmts(p As *Parser, srcLn As Long) As Long
+    Dim first As Long, last As Long
+    first = -1
+    last = -1
+    ParseN88IfStmts = -1
+    Do
+        If Not ParseN88IfTake(p, srcLn, first, last) Then Exit Function
+        If ParseN88IfMore(p, srcLn) = 0 Then Exit Do
+    Loop
+    ParseN88IfStmts = first
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseN88IfTake(p As *Parser, srcLn As Long, ByRef first As Long, ByRef last As Long) As boolean
+    Dim n As Long
+    ParseN88IfTake = false
+    n = ParseN88IfOne(p, srcLn)
+    If n < 0 Then Exit Function
+    ParseN88LinkAt(p, first, last, n, srcLn)
+    ParseN88IfTake = true
+End Function
+
+' 1 文。後ろは : / ELSE / 行末でなければエラー
+Function ParseN88IfOne(p As *Parser, srcLn As Long) As Long
+    Dim n As Long
+    ParseN88IfOne = -1
+    n = ParseN88Stmt(p)
+    If n < 0 Or p->err <> 0 Then Exit Function
+    If ParseN88StmtDone(p, srcLn) = 0 And ParseCmdKw(p, "else") = 0 Then ParseFail(p, "syntax error")
+    If p->err = 0 Then ParseN88IfOne = n
+End Function
+
+' : の後ろに同じ行の文が続けば読み進めて 1（ELSE の前で止まる）
+Function ParseN88IfMore(p As *Parser, srcLn As Long) As Long
+    ParseN88IfMore = 0
+    If ParseTokKind(p) <> TK_COLON Then Exit Function
+    If ParseN88OnLine(p, srcLn) = 0 Then Exit Function
+    If ParseCmdKw(p, "else") = 0 Then ParseN88IfMore = 1
+End Function
+
+Function ParseN88MakeIf(ast As *Ast, cond As Long, thenL As Long, elseL As Long) As Long
+    Dim nodes As *AstNode
+    ParseN88MakeIf = AstAddNode(ast, AST_IF)
+    If ParseN88MakeIf < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[ParseN88MakeIf].left = cond
+    nodes[ParseN88MakeIf].right = thenL
+    nodes[ParseN88MakeIf].extra = elseL
+End Function
