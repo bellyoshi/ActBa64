@@ -110,8 +110,9 @@ Function ParseFieldStmt(p As *Parser) As Long
     nFile = ParseExpr(p)
     If nFile < 0 Then Exit Function
     If Not ParseExpect(p, TK_COMMA) Then Exit Function
-    nLen = ParseExpr(p)
+    nLen = ParseAB2FieldLen(p)
     If nLen < 0 Then Exit Function
+    If Not ParseAB2FieldAs(p, nFile) Then Exit Function
     ast = p->ast
     nField = AstAddNode(ast, AST_FIELD)
     If nField < 0 Then Exit Function
@@ -129,7 +130,6 @@ Function ParseGetStmt(p As *Parser) As Long
     Dim nFile As Long
     Dim nRec As Long
     Dim nVar As Long
-    Dim name(SYM_NAME_LEN - 1) As Byte
 
     ParseGetStmt = -1
     p->pos = p->pos + 1
@@ -139,12 +139,9 @@ Function ParseGetStmt(p As *Parser) As Long
     If Not ParseExpect(p, TK_COMMA) Then Exit Function
     nRec = ParseExpr(p)
     If nRec < 0 Then Exit Function
-    If Not ParseExpect(p, TK_COMMA) Then Exit Function
-    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
-    ast = p->ast
-    nVar = AstAddNode(ast, AST_VAR)
+    nVar = ParseGetVar(p, nFile)
     If nVar < 0 Then Exit Function
-    AstSetStr(ast, nVar, VarPtr(name))
+    ast = p->ast
     nGet = AstAddNode(ast, AST_GET)
     If nGet < 0 Then Exit Function
     nodes = ast->nodes
@@ -152,6 +149,28 @@ Function ParseGetStmt(p As *Parser) As Long
     nodes[nGet].right = nRec
     nodes[nGet].extra = nVar
     ParseGetStmt = nGet
+End Function
+
+' Get の , 変数。-pAB2 で , が無ければ Field #num,... As の変数
+Function ParseGetVar(p As *Parser, nFile As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseGetVar = -1
+    If ParseAB2NoVar(p) <> 0 Then ParseGetVar = ParseAB2BoundVar(p, nFile)
+    If ParseAB2NoVar(p) <> 0 Then Exit Function
+    If Not ParseExpect(p, TK_COMMA) Then Exit Function
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    ParseGetVar = ParseAB2MakeVar(p->ast, VarPtr(name))
+End Function
+
+' Put の , 式。-pAB2 で , が無ければ Field #num,... As の変数
+Function ParsePutData(p As *Parser, nFile As Long) As Long
+    ParsePutData = -1
+    If ParseAB2NoVar(p) <> 0 Then
+        ParsePutData = ParseAB2BoundVar(p, nFile)
+        Exit Function
+    End If
+    If Not ParseExpect(p, TK_COMMA) Then Exit Function
+    ParsePutData = ParseExpr(p)
 End Function
 
 ' Put #num, rec, expr
@@ -171,8 +190,7 @@ Function ParsePutStmt(p As *Parser) As Long
     If Not ParseExpect(p, TK_COMMA) Then Exit Function
     nRec = ParseExpr(p)
     If nRec < 0 Then Exit Function
-    If Not ParseExpect(p, TK_COMMA) Then Exit Function
-    nData = ParseExpr(p)
+    nData = ParsePutData(p, nFile)
     If nData < 0 Then Exit Function
     ast = p->ast
     nPut = AstAddNode(ast, AST_PUT)

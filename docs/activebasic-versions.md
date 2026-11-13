@@ -29,3 +29,9 @@ actba64 old.abp -pN88 -o old.exe
 ```
 
 ただし、`-pN88` は ActiveBasic よりはるか前の BASIC のプログラムを動かすことを目的としています。
+
+ActiveBasic 2.62 の Windows プログラム（`Window` / `GetWndMsg` / `SendWndMsg` のメッセージループ、`Data` / `Read`、`Field ... As` など）は `-pAB2` を付けます（[language.md §1.8](./language.md#pab2)）。
+
+```powershell
+actba64 old.bas -pAB2 -o old.exe
+```

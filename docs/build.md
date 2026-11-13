@@ -84,10 +84,10 @@ cd src\actba64
 使い方:
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-pN88] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-pN88] [-pAB2] [-o <out>]
 ```
 
-`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。
+`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。`-pAB2` は ActiveBasic 2.62 のソースを読む（`ParserAB2*` と `Include\AB2`）（[language.md §1.8](./language.md#pab2)）。
 
 `.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1` で、再配置は `PeReloc.abp` が `.reloc` に書く（[language.md §8.4](./language.md#84-dll-を出力する)）。
 

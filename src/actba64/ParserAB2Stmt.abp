@@ -1,0 +1,346 @@
+' ===================================================
+'  ParserAB2Stmt - -pAB2 の文と括弧なしの関数
+' ===================================================
+'   SendWndMsg h, msg, wParam, lParam [, 戻り値]
+'     → [戻り値 =] AB2_SendWndMsg(...)。lParam が変数なら ...V（文字列はバッファとして読み書き）、
+'       wParam も変数なら ...VV（EM_GETSEL などで両方のアドレスを渡す）
+'   Data 項目, ... → AB2_DataStr / AB2_DataNum をプログラムの先頭へ移す（Read はどこからでも読める）
+'   Read 変数, ... → 変数 = AB2_ReadStr$()（$ 付き）/ AB2_ReadNum()
+'   On Error Goto ... → 何もしない（エラーの横取りは未対応）
+'   ClipStr$ / CmdLine$ / CurDir$ / Date$ / Time$ → 括弧なしの関数呼び出し
+
+' Data の呼び出しの連なり（g_ab2DataN = 0 なら空）
+Dim g_ab2DataFirst As Long
+Dim g_ab2DataLast As Long
+Dim g_ab2DataN As Long
+
+Function ParseStmtAB2(p As *Parser) As Long
+    ParseStmtAB2 = -2
+    If CompIsAB2() = 0 Then Exit Function
+    ParseStmtAB2 = ParseAB2SendMsg(p)
+    If ParseStmtAB2 = -2 Then ParseStmtAB2 = ParseAB2Data(p)
+    If ParseStmtAB2 = -2 Then ParseStmtAB2 = ParseAB2Read(p)
+    If ParseStmtAB2 = -2 Then ParseStmtAB2 = ParseAB2OnError(p)
+End Function
+
+Function ParseAB2Nop(ast As *Ast) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "AB2_Nop")
+    ParseAB2Nop = ParseMakeCall(ast, VarPtr(name), -1, 0)
+End Function
+
+Function ParseAB2Next(ast As *Ast, n As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    ParseAB2Next = nodes[n].nxt
+End Function
+
+' 引数の連なりの k 番目（0 始まり）の式
+Function ParseAB2ArgAt(ast As *Ast, arg0 As Long, k As Long) As Long
+    Dim a As Long, i As Long, nodes As *AstNode
+    a = arg0
+    For i = 1 To k
+        a = ParseAB2Next(ast, a)
+    Next
+    nodes = ast->nodes
+    ParseAB2ArgAt = nodes[a].left
+End Function
+
+Function ParseAB2IsVar(ast As *Ast, n As Long) As Long
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    ParseAB2IsVar = 0
+    If nodes[n].kind = AST_VAR Then ParseAB2IsVar = 1
+End Function
+
+' ---- SendWndMsg ----
+
+Function ParseAB2SendMsg(p As *Parser) As Long
+    Dim srcLn As Long
+    ParseAB2SendMsg = -2
+    If ParseCmdKw(p, "sendwndmsg") = 0 Then Exit Function
+    srcLn = ParseTokLogLine(p)
+    p->pos = p->pos + 1
+    ParseAB2SendMsg = ParseAB2SendBody(p, srcLn)
+End Function
+
+Function ParseAB2SendBody(p As *Parser, srcLn As Long) As Long
+    Dim ans As Long
+    ParseAB2SendBody = -1
+    If ParseCmdGather(p, srcLn, 4) = 0 Then Exit Function
+    If ParseNeed(p, 4) = 0 Then Exit Function
+    ans = ParseMsgAns(p, srcLn)
+    If ans = -1 Then Exit Function
+    ParseAB2SendName(p->ast)
+    ParseAB2SendBody = ParseMsgFinish(p, ans)
+End Function
+
+Sub ParseAB2SendName(ast As *Ast)
+    Dim w As Long, l As Long
+    w = ParseAB2ArgAt(ast, g_cmdArg0, 2)
+    l = ParseAB2ArgAt(ast, g_cmdArg0, 3)
+    lstrcpy(VarPtr(g_cmdFn), "AB2_SendWndMsg")
+    If ParseAB2IsVar(ast, l) = 0 Then Exit Sub
+    lstrcpy(VarPtr(g_cmdFn), "AB2_SendWndMsgV")
+    If ParseAB2IsVar(ast, w) <> 0 Then lstrcpy(VarPtr(g_cmdFn), "AB2_SendWndMsgVV")
+End Sub
+
+' ---- Data ----
+
+Function ParseAB2Data(p As *Parser) As Long
+    Dim srcLn As Long
+    ParseAB2Data = -2
+    If ParseCmdKw(p, "data") = 0 Then Exit Function
+    srcLn = ParseTokLogLine(p)
+    p->pos = p->pos + 1
+    ParseAB2Data = ParseAB2DataBody(p, srcLn)
+End Function
+
+Function ParseAB2DataBody(p As *Parser, srcLn As Long) As Long
+    ParseAB2DataBody = -1
+    If ParseCmdGather(p, srcLn, AST_MAX_NODES) = 0 Then Exit Function
+    If Not ParseAB2DataHoist(p->ast) Then Exit Function
+    ParseAB2DataBody = ParseAB2Nop(p->ast)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAB2DataHoist(ast As *Ast) As boolean
+    Dim a As Long
+    ParseAB2DataHoist = false
+    a = g_cmdArg0
+    While a >= 0
+        a = ParseAB2DataOne(ast, a)
+        If a = -2 Then Exit Function
+    Wend
+    ParseAB2DataHoist = true
+End Function
+
+' 項目 a を呼び出しにしてつなぐ。戻り値は次の項目（無ければ -1、エラーは -2）
+Function ParseAB2DataOne(ast As *Ast, a As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim c As Long
+    ParseAB2DataOne = ParseAB2Next(ast, a)
+    ParseAB2DataFn(ast, a, VarPtr(name))
+    c = ParseMakeCall(ast, VarPtr(name), a, 1)
+    If c >= 0 Then ParseAB2DataLink(ast, c)
+    If c < 0 Then ParseAB2DataOne = -2
+End Function
+
+' 文字列の項目は AB2_DataStr、ほかは AB2_DataNum
+Sub ParseAB2DataFn(ast As *Ast, a As Long, name As *Byte)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[a].nxt = -1
+    lstrcpy(name, "AB2_DataNum")
+    If nodes[nodes[a].left].kind = AST_STRING Then lstrcpy(name, "AB2_DataStr")
+End Sub
+
+Sub ParseAB2DataLink(ast As *Ast, c As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[c].nxt = -1
+    If g_ab2DataN = 0 Then g_ab2DataFirst = c
+    If g_ab2DataN <> 0 Then nodes[g_ab2DataLast].nxt = c
+    g_ab2DataLast = c
+    g_ab2DataN = g_ab2DataN + 1
+End Sub
+
+' ParseProgram の最後。Data の呼び出しを最初の文の前へつなぐ
+Function ParseAB2HoistData(ast As *Ast, first As Long) As Long
+    Dim nodes As *AstNode
+    ParseAB2HoistData = first
+    If g_ab2DataN = 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[g_ab2DataLast].nxt = first
+    ParseAB2HoistData = g_ab2DataFirst
+End Function
+
+' ---- Read ----
+
+Function ParseAB2Read(p As *Parser) As Long
+    ParseAB2Read = -2
+    If ParseCmdKw(p, "read") = 0 Then Exit Function
+    p->pos = p->pos + 1
+    ParseAB2Read = ParseAB2ReadList(p)
+End Function
+
+' 1 つなら代入、2 つ以上なら If 1 Then 代入: 代入 ... にまとめる
+Function ParseAB2ReadList(p As *Parser) As Long
+    Dim first As Long, last As Long, cnt As Long
+    ParseAB2ReadList = -1
+    cnt = 0
+    Do
+        If Not ParseAB2ReadNext(p, first, last, cnt) Then Exit Function
+        If ParseAB2EatComma(p) = 0 Then Exit Do
+    Loop
+    ParseAB2ReadList = ParseAB2Block(p->ast, first, cnt)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseAB2ReadNext(p As *Parser, ByRef first As Long, ByRef last As Long, ByRef cnt As Long) As boolean
+    Dim n As Long
+    ParseAB2ReadNext = false
+    n = ParseAB2ReadOne(p)
+    If n < 0 Then Exit Function
+    ParseAB2Chain(p->ast, first, last, cnt, n)
+    ParseAB2ReadNext = true
+End Function
+
+Function ParseAB2EatComma(p As *Parser) As Long
+    ParseAB2EatComma = 0
+    If ParseTokKind(p) <> TK_COMMA Then Exit Function
+    p->pos = p->pos + 1
+    ParseAB2EatComma = 1
+End Function
+
+Sub ParseAB2Chain(ast As *Ast, ByRef first As Long, ByRef last As Long, ByRef cnt As Long, n As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].nxt = -1
+    If cnt = 0 Then first = n
+    If cnt <> 0 Then nodes[last].nxt = n
+    last = n
+    cnt = cnt + 1
+End Sub
+
+Function ParseAB2Block(ast As *Ast, first As Long, cnt As Long) As Long
+    Dim one As Long
+    ParseAB2Block = first
+    If cnt <= 1 Then Exit Function
+    one = ParseMakeNum(ast, 1)
+    ParseAB2Block = AstAddNode(ast, AST_IF)
+    If ParseAB2Block >= 0 Then ParseAB2SetIf(ast, ParseAB2Block, one, first)
+End Function
+
+Sub ParseAB2SetIf(ast As *Ast, n As Long, cond As Long, body As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[n].left = cond
+    nodes[n].right = body
+    nodes[n].extra = -1
+End Sub
+
+' 変数 = AB2_ReadStr$() / AB2_ReadNum()
+Function ParseAB2ReadOne(p As *Parser) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim lhs As Long
+    ParseAB2ReadOne = -1
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    lhs = ParseAB2ReadLhs(p, VarPtr(name))
+    If lhs >= 0 Then ParseAB2ReadOne = ParseAB2ReadAssign(p->ast, VarPtr(name), lhs)
+End Function
+
+Function ParseAB2ReadAssign(ast As *Ast, name As *Byte, lhs As Long) As Long
+    Dim fn(SYM_NAME_LEN - 1) As Byte
+    Dim rhs As Long
+    ParseAB2ReadAssign = -1
+    ParseAB2ReadFn(name, VarPtr(fn))
+    rhs = ParseMakeCall(ast, VarPtr(fn), -1, 0)
+    If rhs >= 0 Then ParseAB2ReadAssign = ParseMakeAssign(ast, lhs, rhs)
+End Function
+
+Sub ParseAB2ReadFn(name As *Byte, fn As *Byte)
+    lstrcpy(fn, "AB2_ReadNum")
+    If name[lstrlen(name) - 1] = CH_DOLLAR Then lstrcpy(fn, "AB2_ReadStr$")
+End Sub
+
+' 名前 / 名前(添字) / 名前(添字, 添字...) の代入先
+Function ParseAB2ReadLhs(p As *Parser, name As *Byte) As Long
+    Dim arg0 As Long, nArgs As Long
+    ParseAB2ReadLhs = -1
+    If ParseTokKind(p) <> TK_LPAREN Then ParseAB2ReadLhs = ParseAB2MakeVar(p->ast, name)
+    If ParseTokKind(p) <> TK_LPAREN Then Exit Function
+    p->pos = p->pos + 1
+    If ParseArgList(p, arg0, nArgs) = 0 Then Exit Function
+    ParseAB2ReadLhs = ParseAB2ElemLhs(p->ast, name, arg0, nArgs)
+End Function
+
+Function ParseAB2MakeVar(ast As *Ast, name As *Byte) As Long
+    ParseAB2MakeVar = AstAddNode(ast, AST_VAR)
+    If ParseAB2MakeVar >= 0 Then AstSetStr(ast, ParseAB2MakeVar, name)
+End Function
+
+' 1 次元は AST_INDEX、2 次元以上は配列の AST_CALL（ParseAssignParen と同じ形）
+Function ParseAB2ElemLhs(ast As *Ast, name As *Byte, arg0 As Long, nArgs As Long) As Long
+    If nArgs >= 2 Then
+        ParseAB2ElemLhs = ParseAB2ArrCall(ast, name, arg0, nArgs)
+        Exit Function
+    End If
+    ParseAB2ElemLhs = ParseAB2Index1(ast, ParseAB2MakeVar(ast, name), ParseAB2ArgAt(ast, arg0, 0))
+End Function
+
+' 1 次元の代入先 v(e)（ParseAssignParen と同じく num = 0）
+Function ParseAB2Index1(ast As *Ast, v As Long, e As Long) As Long
+    Dim nodes As *AstNode
+    ParseAB2Index1 = ParseAB2MakeIndex(ast, v, e, -1)
+    If ParseAB2Index1 < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[ParseAB2Index1].num = 0
+End Function
+
+Function ParseAB2ArrCall(ast As *Ast, name As *Byte, arg0 As Long, nArgs As Long) As Long
+    Dim nodes As *AstNode
+    ParseAB2ArrCall = ParseMakeCall(ast, name, arg0, nArgs)
+    If ParseAB2ArrCall < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[ParseAB2ArrCall].extra = -1
+End Function
+
+' ---- On Error ----
+
+Function ParseAB2OnError(p As *Parser) As Long
+    ParseAB2OnError = -2
+    If ParseCmdKw(p, "on") = 0 Then Exit Function
+    If ParseAB2KwNext(p, "error") = 0 Then Exit Function
+    ParseAB2SkipLine(p)
+    ParseAB2OnError = ParseAB2Nop(p->ast)
+End Function
+
+' 文の終わり（: / 行末）まで読み飛ばす
+Sub ParseAB2SkipLine(p As *Parser)
+    Dim srcLn As Long
+    srcLn = ParseTokLogLine(p)
+    While ParseAB2InLine(p, srcLn) <> 0
+        p->pos = p->pos + 1
+    Wend
+End Sub
+
+' 次のトークンが lit なら 1
+Function ParseAB2KwNext(p As *Parser, lit As *Byte) As Long
+    p->pos = p->pos + 1
+    ParseAB2KwNext = ParseCmdKw(p, lit)
+    p->pos = p->pos - 1
+End Function
+
+Function ParseAB2InLine(p As *Parser, srcLn As Long) As Long
+    ParseAB2InLine = 0
+    If ParseTokKind(p) = TK_EOF Or ParseTokKind(p) = TK_COLON Then Exit Function
+    If ParseTokLogLine(p) = srcLn Then ParseAB2InLine = 1
+End Function
+
+' ---- 括弧なしの関数 ----
+
+Function ParseAB2IsSysVar(p As *Parser) As Long
+    ParseAB2IsSysVar = 0
+    If CompIsAB2() = 0 Then Exit Function
+    If ParseTokKind(p) <> TK_IDENT Then Exit Function
+    If ParseTokKindAt(p, p->pos + 1) = TK_LPAREN Then Exit Function
+    ParseAB2IsSysVar = ParseAB2SysName(p)
+End Function
+
+Function ParseAB2SysName(p As *Parser) As Long
+    ParseAB2SysName = 1
+    If ParseCmdKw(p, "clipstr$") <> 0 Then Exit Function
+    If ParseCmdKw(p, "cmdline$") <> 0 Then Exit Function
+    If ParseCmdKw(p, "curdir$") <> 0 Then Exit Function
+    If ParseCmdKw(p, "date$") <> 0 Then Exit Function
+    If ParseCmdKw(p, "time$") <> 0 Then Exit Function
+    ParseAB2SysName = 0
+End Function
+
+Function ParseAB2SysVarCall(p As *Parser) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseAB2SysVarCall = -1
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    ParseAB2SysVarCall = ParseMakeCall(p->ast, VarPtr(name), -1, 0)
+End Function

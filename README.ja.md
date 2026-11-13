@@ -52,7 +52,7 @@ actba64 hello.abp -linux -o hello           # x86-64 Linux ELF
 ### コマンドライン
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-pAB2] [-o <out>]
 ```
 
 | オプション | 意味 |
@@ -61,6 +61,7 @@ actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-o <out>]
 | `-actba32` | 64bit の代わりに 32bit の PE を出す |
 | `-linux` | x86-64 Linux の ELF を出す |
 | `-pN88` | ソースを N88-BASIC として読む |
+| `-pAB2` | ソースを ActiveBasic 2.62 として読む |
 
 プロジェクトファイル（`.pj`）は `#SOURCE` の下にソースを並べ、1 本のプログラムとしてコンパイルします。コンパイルに失敗すると終了コードは 0 以外になります。
 

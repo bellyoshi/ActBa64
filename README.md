@@ -52,7 +52,7 @@ Or open `ProjectEditor.exe`, type the program and choose Run from the Basic menu
 ### Command line
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-pAB2] [-o <out>]
 ```
 
 | Option | Meaning |
@@ -61,6 +61,7 @@ actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-o <out>]
 | `-actba32` | 32-bit PE instead of 64-bit |
 | `-linux` | x86-64 Linux ELF |
 | `-pN88` | Read the source as N88-BASIC |
+| `-pAB2` | Read the source as ActiveBasic 2.62 |
 
 A project file (`.pj`) lists sources under `#SOURCE` and compiles them as one program. The exit code is non-zero when compilation fails.
 

@@ -1,0 +1,91 @@
+' ab2print - -pAB2 の SelectPrinter / LPrint
+'   SelectPrinter … 印刷ダイアログでプリンタを選ぶ（選ばずに LPrint したら既定のプリンタ）
+'   LPrint 文字列 … 1 行を印刷する。ページの下まで来たら次のページ
+'   LPrint Chr$(12) … 改ページ。そこで印刷を終えてプリンタへ送る
+
+Type DOCINFO
+    cbSize As Long
+    lpszDocName As *Byte
+    lpszOutput As *Byte
+    lpszDatatype As *Byte
+    fwType As DWord
+End Type
+
+Declare Function StartDoc Lib "gdi32.dll" Alias "StartDocA" (ByVal hdc As HDC, ByRef lpdi As DOCINFO) As Long
+Declare Function EndDoc Lib "gdi32.dll" (ByVal hdc As HDC) As Long
+Declare Function StartPage Lib "gdi32.dll" (ByVal hdc As HDC) As Long
+Declare Function EndPage Lib "gdi32.dll" (ByVal hdc As HDC) As Long
+
+Dim g_ab2PrnDC As HDC
+Dim g_ab2PrnDoc As Long
+Dim g_ab2PrnY As Long
+
+Sub AB2_PrnEnd()
+    If g_ab2PrnDoc = 0 Then Exit Sub
+    EndPage(g_ab2PrnDC)
+    EndDoc(g_ab2PrnDC)
+    g_ab2PrnDoc = 0
+End Sub
+
+Sub AB2_PrnTake(hdc As HDC)
+    If hdc = 0 Then Exit Sub
+    AB2_PrnEnd()
+    If g_ab2PrnDC <> 0 Then DeleteDC(g_ab2PrnDC)
+    g_ab2PrnDC = hdc
+End Sub
+
+Sub AB2_PrnDlg(flags As DWord)
+    Dim pd As PRINTDLG
+    FillMemory(VarPtr(pd), Len(pd), 0)
+    pd.lStructSize = Len(pd)
+    pd.Flags = flags Or PD_RETURNDC
+    If PrintDlg(pd) = 0 Then Exit Sub
+    AB2_PrnTake(pd.hDC)
+End Sub
+
+Sub SelectPrinter()
+    AB2_PrnDlg(0)
+End Sub
+
+Sub AB2_PrnBegin()
+    Dim di As DOCINFO
+    If g_ab2PrnDoc <> 0 Then Exit Sub
+    FillMemory(VarPtr(di), Len(di), 0)
+    di.cbSize = Len(di)
+    StartDoc(g_ab2PrnDC, di)
+    StartPage(g_ab2PrnDC)
+    g_ab2PrnDoc = 1
+    g_ab2PrnY = 0
+End Sub
+
+Function AB2_PrnLineH() As Long
+    Dim tm As TEXTMETRIC
+    GetTextMetrics(g_ab2PrnDC, tm)
+    AB2_PrnLineH = tm.tmHeight + tm.tmExternalLeading
+End Function
+
+Sub AB2_PrnLine(s As String)
+    Dim lh As Long
+    AB2_PrnBegin()
+    lh = AB2_PrnLineH()
+    If g_ab2PrnY + lh > GetDeviceCaps(g_ab2PrnDC, VERTRES) Then AB2_PrnNext()
+    TextOut(g_ab2PrnDC, 0, g_ab2PrnY, StrPtr(s), Len(s))
+    g_ab2PrnY = g_ab2PrnY + lh
+End Sub
+
+Sub AB2_PrnNext()
+    EndPage(g_ab2PrnDC)
+    StartPage(g_ab2PrnDC)
+    g_ab2PrnY = 0
+End Sub
+
+' LPrint 文字列
+Sub LPrint(s As String)
+    If g_ab2PrnDC = 0 Then AB2_PrnDlg(PD_RETURNDEFAULT)
+    If g_ab2PrnDC = 0 Then Exit Sub
+    If s = Chr$(12) Then
+        AB2_PrnEnd()
+        Exit Sub
+    End If
+    AB2_PrnLine(s)
+End Sub

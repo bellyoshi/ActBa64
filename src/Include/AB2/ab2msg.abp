@@ -1,0 +1,72 @@
+' ab2msg - -pAB2 の SendWndMsg h, msg, wParam, lParam [, 戻り値]
+'   パーサが lParam の形で呼び先を選ぶ（戻り値はパーサが代入にする）
+'     AB2_SendWndMsg   : lParam が式（数値か文字列）
+'     AB2_SendWndMsgV  : lParam が変数。文字列の変数はバッファとして読み書きする（WM_GETTEXT）
+'     AB2_SendWndMsgVV : wParam も変数。EM_GETSEL は両方のアドレスを渡して結果を受け取る
+'   WM_GETTEXTLENGTH / WM_GETTEXT は UTF-8 のバイト数・文字列（GetWindowTextLength / GetWindowText）
+
+Function AB2_SendNum(h As HWND, m As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    If m = WM_GETTEXTLENGTH Then
+        AB2_SendNum = GetWindowTextLength(h)
+        Exit Function
+    End If
+    AB2_SendNum = SendMessage(h, m, wp, lp)
+End Function
+
+' 窓の文字列（最大 n - 1 バイト）
+Function AB2_GetText$(h As HWND, n As Long) As String
+    Dim buf As *Byte
+    AB2_GetText$ = ""
+    buf = AB2_ZeroBuf(n)
+    If buf = 0 Then Exit Function
+    GetWindowText(h, buf, n)
+    AB2_GetText$ = MakeStr(buf)
+    free(buf)
+End Function
+
+' n + 1 バイトの空の文字列のバッファ（n <= 0 なら 0）
+Function AB2_ZeroBuf(n As Long) As *Byte
+    Dim p As *Byte
+    AB2_ZeroBuf = 0
+    If n <= 0 Then Exit Function
+    p = malloc(n + 1)
+    If p <> 0 Then p[0] = 0
+    AB2_ZeroBuf = p
+End Function
+
+Function AB2_SendStrVar(h As HWND, m As DWord, wp As WPARAM, ByRef s As String) As LRESULT
+    If m = WM_GETTEXT Then
+        s = AB2_GetText$(h, wp As Long)
+        AB2_SendStrVar = Len(s)
+        Exit Function
+    End If
+    AB2_SendStrVar = SendMessage(h, m, wp, StrPtr(s) As LPARAM)
+End Function
+
+Function AB2_SendWndMsg(h As HWND, m As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    AB2_SendWndMsg = AB2_SendNum(h, m, wp, lp)
+End Function
+
+Function AB2_SendWndMsg(h As HWND, m As DWord, wp As WPARAM, s As String) As LRESULT
+    AB2_SendWndMsg = SendMessage(h, m, wp, StrPtr(s) As LPARAM)
+End Function
+
+Function AB2_SendWndMsgV(h As HWND, m As DWord, wp As WPARAM, ByRef lp As Long) As LRESULT
+    AB2_SendWndMsgV = AB2_SendNum(h, m, wp, lp)
+End Function
+
+Function AB2_SendWndMsgV(h As HWND, m As DWord, wp As WPARAM, ByRef s As String) As LRESULT
+    AB2_SendWndMsgV = AB2_SendStrVar(h, m, wp, s)
+End Function
+
+Function AB2_SendWndMsgVV(h As HWND, m As DWord, ByRef wp As Long, ByRef lp As Long) As LRESULT
+    If m = EM_GETSEL Then
+        AB2_SendWndMsgVV = SendMessage(h, m, VarPtr(wp) As WPARAM, VarPtr(lp) As LPARAM)
+        Exit Function
+    End If
+    AB2_SendWndMsgVV = AB2_SendNum(h, m, wp, lp)
+End Function
+
+Function AB2_SendWndMsgVV(h As HWND, m As DWord, ByRef wp As Long, ByRef s As String) As LRESULT
+    AB2_SendWndMsgVV = AB2_SendStrVar(h, m, wp, s)
+End Function

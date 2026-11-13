@@ -1,0 +1,162 @@
+' ab2wnd - -pAB2 の窓（Window 文のクラス "NORMAL"）と GetWndMsg / ShowWnd / WndPos / OwnerWnd
+'   "NORMAL" の窓の手続きは WM_COMMAND / WM_CLOSE / WM_SIZE などを待ち行列に積む。
+'   WM_CLOSE では閉じない（AB2 のプログラムが DelWnd で閉じる）。
+'   GetWndMsg は待ち行列があれば 1 つ取り出し、無ければメッセージを 1 つ配って返す。
+'   位置が -1 の窓は画面の中央、幅か高さが -1 の窓は Windows の既定の位置と大きさ。
+
+Declare Function GetMessageW Lib "user32.dll" (ByRef lpMsg As MSG, ByVal hWnd As HWND, ByVal wMsgFilterMin As DWord, ByVal wMsgFilterMax As DWord) As Long
+Declare Function DispatchMessageW Lib "user32.dll" (ByRef lpMsg As MSG) As LRESULT
+
+Const AB2_QMAX = 256
+
+Dim g_ab2QH(AB2_QMAX - 1) As HWND
+Dim g_ab2QM(AB2_QMAX - 1) As DWord
+Dim g_ab2QW(AB2_QMAX - 1) As WPARAM
+Dim g_ab2QL(AB2_QMAX - 1) As LPARAM
+Dim g_ab2QHead As Long
+Dim g_ab2QN As Long
+Dim g_ab2WndOk As Long
+Dim g_ab2ClsName As String
+Dim g_ab2Msg As MSG
+
+' 待ち行列に積むメッセージなら 1
+Function AB2_WantMsg(m As DWord) As Long
+    AB2_WantMsg = 1
+    If m = WM_COMMAND Or m = WM_CLOSE Or m = WM_SIZE Or m = WM_MOVE Then Exit Function
+    If m = WM_NOTIFY Or m = WM_HSCROLL Or m = WM_VSCROLL Or m = WM_DESTROY Then Exit Function
+    If m = WM_TIMER Or m = WM_DROPFILES Then Exit Function
+    AB2_WantMsg = 0
+End Function
+
+Sub AB2_Push(h As HWND, m As DWord, wp As WPARAM, lp As LPARAM)
+    Dim i As Long
+    If g_ab2QN >= AB2_QMAX Then Exit Sub
+    i = (g_ab2QHead + g_ab2QN) Mod AB2_QMAX
+    g_ab2QH(i) = h
+    g_ab2QM(i) = m
+    g_ab2QW(i) = wp
+    g_ab2QL(i) = lp
+    g_ab2QN = g_ab2QN + 1
+End Sub
+
+Sub AB2_Pop(ByRef h As Long, ByRef m As Long, ByRef wp As Long, ByRef lp As Long)
+    Dim i As Long
+    i = g_ab2QHead
+    h = g_ab2QH(i) As Long
+    m = g_ab2QM(i)
+    wp = g_ab2QW(i) As Long
+    lp = g_ab2QL(i) As Long
+    g_ab2QHead = (i + 1) Mod AB2_QMAX
+    g_ab2QN = g_ab2QN - 1
+End Sub
+
+Function AB2_WndProc(hWnd As HWND, m As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    If AB2_WantMsg(m) <> 0 Then AB2_Push(hWnd, m, wp, lp)
+    AB2_WndProc = 0
+    If m = WM_CLOSE Then Exit Function
+    AB2_WndProc = DefWindowProc(hWnd, m, wp, lp)
+End Function
+
+Sub AB2_FillWnd(ByRef wc As WNDCLASSEX)
+    FillMemory(VarPtr(wc), Len(wc), 0)
+    wc.cbSize = Len(wc)
+    wc.lpfnWndProc = AddressOf(AB2_WndProc)
+    wc.hInstance = GetModuleHandle(0)
+    wc.style = CS_HREDRAW Or CS_VREDRAW
+    wc.hCursor = LoadCursor(0, IDC_ARROW)
+    wc.hbrBackground = (COLOR_BTNFACE + 1) As HBRUSH
+    wc.lpszClassName = StrPtr(g_ab2ClsName)
+End Sub
+
+Sub AB2_EnsureWnd()
+    Dim wc As WNDCLASSEX
+    If g_ab2WndOk <> 0 Then Exit Sub
+    g_ab2ClsName = "ActBa64AB2Wnd"
+    AB2_FillWnd(wc)
+    If RegisterClassEx(wc) <> 0 Then g_ab2WndOk = 1
+End Sub
+
+' クラス名が空か "NORMAL" なら 1
+Function AB2_IsNormal(className As String) As Long
+    AB2_IsNormal = 1
+    If Len(className) = 0 Then Exit Function
+    If lstrcmpi(StrPtr(className), "NORMAL") = 0 Then Exit Function
+    AB2_IsNormal = 0
+End Function
+
+' 位置・大きさの -1
+Sub AB2_FixPos(ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long)
+    If w = -1 Or h = -1 Then
+        AB2_DefaultPos(x, y, w, h)
+        Exit Sub
+    End If
+    If x = -1 Then x = (GetSystemMetrics(SM_CXSCREEN) - w) \ 2
+    If y = -1 Then y = (GetSystemMetrics(SM_CYSCREEN) - h) \ 2
+End Sub
+
+Sub AB2_DefaultPos(ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long)
+    x = CW_USEDEFAULT
+    y = CW_USEDEFAULT
+    w = CW_USEDEFAULT
+    h = CW_USEDEFAULT
+End Sub
+
+' Window 文（-pAB2）。引数は BasicWindow と同じ
+Function AB2_Window(ByRef hWnd As HWND, hOwner As HWND, x As Long, y As Long, w As Long, h As Long, title As String, style As DWord, className As String, id As HMENU, proc As Long, exStyle As DWord) As HWND
+    Dim wndCls As String
+    wndCls = AB2_PickClass$(className, x, y, w, h)
+    hWnd = CreateWindowEx(exStyle, StrPtr(wndCls), StrPtr(title), style, x, y, w, h, hOwner, id, GetModuleHandle(0), proc)
+    AB2_Window = hWnd
+End Function
+
+' "NORMAL" なら AB2 のクラス名にし、-1 の位置・大きさを直す
+Function AB2_PickClass$(className As String, ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long) As String
+    AB2_PickClass$ = className
+    If AB2_IsNormal(className) = 0 Then Exit Function
+    AB2_FixPos(x, y, w, h)
+    AB2_EnsureWnd()
+    AB2_PickClass$ = g_ab2ClsName
+End Function
+
+' メッセージを 1 つ受け取って配る。WM_QUIT なら g_ab2Msg.message が WM_QUIT
+Sub AB2_PumpOne()
+    If GetMessageW(g_ab2Msg, 0, 0, 0) <= 0 Then
+        g_ab2Msg.message = WM_QUIT
+        Exit Sub
+    End If
+    TranslateMessage(g_ab2Msg)
+    DispatchMessageW(g_ab2Msg)
+End Sub
+
+Sub AB2_TakeLast(ByRef h As Long, ByRef m As Long, ByRef wp As Long, ByRef lp As Long)
+    h = g_ab2Msg.hwnd As Long
+    m = g_ab2Msg.message
+    wp = g_ab2Msg.wParam As Long
+    lp = g_ab2Msg.lParam As Long
+End Sub
+
+' GetWndMsg hWnd, Message, wParam, lParam
+Sub GetWndMsg(ByRef h As Long, ByRef m As Long, ByRef wp As Long, ByRef lp As Long)
+    If g_ab2QN = 0 Then AB2_PumpOne()
+    If g_ab2QN <> 0 Then
+        AB2_Pop(h, m, wp, lp)
+        Exit Sub
+    End If
+    AB2_TakeLast(h, m, wp, lp)
+End Sub
+
+' ShowWnd hWnd, nCmdShow
+Sub ShowWnd(h As HWND, cmd As Long)
+    ShowWindow(h, cmd)
+    UpdateWindow(h)
+End Sub
+
+' WndPos hWnd, x, y, 幅, 高さ
+Sub WndPos(h As HWND, x As Long, y As Long, w As Long, hh As Long)
+    MoveWindow(h, x, y, w, hh, 1)
+End Sub
+
+' 親の窓。AB2 のプログラムの窓は親を持たない
+Function OwnerWnd() As HWND
+    OwnerWnd = 0
+End Function
