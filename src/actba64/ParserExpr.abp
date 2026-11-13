@@ -2,99 +2,15 @@
 '  ParserExpr - factor / expression
 ' ===================================================
 
-' num/den (>0) → IEEE754 Double ビット（Long 演算のみ。AB4.20 の Double 変換を避ける）
-Sub ParseEncodeNumDen(num As Long, den As Long, ByRef outLo As Long, ByRef outHi As Long)
-    Dim n As Long
-    Dim d As Long
-    Dim exp As Long
-    Dim i As Long
-    Dim bit As Long
-    Dim place As Long
-
-    outLo = 0
-    outHi = 0
-    If num <= 0 Or den <= 0 Then Exit Sub
-    n = num
-    d = den
-    exp = 1023
-    While n < d
-        If n > 1073741823 Then Exit Sub
-        n = n * 2
-        exp = exp - 1
-    Wend
-    While n / 2 >= d
-        If d > 1073741823 Then Exit Sub
-        d = d * 2
-        exp = exp + 1
-    Wend
-    n = n - d
-    outHi = exp * 1048576
-    i = 0
-    While i < 52
-        n = n * 2
-        bit = 0
-        If n >= d Then
-            n = n - d
-            bit = 1
-        End If
-        If i < 20 Then
-            place = 1
-            place = place << (19 - i)
-            If bit <> 0 Then outHi = outHi + place
-        Else
-            place = 1
-            place = place << (51 - i)
-            If bit <> 0 Then outLo = outLo + place
-        End If
-        i = i + 1
-    Wend
-End Sub
-
-' 十進テキスト → IEEE Double ビット（整数のみ）
+' 十進テキスト → IEEE Double ビット（最近接に丸める。0 は 0）
 Sub ParseFloatTextToBits(text As *Byte, ByRef outLo As Long, ByRef outHi As Long)
-    Dim i As Long
-    Dim c As Long
-    Dim dig As Long
-    Dim sig As Long
-    Dim nd As Long
-    Dim den As Long
-    Dim j As Long
-
+    Dim num(PF_MAXIDX) As Long
+    Dim den(PF_MAXIDX) As Long
     outLo = 0
     outHi = 0
-    i = 0
-    sig = 0
-    nd = 0
-    c = text[i]
-    While IsDigit(c)
-        dig = DigitValue(c)
-        If sig <= 214748363 Then
-            sig = sig * 10 + dig
-        End If
-        i = i + 1
-        c = text[i]
-    Wend
-    If c = CH_DOT Then
-        i = i + 1
-        c = text[i]
-        While IsDigit(c)
-            dig = DigitValue(c)
-            If sig <= 214748363 And nd < 9 Then
-                sig = sig * 10 + dig
-                nd = nd + 1
-            End If
-            i = i + 1
-            c = text[i]
-        Wend
-    End If
-    If sig = 0 Then Exit Sub
-    den = 1
-    j = 0
-    While j < nd
-        den = den * 10
-        j = j + 1
-    Wend
-    ParseEncodeNumDen(sig, den, outLo, outHi)
+    PfReadText(text, VarPtr(num), VarPtr(den))
+    If PfIsZero(VarPtr(num)) <> 0 Then Exit Sub
+    PfToBits(VarPtr(num), VarPtr(den), outLo, outHi)
 End Sub
 
 ' 十進テキスト → Double（ビット組み立て後に載せる）

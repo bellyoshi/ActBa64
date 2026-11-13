@@ -1,0 +1,150 @@
+' ===================================================
+'  ParserFloat - 十進テキスト → IEEE754 Double ビット
+' ===================================================
+' 16 ビットずつの多倍長整数（下位の桁から）で num/den を割り、最近接偶数に丸める。
+' Long 演算のみ（AB4.20 の Double 変換を避ける）。テキストは 255 文字までなので指数は範囲内に収まる。
+
+Const PF_LIMBS = 112
+Const PF_MAXIDX = 111
+Const PF_MAXSIG = 40
+
+Sub PfClear(a As *Long)
+    Dim i As Long
+    For i = 0 To PF_MAXIDX
+        a[i] = 0
+    Next
+End Sub
+
+' a = a * mul + add（mul, add < 2^15）
+Sub PfMulAdd(a As *Long, mul As Long, add As Long)
+    Dim i As Long
+    Dim v As Long
+    v = add
+    For i = 0 To PF_MAXIDX
+        v = a[i] * mul + v
+        a[i] = v And &HFFFF
+        v = v >> 16
+    Next
+End Sub
+
+' a = a - b（a >= b）。v >> 16 は借りが無ければ 1
+Sub PfSub(a As *Long, b As *Long)
+    Dim i As Long
+    Dim v As Long
+    v = 65536
+    For i = 0 To PF_MAXIDX
+        v = a[i] - b[i] + (v >> 16) + 65535
+        a[i] = v And &HFFFF
+    Next
+End Sub
+
+' 上位の桁ほど後で上書きするので、最上位の違いで決まる
+Function PfCmp(a As *Long, b As *Long) As Long
+    Dim i As Long
+    PfCmp = 0
+    For i = 0 To PF_MAXIDX
+        If a[i] > b[i] Then PfCmp = 1
+        If a[i] < b[i] Then PfCmp = -1
+    Next
+End Function
+
+Function PfIsZero(a As *Long) As Long
+    Dim i As Long
+    PfIsZero = 1
+    For i = 0 To PF_MAXIDX
+        If a[i] <> 0 Then PfIsZero = 0
+    Next
+End Function
+
+' st[0]: 小数部に入った, st[1]: 有効桁数。有効桁を超えた小数の桁は捨て、整数の桁は 0 として桁だけ上げる
+Sub PfReadChar(c As Long, num As *Long, den As *Long, st As *Long)
+    Dim dig As Long
+    If c = CH_DOT Then st[0] = 1
+    If c = CH_DOT Or (st[1] >= PF_MAXSIG And st[0] <> 0) Then Exit Sub
+    dig = DigitValue(c)
+    If st[1] >= PF_MAXSIG Then dig = 0
+    PfMulAdd(num, 10, dig)
+    If st[0] <> 0 Then PfMulAdd(den, 10, 0)
+    If PfIsZero(num) = 0 Then st[1] = st[1] + 1
+End Sub
+
+Sub PfInit(num As *Long, den As *Long, st As *Long)
+    PfClear(num)
+    PfClear(den)
+    den[0] = 1
+    st[0] = 0
+    st[1] = 0
+End Sub
+
+' 十進テキスト → num / den（den = 10^小数部の桁数）
+Sub PfReadText(text As *Byte, num As *Long, den As *Long)
+    Dim i As Long
+    Dim st(1) As Long
+    PfInit(num, den, VarPtr(st))
+    i = 0
+    While IsDigit(text[i]) Or text[i] = CH_DOT
+        PfReadChar(text[i], num, den, VarPtr(st))
+        i = i + 1
+    Wend
+End Sub
+
+' n を 2 倍して d 以上なら引く（商の次の 1 ビット）
+Function PfNextBit(n As *Long, d As *Long) As Long
+    PfMulAdd(n, 2, 0)
+    PfNextBit = 0
+    If PfCmp(n, d) < 0 Then Exit Function
+    PfSub(n, d)
+    PfNextBit = 1
+End Function
+
+Function PfBits(n As *Long, d As *Long, count As Long) As Long
+    Dim i As Long
+    Dim r As Long
+    r = 0
+    For i = 1 To count
+        r = (r << 1) Or PfNextBit(n, d)
+    Next
+    PfBits = r
+End Function
+
+' n > d になるまで d を 2 倍した回数
+Function PfShiftDen(n As *Long, d As *Long) As Long
+    Dim k As Long
+    k = 0
+    While PfCmp(n, d) >= 0
+        PfMulAdd(d, 2, 0)
+        k = k + 1
+    Wend
+    PfShiftDen = k
+End Function
+
+' n >= d になるまで n を 2 倍した回数（終われば d <= n < 2d）
+Function PfShiftNum(n As *Long, d As *Long) As Long
+    Dim k As Long
+    k = 0
+    While PfCmp(n, d) < 0
+        PfMulAdd(n, 2, 0)
+        k = k + 1
+    Wend
+    PfShiftNum = k
+End Function
+
+' 残りが 1/2 より大きいか、ちょうど 1/2 で末尾が奇数なら切り上げ（桁上がりは指数へ）
+Sub PfRound(n As *Long, d As *Long, ByRef outLo As Long, ByRef outHi As Long)
+    If PfNextBit(n, d) = 0 Then Exit Sub
+    If PfIsZero(n) <> 0 And (outLo And 1) = 0 Then Exit Sub
+    If outLo = -1 Then outHi = outHi + 1
+    outLo = outLo + 1
+End Sub
+
+' num/den (>0) → IEEE754 Double ビット。num, den は壊す
+Sub PfToBits(n As *Long, d As *Long, ByRef outLo As Long, ByRef outHi As Long)
+    Dim e As Long
+    e = 1023 + PfShiftDen(n, d)
+    e = e - PfShiftNum(n, d)
+    If e <= 0 Or e >= 2047 Then Exit Sub
+    PfSub(n, d)
+    outHi = e * 1048576 + PfBits(n, d, 20)
+    outLo = PfBits(n, d, 32)
+    PfRound(n, d, outLo, outHi)
+End Sub
