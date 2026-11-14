@@ -1,0 +1,142 @@
+' ============================================================
+' AltBPause - Alt + B を押すと Pause キーを送る Windows アプリ
+'
+' Alt + B をホットキー（RegisterHotKey）として登録するので、
+' ほかのアプリが前面にあっても効く。
+' 押されたら Alt キーが離されるのを待ってから Pause を送る
+' （Alt を押したまま送ると Alt + Pause になるため）。
+'
+' 窓を閉じるとホットキーの登録を外して終わる。
+'
+' Build:
+'   actba64.exe samples\AltBPause.abp -o samples\AltBPause.exe
+' ============================================================
+
+#USEWINDOW=1
+
+Const HOTKEY_ID = 1
+Const TIMER_ID = 1
+Const MOD_ALT = &H0001
+Const MOD_NOREPEAT = &H4000
+Const CLIENT_W = 320
+Const CLIENT_H = 96
+Const GUI_FONT = 17
+Const WIN_STYLE = WS_OVERLAPPED Or WS_CAPTION Or WS_SYSMENU Or WS_MINIMIZEBOX Or WS_VISIBLE
+
+Declare Function RegisterHotKey Lib "user32.dll" (ByVal hWnd As Long, ByVal id As Long, ByVal fsModifiers As DWord, ByVal vk As DWord) As Long
+Declare Function UnregisterHotKey Lib "user32.dll" (ByVal hWnd As Long, ByVal id As Long) As Long
+Declare Function SetRect Lib "user32.dll" (ByRef lprc As RECT, ByVal xLeft As Long, ByVal yTop As Long, ByVal xRight As Long, ByVal yBottom As Long) As Long
+
+Dim g_hwnd As Long
+Dim g_wc As WNDCLASSEX
+Dim g_class(31) As Byte
+Dim g_title(31) As Byte
+Dim g_sent As Long
+Dim g_waiting As Long
+Dim g_note As String
+
+
+' ------------------------------------------------------------
+' Pause を送る
+' ------------------------------------------------------------
+
+Sub SendPause()
+    keybd_event(VK_PAUSE, 0, 0, 0)
+    keybd_event(VK_PAUSE, 0, KEYEVENTF_KEYUP, 0)
+    g_sent = g_sent + 1
+    g_note = "Pause を送りました（" + Str$(g_sent) + " 回）"
+    SetWindowText(g_hwnd, "Alt+B -> Pause (" + Str$(g_sent) + ")")
+    InvalidateRect(g_hwnd, 0, TRUE)
+End Sub
+
+' Alt + B が押された。Alt が離されるまでタイマーで待つ
+Sub OnHotKey()
+    If g_waiting <> 0 Then Exit Sub
+    g_waiting = 1
+    SetTimer(g_hwnd, TIMER_ID, 20, 0)
+End Sub
+
+Sub OnTimer()
+    If (GetAsyncKeyState(VK_MENU) And &H8000) <> 0 Then Exit Sub
+    KillTimer(g_hwnd, TIMER_ID)
+    g_waiting = 0
+    SendPause()
+End Sub
+
+
+' ------------------------------------------------------------
+' 描画
+' ------------------------------------------------------------
+
+Sub OnPaint(hWnd As Long)
+    Dim ps As PAINTSTRUCT
+    Dim hdc As Long
+    hdc = BeginPaint(hWnd, VarPtr(ps))
+    SelectObject(hdc, GetStockObject(GUI_FONT))
+    SetBkMode(hdc, TRANSPARENT)
+    TextOut(hdc, 16, 20, "Alt + B で Pause キーを送ります。", -1)
+    TextOut(hdc, 16, 52, g_note, -1)
+    EndPaint(hWnd, VarPtr(ps))
+End Sub
+
+
+' ------------------------------------------------------------
+' 窓
+' ------------------------------------------------------------
+
+Function GuiWndProc(hWnd As Long, message As DWord, wParam As Long, lParam As Long) As Long
+    GuiWndProc = 0
+    If message = WM_HOTKEY Then
+        If wParam = HOTKEY_ID Then OnHotKey()
+    ElseIf message = WM_TIMER Then
+        If wParam = TIMER_ID Then OnTimer()
+    ElseIf message = WM_PAINT Then
+        OnPaint(hWnd)
+    ElseIf message = WM_DESTROY Then
+        UnregisterHotKey(hWnd, HOTKEY_ID)
+        PostQuitMessage(0)
+    Else
+        GuiWndProc = DefWindowProcA(hWnd, message, wParam, lParam)
+    End If
+End Function
+
+Sub RegisterGuiClass()
+    lstrcpy(VarPtr(g_class), "ActBa64AltBPause")
+    g_wc.cbSize = SizeOf(WNDCLASSEX)
+    g_wc.lpfnWndProc = AddressOf(GuiWndProc)
+    g_wc.hInstance = GetModuleHandleA(0)
+    g_wc.hCursor = LoadCursorA(0, MAKEINTRESOURCE(IDC_ARROW))
+    g_wc.hbrBackground = COLOR_BTNFACE + 1
+    g_wc.lpszClassName = VarPtr(g_class)
+    RegisterClassExA(VarPtr(g_wc))
+End Sub
+
+Sub CreateGuiWindow()
+    Dim rc As RECT
+    lstrcpy(VarPtr(g_title), "Alt+B -> Pause")
+    SetRect(rc, 0, 0, CLIENT_W, CLIENT_H)
+    AdjustWindowRect(rc, WIN_STYLE, FALSE)
+    g_hwnd = CreateWindowExA(0, VarPtr(g_class), VarPtr(g_title), WIN_STYLE, 100, 100, rc.right - rc.left, rc.bottom - rc.top, 0, 0, GetModuleHandleA(0), 0)
+End Sub
+
+Sub MessageLoop()
+    Dim msg As MSG
+    While GetMessageA(VarPtr(msg), 0, 0, 0) > 0
+        TranslateMessage(VarPtr(msg))
+        DispatchMessageA(VarPtr(msg))
+    Wend
+End Sub
+
+Sub AltBPauseRun()
+    RegisterGuiClass()
+    CreateGuiWindow()
+    If g_hwnd = 0 Then Exit Sub
+    If RegisterHotKey(g_hwnd, HOTKEY_ID, MOD_ALT Or MOD_NOREPEAT, Asc("B")) = 0 Then
+        g_note = "Alt + B はほかのアプリが使っています。"
+    Else
+        g_note = "待機中…"
+    End If
+    MessageLoop()
+End Sub
+
+AltBPauseRun()
