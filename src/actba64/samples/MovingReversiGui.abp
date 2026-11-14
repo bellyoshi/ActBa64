@@ -1,0 +1,205 @@
+' ============================================================
+' Moving Reversi - GUI version (two players at one mouse)
+'
+' The rules are in the header of MovingReversiconsole.abp.
+' The game logic is shared with the console version through
+' MovingReversiBoard.abp and MovingReversiMove.abp.
+'
+' Mouse:
+'   Click an empty square      Place a new piece.
+'   Click one of your pieces   Select it (click it again to cancel),
+'   then an adjacent empty     and move it there.
+'   square
+'
+' Yellow dots mark the legal squares: placements, or the moves of
+' the selected piece.
+'
+' Buttons: New game / Quit
+'
+' Build:
+'   actba64.exe samples\MovingReversiGui.abp -o samples\MovingReversiGui.exe
+' ============================================================
+
+#USEWINDOW=1
+
+Const EMPTY = 0
+Const BLACK = 1
+Const WHITE = 2
+
+Const CELL = 48
+Const MARGIN = 16
+Const BOARD_PX = 384
+Const TEXT_Y = 410
+Const BUTTON_Y = 478
+Const BUTTON_W = 120
+Const BUTTON_H = 28
+Const CLIENT_W = 416
+Const CLIENT_H = 522
+Const ID_NEW = 101
+Const ID_QUIT = 102
+Const GUI_FONT = 17
+Const WIN_STYLE = WS_OVERLAPPED Or WS_CAPTION Or WS_SYSMENU Or WS_MINIMIZEBOX Or WS_CLIPCHILDREN Or WS_VISIBLE
+
+Declare Function SetRect Lib "user32.dll" (ByRef lprc As RECT, ByVal xLeft As Long, ByVal yTop As Long, ByVal xRight As Long, ByVal yBottom As Long) As Long
+
+Const COLOR_BOARD = &H008000
+Const COLOR_BLACK = &H000000
+Const COLOR_WHITE = &HFFFFFF
+Const COLOR_HINT = &H00FFFF
+Const COLOR_SELECT = &H00A0FF
+
+Dim board[7, 7] As Long
+
+Dim dx[7] As Long
+Dim dy[7] As Long
+
+Dim player As Long
+Dim passCount As Long
+Dim gameOver As Long
+Dim selX As Long
+Dim selY As Long
+Dim note As String
+
+Dim g_hwnd As Long
+Dim g_wc As WNDCLASSEX
+Dim g_class(31) As Byte
+Dim g_title(31) As Byte
+
+#include "MovingReversiBoard.abp"
+#include "MovingReversiMove.abp"
+
+
+' ------------------------------------------------------------
+' Turn handling
+' ------------------------------------------------------------
+
+Function PlayerName(p As Long) As String
+    If p = BLACK Then
+        PlayerName = "Black"
+    Else
+        PlayerName = "White"
+    End If
+End Function
+
+Function CanAct(p As Long) As Long
+    CanAct = FALSE
+    If HasPlace(p) Then CanAct = TRUE
+    If HasMove(p) Then CanAct = TRUE
+End Function
+
+' A player who cannot place or move passes. Two passes in a row
+' end the game.
+Sub ResolvePasses()
+    While gameOver = 0 And CanAct(player) = FALSE
+        note = note + PlayerName(player) + " passes. "
+        passCount = passCount + 1
+        If passCount >= 2 Then gameOver = 1
+        If gameOver = 0 Then player = Opponent(player)
+    Wend
+End Sub
+
+Sub NewGame()
+    InitBoard()
+    player = BLACK
+    passCount = 0
+    gameOver = 0
+    selX = -1
+    note = "Click a square to place, or your piece to move."
+    ResolvePasses()
+End Sub
+
+Sub EndTurn()
+    selX = -1
+    passCount = 0
+    player = Opponent(player)
+    note = ""
+    ResolvePasses()
+End Sub
+
+
+' ------------------------------------------------------------
+' Clicks on the board
+' ------------------------------------------------------------
+
+Sub SelectPiece(cx As Long, cy As Long)
+    selX = cx
+    selY = cy
+    note = "Selected. Click an adjacent empty square."
+End Sub
+
+Sub TryMove(cx As Long, cy As Long)
+    If MovePiece(selX, selY, cx, cy, player) Then
+        EndTurn()
+    Else
+        note = "Illegal move: one step, to empty, must flip."
+    End If
+End Sub
+
+Sub ClickWithSelection(cx As Long, cy As Long)
+    If cx = selX And cy = selY Then
+        selX = -1
+        note = "Selection cancelled."
+    ElseIf board[cx, cy] = player Then
+        SelectPiece(cx, cy)
+    Else
+        TryMove(cx, cy)
+    End If
+End Sub
+
+Sub ClickNoSelection(cx As Long, cy As Long)
+    If board[cx, cy] = player Then
+        SelectPiece(cx, cy)
+    ElseIf PlacePiece(cx, cy, player) Then
+        EndTurn()
+    Else
+        note = "Illegal placement: it must flip a piece."
+    End If
+End Sub
+
+Sub OnCellClick(cx As Long, cy As Long)
+    If gameOver <> 0 Then Exit Sub
+    If selX >= 0 Then
+        ClickWithSelection(cx, cy)
+    Else
+        ClickNoSelection(cx, cy)
+    End If
+End Sub
+
+Function HitCell(px As Long, py As Long, ByRef cx As Long, ByRef cy As Long) As Long
+    HitCell = FALSE
+    If px < MARGIN Or py < MARGIN Then Exit Function
+    cx = (px - MARGIN) \ CELL
+    cy = (py - MARGIN) \ CELL
+    HitCell = IsInside(cx, cy)
+End Function
+
+
+' ------------------------------------------------------------
+' Status text
+' ------------------------------------------------------------
+
+Function WinnerText() As String
+    Dim b As Long
+    Dim w As Long
+    b = CountPieces(BLACK)
+    w = CountPieces(WHITE)
+    WinnerText = "Draw"
+    If b > w Then WinnerText = "Black wins"
+    If w > b Then WinnerText = "White wins"
+End Function
+
+Function StatusLine() As String
+    If gameOver = 0 Then
+        StatusLine = PlayerName(player) + " to play"
+    Else
+        StatusLine = "Game over - " + WinnerText()
+    End If
+End Function
+
+Function CountLine() As String
+    CountLine = "Black:" + Str$(CountPieces(BLACK)) + "    White:" + Str$(CountPieces(WHITE))
+End Function
+
+#include "MovingReversiGuiDraw.abp"
+
+MovingReversiRun()

@@ -1,0 +1,216 @@
+' MovingReversiGuiDraw - 描画、ボタン、ウィンドウ手続き
+
+
+' ------------------------------------------------------------
+' Drawing
+' ------------------------------------------------------------
+
+Sub FillBox(hdc As Long, l As Long, t As Long, r As Long, b As Long, color As Long)
+    Dim rc As RECT
+    Dim brush As Long
+    SetRect(rc, l, t, r, b)
+    brush = CreateSolidBrush(color)
+    FillRect(hdc, VarPtr(rc), brush)
+    DeleteObject(brush)
+End Sub
+
+Sub DrawEllipse(hdc As Long, l As Long, t As Long, r As Long, b As Long, color As Long)
+    Dim brush As Long
+    Dim oldBrush As Long
+    brush = CreateSolidBrush(color)
+    oldBrush = SelectObject(hdc, brush)
+    Ellipse(hdc, l, t, r, b)
+    SelectObject(hdc, oldBrush)
+    DeleteObject(brush)
+End Sub
+
+Sub DrawDisk(hdc As Long, cx As Long, cy As Long, color As Long)
+    Dim px As Long
+    Dim py As Long
+    px = MARGIN + cx * CELL
+    py = MARGIN + cy * CELL
+    DrawEllipse(hdc, px + 4, py + 4, px + CELL - 4, py + CELL - 4, color)
+End Sub
+
+Sub DrawDot(hdc As Long, cx As Long, cy As Long, color As Long)
+    Dim px As Long
+    Dim py As Long
+    px = MARGIN + cx * CELL + CELL \ 2
+    py = MARGIN + cy * CELL + CELL \ 2
+    DrawEllipse(hdc, px - 5, py - 5, px + 5, py + 5, color)
+End Sub
+
+Sub DrawSelection(hdc As Long, cx As Long, cy As Long)
+    Dim px As Long
+    Dim py As Long
+    px = MARGIN + cx * CELL
+    py = MARGIN + cy * CELL
+    FillBox(hdc, px + 1, py + 1, px + CELL, py + CELL, COLOR_SELECT)
+End Sub
+
+Sub DrawGrid(hdc As Long)
+    Dim i As Long
+    FillBox(hdc, MARGIN, MARGIN, MARGIN + BOARD_PX, MARGIN + BOARD_PX, COLOR_BOARD)
+    For i = 0 To 8
+        MoveToEx(hdc, MARGIN + i * CELL, MARGIN, 0)
+        LineTo(hdc, MARGIN + i * CELL, MARGIN + BOARD_PX + 1)
+        MoveToEx(hdc, MARGIN, MARGIN + i * CELL, 0)
+        LineTo(hdc, MARGIN + BOARD_PX + 1, MARGIN + i * CELL)
+    Next
+End Sub
+
+' A legal square for the current player: a placement, or a move
+' of the selected piece.
+Function IsHint(x As Long, y As Long) As Long
+    If selX >= 0 Then
+        IsHint = CanMove(selX, selY, x, y, player)
+    Else
+        IsHint = CanPlace(x, y, player)
+    End If
+End Function
+
+Sub DrawCell(hdc As Long, x As Long, y As Long)
+    If x = selX And y = selY Then DrawSelection(hdc, x, y)
+    If board[x, y] = BLACK Then DrawDisk(hdc, x, y, COLOR_BLACK)
+    If board[x, y] = WHITE Then DrawDisk(hdc, x, y, COLOR_WHITE)
+    If gameOver <> 0 Then Exit Sub
+    If IsHint(x, y) Then DrawDot(hdc, x, y, COLOR_HINT)
+End Sub
+
+Sub DrawBoard(hdc As Long)
+    Dim x As Long
+    Dim y As Long
+    DrawGrid(hdc)
+    For y = 0 To 7
+        For x = 0 To 7
+            DrawCell(hdc, x, y)
+        Next
+    Next
+End Sub
+
+Sub DrawTextLine(hdc As Long, y As Long, s As String)
+    TextOut(hdc, MARGIN, y, s, Len(s))
+End Sub
+
+Sub DrawStatus(hdc As Long)
+    SelectObject(hdc, GetStockObject(GUI_FONT))
+    SetBkMode(hdc, TRANSPARENT)
+    DrawTextLine(hdc, TEXT_Y, StatusLine())
+    DrawTextLine(hdc, TEXT_Y + 20, CountLine())
+    DrawTextLine(hdc, TEXT_Y + 40, note)
+End Sub
+
+Sub OnPaint(hWnd As Long)
+    Dim ps As PAINTSTRUCT
+    Dim hdc As Long
+    hdc = BeginPaint(hWnd, VarPtr(ps))
+    DrawBoard(hdc)
+    DrawStatus(hdc)
+    EndPaint(hWnd, VarPtr(ps))
+End Sub
+
+Sub Redraw()
+    SetWindowText(g_hwnd, "Moving Reversi - " + StatusLine())
+    InvalidateRect(g_hwnd, 0, TRUE)
+End Sub
+
+
+' ------------------------------------------------------------
+' Input
+' ------------------------------------------------------------
+
+Sub OnLButtonDown(lParam As Long)
+    Dim cx As Long
+    Dim cy As Long
+    If HitCell(lParam And &HFFFF, (lParam >> 16) And &HFFFF, cx, cy) = FALSE Then Exit Sub
+    OnCellClick(cx, cy)
+    Redraw()
+End Sub
+
+Sub OnCommand(wParam As Long)
+    If (wParam And &HFFFF) = ID_NEW Then
+        NewGame()
+        Redraw()
+    End If
+    If (wParam And &HFFFF) = ID_QUIT Then DestroyWindow(g_hwnd)
+End Sub
+
+Sub OnInput(hWnd As Long, message As DWord, wParam As Long, lParam As Long)
+    If message = WM_PAINT Then OnPaint(hWnd)
+    If message = WM_LBUTTONDOWN Then OnLButtonDown(lParam)
+    If message = WM_COMMAND Then OnCommand(wParam)
+End Sub
+
+Function OtherMessage(hWnd As Long, message As DWord, wParam As Long, lParam As Long) As Long
+    OtherMessage = 0
+    If message = WM_DESTROY Then
+        PostQuitMessage(0)
+    Else
+        OtherMessage = DefWindowProcA(hWnd, message, wParam, lParam)
+    End If
+End Function
+
+Function GuiWndProc(hWnd As Long, message As DWord, wParam As Long, lParam As Long) As Long
+    If message = WM_PAINT Or message = WM_LBUTTONDOWN Or message = WM_COMMAND Then
+        OnInput(hWnd, message, wParam, lParam)
+        GuiWndProc = 0
+    Else
+        GuiWndProc = OtherMessage(hWnd, message, wParam, lParam)
+    End If
+End Function
+
+
+' ------------------------------------------------------------
+' Window
+' ------------------------------------------------------------
+
+Sub RegisterGuiClass()
+    lstrcpy(VarPtr(g_class), "ActBa64MovingReversi")
+    g_wc.cbSize = SizeOf(WNDCLASSEX)
+    g_wc.lpfnWndProc = AddressOf(GuiWndProc)
+    g_wc.hInstance = GetModuleHandleA(0)
+    g_wc.hCursor = LoadCursorA(0, MAKEINTRESOURCE(IDC_ARROW))
+    g_wc.hbrBackground = COLOR_BTNFACE + 1
+    g_wc.lpszClassName = VarPtr(g_class)
+    RegisterClassExA(VarPtr(g_wc))
+End Sub
+
+Sub CreateGuiWindow()
+    Dim rc As RECT
+    Dim w As Long
+    lstrcpy(VarPtr(g_title), "Moving Reversi")
+    SetRect(rc, 0, 0, CLIENT_W, CLIENT_H)
+    AdjustWindowRect(rc, WIN_STYLE, FALSE)
+    w = rc.right - rc.left
+    g_hwnd = CreateWindowExA(0, VarPtr(g_class), VarPtr(g_title), WIN_STYLE, 80, 80, w, rc.bottom - rc.top, 0, 0, GetModuleHandleA(0), 0)
+End Sub
+
+Sub CreateButton(caption As String, x As Long, id As Long)
+    Dim h As Long
+    h = CreateWindowExA(0, "BUTTON", caption, WS_CHILD Or WS_VISIBLE Or BS_PUSHBUTTON, x, BUTTON_Y, BUTTON_W, BUTTON_H, g_hwnd, id, GetModuleHandleA(0), 0)
+    SendMessageA(h, WM_SETFONT, GetStockObject(GUI_FONT), TRUE)
+End Sub
+
+Sub CreateButtons()
+    CreateButton("New game", MARGIN, ID_NEW)
+    CreateButton("Quit", CLIENT_W - MARGIN - BUTTON_W, ID_QUIT)
+End Sub
+
+Sub MessageLoop()
+    Dim msg As MSG
+    While GetMessageA(VarPtr(msg), 0, 0, 0) > 0
+        TranslateMessage(VarPtr(msg))
+        DispatchMessageA(VarPtr(msg))
+    Wend
+End Sub
+
+Sub MovingReversiRun()
+    InitDirections()
+    NewGame()
+    RegisterGuiClass()
+    CreateGuiWindow()
+    If g_hwnd = 0 Then Exit Sub
+    CreateButtons()
+    Redraw()
+    MessageLoop()
+End Sub
