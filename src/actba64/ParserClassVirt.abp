@@ -1,0 +1,251 @@
+' ParserClassVirt - 中身のある Virtual / Override（ユーザーの vtable）
+'
+' 中身のある Virtual を持つ Class は、先頭に隠しフィールド __vptr を置き、
+' vtable を埋める隠しメソッド Class__Vt を持つ（AstLowerVt）。
+' 中身の無い Virtual だけの Class は今までどおり COM インターフェース。
+
+' ---- 字句の先読み ----
+
+Function PvKw(p As *Parser, pos As Long, kw As *Byte) As Long
+    PvKw = ParseIdentIsAt(p, pos, kw)
+End Function
+
+Function PvIsProc(p As *Parser, pos As Long) As Long
+    Dim kSub(KW_SHORT_LEN - 1) As Byte
+    Dim kFun(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kSub), "sub")
+    lstrcpy(VarPtr(kFun), "function")
+    PvIsProc = 0
+    If PvKw(p, pos, VarPtr(kSub)) <> 0 Or PvKw(p, pos, VarPtr(kFun)) <> 0 Then PvIsProc = 1
+End Function
+
+' 次のメンバの頭（Sub / Function / Virtual / Override）なら 1
+Function PvIsMember(p As *Parser, pos As Long) As Long
+    Dim kVirt(KW_LEN - 1) As Byte
+    Dim kOvr(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kVirt), "virtual")
+    lstrcpy(VarPtr(kOvr), "override")
+    PvIsMember = PvIsProc(p, pos)
+    If PvKw(p, pos, VarPtr(kVirt)) <> 0 Or PvKw(p, pos, VarPtr(kOvr)) <> 0 Then PvIsMember = 1
+End Function
+
+Function PvIsEnd(p As *Parser, pos As Long) As Long
+    Dim kEnd(KW_SHORT_LEN - 1) As Byte
+    lstrcpy(VarPtr(kEnd), "end")
+    PvIsEnd = PvKw(p, pos, VarPtr(kEnd))
+End Function
+
+Function PvIsEndClass(p As *Parser, pos As Long) As Long
+    Dim kClass(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kClass), "class")
+    PvIsEndClass = 0
+    If PvIsEnd(p, pos) <> 0 And PvKw(p, pos + 1, VarPtr(kClass)) <> 0 Then PvIsEndClass = 1
+End Function
+
+' End / Exit / * は次の語と組（End Sub、Exit Sub、*Function）。組なら 1
+Function PvIsPair(p As *Parser, pos As Long) As Long
+    Dim kExit(KW_SHORT_LEN - 1) As Byte
+    lstrcpy(VarPtr(kExit), "exit")
+    PvIsPair = PvIsEnd(p, pos)
+    If PvKw(p, pos, VarPtr(kExit)) <> 0 Then PvIsPair = 1
+    If ParseTokKindAt(p, pos) = TK_STAR Then PvIsPair = 1
+End Function
+
+' End の後ろ。Sub / Function なら本体あり（1）、Class なら本体なし（0）、ほかは続ける（-1）
+Function PvAfterEnd(p As *Parser, pos As Long) As Long
+    Dim kClass(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kClass), "class")
+    PvAfterEnd = -1
+    If PvIsProc(p, pos) <> 0 Then PvAfterEnd = 1
+    If PvKw(p, pos, VarPtr(kClass)) <> 0 Then PvAfterEnd = 0
+End Function
+
+Function PvScanStep(p As *Parser, ByRef pos As Long) As Long
+    PvScanStep = 0
+    If ParseTokKindAt(p, pos) = TK_EOF Then Exit Function
+    If PvIsMember(p, pos) <> 0 Then Exit Function
+    PvScanStep = -1
+    If PvIsEnd(p, pos) <> 0 Then PvScanStep = PvAfterEnd(p, pos + 1)
+    pos = pos + 1 + PvIsPair(p, pos)
+End Function
+
+' procPos は Virtual / Override の次の Sub / Function。見出しの後ろに本体（End Sub / End Function）が
+' 次のメンバより先に来れば 1
+Function ParseVirtHasBodyAt(p As *Parser, procPos As Long) As Long
+    Dim pos As Long
+    pos = procPos + 1
+    ParseVirtHasBodyAt = -1
+    While ParseVirtHasBodyAt < 0
+        ParseVirtHasBodyAt = PvScanStep(p, pos)
+    Wend
+End Function
+
+' Class 本体の 1 語。中身のある Virtual なら 1、End Class なら 0、ほかは -1
+Function PvClassStep(p As *Parser, ByRef pos As Long) As Long
+    Dim kVirt(KW_LEN - 1) As Byte
+    lstrcpy(VarPtr(kVirt), "virtual")
+    PvClassStep = 0
+    If ParseTokKindAt(p, pos) = TK_EOF Or PvIsEndClass(p, pos) <> 0 Then Exit Function
+    PvClassStep = -1
+    If PvKw(p, pos, VarPtr(kVirt)) <> 0 And ParseVirtHasBodyAt(p, pos + 1) = 1 Then PvClassStep = 1
+    pos = pos + 1
+End Function
+
+' 今の位置から End Class までに中身のある Virtual があれば 1
+Function ParseClassScanVt(p As *Parser) As Long
+    Dim pos As Long
+    pos = p->pos
+    ParseClassScanVt = -1
+    While ParseClassScanVt < 0
+        ParseClassScanVt = PvClassStep(p, pos)
+    Wend
+End Function
+
+' p->pos が Sub / Function。その次のメソッド名を写す（位置は動かさない）
+Function PvMethName(p As *Parser, name As *Byte) As Long
+    Dim save As Long
+    save = p->pos
+    p->pos = p->pos + 1
+    PvMethName = 0
+    If ParseCopyIdent(p, name) Then PvMethName = 1
+    p->pos = save
+End Function
+
+' ---- Class の開き（Inherits の後） ----
+
+Function PvVtFieldAcc(types As *TypeTable, ti As Long) As boolean
+    PvVtFieldAcc = false
+    If AccSetField(types->nFields - 1, ACC_PRIVATE, ti) <> 0 Then PvVtFieldAcc = true
+End Function
+
+Function ParseClassVtField(p As *Parser, ti As Long) As boolean
+    Dim fname(SYM_NAME_LEN - 1) As Byte
+    Dim types As *TypeTable
+    ParseClassVtField = false
+    lstrcpy(VarPtr(fname), "__vptr")
+    types = PsTypes(p)
+    If TyAddField(types, ti, VarPtr(fname), TyPtrSize(), 1, -1) Then ParseClassVtField = PvVtFieldAcc(types, ti)
+    If Not ParseClassVtField Then p->err = 1
+End Function
+
+' vtable を最初に持つ Class。__vptr を先頭（オフセット 0）に置くため Inherits は使えない
+Function ParseClassVtRoot(p As *Parser, ti As Long, parent As Long) As boolean
+    ParseClassVtRoot = false
+    If parent >= 0 Then
+        ParseFail(p, "a Class that first has Virtual with a body cannot use Inherits")
+        Exit Function
+    End If
+    ParseClassVtRoot = ParseClassVtField(p, ti)
+End Function
+
+' 親がユーザーの vtable を持つか、本体に中身のある Virtual があれば、ユーザーの vtable の Class にする
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseClassVtSetup(p As *Parser, ti As Long, ByRef isIface As Long) As boolean
+    Dim parent As Long
+    ParseClassVtSetup = true
+    parent = AccParent(ti)
+    If VtIsUser(parent) = 0 And ParseClassScanVt(p) = 0 Then Exit Function
+    isIface = 0
+    If VtIsUser(parent) = 0 Then ParseClassVtSetup = ParseClassVtRoot(p, ti, parent)
+    If VtSetUser(ti) = 0 Then ParseClassVtSetup = false
+End Function
+
+' ---- 本体のメンバ ----
+
+Sub PvFailName(p As *Parser, head As String, name As *Byte, tail As String)
+    ParseFail(p, head + "'" + MakeStr(name) + "'" + tail)
+End Sub
+
+' 親にもう同じ名前の Virtual があればエラー。無ければ 1
+Function PvSlotIsNew(p As *Parser, ti As Long, name As *Byte) As Long
+    PvSlotIsNew = 1
+    If TyFindVirt(PsTypes(p), ti, name) < 0 Then Exit Function
+    PvFailName(p, "", name, " is already Virtual in the base class: use Override")
+    PvSlotIsNew = 0
+End Function
+
+' Virtual Sub / Function（中身あり）。新しいスロットを足す。1=正常 0=エラー
+Function PvAddSlot(p As *Parser, ti As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    PvAddSlot = 0
+    If PvMethName(p, VarPtr(name)) = 0 Then Exit Function
+    If PvSlotIsNew(p, ti, VarPtr(name)) = 0 Then Exit Function
+    If TyAddVirt(PsTypes(p), ti, VarPtr(name)) >= 0 Then PvAddSlot = 1
+    If PvAddSlot = 0 Then p->err = 1
+End Function
+
+' ユーザーの vtable の Class の Virtual は本体が要る。1=正常 0=エラー
+Function PvVirtUser(p As *Parser, ti As Long) As Long
+    PvVirtUser = 0
+    If PvIsProc(p, p->pos) = 0 Or ParseVirtHasBodyAt(p, p->pos) <> 1 Then
+        ParseFail(p, "Virtual in this Class needs Sub / Function with a body")
+        Exit Function
+    End If
+    PvVirtUser = PvAddSlot(p, ti)
+End Function
+
+' Virtual の後ろ（p->pos は Sub / Function）。1=中身あり（呼び元がメソッドとして読む） 0=宣言を読んだ -1=エラー
+Function ParseClassVirtItem(p As *Parser, ti As Long, ByRef isIface As Long, access As Long) As Long
+    ParseClassVirtItem = -1
+    If VtIsUser(ti) <> 0 Then
+        If PvVirtUser(p, ti) <> 0 Then ParseClassVirtItem = 1
+        Exit Function
+    End If
+    If Not ParseClassVirtDecl(p, access) Then Exit Function
+    isIface = 1
+    ParseClassVirtItem = 0
+End Function
+
+' Override の後ろ（p->pos は Sub / Function）。親の Virtual が要る。1=正常 0=エラー
+Function ParseClassOverride(p As *Parser, ti As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseClassOverride = 0
+    If PvIsProc(p, p->pos) = 0 Or PvMethName(p, VarPtr(name)) = 0 Then
+        ParseFail(p, "Override needs Sub / Function")
+        Exit Function
+    End If
+    If VtIsUser(ti) <> 0 And TyFindVirt(PsTypes(p), ti, VarPtr(name)) >= 0 Then ParseClassOverride = 1
+    If ParseClassOverride = 0 Then PvFailName(p, "Override: no Virtual ", VarPtr(name), " in the base class")
+End Function
+
+' 普通の Sub / Function が親の Virtual と同じ名前ならエラー。1=正常 0=エラー
+Function ParseClassPlainOk(p As *Parser, ti As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    ParseClassPlainOk = 1
+    If VtIsUser(ti) = 0 Then Exit Function
+    If PvMethName(p, VarPtr(name)) = 0 Then Exit Function
+    If TyFindVirt(PsTypes(p), ti, VarPtr(name)) < 0 Then Exit Function
+    PvFailName(p, "", VarPtr(name), " is Virtual: write Override")
+    ParseClassPlainOk = 0
+End Function
+
+' ---- Class の閉じ ----
+
+Sub PvVtName(className As *Byte, dst As *Byte)
+    lstrcpy(dst, className)
+    lstrcat(dst, "__Vt")
+End Sub
+
+Function PvLinkVt(p As *Parser, nMeth As Long, ByRef nPrev As Long) As boolean
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = p->ast
+    nodes = ast->nodes
+    nodes[nMeth].num = nodes[nMeth].num Or AST_FUNC_VTINIT
+    nodes[nPrev].nxt = nMeth
+    nPrev = nMeth
+    PvLinkVt = true
+End Function
+
+' vtable を埋める隠しメソッド Class__Vt を足す
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseClassAddVt(p As *Parser, name As *Byte, ti As Long, ByRef nPrev As Long) As boolean
+    Dim mangled(MANGLED_LEN - 1) As Byte
+    Dim nMeth As Long
+    ParseClassAddVt = true
+    If VtIsUser(ti) = 0 Then Exit Function
+    ParseClassAddVt = false
+    PvVtName(name, VarPtr(mangled))
+    nMeth = ParseMakeEmptyClassFunc(p, VarPtr(mangled), 1)
+    If nMeth >= 0 Then ParseClassAddVt = PvLinkVt(p, nMeth, nPrev)
+End Function

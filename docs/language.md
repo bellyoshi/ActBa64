@@ -394,7 +394,33 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 - デストラクタ `Sub ~ClassName()` → 局所は手続き末尾、モジュール大域は終了前に呼出
 - ctor/dtor 省略時は空の無引数版を暗黙生成
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=This`、32bit は stdcall の第1引数）
-- `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。親に `Virtual` がある Class は COM インターフェースとして空の ctor/dtor を付けない。`Virtual` 呼び出しは vtable
+- `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。`Virtual` 呼び出しは vtable
+- 中身の無い `Virtual Sub M(...)` / `Virtual Function M(...) As T`（宣言だけ）の Class は COM インターフェース。空の ctor/dtor を付けず、それを `Inherits` した Class も同じ
+- 中身のある `Virtual` / `Override`（ユーザーの vtable）:
+
+```
+Class Form
+    Public
+    Sub Form()
+        InitializeComponent()        ' 作っているオブジェクトの Class の Override を呼ぶ
+    End Sub
+    Virtual Sub InitializeComponent()
+    End Sub
+End Class
+
+Class Form1
+    Inherits Form
+Private
+    Override Sub InitializeComponent()
+        ' ...
+    End Sub
+End Class
+```
+
+  - 本体に中身のある `Virtual` がある Class は、先頭（オフセット 0）に隠しフィールド `__vptr` を持つ。そのため最初に `Virtual` を持つ Class は `Inherits` できない（子孫は `Inherits` してよい）
+  - 子は `Override Sub` / `Override Function` で差し替える。親に同じ名前の `Virtual` が無い `Override`、`Override` を付けずに親の `Virtual` と同じ名前の `Sub` / `Function` を書くのはコンパイルエラー。ユーザーの vtable の Class の `Virtual` は本体が要る（宣言だけは COM 用）
+  - vtable は `Dim` / `New` / メンバ Class でオブジェクトを作るとき、ctor より前に設定する。基底の ctor の中の呼び出しも、作っている Class の `Override` へ行く。`Private` の `Override` でも基底から呼べる
+  - `obj.M()`、`p->M()`、メソッド内の `M()` は vtable 経由。`Super.M()` は親の定義を直接呼ぶ
 - `Super.Name(args)` は親の `Name` を `This` 付きで直接呼ぶ。`Super.Parent(args)` は親 ctor、`Super.~Parent()` は親 dtor
 - 基底の ctor/dtor は自動で呼ぶ。ctor は 基底 ctor → メンバ ctor → 本体、dtor は 本体 → メンバ dtor → 基底 dtor の順。省略した ctor/dtor（暗黙の空の版）でも同じ
 - 本体のどこかに `Super.Parent(...)` があれば基底 ctor を、`Super.~Parent()` があれば基底 dtor を自動では呼ばない（二重に呼ばない）。呼ぶのは書いた位置
@@ -941,7 +967,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 
 ## 10. 非対応（意図的）
 
-- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは COM vtable。`Super` / `New` / `Delete` は対応）
+- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは vtable（COM と、中身のある `Virtual` / `Override`）。`Super` / `New` / `Delete` は対応）
 - `Single` の四則演算は Double で計算して Single に戻す（`Print` は `StrS$` で有効 6 桁）。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールド、`Print` の自動変換は IEEE Double（64bit と `-actba32`）
 - ネスト手続き
 - `#resource` の MENU / DIALOG / VERSIONINFO（ICON / BITMAP 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）

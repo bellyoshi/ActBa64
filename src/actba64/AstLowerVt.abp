@@ -1,0 +1,179 @@
+' AstLowerVt - ユーザーの vtable（中身のある Virtual / Override）
+'
+' vtable は大域データに置く。隠しメソッド Class__Vt が vtable を埋め、This の先頭（__vptr）に指させる。
+' Class__Vt は Dim / New / メンバ Class で ctor より前に呼ぶ。基底の ctor の中でも、
+' 作っているオブジェクトの Class の Override が呼ばれる。
+' 呼び出しは COM と同じ call [ [This] + slot * ptr ]（LowExprCallMethodInvoke）
+
+Dim g_vtStmt As Long
+
+' ---- 大域データの場所（AstToIrBindMod から） ----
+
+Sub LowVtReserveOne(t As *TypeTable, ti As Long)
+    Dim counts As *Long
+    counts = t->typeVirtCount
+    g_globDataSize = LowAlign16(g_globDataSize)
+    VtSetOff(ti, g_globDataSize)
+    g_globDataSize = g_globDataSize + counts[ti] * TyPtrSize()
+End Sub
+
+Sub LowVtReserve(t As *TypeTable)
+    Dim ti As Long
+    ti = 0
+    While ti < t->nTypes
+        If VtIsUser(ti) <> 0 Then LowVtReserveOne(t, ti)
+        ti = ti + 1
+    Wend
+End Sub
+
+' ---- Class__Vt の本体 ----
+
+Function LowVtCount(ctx As *LowerCtx, ti As Long) As Long
+    Dim t As *TypeTable
+    Dim counts As *Long
+    t = AccCtxTypes(ctx)
+    counts = t->typeVirtCount
+    LowVtCount = counts[ti]
+End Function
+
+Sub LowVtSlotName(ctx As *LowerCtx, ti As Long, i As Long, dst As *Byte)
+    Dim t As *TypeTable
+    Dim names As *Byte
+    Dim firsts As *Long
+    t = AccCtxTypes(ctx)
+    names = t->virtNames
+    firsts = t->typeVirtFirst
+    lstrcpy(dst, VarPtr(names[(firsts[ti] + i) * TYNAME_LEN]))
+End Sub
+
+Sub LowVtTyName(ctx As *LowerCtx, ti As Long, dst As *Byte)
+    Dim t As *TypeTable
+    Dim names As *Byte
+    t = AccCtxTypes(ctx)
+    names = t->typeNames
+    lstrcpy(dst, VarPtr(names[ti * TYNAME_LEN]))
+End Sub
+
+' Class owner の name のラベル
+Function LowVtOwnerLab(ctx As *LowerCtx, owner As Long, name As *Byte) As Long
+    Dim cls(SYM_NAME_LEN - 1) As Byte
+    Dim buf(MANGLED_LEN - 1) As Byte
+    LowVtTyName(ctx, owner, VarPtr(cls))
+    LowMangleClass(VarPtr(cls), name, VarPtr(buf))
+    LowVtOwnerLab = LowFindFunc(ctx, VarPtr(buf))
+End Function
+
+' ti から見たスロット name の実体（いちばん派生した定義）のラベル
+Function LowVtImplLab(ctx As *LowerCtx, ti As Long, name As *Byte) As Long
+    Dim acc As Long, owner As Long
+    LowVtImplLab = -1
+    owner = AccMethOwner(ti, name, acc)
+    If owner >= 0 Then LowVtImplLab = LowVtOwnerLab(ctx, owner, name)
+    If LowVtImplLab < 0 Then LowerDiagError(ctx, g_vtStmt, "Virtual '" + MakeStr(name) + "' has no body")
+End Function
+
+' 積んだ値を rax の番地へ書く
+Sub LowVtPopStore(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+    IrEmit(ctx->list, OP_STORE_PTR, 0, 0)
+End Sub
+
+' 関数 lab の番地を大域データ off へ書く
+Sub LowVtStoreLab(ctx As *LowerCtx, lab As Long, off As Long)
+    IrEmit(ctx->list, OP_LEA_RAX_LAB, lab, 0)
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    IrEmit(ctx->list, OP_LEA_RAX_GLOB, off, 0)
+    LowVtPopStore(ctx)
+End Sub
+
+Function LowVtSlot(ctx As *LowerCtx, ti As Long, i As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim lab As Long
+    LowVtSlot = 0
+    LowVtSlotName(ctx, ti, i, VarPtr(name))
+    lab = LowVtImplLab(ctx, ti, VarPtr(name))
+    If lab < 0 Then Exit Function
+    LowVtStoreLab(ctx, lab, VtOff(ti) + i * TyPtrSize())
+    LowVtSlot = 1
+End Function
+
+' This->__vptr（オフセット 0）= vtable
+Function LowVtStoreThis(ctx As *LowerCtx, ti As Long) As Long
+    Dim off As Long, gl As Long
+    LowVtStoreThis = 0
+    If LowLookupThis(ctx, off, gl) = 0 Then Exit Function
+    IrEmit(ctx->list, OP_LEA_RAX_GLOB, VtOff(ti), 0)
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    LowEmitLoadOff(ctx->list, off, gl)
+    LowVtPopStore(ctx)
+    LowVtStoreThis = 1
+End Function
+
+Function LowVtFill(ctx As *LowerCtx, ti As Long) As Long
+    Dim i As Long
+    LowVtFill = 0
+    i = 0
+    While i < LowVtCount(ctx, ti)
+        If LowVtSlot(ctx, ti, i) = 0 Then Exit Function
+        i = i + 1
+    Wend
+    LowVtFill = LowVtStoreThis(ctx, ti)
+End Function
+
+' Class__Vt なら本体を出して 1（エラーは 0）。ほかの手続きなら -1
+Function LowEmitVtBody(ctx As *LowerCtx, stmt As Long) As Long
+    Dim nodes As *AstNode
+    nodes = AccCtxNodes(ctx)
+    LowEmitVtBody = -1
+    If (nodes[stmt].num And AST_FUNC_VTINIT) = 0 Then Exit Function
+    LowEmitVtBody = 1
+    g_vtStmt = stmt
+    If g_lowStub = 0 Then LowEmitVtBody = LowVtFill(ctx, g_lowClassTi)
+End Function
+
+' ---- オブジェクトを作る所 ----
+
+' Class__Vt のラベル。ユーザーの vtable の Class でなければ -1
+Function LowVtLab(ctx As *LowerCtx, ti As Long) As Long
+    Dim cls(SYM_NAME_LEN - 1) As Byte
+    Dim buf(MANGLED_LEN - 1) As Byte
+    LowVtLab = -1
+    If VtIsUser(ti) = 0 Then Exit Function
+    LowVtTyName(ctx, ti, VarPtr(cls))
+    PvVtName(VarPtr(cls), VarPtr(buf))
+    LowVtLab = LowFindFunc(ctx, VarPtr(buf))
+End Function
+
+' rax のオブジェクトに Class__Vt を呼ぶ
+Sub LowEmitVtCallRax(ctx As *LowerCtx, lab As Long)
+    Dim cb As Long
+    cb = LowCallBytes(1)
+    If cb > 0 Then IrEmit(ctx->list, OP_SUB_RSP, cb, 0)
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, 0, 0)
+    LowEmitLoadRegArgs(ctx->list, 1)
+    IrEmit(ctx->list, OP_CALL_LAB, lab, 0)
+    LowEmitCallFinish(ctx->list, cb)
+End Sub
+
+Sub LowDimVtEmit(ctx As *LowerCtx, vOff As Long, vGl As Long, lab As Long)
+    LowEmitLeaOff(ctx->list, vOff, vGl)
+    LowEmitVtCallRax(ctx, lab)
+End Sub
+
+Function LowDimVtGo(ctx As *LowerCtx, idx As Long, lab As Long) As boolean
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    LowDimVtGo = LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl))
+    If Not LowDimVtGo Then ctx->err = 1
+    If LowDimVtGo Then LowDimVtEmit(ctx, vOff, vGl, lab)
+End Function
+
+' Dim x As Class の ctor より前
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowDimVt(ctx As *LowerCtx, idx As Long, ti As Long) As boolean
+    Dim lab As Long
+    LowDimVt = true
+    lab = LowVtLab(ctx, ti)
+    If lab >= 0 Then LowDimVt = LowDimVtGo(ctx, idx, lab)
+End Function
