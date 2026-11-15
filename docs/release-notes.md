@@ -15,6 +15,30 @@ ActiveBasic 2.62 のソースを読む `-pAB2` モードを追加しました。
 - **ProjectEditor で -pAB2 を選べます。** Basic メニューの「ActiveBasic2構文(-pAB2)」で切り替えます。
   - 「N88BASIC構文(-pN88)」とは同時に選べません。
   - 保存していない新しい文書のままでも実行できます。
+- **Class で中身のある `Virtual` と `Override` を使えます。** 窓を Class として書ける `Forms.sbp` も追加しました。詳しくは [language.md](./language.md) の「3.3 Class」と「7.8 フォーム（Forms.sbp）」を見てください。
+
+### Class
+
+- 中身のある `Virtual` Sub / Function を書き、子の Class で `Override` して差し替えられます。
+  - 呼び出しは vtable を通るので、`obj.M()`、`p->M()`、メソッドの中の `M()` のどれでも子の版が呼ばれます。基底の ctor の中から呼んでも子の版が呼ばれます。
+  - 親に `Virtual` が無いのに `Override` を書くと、コンパイルエラーになります。
+  - 親の `Virtual` と同じ名前のメソッドを `Override` なしで書くと、コンパイルエラーになります。
+  - 中身の無い `Virtual` 宣言だけの Class は、これまでどおり COM インターフェースとして扱います。
+  - 最初に `Virtual` を持つ Class は、ほかの Class を `Inherits` できません。
+- 基底の ctor / dtor を自動で呼びます。
+  - ctor は「基底の ctor → メンバの ctor → 本体」、dtor は「本体 → メンバの dtor → 基底の dtor」の順に呼びます。ctor / dtor を省略したときも同じです。
+  - 本体に `Super.Parent(...)` / `Super.~Parent()` を書いたときは、自動では呼びません。
+  - 基底に引数なしの ctor が無いのに `Super.Parent(...)` を書かないと、コンパイルエラーになります。
+- フィールドの無い Class も `Dim` / `New` できます。これまでは「Dim UDT size 0」のエラーになっていました。
+
+### Forms.sbp
+
+- `#include <Forms.sbp>` で、窓を `Form` クラスの子として書けます。
+  - `Form` は `Left` / `Top` / `Width` / `Height` / `Caption` / `Handle` を持ちます。
+  - ctor が `InitializeComponent()` を呼ぶので、子は `Override` して値を入れます。
+  - メッセージは `WndProc(msg, wParam, lParam)` に届きます。子は `Override` し、扱わないメッセージを `Super.WndProc` へ渡します。
+  - `Application.Run(form)` は窓を出し、閉じるまでメッセージループを回します。
+- サンプル `src/actba64/samples/forms/`（`project1.abp` と `Form1.abp`）を追加しました。
 
 ### -pN88（N88-BASIC 構文）
 
@@ -51,6 +75,9 @@ ActiveBasic 2.62 のソースを読む `-pAB2` モードを追加しました。
 - `src/actba64/samples` に次のサンプルを追加しました。
   - `MovingReversiGui.abp`: 動くリバーシの GUI 版です。盤と手の処理はコンソール版と共有しています。
   - `AltBPause.abp`: Alt + B を押すと Pause キーを送ります。
+  - `circle.sbp`: N88BASIC 構文で円を描きます。
+- [language.md](./language.md) の `#USEWINDOW` の説明を直しました。`#USEWINDOW` は `.pj` に書いたときだけ効きます。GUI で画面への `Print` を使っても表示されないことも書き足しました。
+- 古いプロトタイプ（`src/prototype1`〜`4`）を削除しました。
 - [index.md](./index.md) に、動かないコードの報告先（GitHub Issues）を書きました。
 
 ## v0.0.6（v0.0.5 からの変更点）
