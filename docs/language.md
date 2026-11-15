@@ -393,6 +393,7 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 - コンストラクタ `Sub ClassName(...)` → `Dim obj As ClassName(args)` で自動呼出
 - デストラクタ `Sub ~ClassName()` → 局所は手続き末尾、モジュール大域は終了前に呼出
 - ctor/dtor 省略時は空の無引数版を暗黙生成
+- フィールドの無い Class も `Dim` / `New` できる（大きさは 1 バイト。中身の無い `Virtual` だけの COM インターフェースは除く）
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=This`、32bit は stdcall の第1引数）
 - `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。`Virtual` 呼び出しは vtable
 - 中身の無い `Virtual Sub M(...)` / `Virtual Function M(...) As T`（宣言だけ）の Class は COM インターフェース。空の ctor/dtor を付けず、それを `Inherits` した Class も同じ
