@@ -227,6 +227,25 @@ Function LowAddrIndexBasePtr(ctx As *LowerCtx, list As *IrList, typeTable As *Ty
     LowAddrIndexBasePtr = 1
 End Function
 
+' a[i] / a[i, j] の添字の個数が配列の次元数と違えばエラー（UDT 配列は添字 1 個のまま）
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowAddrIndexRankOk(ctx As *LowerCtx, idx As Long, vTy As Long, vTypeIdx As Long, i1 As Long) As boolean
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim nArgs As Long
+    LowAddrIndexRankOk = true
+    If Not LowIsArrTy(vTy) Or vTy = TY_UDT_ARR Then Exit Function
+    nArgs = 1
+    If i1 >= 0 Then nArgs = 2
+    If LowArrMatch(vTypeIdx, nArgs) <> 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, nodes[idx].left, VarPtr(name))
+    LowerDiagError(ctx, idx, "bad array index count '" + MakeStr(VarPtr(name)) + "'")
+    LowAddrIndexRankOk = false
+End Function
+
 Function LowAddrIndexBase(ctx As *LowerCtx, idx As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
@@ -254,6 +273,7 @@ Function LowAddrIndexBase(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     i1 = nodes[idx].extra
+    If Not LowAddrIndexRankOk(ctx, idx, vTy, vTypeIdx, i1) Then Exit Function
     If i1 >= 0 Then
         If vTy = TY_UDT_ARR Then
             ctx->err = 1
