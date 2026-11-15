@@ -58,7 +58,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 |---|---|---|
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 変数代入に加え、`Long`→`Byte`（呼び出し結果を含む）と引数の `String`→`VoidPtr`・`VoidPtr`→`Long` を warning（`As` で抑制）。数値リテラルは対象外。`Include\default` は抑制 |
 | `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の `+` `-` `*` `/` と符号反転は Double で計算して Single に戻す（Single どうしの `/` は Single）。`Print` の Single は `StrS$`（有効 6 桁。`4/3` は `1.33333`）。`Double` の配列要素と UDT フィールドは `-actba32` でも 8 バイト転送。`Print` の Double は 64bit と `-actba32` で `StrD$`。科学記法（`1.0e10`）は未対応 |
-| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、アクセス制御 | `Inherits` は親フィールドを先頭に置く。`Virtual` 呼び出しは COM vtable。`Super` は親関数の直接呼び出し（基底 ctor/dtor は自動では呼ばない）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。メソッドはマングル名 + 暗黙 `This` |
+| `Class` | `Inherits`、`Virtual`、`Super.Method`、`New`/`Delete`、アクセス制御 | `Inherits` は親フィールドを先頭に置く。`Virtual` 呼び出しは COM vtable。`Super` は親関数の直接呼び出し。基底 ctor/dtor は自動で呼ぶ（本体に `Super.Parent(...)` / `Super.~Parent()` があるときは呼ばない）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。メソッドはマングル名 + 暗黙 `This` |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |

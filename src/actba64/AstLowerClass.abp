@@ -4,6 +4,7 @@ Dim g_supLab As Long
 Dim g_supNArgs As Long
 Dim g_supParentTi As Long
 Dim g_memStmt As Long
+Dim g_lowStub As Long
 
 Function LowTakeThis(ctx As *LowerCtx, k As *Byte, ByRef off As Long, ByRef gl As Long, ByRef ty As Long, ByRef ti As Long, ByRef br As Long) As Long
     LowTakeThis = 0
@@ -216,11 +217,57 @@ Function LowMemCdWanted(ctx As *LowerCtx, stmt As Long, isDtor As Long) As Long
     LowMemCdWanted = AccSuffixIs(AccCtxTypes(ctx), g_lowClassTi, VarPtr(name), VarPtr(k))
 End Function
 
+' 基底の ctor は引数なしに合う定義を選ぶ
+Sub LowBaseCdName(ctx As *LowerCtx, parent As Long, isDtor As Long, dst As *Byte)
+    LowMemCdName(ctx, parent, isDtor, dst)
+    If isDtor = 0 Then OvlPickFull(ctx, dst, -1, 0, 1)
+End Sub
+
+Function LowBaseCtorOk(ctx As *LowerCtx, stmt As Long, parent As Long, name As *Byte) As Long
+    Dim t As *TypeTable
+    Dim names As *Byte
+    LowBaseCtorOk = 1
+    If LowNargsAt(LowFuncIndex(ctx, name)) <= 1 Then Exit Function
+    t = AccCtxTypes(ctx)
+    names = t->typeNames
+    LowerDiagError(ctx, stmt, "base class ctor requires arguments: call Super." + MakeStr(VarPtr(names[parent * TYNAME_LEN])) + "(...)")
+    LowBaseCtorOk = 0
+End Function
+
+Function LowBaseCdLab(ctx As *LowerCtx, stmt As Long, parent As Long, isDtor As Long) As Long
+    Dim buf(MANGLED_LEN - 1) As Byte
+    LowBaseCdName(ctx, parent, isDtor, VarPtr(buf))
+    LowBaseCdLab = LowFindFunc(ctx, VarPtr(buf))
+    If isDtor <> 0 Or LowBaseCdLab < 0 Then Exit Function
+    If LowBaseCtorOk(ctx, stmt, parent, VarPtr(buf)) = 0 Then LowBaseCdLab = -1
+End Function
+
+Function LowBaseCdFlag(isDtor As Long) As Long
+    LowBaseCdFlag = AST_FUNC_SUPER_CTOR
+    If isDtor <> 0 Then LowBaseCdFlag = AST_FUNC_SUPER_DTOR
+End Function
+
+' 本体に Super.Parent(...) / Super.~Parent() が無ければ基底の ctor / dtor を呼ぶ
+Function LowEmitBaseCd(ctx As *LowerCtx, stmt As Long, isDtor As Long) As Long
+    Dim nodes As *AstNode
+    Dim parent As Long
+    LowEmitBaseCd = 1
+    nodes = AccCtxNodes(ctx)
+    If (nodes[stmt].num And LowBaseCdFlag(isDtor)) <> 0 Then Exit Function
+    parent = AccParent(g_lowClassTi)
+    If parent < 0 Then Exit Function
+    LowEmitBaseCd = LowEmitElemGo(ctx, LowBaseCdLab(ctx, stmt, parent, isDtor), 0)
+End Function
+
+' ctor: 基底 → メンバ → 本体。dtor: 本体 → メンバ → 基底
 Function LowEmitMemCd(ctx As *LowerCtx, stmt As Long, isDtor As Long) As Long
     LowEmitMemCd = 1
     g_memStmt = stmt
+    If g_lowStub <> 0 Then Exit Function
     If LowMemCdWanted(ctx, stmt, isDtor) = 0 Then Exit Function
-    LowEmitMemCd = LowEmitMemFields(ctx, g_lowClassTi, isDtor)
+    If isDtor = 0 Then LowEmitMemCd = LowEmitBaseCd(ctx, stmt, 0)
+    If LowEmitMemCd <> 0 Then LowEmitMemCd = LowEmitMemFields(ctx, g_lowClassTi, isDtor)
+    If LowEmitMemCd <> 0 And isDtor <> 0 Then LowEmitMemCd = LowEmitBaseCd(ctx, stmt, 1)
     If ctx->err <> 0 Then LowEmitMemCd = 0
 End Function
 

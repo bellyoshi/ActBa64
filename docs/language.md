@@ -54,7 +54,7 @@ Print a +_
 |---|---|
 | `#console` | `Include\console\console.idx` を自動挿入し、CUI（コンソール）にする。`#console` が無ければ GUI。ただし `#n88basic` / `#prompt` でなく、画面への `Print`（`Print #` は除く）があれば `#console` とみなして CUI にする |
 | `#n88basic` / `#N88BASIC` / `#prompt` | N88BASIC 互換モード（[§1.6](#16-n88basic-モード)）。`#prompt` は完全別名 |
-| `#USEWINDOW=0\|1` | 1=GUI（`#console` より優先）。0 は上の `#console` の規則に従う。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
+| `#USEWINDOW=0\|1` | **`.pj` だけで有効**（[§1.4](#14-pjプロジェクト)）。`.abp` / `.sbp` に書いても読まない（その他 `#...` と同じく無視） |
 | `#strict` | 型の暗黙変換を warning（`As` で抑制）。`Long`→`Byte` はデータ欠落、引数の `String`→`VoidPtr` と `VoidPtr`→`Long` も含む |
 | `#include "path"` / `#include <path>` | ファイル挿入（深さ上限あり）。`"..."` はソース相対（絶対パス可）、`<...>` は `Include\` 配下を検索 |
 | `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` | 条件付きコンパイル（[§7.7](#77-条件付きコンパイル)） |
@@ -83,7 +83,7 @@ b.abp
 |---|---|
 | `#SOURCE` | 必須。続く行が入力 `.abp`（結合して 1 コンパイル単位） |
 | `#OUTPUT_RELEASE` | `.pj` からの相対出力パス。`-o` が無いとき使う（`-o` が優先） |
-| `#USEWINDOW` | サブシステム（既定 CUI。`#n88basic` で GUI） |
+| `#USEWINDOW` | `1` で GUI サブシステム。ソースの `#console` や画面への `Print` があっても GUI のまま。`0`（既定）は [§1.3](#13-ディレクティブ行) の `#console` の規則に従う。`#n88basic` / `#prompt` は値によらず GUI。GUI で画面への `Print` を使うと、出力は標準出力へ書くがコンソールが無いので表示されない（`> out.txt` などで出力先を変えたときだけ残る） |
 | `#MODULETYPE` | `0` = EXE（既定）、`1` = DLL（[§8.4](#84-dll-を出力する)） |
 | `#PLATFORM` | AB4.20 用。`actba64` は読まない（対象は `-actba32`） |
 | その他 | 無視 |
@@ -395,7 +395,10 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 - ctor/dtor 省略時は空の無引数版を暗黙生成
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=This`、32bit は stdcall の第1引数）
 - `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。親に `Virtual` がある Class は COM インターフェースとして空の ctor/dtor を付けない。`Virtual` 呼び出しは vtable
-- `Super.Name(args)` は親の `Name` を `This` 付きで直接呼ぶ。`Super.Parent(args)` は親 ctor、`Super.~Parent()` は親 dtor。基底の ctor/dtor は自動では呼ばない
+- `Super.Name(args)` は親の `Name` を `This` 付きで直接呼ぶ。`Super.Parent(args)` は親 ctor、`Super.~Parent()` は親 dtor
+- 基底の ctor/dtor は自動で呼ぶ。ctor は 基底 ctor → メンバ ctor → 本体、dtor は 本体 → メンバ dtor → 基底 dtor の順。省略した ctor/dtor（暗黙の空の版）でも同じ
+- 本体のどこかに `Super.Parent(...)` があれば基底 ctor を、`Super.~Parent()` があれば基底 dtor を自動では呼ばない（二重に呼ばない）。呼ぶのは書いた位置
+- 自動で呼ぶ基底 ctor は引数なしに合う定義。基底に引数なしの ctor が無いのに `Super.Parent(...)` を書かないときはコンパイルエラー（`base class ctor requires arguments`）
 - 値のメンバ Class は、そのフィールドを宣言した Class の ctor 先頭でメンバ ctor、dtor 末尾でメンバ dtor を呼ぶ。メンバ ctor にユーザー引数があるときはコンパイルエラー
 - `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
 - `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。個数を省略したときは 1。コンストラクタ引数は一度だけ評価し、各要素へ同じ値を渡す。確保に失敗したときは 0 を返し、コンストラクタは呼ばない
