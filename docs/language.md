@@ -93,10 +93,10 @@ b.abp
 ### 1.5 CLI
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-pN88] [-pAB2] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 ```
 
-`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。`-pN88` は N88-BASIC のソースとして読む（[§1.7](#pn88)。`.pj` には効かない）。`-pAB2` は ActiveBasic 2.62 のソースとして読む（[§1.8](#pab2)）。
+`-o` は `.abp` では必須。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるディレクトリ基準になる。`-o` を付けたときはそちらが優先。`-actba32` は引数のどこでも可。省略時は PE32+。`-pN88` は N88-BASIC のソースとして読む（[§1.7](#pn88)。`.pj` には効かない）。`-pAB2` は ActiveBasic 2.62 のソースとして読む（[§1.8](#pab2)）。`-X` は使っていない（どこからも呼ばれない）関数・メソッドを exe に入れない。そこからしか呼ばない API も取り込まない。`AddressOf` で取った関数と `Virtual` の Override は残る。`-linux` では付けなくても常にこうなる。
 
 EXE のエントリは結合後ソースのトップレベル文です。終了は `ExitProcess(n)` または `End`（終了コード 0）。  
 DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出力する)）。  
