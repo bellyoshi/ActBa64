@@ -1,0 +1,304 @@
+' UsingNum.abp — Print Using の数値欄
+' # 桁、. 小数点、, 3 桁区切り、先頭 + / 末尾 + - で符号、先頭 ** で * 埋め、先頭 \\ で \、
+' 末尾 ^^^^ で指数形式。入らないときは前に % を付けてそのまま出す。
+Const PU_YEN = 92
+Const PU_BIG = 1000000000
+
+Dim g_puIh As Long
+Dim g_puFh As Long
+Dim g_puComma As Long
+Dim g_puStar As Long
+Dim g_puYen As Long
+Dim g_puLead As Long
+Dim g_puTrail As Long
+Dim g_puExp As Long
+
+Sub PuSpecReset()
+    g_puIh = 0
+    g_puFh = -1
+    g_puComma = 0
+    g_puStar = 0
+    g_puYen = 0
+    g_puLead = 0
+    g_puTrail = 0
+    g_puExp = 0
+End Sub
+
+' p[i] と p[i+1] がどちらも c（p[i] が 0 でなければ p[i+1] は読める）
+Function PuIs2(p As *Byte, i As Long, c As Long) As Long
+    PuIs2 = 0
+    If p[i] <> c Then Exit Function
+    If p[i + 1] = c Then PuIs2 = 1
+End Function
+
+Function PuHashAt(p As *Byte, i As Long) As Long
+    PuHashAt = 0
+    If p[i] = Asc("#") Then PuHashAt = 1
+    If p[i] <> Asc(".") Then Exit Function
+    If p[i + 1] = Asc("#") Then PuHashAt = 1
+End Function
+
+' i から数値欄が始まるか
+Function PuNumAt(p As *Byte, i As Long) As Long
+    PuNumAt = PuHashAt(p, i)
+    If PuIs2(p, i, Asc("*")) <> 0 Then PuNumAt = 1
+    If PuIs2(p, i, PU_YEN) <> 0 Then PuNumAt = 1
+    If p[i] <> Asc("+") Then Exit Function
+    If PuHashAt(p, i + 1) <> 0 Then PuNumAt = 1
+End Function
+
+Sub PuSpecSign(p As *Byte, ByRef i As Long)
+    If p[i] <> Asc("+") Then Exit Sub
+    g_puLead = 1
+    i = i + 1
+End Sub
+
+' ** は 2 桁、**\ は 3 桁（うち 1 桁は \）
+Sub PuSpecStar(p As *Byte, ByRef i As Long)
+    If PuIs2(p, i, Asc("*")) = 0 Then Exit Sub
+    g_puStar = 1
+    g_puIh = 2
+    i = i + 2
+    If p[i] <> PU_YEN Then Exit Sub
+    g_puYen = 1
+    g_puIh = 3
+    i = i + 1
+End Sub
+
+' \\ は 2 桁（うち 1 桁は \）
+Sub PuSpecYen(p As *Byte, ByRef i As Long)
+    If g_puStar <> 0 Then Exit Sub
+    If PuIs2(p, i, PU_YEN) = 0 Then Exit Sub
+    g_puYen = 1
+    g_puIh = 2
+    i = i + 2
+End Sub
+
+' 1 = #  2 = ,  0 = 整数部の終わり
+Function PuIntCh(c As Long) As Long
+    PuIntCh = 0
+    If c = Asc("#") Then PuIntCh = 1
+    If c = Asc(",") Then PuIntCh = 2
+End Function
+
+' , も 1 桁に数える
+Sub PuSpecInt(p As *Byte, ByRef i As Long)
+    Dim k As Long
+    k = PuIntCh(p[i])
+    While k <> 0
+        If k = 2 Then g_puComma = 1
+        g_puIh = g_puIh + 1
+        i = i + 1
+        k = PuIntCh(p[i])
+    Wend
+End Sub
+
+Sub PuSpecFrac(p As *Byte, ByRef i As Long)
+    If p[i] <> Asc(".") Then Exit Sub
+    i = i + 1
+    g_puFh = PuCountHash(p, PU_BIG, i)
+End Sub
+
+Sub PuSpecExp(p As *Byte, ByRef i As Long)
+    If PuIs2(p, i, Asc("^")) = 0 Then Exit Sub
+    If PuIs2(p, i + 2, Asc("^")) = 0 Then Exit Sub
+    g_puExp = 1
+    i = i + 4
+End Sub
+
+Sub PuSpecTrail(p As *Byte, ByRef i As Long)
+    If g_puLead <> 0 Then Exit Sub
+    If p[i] = Asc("+") Then g_puTrail = 1
+    If p[i] = Asc("-") Then g_puTrail = 2
+    If g_puTrail <> 0 Then i = i + 1
+End Sub
+
+' i の数値欄を読んで g_pu* に置き、i を欄の後ろへ進める
+Sub PuSpec(p As *Byte, ByRef i As Long)
+    PuSpecReset()
+    PuSpecSign(p, i)
+    PuSpecStar(p, i)
+    PuSpecYen(p, i)
+    PuSpecInt(p, i)
+    PuSpecFrac(p, i)
+    PuSpecExp(p, i)
+    PuSpecTrail(p, i)
+End Sub
+
+Function PuNeg(n As Double) As Long
+    PuNeg = 0
+    If n < 0 Then PuNeg = 1
+End Function
+
+' 数字の前に付ける符号
+Function PuSignPre(neg As Long) As String
+    PuSignPre = ""
+    If neg <> 0 And g_puTrail = 0 Then PuSignPre = "-"
+    If g_puLead <> 0 And neg = 0 Then PuSignPre = "+"
+End Function
+
+' 数字の後ろに付ける符号（末尾 + / -）
+Function PuSignPost(neg As Long) As String
+    PuSignPost = ""
+    If g_puTrail = 1 Then PuSignPost = "+"
+    If g_puTrail <> 0 And neg <> 0 Then PuSignPost = "-"
+    If g_puTrail = 2 And neg = 0 Then PuSignPost = " "
+End Function
+
+Function PuFill(k As Long) As String
+    PuFill = PuPad(k)
+    If g_puStar <> 0 Then PuFill = PuRep(k, "*")
+End Function
+
+' 小数点より左を欄の幅へ右寄せ。入らなければ % を前に付ける
+Function PuLeftFit(s As String) As String
+    Dim w As Long
+    Dim t As String
+    w = g_puIh + g_puLead
+    t = "%"
+    If Len(s) <= w Then t = PuFill(w - Len(s))
+    PuLeftFit = t + s
+End Function
+
+Function PuCommas(s As String) As String
+    Dim t As String
+    PuCommas = s
+    If Len(s) <= 3 Then Exit Function
+    t = PuCommas(Left$(s, Len(s) - 3))
+    PuCommas = PuCat3(t, ",", Right$(s, 3))
+End Function
+
+' 整数部。0 は欄に余りがなければ省く（#.## の -0.5 は -.50）
+Function PuIntDigStr(r As Double, used As Long) As String
+    Dim s As String
+    s = PuIntStr(Fix(r))
+    If g_puComma <> 0 Then s = PuCommas(s)
+    PuIntDigStr = s
+    If s <> "0" Then Exit Function
+    If used + 1 > g_puIh + g_puLead Then PuIntDigStr = ""
+End Function
+
+Function PuLeftStr(r As Double, neg As Long) As String
+    Dim pre As String
+    Dim ip As String
+    pre = PuSignPre(neg)
+    If g_puYen <> 0 Then pre = pre + Chr$(PU_YEN)
+    ip = PuIntDigStr(r, Len(pre))
+    PuLeftStr = pre + ip
+End Function
+
+Function PuFracTail(r As Double) As String
+    Dim t As String
+    PuFracTail = ""
+    If g_puFh < 0 Then Exit Function
+    t = PuFracPart(r, g_puFh)
+    PuFracTail = "." + t
+End Function
+
+' 文字列の + に関数呼び出しを 2 つ並べない（一時変数を通す）
+Function PuCat3(a As String, b As String, c As String) As String
+    Dim t As String
+    t = a + b
+    PuCat3 = t + c
+End Function
+
+Function PuFixed(n As Double) As String
+    Dim r As Double
+    Dim a As String
+    Dim b As String
+    r = PuRound(Abs(n), PuFracN(g_puFh))
+    a = PuLeftFit(PuLeftStr(r, PuNeg(n)))
+    b = PuFracTail(r)
+    PuFixed = PuCat3(a, b, PuSignPost(PuNeg(n)))
+End Function
+
+' 指数形式の仮数の整数部の桁数（符号の指定がなければ 1 桁を符号に取る）
+Function PuExpDig() As Long
+    PuExpDig = g_puIh
+    If g_puLead = 0 And g_puTrail = 0 Then PuExpDig = g_puIh - 1
+    If PuExpDig < 0 Then PuExpDig = 0
+End Function
+
+' 0 < a < 1 の常用対数の切り捨て
+Function PuLogDn(a As Double) As Long
+    Dim x As Double
+    x = a
+    PuLogDn = 0
+    While x < 1
+        x = x * 10
+        PuLogDn = PuLogDn - 1
+    Wend
+End Function
+
+Function PuLog10(a As Double) As Long
+    PuLog10 = PuIntDigits(a) - 1
+    If a < 1 Then PuLog10 = PuLogDn(a)
+End Function
+
+Function PuScale(a As Double, e As Long) As Double
+    If e >= 0 Then
+        PuScale = a / PuPow10(e)
+    Else
+        PuScale = a * PuPow10(0 - e)
+    End If
+End Function
+
+' 仮数の整数部が d 桁になる指数（丸めで桁が増えたら 1 つ上げる）
+Function PuExpE(a As Double, d As Long) As Long
+    Dim e As Long
+    Dim m As Double
+    PuExpE = 0
+    If a = 0 Then Exit Function
+    e = PuLog10(a) - d + 1
+    m = PuRound(PuScale(a, e), PuFracN(g_puFh))
+    If m >= PuPow10(d) Then e = e + 1
+    PuExpE = e
+End Function
+
+Function PuExpStr(e As Long) As String
+    Dim s As String
+    Dim t As String
+    s = "E+"
+    If e < 0 Then s = "E-"
+    If Abs(e) < 10 Then s = s + "0"
+    t = PuIntStr(Abs(e))
+    PuExpStr = s + t
+End Function
+
+Function PuExpLeft(r As Double, neg As Long) As String
+    Dim ip As String
+    Dim pre As String
+    ip = ""
+    If PuExpDig() > 0 Then ip = PuIntStr(Fix(r))
+    pre = PuSignPre(neg)
+    PuExpLeft = PuLeftFit(pre + ip)
+End Function
+
+Function PuExpMant(n As Double, e As Long) As String
+    Dim r As Double
+    Dim a As String
+    Dim b As String
+    r = PuRound(PuScale(Abs(n), e), PuFracN(g_puFh))
+    a = PuExpLeft(r, PuNeg(n))
+    b = PuFracTail(r)
+    PuExpMant = a + b
+End Function
+
+Function PuExpo(n As Double) As String
+    Dim e As Long
+    Dim a As String
+    Dim b As String
+    e = PuExpE(Abs(n), PuExpDig())
+    a = PuExpMant(n, e)
+    b = PuExpStr(e)
+    PuExpo = PuCat3(a, b, PuSignPost(PuNeg(n)))
+End Function
+
+' PuSpec で読んだ欄で n を書く
+Function PuNumFmt(n As Double) As String
+    If g_puExp <> 0 Then
+        PuNumFmt = PuExpo(n)
+    Else
+        PuNumFmt = PuFixed(n)
+    End If
+End Function
