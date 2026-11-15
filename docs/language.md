@@ -265,19 +265,19 @@ Dim a(N, M, L) As T     ' 3 次元以上。最大 8 次元
 `ELM(n)` は要素数 `n` に対する上限で、値は `n - 1`。`Dim a[ELM(10)]` は `Dim a[9]` と同じ（添字 0..9）。  
 要素型は `Byte` / `Long` / `Single` / `Double` / `String` / UDT。UDT 配列は添字 1 個（平坦な通し番号）だけ。
 
-**レイアウト（first-index-fastest）:** 先頭添字が連続する。各次元の長さは上限+1。
+**レイアウト（最後の添字が連続。ActiveBasic・C と同じ）:** 各次元の長さは上限+1。`VarPtr(a[i, 0])` から `[0]..[M]` で `a[i, 0..M]` を読める。
 
 ```
-flat = i0 + i1 * (N + 1)          ' Dim a(N, M) の a(i0, i1)
-L0 = N + 1
+flat = i0 * (M + 1) + i1          ' Dim a(N, M) の a(i0, i1)
 L1 = M + 1
-flat = i0 + i1 * L0 + i2 * L0 * L1   ' Dim a(N, M, L) の a(i0, i1, i2)
+L2 = L + 1
+flat = i0 * L1 * L2 + i1 * L2 + i2   ' Dim a(N, M, L) の a(i0, i1, i2)
 ```
 
-3 次元以上も同じで、k 番目の刻みはそれより前の長さの積。添字は括弧・角括弧とも可。個数は 1（平坦な通し番号）か、その配列の次元数。要素数は各長さの積。  
+3 次元以上も同じで、k 番目の刻みはそれより後ろの長さの積。添字は括弧・角括弧とも可。個数はその配列の次元数と同じ（違えば `bad array index count`。多次元配列の平坦な添字 `a(k)` も ActiveBasic と同じくエラー）。要素数は各長さの積。  
 境界は `Dim` のときに決まり、実行中には変えない。`ReDim` は Visual Basic の機能で、ActiveBasic 4.20 にも ActBa64 にも無い。
 
-回帰: `test/t_arr2d_rw.abp`、`test/t_arr2d_const.abp`、`test/t_arr3d_rw.abp`。サンプル: `samples/reversi.abp`。
+回帰: `test/t_arr2d_rw.abp`、`test/t_arr2d_const.abp`、`test/t_arr3d_rw.abp`、`test/t_arr_layout.abp`、`test/t_err_arr_flat.abp`。サンプル: `samples/reversi.abp`。
 
 ### 2.2 ユーザ定義型
 

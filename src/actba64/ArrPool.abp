@@ -1,6 +1,7 @@
 ' ===================================================
 '  ArrPool - stride pool for rank >= 3 arrays
-'  rank 2 keeps len0 in the symbol typeIdx
+'  rank 2 keeps len1 (length of the last dim) in the symbol typeIdx
+'  layout: last index contiguous (ActiveBasic / C order)
 ' ===================================================
 
 Const ARR_POOL_MAX = 128
@@ -26,7 +27,7 @@ Function LowArrFill(id As Long) As Long
     Dim k As Long, s As Long
     s = 1
     g_arrRank(id) = g_dimRank
-    For k = 0 To g_dimRank - 1
+    For k = g_dimRank - 1 To 0 Step -1
         s = LowArrStrideMul(id, k, s)
     Next
     LowArrFill = 1
@@ -87,7 +88,7 @@ Function LowDimUseRank(ByRef nElems As Long, ByRef arrLen0 As Long) As Long
     arrLen0 = -1
     g_dimPool = -1
     LowDimUseRank = 1
-    If g_dimRank = 2 Then arrLen0 = g_dimLen(0)
+    If g_dimRank = 2 Then arrLen0 = g_dimLen(1)
     If g_dimRank < 3 Then Exit Function
     g_dimPool = LowArrPush()
     If g_dimPool < 0 Then LowDimUseRank = 0
@@ -103,9 +104,10 @@ Sub LowArrScale(list As *IrList, stride As Long)
     IrEmit(list, OP_IMUL_EAX_ECX, 0, 0)
 End Sub
 
-Function LowArrFirst(ctx As *LowerCtx, list As *IrList, expr As Long) As Long
+Function LowArrFirst(ctx As *LowerCtx, list As *IrList, expr As Long, stride As Long) As Long
     LowArrFirst = 0
     If LowIdxExpr(ctx, expr) = 0 Then Exit Function
+    LowArrScale(list, stride)
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     LowArrFirst = 1
 End Function
@@ -134,7 +136,7 @@ Function LowEmitFlatN(ctx As *LowerCtx, list As *IrList, arg As Long, id As Long
     Dim ast As *Ast, nodes As *AstNode
     LowEmitFlatN = false
     ast = ctx->ast: nodes = ast->nodes
-    If LowArrFirst(ctx, list, nodes[arg].left) = 0 Then Exit Function
+    If LowArrFirst(ctx, list, nodes[arg].left, LowArrStrideAt(id, 0)) = 0 Then Exit Function
     If LowArrRest(ctx, list, nodes[arg].nxt, id, 1) = 0 Then Exit Function
     IrEmit(list, OP_POP_RAX, 0, 0)
     LowEmitFlatN = true
@@ -160,9 +162,10 @@ Function LowArrUdtOk(vTy As Long, nArgs As Long) As Long
     If nArgs = 1 Then LowArrUdtOk = 1
 End Function
 
+' 添字の個数は配列の次元数と同じ（ActiveBasic と同じく、多次元配列の平坦な添字 a(k) はエラー）
 Function LowArrMatch(ti As Long, nArgs As Long) As Long
     LowArrMatch = 0
-    If nArgs = 1 Or nArgs = LowArrRankOf(ti) Then LowArrMatch = 1
+    If nArgs = LowArrRankOf(ti) Then LowArrMatch = 1
 End Function
 
 ' 要素がポインタ幅。String 配列と *Byte 配列。
