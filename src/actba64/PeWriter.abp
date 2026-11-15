@@ -1,5 +1,6 @@
 ' ===================================================
 '  PeWriter - .text + .data + .idata [+ .rsrc]
+'  .data は大域変数で中身は全部 0。ファイルには持たず（BSS）、ローダーが 0 で埋める
 ' ===================================================
 
 Type PeLayout
@@ -48,8 +49,7 @@ Sub PeCalcLayoutBase(codeSize As Long, globSize As Long, idataSize As DWord, lay
     lay->textRaw = AlignUp(codeSize, FILE_ALIGN)
     lay->dataVirt = AlignUp(globSize, SECTION_ALIGN)
     If lay->dataVirt < SECTION_ALIGN Then lay->dataVirt = SECTION_ALIGN
-    lay->dataRaw = AlignUp(lay->dataVirt, FILE_ALIGN)
-    If lay->dataRaw < FILE_ALIGN Then lay->dataRaw = FILE_ALIGN
+    lay->dataRaw = 0
     t = TEXT_RVA
     t = t + lay->textVirt
     lay->dataRva = t
@@ -209,7 +209,7 @@ End Sub
 
 Sub PeWriteSects(outBuf As *Byte, sectOff As DWord, lay As *PeLayout, codeSize As Long, idataSize As DWord, rsrcSize As Long, builder As *ImportBuilder)
     PeWriteSect(outBuf, sectOff, ".text", codeSize, TEXT_RVA, lay->textRaw, lay->hdrSize, IMAGE_SCN_CNT_CODE Or IMAGE_SCN_MEM_EXECUTE Or IMAGE_SCN_MEM_READ)
-    PeWriteSect(outBuf, sectOff, ".data", lay->dataVirt, lay->dataRva, lay->dataRaw, lay->dataOff, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
+    PeWriteSect(outBuf, sectOff, ".data", lay->dataVirt, lay->dataRva, 0, 0, IMAGE_SCN_CNT_UNINITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
     PeWriteSect(outBuf, sectOff, ".idata", idataSize, builder->iatRva, lay->idataRaw, lay->idataFileOff, IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ Or IMAGE_SCN_MEM_WRITE)
     PeWriteEdataSect(outBuf, sectOff, lay)
     If rsrcSize > 0 Then
@@ -220,7 +220,6 @@ End Sub
 
 Sub PeCopyPayloads(outBuf As *Byte, lay As *PeLayout, codeBuf As *Byte, codeSize As Long, idataBuf As *Byte, idataSize As DWord, rsrcBuf As *Byte, rsrcSize As Long)
     MemCopyAt(outBuf, lay->hdrSize, codeBuf, codeSize)
-    ZeroAt(outBuf, lay->dataOff, lay->dataRaw)
     MemCopyAt(outBuf, lay->idataFileOff, idataBuf, idataSize)
     PeCopyEdata(outBuf, lay)
     If rsrcSize > 0 And rsrcBuf <> NULL Then

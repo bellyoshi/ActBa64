@@ -87,7 +87,7 @@ cd src\actba64
 actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 ```
 
-`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。`-pAB2` は ActiveBasic 2.62 のソースを読む（`ParserAB2*` と `Include\AB2`）（[language.md §1.8](./language.md#pab2)）。`-X` は呼ばれない関数を消して exe を小さくする（下の「呼ばれない関数を消す」と同じ解析を Windows の出力にも使う。Hello World は 185KB → 50KB）。
+`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。`-pAB2` は ActiveBasic 2.62 のソースを読む（`ParserAB2*` と `Include\AB2`）（[language.md §1.8](./language.md#pab2)）。`-X` は呼ばれない関数を消して exe を小さくする（下の「呼ばれない関数を消す」と同じ解析を Windows の出力にも使う。Hello World は 144KB → 9KB）。PE の `.data`（大域変数）は中身が全部 0 なので、ファイルには持たない（BSS。`IMAGE_SCN_CNT_UNINITIALIZED_DATA`、ローダーが 0 で埋める）。
 
 `.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1` で、再配置は `PeReloc.abp` が `.reloc` に書く（[language.md §8.4](./language.md#84-dll-を出力する)）。
 
