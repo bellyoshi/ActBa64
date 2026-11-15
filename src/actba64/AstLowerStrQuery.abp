@@ -177,7 +177,8 @@ Function LowExprIsCStr(ctx As *LowerCtx, idx As Long) As Long
     If kind = AST_VAR Then
         AstCopyStr(ast, idx, VarPtr(name))
         If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
-        If vTy = TY_PTR_BYTE Then
+        ' Byte 配列（Dim s[N] As Byte）も先頭アドレスの C 文字列
+        If vTy = TY_PTR_BYTE Or vTy = TY_BYTE_ARR Then
             LowExprIsCStr = 1
             Exit Function
         End If
@@ -196,7 +197,15 @@ End Function
 ' *Byte、またはフィールドなしポインタ幅の TypeDef（VoidPtr）。
 Function LowFieldIsCStr(ctx As *LowerCtx, idx As Long) As Long
     Dim ft As Long
+    Dim fOff As Long, fSize As Long, fCount As Long, fTy As Long
     LowFieldIsCStr = 0
+    ' Byte 配列のメンバ（s[N] As Byte）も先頭アドレスの C 文字列
+    If LowResolveMemberField(ctx, idx, fOff, fSize, fCount, fTy) Then
+        If fSize = 1 And fCount > 1 And fTy = -1 Then
+            LowFieldIsCStr = 1
+            Exit Function
+        End If
+    End If
     ft = LowMemberFieldTy(ctx, idx)
     If ft = FIELDTY_PTR_BYTE Then
         LowFieldIsCStr = 1
