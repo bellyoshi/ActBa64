@@ -98,26 +98,38 @@ Function AstToIrEmitFuncOnce(ctx As *LowerCtx, stmt As Long) As boolean
 End Function
 
 ' 本体の無い手続きとして作る（呼ばれない失敗した手続きの代わり）
-Function AstToIrEmitFuncStub(ctx As *LowerCtx, stmt As Long) As boolean
+Function AstToIrEmitFuncStubGo(ctx As *LowerCtx, stmt As Long) As boolean
     Dim nodes As *AstNode
     Dim body As Long
     nodes = AccCtxNodes(ctx)
     body = nodes[stmt].right
     nodes[stmt].right = -1
-    AstToIrEmitFuncStub = AstToIrEmitFuncOnce(ctx, stmt)
+    AstToIrEmitFuncStubGo = AstToIrEmitFuncOnce(ctx, stmt)
     nodes = AccCtxNodes(ctx)
     nodes[stmt].right = body
 End Function
 
+' 基底・メンバ Class の ctor/dtor 呼び出しも出さない（同じ診断を二度出さない）
+Function AstToIrEmitFuncStub(ctx As *LowerCtx, stmt As Long) As boolean
+    g_lowStub = 1
+    AstToIrEmitFuncStub = AstToIrEmitFuncStubGo(ctx, stmt)
+    g_lowStub = 0
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function AstToIrEmitFuncBody(ctx As *LowerCtx, stmt As Long) As Long
+    AstToIrEmitFuncBody = LowEmitVtBody(ctx, stmt)
+    If AstToIrEmitFuncBody < 0 Then AstToIrEmitFuncBody = AstToIrEmitFuncBodyStd(ctx, stmt)
+End Function
+
+Function AstToIrEmitFuncBodyStd(ctx As *LowerCtx, stmt As Long) As Long
     Dim nodes As *AstNode
-    AstToIrEmitFuncBody = 0
+    AstToIrEmitFuncBodyStd = 0
     nodes = AccCtxNodes(ctx)
     If LowEmitMemCd(ctx, stmt, 0) = 0 Then Exit Function
     If LowStmtList(ctx, nodes[stmt].right) = 0 Then Exit Function
     If LowEmitMemCd(ctx, stmt, 1) = 0 Then Exit Function
-    AstToIrEmitFuncBody = 1
+    AstToIrEmitFuncBodyStd = 1
 End Function
 
 Function AstToIrEmitMain(ctx As *LowerCtx, prog As Long, labMain As Long) As Long
@@ -308,6 +320,7 @@ Function AstToIrBindMod(ctx As *LowerCtx, prog As Long, list As *IrList) As bool
     ' module-level Dim -> globals (before any function emit; nested Dims in main too)
     If Not LowCollectDimsInList(ctx, nodes[prog].left, 1) Then Exit Function
     LnReserveDepth()
+    LowVtReserve(ast->types)
     LowCollectPreciseGlobRoots()
     g_gcBaseOff = g_globDataSize
     g_globDataSize = g_globDataSize + GC_REGION_SIZE
