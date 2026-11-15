@@ -865,6 +865,43 @@ dx_SetCullMode(CullMode)
 
 ---
 
+### 7.8 フォーム（`Forms.sbp`）
+
+`#include <Forms.sbp>`（[`src/Include/Forms.sbp`](../src/Include/Forms.sbp)）で、窓を Class として書ける。サンプルは [`src/actba64/samples/forms/`](../src/actba64/samples/forms/)。
+
+```
+#include <Forms.sbp>
+
+Class Form1
+    Inherits Form
+Private
+    Override Sub InitializeComponent()
+        Left = 673
+        Top = 320
+        Width = 320
+        Height = 240
+        Caption = "Form1"
+    End Sub
+End Class
+
+Dim mainForm As Form1
+Application.Initialize()
+Application.Run(mainForm)
+```
+
+| 名前 | 意味 |
+|---|---|
+| `Form` | `Left` / `Top` / `Width` / `Height`（既定 `CW_USEDEFAULT`）、`Caption`、`Handle`（窓ができてから）。ctor が `InitializeComponent()` を呼ぶ |
+| `Virtual Sub InitializeComponent()` | 子が `Override` して位置・大きさ・見出しを入れる |
+| `Virtual Function WndProc(msg, wParam, lParam) As LRESULT` | 窓のメッセージ。子が `Override` し、扱わないものは `Super.WndProc(msg, wParam, lParam)` へ。既定は `WM_DESTROY` で `PostQuitMessage(0)` し、`DefWindowProc` を返す |
+| `Show()` | 窓が無ければ作って表示する |
+| `Application.Initialize()` | 今は何もしない |
+| `Application.Run(form)` | `form.Show()` のあと、窓が閉じるまでメッセージループを回す |
+
+- 窓クラスは 1 つ（`ActBa64Form`）。`CreateWindowEx` の中の最初のメッセージで、作っている `Form` を窓（`GWL_USERDATA`）に結びつけ、以後は `Form` の `WndProc` を vtable で呼ぶ。`WM_CREATE` なども `Override` した `WndProc` に届く
+- 窓は Unicode。`Caption` は UTF-8 のまま入れてよい
+- 今は 1 つのフォームを前提にしている（どのフォームが閉じてもメッセージループが終わる）
+
 ## 8. WinAPI / IAT
 
 `api.idx` / `UnicodeApi.sbp` の `Declare`（およびソース側 Declare）で認識した API はインポートテーブル（IAT）に載る。  
