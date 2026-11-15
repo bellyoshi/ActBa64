@@ -84,10 +84,10 @@ cd src\actba64
 使い方:
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-pN88] [-pAB2] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 ```
 
-`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。`-pAB2` は ActiveBasic 2.62 のソースを読む（`ParserAB2*` と `Include\AB2`）（[language.md §1.8](./language.md#pab2)）。
+`-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。`-pAB2` は ActiveBasic 2.62 のソースを読む（`ParserAB2*` と `Include\AB2`）（[language.md §1.8](./language.md#pab2)）。`-X` は呼ばれない関数を消して exe を小さくする（下の「呼ばれない関数を消す」と同じ解析を Windows の出力にも使う。Hello World は 185KB → 50KB）。
 
 `.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。DLL は `#MODULETYPE=1` で、再配置は `PeReloc.abp` が `.reloc` に書く（[language.md §8.4](./language.md#84-dll-を出力する)）。
 
@@ -168,7 +168,7 @@ actba64 <src.abp|.pj> [-actba32] [-pN88] [-pAB2] [-o <out>]
 - ファイルの API（`LxFile`）はパスの `\` を `/` として扱う（コンパイラが `"Include\"` のように組み立てるため）。`CreateProcess` はコマンドラインを空白で分け（`""` の中は 1 つ）、先頭のプログラムだけ `\` を `/` にして fork + execve。ハンドルは pid + `LX_PROC_BIAS`
 - ファイルの行末も LF（`BaFileWriteNl`）。パスは UTF-8 のまま A 版の代わりへ渡す（`BasicPathWide` は `-linux` で 0）
 - `Include\linux` では `*VoidPtr` / `*Word` の添字と `VoidPtr` の配列を使わない（どれも 4 バイト刻みになる）。8 バイト・2 バイトは `LxGetQ` / `LxSetQ` / `LxSetW` で読み書きする。`VoidPtr` を返す関数の呼び出しに式を足すと（`Lx_StackBase() + n * 8`）32bit に切れるので、いったん局所変数に入れてから足す
-- **呼ばれない関数を消す**（`LinuxPrune`、`-linux` だけ）: IR を関数（`OP_LABEL` の直後が `OP_ENTER`）に分け、先頭（`jmp main`）から分岐・`OP_CALL_LAB`・`OP_LEA_RAX_LAB`（`AddressOf` / `Virtual`）・次の関数への落ち込み・API の Lx_ 版をたどる。届かない関数は `OP_NOP` にするので、コードも API の取り込みも文字列も出ない（Hello World は 212KB → 29KB）
+- **呼ばれない関数を消す**（`LinuxPrune`、`-linux` は常に、Windows の PE は `-X` のとき。Windows では API から先はたどらない）: IR を関数（`OP_LABEL` の直後が `OP_ENTER`）に分け、先頭（`jmp main`）から分岐・`OP_CALL_LAB`・`OP_LEA_RAX_LAB`（`AddressOf` / `Virtual`）・次の関数への落ち込み・API の Lx_ 版をたどる。届かない関数は `OP_NOP` にするので、コードも API の取り込みも文字列も出ない（Hello World は 212KB → 29KB）
 - **警告**（`LinuxCheck`）: 残った呼び出しのうち Linux 版の無い API は `warning: file(行): 'MessageBeep' has no Linux version; …` を出す。行は呼んだ文（`OP_CALL_API` の `arg2`）。実行時ルーチンの中なら `warning: (runtime): …`
 - 実際には通らないが静的には届く Windows 専用の呼び出し（`BasicPath` の W 版、`Sleep` のメッセージ処理など）は `#ifndef _LINUX` で外す
 - `MultiByteToWideChar` / `WideCharToMultiByte`（`LxUnicode`）: コードページは何でも UTF-8 として扱う（Linux に CP932 は無い）

@@ -11,6 +11,7 @@
 #   .\run_test2.ps1 -KeepArtifacts
 #   .\run_test2.ps1 -IncludeGui     # ' Gui: 1 のテストも実行（既定はスキップ）
 #   .\run_test2.ps1 -Actba32        # -actba32 で PE32 を出力して実行
+#   .\run_test2.ps1 -DeadStrip      # -X で呼ばれない関数を消して出力して実行
 #   .\run_test2.ps1 -Linker .\bin\stage1\actba64.exe
 #
 # stage0 注意: ソース変更のたびに自動更新されない。AB4.20 で actba64.pj を
@@ -44,7 +45,8 @@ param(
     [switch]$ShowSkipped,
     [switch]$KeepArtifacts,
     [switch]$IncludeGui,
-    [switch]$Actba32
+    [switch]$Actba32,
+    [switch]$DeadStrip
 )
 
 $ErrorActionPreference = "Continue"
@@ -210,6 +212,7 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
         }
         $preArgs = @($preSrc)
         if ($Actba32) { $preArgs += "-actba32" }
+        if ($DeadStrip) { $preArgs += "-X" }
         $preArgs += @("-o", $preDll)
         $preLog = Get-CompilerLog $preArgs
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $preDll)) {
@@ -229,6 +232,9 @@ function Invoke-OneTest([string]$src, [string]$name, [hashtable]$meta) {
     $ccArgs = @($src)
     if ($Actba32) {
         $ccArgs += "-actba32"
+    }
+    if ($DeadStrip) {
+        $ccArgs += "-X"
     }
     $ccArgs += $meta.Options
     $ccArgs += "-o"
