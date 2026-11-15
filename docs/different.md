@@ -57,13 +57,13 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 の動作 |
 |---|---|---|
 | `#strict` | 厳密型チェック。異なる基本型間代入・ポインタ不一致等を警告 | 変数代入に加え、`Long`→`Byte`（呼び出し結果を含む）と引数の `String`→`VoidPtr`・`VoidPtr`→`Long` を warning（`As` で抑制）。数値リテラルは対象外。`Include\default` は抑制 |
-| `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の `+` `-` `*` `/` と符号反転は Double で計算して Single に戻す（Single どうしの `/` は Single）。`Print` の Single は `StrS$`（有効 6 桁。`4/3` は `1.33333`）。`Double` の配列要素と UDT フィールドは `-actba32` でも 8 バイト転送。`Print` の Double は 64bit と `-actba32` で `StrD$`。科学記法（`1.0e10`）は未対応 |
+| `Single` / `Double` | IEEE 浮動小数点演算 | **`Single`** の `+` `-` `*` `/` と符号反転は Double で計算して Single に戻す（Single どうしの `/` は Single）。`Print` の Single は `StrS$`（有効 6 桁。`4/3` は `1.33333`）。`Double` の配列要素と UDT フィールドは `-actba32` でも 8 バイト転送。`Print` の Double は 64bit と `-actba32` で `StrD$`（Long を超える値は 10^15 未満なら整数部をそのまま、それ以上は `1.5E+20` の形。無限大は `inf`）。指数のリテラル（`1.5e10`）も読む |
 | `Class` | `Inherits`、`Virtual` / `Override`、`Super.Method`、`New`/`Delete`、アクセス制御 | `Inherits` は親フィールドを先頭に置く。`Virtual` 呼び出しは vtable。宣言だけの `Virtual` は COM、中身のある `Virtual` は先頭に隠しフィールド `__vptr` を置き、子は `Override` で差し替える（vtable は ctor より前に設定するので、基底の ctor からも子の `Override` が呼ばれる）。`Super` は親関数の直接呼び出し。基底 ctor/dtor は自動で呼ぶ（本体に `Super.Parent(...)` / `Super.~Parent()` があるときは呼ばない）。`New` / `Delete` は対応（ヒープ塊の先頭 8 バイトが要素数）。メソッドはマングル名 + 暗黙 `This` |
 | N88 `LOCATE` | 本家 N88 BASIC は行・桁 1 始まり | **`LOCATE x, y` は 0 始まり**（桁 x, 行 y） |
 | N88 `CIRCLE` … `F` | タイルストリングによる塗りつぶし | `F` 塗りつぶしのみ（タイル未対応） |
 | 組込 vs Include | `Left$` / `Len` / `InStr` / `Hex$` 等は `basic\function.sbp` 等 | **`Len` / `Asc` / `Chr$` / … / `ELM` / ビットマクロ等は組込**。`InStr` / `Hex$` / `Val` は **`StrUtils.abp`（`default.idx` 自動挿入）**。`GetByte` 等は **`Memory.abp`（同上）** |
 | 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp` のマクローリン展開**。複雑な入れ子は一時変数経由が安全 |
-| `Int64` / `QWord` / `Char` | 基本型として定義 | **64bit 整数は未対応**。`QWord` は `DWord`、`Int64` は `Long`（32bit）として読み、`64-bit integers are not supported` の警告を出す。型の位置（`As` / `SizeOf(` の後ろ）の **`Char` は `Byte`**（変数名の `char` はそのまま） |
+| `Int64` / `QWord` / `Char` | 基本型として定義 | **64bit 整数は未対応**。`QWord` は `DWord`、`Int64` は `Long`（32bit）として読み、`64-bit integers are not supported` の警告を出す。`4294967295` を超える十進の整数リテラルは Double になる。`DWord` は Double への変換だけ符号なし（DWord の配列・ポインタ先・`Function As DWord` の戻り値は Long と同じ）。型の位置（`As` / `SizeOf(` の後ろ）の **`Char` は `Byte`**（変数名の `char` はそのまま） |
 | DLL 再配置 | ロード時のベース再配置 | DLL は末尾に `.reloc` を出す。32bit は絶対アドレスの HIGHLOW。64bit は空の再配置表（コードは RIP 相対）。EXE は出さない。`DYNAMIC_BASE` は立てないので、優先ベースが空いていればそのまま、塞がっていればローダーが移動する |
 | `Function` の `As` 省略 | 戻り値の型を省くと既定の型（Double） | 戻り値は **Double**。戻り値に代入しなければ 0。型を推定できないので `cannot infer the type of Function 'f'; treated as Double` の警告を出す（コンパイルは続ける）。クラスのメソッドで `As` を省いた `Function` は従来どおり Long |
 | `Const` の再定義 | 同じ名前の定数は一度だけ定義する | **同じ名前・同じ値（数値・Double・文字列とも）の再定義はエラーにしない**。標準ヘッダ（`default.idx`）が定義する `MB_OK` などを、ユーザのソースでも同じ値で定義していることがあるため。**値が違えば、後ろの定義の行で `Const 'a' is already defined with a different value` のエラー**。組込みの `TRUE` / `FALSE` は対象外（ソースで定義し直しても、組込みの値のまま） |

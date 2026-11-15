@@ -61,52 +61,109 @@ Function LexDotDigit(lx As *Lexer, c As Long) As Long
 End Function
 
 Function LexNumber(lx As *Lexer) As Long
-    Dim src As *Byte
     Dim start As Long
+    Dim isF As Long
+    start = lx->pos
+    lx->pos = LexSkipDigits(lx->src, start)
+    isF = LexScanFrac(lx)
+    If LexScanExp(lx) <> 0 Then isF = 1
+    If isF = 0 Then isF = LexDecTooBig(lx->src, start, lx->pos)
+    If isF <> 0 Then
+        LexNumber = LexPushFloat(lx, start)
+    Else
+        LexNumber = LexPushInt(lx, start)
+    End If
+End Function
+
+' src[k] から数字の並びを飛ばした位置
+Function LexSkipDigits(src As *Byte, k As Long) As Long
+    While IsDigit(src[k])
+        k = k + 1
+    Wend
+    LexSkipDigits = k
+End Function
+
+' 1.5 / 1. の小数部（. の次が識別子なら小数点ではない）。読んだら 1
+Function LexScanFrac(lx As *Lexer) As Long
+    Dim src As *Byte
+    LexScanFrac = 0
+    src = lx->src
+    If src[lx->pos] <> CH_DOT Then Exit Function
+    If LexDotIsFloat(src[lx->pos + 1]) = 0 Then Exit Function
+    lx->pos = LexSkipDigits(src, lx->pos + 1)
+    LexScanFrac = 1
+End Function
+
+' 1e10 / 2.5E-3 / 1E+3 の指数部。e の次が数字か、符号と数字のときだけ。読んだら 1
+Function LexScanExp(lx As *Lexer) As Long
+    Dim src As *Byte
+    Dim k As Long
+    LexScanExp = 0
+    src = lx->src
+    If ToLowerChar(src[lx->pos]) <> CH_Le Then Exit Function
+    k = lx->pos + 1
+    If src[k] = CH_PLUS Or src[k] = CH_MINUS Then k = k + 1
+    If IsDigit(src[k]) = false Then Exit Function
+    lx->pos = LexSkipDigits(src, k)
+    LexScanExp = 1
+End Function
+
+' 整数が DWord（4294967295）に入らなければ 1。そのときは Double として読む（64bit 整数は無いので）
+Function LexDecTooBig(src As *Byte, start As Long, fin As Long) As Long
+    While fin - start > 1 And src[start] = CH_0
+        start = start + 1
+    Wend
+    LexDecTooBig = 0
+    If fin - start > 10 Then LexDecTooBig = 1
+    If fin - start = 10 Then LexDecTooBig = LexDec10Big(src, start)
+End Function
+
+' 10 桁の十進が 4294967295 より大きければ 1
+Function LexDec10Big(src As *Byte, start As Long) As Long
+    Dim hi As Long
+    Dim i As Long
+    hi = 0
+    For i = start To start + 8
+        hi = hi * LEX_RADIX_DEC + DigitValue(src[i])
+    Next
+    LexDec10Big = 0
+    If hi > 429496729 Or (hi = 429496729 And DigitValue(src[start + 9]) > 5) Then LexDec10Big = 1
+End Function
+
+' start..pos を十進整数の TK_NUMBER に（4294967295 までは 32bit のビット列）
+Function LexPushInt(lx As *Lexer, start As Long) As Long
     Dim n As Long
     Dim i As Long
     Dim idx As Long
     Dim toks As *Tok
-    Dim buf(LEX_TEXT_MAXIDX) As Byte
-
-    LexNumber = 0
-    src = lx->src
-    start = lx->pos
+    LexPushInt = 0
     n = 0
-    While IsDigit(src[lx->pos])
-        n = n * LEX_RADIX_DEC + DigitValue(src[lx->pos])
-        lx->pos = lx->pos + 1
-    Wend
-    ' 1.5 / 1.12345 / 1. → TK_FLOAT（テキスト保持。IEEE 化は Parser）
-    If src[lx->pos] = CH_DOT Then
-        If LexDotIsFloat(src[lx->pos + 1]) Then
-            lx->pos = lx->pos + 1
-            While IsDigit(src[lx->pos])
-                lx->pos = lx->pos + 1
-            Wend
-            n = lx->pos - start
-            If n > LEX_TEXT_MAXIDX Then n = LEX_TEXT_MAXIDX
-            i = 0
-            While i < n
-                buf[i] = src[start + i]
-                i = i + 1
-            Wend
-            idx = LexPush(lx, TK_FLOAT)
-            If idx < 0 Then Exit Function
-            LexStoreText(lx, idx, VarPtr(buf), n)
-        Else
-            idx = LexPush(lx, TK_NUMBER)
-            If idx < 0 Then Exit Function
-            toks = lx->toks
-            toks[idx].num = n
-        End If
-    Else
-        idx = LexPush(lx, TK_NUMBER)
-        If idx < 0 Then Exit Function
-        toks = lx->toks
-        toks[idx].num = n
-    End If
-    LexNumber = 1
+    For i = start To lx->pos - 1
+        n = n * LEX_RADIX_DEC + DigitValue(lx->src[i])
+    Next
+    idx = LexPush(lx, TK_NUMBER)
+    If idx < 0 Then Exit Function
+    toks = lx->toks
+    toks[idx].num = n
+    LexPushInt = 1
+End Function
+
+' start..pos のテキストを TK_FLOAT に（IEEE 化は Parser）
+Function LexPushFloat(lx As *Lexer, start As Long) As Long
+    Dim n As Long
+    Dim i As Long
+    Dim idx As Long
+    Dim buf(LEX_TEXT_MAXIDX) As Byte
+    LexPushFloat = 0
+    n = lx->pos - start
+    If n > LEX_TEXT_MAXIDX Then n = LEX_TEXT_MAXIDX
+    For i = 0 To n - 1
+        buf[i] = lx->src[start + i]
+    Next
+    idx = LexPush(lx, TK_FLOAT)
+    If idx < 0 Then Exit Function
+    LexStoreText(lx, idx, VarPtr(buf), n)
+    LexPushFloat = 1
 End Function
 
 Function LexIdent(lx As *Lexer) As Long
