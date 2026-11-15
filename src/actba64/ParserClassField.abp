@@ -131,20 +131,42 @@ Function ParseClassEnsureCd(p As *Parser, name As *Byte, hasCtor As Long, hasDto
     ParseClassEnsureCd = true
 End Function
 
+Sub ParseClassLinkMeth(ast As *Ast, ByRef nPrev As Long, nMeth As Long)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    nodes[nPrev].nxt = nMeth
+    nPrev = nMeth
+    While nodes[nPrev].nxt >= 0
+        nPrev = nodes[nPrev].nxt
+    Wend
+End Sub
+
+' Class 内の Sub / Function（本体あり）を読んで、文の並びにつなぐ
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseClassBodyMeth(p As *Parser, ast As *Ast, name As *Byte, ByRef nPrev As Long, ByRef hasCtor As Long, ByRef hasDtor As Long, access As Long) As boolean
+    Dim nMeth As Long, isCtor As Long, isDtor As Long
+    ParseClassBodyMeth = false
+    nMeth = ParseClassMethod(p, name, isCtor, isDtor, access)
+    If nMeth < 0 Then Exit Function
+    hasCtor = hasCtor Or isCtor
+    hasDtor = hasDtor Or isDtor
+    ParseClassLinkMeth(ast, nPrev, nMeth)
+    ParseClassBodyMeth = true
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParseClassBodyItem(p As *Parser, ast As *Ast, name As *Byte, ti As Long, ByRef nPrev As Long, ByRef hasCtor As Long, ByRef hasDtor As Long, ByRef isIface As Long, ByRef access As Long) As boolean
-    Dim nodes As *AstNode
     Dim kPriv(KW_LEN - 1) As Byte
     Dim kPub(KW_LEN - 1) As Byte
     Dim kProt(KW_LEN - 1) As Byte
     Dim kVirt(KW_LEN - 1) As Byte
     Dim kSub(KW_SHORT_LEN - 1) As Byte
     Dim kFun(KW_LEN - 1) As Byte
-    Dim nMeth As Long
-    Dim isCtor As Long
-    Dim isDtor As Long
+    Dim kOvr(KW_LEN - 1) As Byte
+    Dim vr As Long
 
     ParseClassBodyItem = false
+    lstrcpy(VarPtr(kOvr), "override")
     lstrcpy(VarPtr(kPriv), "private")
     lstrcpy(VarPtr(kPub), "public")
     lstrcpy(VarPtr(kProt), "protected")
@@ -162,19 +184,18 @@ Function ParseClassBodyItem(p As *Parser, ast As *Ast, name As *Byte, ti As Long
         access = ACC_PROTECTED
     ElseIf ParseIdentIs(p, VarPtr(kVirt)) <> 0 Then
         p->pos = p->pos + 1
-        If Not ParseClassVirtDecl(p, access) Then Exit Function
-        isIface = 1
+        vr = ParseClassVirtItem(p, ti, isIface, access)
+        If vr < 0 Then Exit Function
+        If vr > 0 Then
+            If Not ParseClassBodyMeth(p, ast, name, nPrev, hasCtor, hasDtor, access) Then Exit Function
+        End If
+    ElseIf ParseIdentIs(p, VarPtr(kOvr)) <> 0 Then
+        p->pos = p->pos + 1
+        If ParseClassOverride(p, ti) = 0 Then Exit Function
+        If Not ParseClassBodyMeth(p, ast, name, nPrev, hasCtor, hasDtor, access) Then Exit Function
     ElseIf ParseIdentIs(p, VarPtr(kSub)) <> 0 Or ParseIdentIs(p, VarPtr(kFun)) <> 0 Then
-        nMeth = ParseClassMethod(p, name, isCtor, isDtor, access)
-        If nMeth < 0 Then Exit Function
-        If isCtor <> 0 Then hasCtor = 1
-        If isDtor <> 0 Then hasDtor = 1
-        nodes = ast->nodes
-        nodes[nPrev].nxt = nMeth
-        nPrev = nMeth
-        While nodes[nPrev].nxt >= 0
-            nPrev = nodes[nPrev].nxt
-        Wend
+        If ParseClassPlainOk(p, ti) = 0 Then Exit Function
+        If Not ParseClassBodyMeth(p, ast, name, nPrev, hasCtor, hasDtor, access) Then Exit Function
     Else
         If Not ParseClassField(p, ti, access) Then Exit Function
     End If
@@ -226,6 +247,7 @@ Function ParseClassOpen(p As *Parser, name As *Byte, ByRef ti As Long, ByRef isI
         Exit Function
     End If
     If Not ParseClassInherits(p, ti, isIface) Then Exit Function
+    If Not ParseClassVtSetup(p, ti, isIface) Then Exit Function
     ParseClassOpen = true
 End Function
 
@@ -243,6 +265,7 @@ Function ParseClassStmt(p As *Parser) As Long
     Dim access As Long
 
     ParseClassStmt = -1
+    g_pcLine = ParseTokLine(p)
     If Not ParseClassOpen(p, VarPtr(name), ti, isIface) Then Exit Function
     ast = p->ast
     types = ast->types
@@ -260,11 +283,13 @@ Function ParseClassStmt(p As *Parser) As Long
     nPrev = nType
     If Not ParseClassBody(p, VarPtr(name), ti, nPrev, hasCtor, hasDtor, isIface, access) Then Exit Function
 
+    If Not ParseClassAddVt(p, VarPtr(name), ti, nPrev) Then Exit Function
     ' COM インターフェース（Virtual のみ）は空 ctor/dtor を付けない
     If isIface = 0 Then
         If Not ParseClassEnsureCd(p, VarPtr(name), hasCtor, hasDtor, nPrev) Then Exit Function
     End If
 
+    If isIface = 0 Then TyClassMinSize(types, ti)
     TyFinalizeType(types, ti)
     p->classTypeIdx = -1
     ParseClassStmt = nFirst

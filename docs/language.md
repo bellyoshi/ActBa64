@@ -54,7 +54,7 @@ Print a +_
 |---|---|
 | `#console` | `Include\console\console.idx` を自動挿入し、CUI（コンソール）にする。`#console` が無ければ GUI。ただし `#n88basic` / `#prompt` でなく、画面への `Print`（`Print #` は除く）があれば `#console` とみなして CUI にする |
 | `#n88basic` / `#N88BASIC` / `#prompt` | N88BASIC 互換モード（[§1.6](#16-n88basic-モード)）。`#prompt` は完全別名 |
-| `#USEWINDOW=0\|1` | 1=GUI（`#console` より優先）。0 は上の `#console` の規則に従う。ソース・`.pj` どちらでも可。`#n88basic` / `#prompt` は GUI を強制 |
+| `#USEWINDOW=0\|1` | **`.pj` だけで有効**（[§1.4](#14-pjプロジェクト)）。`.abp` / `.sbp` に書いても読まない（その他 `#...` と同じく無視） |
 | `#strict` | 型の暗黙変換を warning（`As` で抑制）。`Long`→`Byte` はデータ欠落、引数の `String`→`VoidPtr` と `VoidPtr`→`Long` も含む |
 | `#include "path"` / `#include <path>` | ファイル挿入（深さ上限あり）。`"..."` はソース相対（絶対パス可）、`<...>` は `Include\` 配下を検索 |
 | `#define` / `#ifdef` / `#ifndef` / `#else` / `#endif` | 条件付きコンパイル（[§7.7](#77-条件付きコンパイル)） |
@@ -83,7 +83,7 @@ b.abp
 |---|---|
 | `#SOURCE` | 必須。続く行が入力 `.abp`（結合して 1 コンパイル単位） |
 | `#OUTPUT_RELEASE` | `.pj` からの相対出力パス。`-o` が無いとき使う（`-o` が優先） |
-| `#USEWINDOW` | サブシステム（既定 CUI。`#n88basic` で GUI） |
+| `#USEWINDOW` | `1` で GUI サブシステム。ソースの `#console` や画面への `Print` があっても GUI のまま。`0`（既定）は [§1.3](#13-ディレクティブ行) の `#console` の規則に従う。`#n88basic` / `#prompt` は値によらず GUI。GUI で画面への `Print` を使うと、出力は標準出力へ書くがコンソールが無いので表示されない（`> out.txt` などで出力先を変えたときだけ残る） |
 | `#MODULETYPE` | `0` = EXE（既定）、`1` = DLL（[§8.4](#84-dll-を出力する)） |
 | `#PLATFORM` | AB4.20 用。`actba64` は読まない（対象は `-actba32`） |
 | その他 | 無視 |
@@ -393,9 +393,39 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 - コンストラクタ `Sub ClassName(...)` → `Dim obj As ClassName(args)` で自動呼出
 - デストラクタ `Sub ~ClassName()` → 局所は手続き末尾、モジュール大域は終了前に呼出
 - ctor/dtor 省略時は空の無引数版を暗黙生成
+- フィールドの無い Class も `Dim` / `New` できる（大きさは 1 バイト。中身の無い `Virtual` だけの COM インターフェースは除く）
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=This`、32bit は stdcall の第1引数）
-- `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。親に `Virtual` がある Class は COM インターフェースとして空の ctor/dtor を付けない。`Virtual` 呼び出しは vtable
-- `Super.Name(args)` は親の `Name` を `This` 付きで直接呼ぶ。`Super.Parent(args)` は親 ctor、`Super.~Parent()` は親 dtor。基底の ctor/dtor は自動では呼ばない
+- `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。`Virtual` 呼び出しは vtable
+- 中身の無い `Virtual Sub M(...)` / `Virtual Function M(...) As T`（宣言だけ）の Class は COM インターフェース。空の ctor/dtor を付けず、それを `Inherits` した Class も同じ
+- 中身のある `Virtual` / `Override`（ユーザーの vtable）:
+
+```
+Class Form
+    Public
+    Sub Form()
+        InitializeComponent()        ' 作っているオブジェクトの Class の Override を呼ぶ
+    End Sub
+    Virtual Sub InitializeComponent()
+    End Sub
+End Class
+
+Class Form1
+    Inherits Form
+Private
+    Override Sub InitializeComponent()
+        ' ...
+    End Sub
+End Class
+```
+
+  - 本体に中身のある `Virtual` がある Class は、先頭（オフセット 0）に隠しフィールド `__vptr` を持つ。そのため最初に `Virtual` を持つ Class は `Inherits` できない（子孫は `Inherits` してよい）
+  - 子は `Override Sub` / `Override Function` で差し替える。親に同じ名前の `Virtual` が無い `Override`、`Override` を付けずに親の `Virtual` と同じ名前の `Sub` / `Function` を書くのはコンパイルエラー。ユーザーの vtable の Class の `Virtual` は本体が要る（宣言だけは COM 用）
+  - vtable は `Dim` / `New` / メンバ Class でオブジェクトを作るとき、ctor より前に設定する。基底の ctor の中の呼び出しも、作っている Class の `Override` へ行く。`Private` の `Override` でも基底から呼べる
+  - `obj.M()`、`p->M()`、メソッド内の `M()` は vtable 経由。`Super.M()` は親の定義を直接呼ぶ
+- `Super.Name(args)` は親の `Name` を `This` 付きで直接呼ぶ。`Super.Parent(args)` は親 ctor、`Super.~Parent()` は親 dtor
+- 基底の ctor/dtor は自動で呼ぶ。ctor は 基底 ctor → メンバ ctor → 本体、dtor は 本体 → メンバ dtor → 基底 dtor の順。省略した ctor/dtor（暗黙の空の版）でも同じ
+- 本体のどこかに `Super.Parent(...)` があれば基底 ctor を、`Super.~Parent()` があれば基底 dtor を自動では呼ばない（二重に呼ばない）。呼ぶのは書いた位置
+- 自動で呼ぶ基底 ctor は引数なしに合う定義。基底に引数なしの ctor が無いのに `Super.Parent(...)` を書かないときはコンパイルエラー（`base class ctor requires arguments`）
 - 値のメンバ Class は、そのフィールドを宣言した Class の ctor 先頭でメンバ ctor、dtor 末尾でメンバ dtor を呼ぶ。メンバ ctor にユーザー引数があるときはコンパイルエラー
 - `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
 - `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。個数を省略したときは 1。コンストラクタ引数は一度だけ評価し、各要素へ同じ値を渡す。確保に失敗したときは 0 を返し、コンストラクタは呼ばない
@@ -835,6 +865,43 @@ dx_SetCullMode(CullMode)
 
 ---
 
+### 7.8 フォーム（`Forms.sbp`）
+
+`#include <Forms.sbp>`（[`src/Include/Forms.sbp`](../src/Include/Forms.sbp)）で、窓を Class として書ける。サンプルは [`src/actba64/samples/forms/`](../src/actba64/samples/forms/)。
+
+```
+#include <Forms.sbp>
+
+Class Form1
+    Inherits Form
+Private
+    Override Sub InitializeComponent()
+        Left = 673
+        Top = 320
+        Width = 320
+        Height = 240
+        Caption = "Form1"
+    End Sub
+End Class
+
+Dim mainForm As Form1
+Application.Initialize()
+Application.Run(mainForm)
+```
+
+| 名前 | 意味 |
+|---|---|
+| `Form` | `Left` / `Top` / `Width` / `Height`（既定 `CW_USEDEFAULT`）、`Caption`、`Handle`（窓ができてから）。ctor が `InitializeComponent()` を呼ぶ |
+| `Virtual Sub InitializeComponent()` | 子が `Override` して位置・大きさ・見出しを入れる |
+| `Virtual Function WndProc(msg, wParam, lParam) As LRESULT` | 窓のメッセージ。子が `Override` し、扱わないものは `Super.WndProc(msg, wParam, lParam)` へ。既定は `WM_DESTROY` で `PostQuitMessage(0)` し、`DefWindowProc` を返す |
+| `Show()` | 窓が無ければ作って表示する |
+| `Application.Initialize()` | 今は何もしない |
+| `Application.Run(form)` | `form.Show()` のあと、窓が閉じるまでメッセージループを回す |
+
+- 窓クラスは 1 つ（`ActBa64Form`）。`CreateWindowEx` の中の最初のメッセージで、作っている `Form` を窓（`GWL_USERDATA`）に結びつけ、以後は `Form` の `WndProc` を vtable で呼ぶ。`WM_CREATE` なども `Override` した `WndProc` に届く
+- 窓は Unicode。`Caption` は UTF-8 のまま入れてよい
+- 今は 1 つのフォームを前提にしている（どのフォームが閉じてもメッセージループが終わる）
+
 ## 8. WinAPI / IAT
 
 `api.idx` / `UnicodeApi.sbp` の `Declare`（およびソース側 Declare）で認識した API はインポートテーブル（IAT）に載る。  
@@ -938,7 +1005,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 
 ## 10. 非対応（意図的）
 
-- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは COM vtable。`Super` / `New` / `Delete` は対応）
+- ActiveBasic 全互換、イベント駆動。`Class` は [§3.3](#33-class)（`Inherits` はフィールドと vtable。`Virtual` 呼び出しは vtable（COM と、中身のある `Virtual` / `Override`）。`Super` / `New` / `Delete` は対応）
 - `Single` の四則演算は Double で計算して Single に戻す（`Print` は `StrS$` で有効 6 桁）。`Double` の演算・`Math.abp`・小数リテラル・N88 `CIRCLE` 角度、配列要素、UDT フィールド、`Print` の自動変換は IEEE Double（64bit と `-actba32`）
 - ネスト手続き
 - `#resource` の MENU / DIALOG / VERSIONINFO（ICON / BITMAP 文は隣の `rc.exe`。ファイル全体の RCDATA 埋め込みは対応）
