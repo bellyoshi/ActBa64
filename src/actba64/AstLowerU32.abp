@@ -1,0 +1,65 @@
+' AstLowerU32 - DWord（符号なし 32bit）の式を Double へ変換するとき 0..4294967295 として読む
+' 値は Long と同じ 32bit のまま。印は変数・仮引数の LOW_PTI_U32 と、Type メンバの FIELDTY_DWORD。
+
+' DWord の変数・仮引数・メンバ、または DWord どうしの + - * And Or Xor なら 1
+Function LowExprIsU32(ctx As *LowerCtx, idx As Long) As Long
+    Dim kind As Long
+    LowExprIsU32 = 0
+    If idx < 0 Then Exit Function
+    kind = LowNodeKind(ctx, idx)
+    If kind = AST_VAR Then LowExprIsU32 = LowVarIsU32(ctx, idx)
+    If kind = AST_MEMBER Then LowExprIsU32 = LowMemberIsU32(ctx, idx)
+    If kind = AST_BINOP Then LowExprIsU32 = LowBinopIsU32(ctx, idx)
+End Function
+
+Function LowVarIsU32(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vByRef As Long, vGlob As Long
+    LowVarIsU32 = 0
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+    If vTy = TY_LONG And vTi = LOW_PTI_U32 Then LowVarIsU32 = 1
+End Function
+
+Function LowMemberIsU32(ctx As *LowerCtx, idx As Long) As Long
+    LowMemberIsU32 = 0
+    If LowMemberFieldTy(ctx, idx) <> FIELDTY_DWORD Then Exit Function
+    If LowMemberIsArr(ctx, idx) <> 0 Then Exit Function
+    LowMemberIsU32 = 1
+End Function
+
+' 32bit のまま回り込む演算で、両辺とも DWord なら結果も DWord
+Function LowBinopIsU32(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    LowBinopIsU32 = 0
+    If LowBinopWraps(ctx, idx) = 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowExprIsU32(ctx, nodes[idx].left) = 0 Then Exit Function
+    LowBinopIsU32 = LowExprIsU32(ctx, nodes[idx].right)
+End Function
+
+Function LowBinopWraps(ctx As *LowerCtx, idx As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim op As Long
+    ast = ctx->ast
+    nodes = ast->nodes
+    op = nodes[idx].num
+    LowBinopWraps = 0
+    If op = BOP_ADD Or op = BOP_SUB Or op = BOP_MUL Or op = BOP_AND Or op = BOP_OR Or op = BOP_XOR Then LowBinopWraps = 1
+End Function
+
+' 評価済みの式 idx（rax）を Double へ。DWord なら符号なしで
+Sub LowEmitCvtExprToDouble(ctx As *LowerCtx, idx As Long)
+    LowEmitCvtRaxToDoubleU(ctx, LowExprType(ctx, idx), LowExprIsU32(ctx, idx))
+End Sub
+
+Sub LowEmitCvtRaxToDoubleU(ctx As *LowerCtx, typeKind As Long, isU32 As Long)
+    If typeKind = TY_LONG And isU32 <> 0 Then
+        IrEmit(ctx->list, OP_CVT_U32_TO_SD, 0, 0)
+        Exit Sub
+    End If
+    LowEmitCvtRaxToDoubleFromTy(ctx, typeKind)
+End Sub

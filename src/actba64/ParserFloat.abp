@@ -2,11 +2,13 @@
 '  ParserFloat - 十進テキスト → IEEE754 Double ビット
 ' ===================================================
 ' 16 ビットずつの多倍長整数（下位の桁から）で num/den を割り、最近接偶数に丸める。
-' Long 演算のみ（AB4.20 の Double 変換を避ける）。テキストは 255 文字までなので指数は範囲内に収まる。
+' Long 演算のみ（AB4.20 の Double 変換を避ける）。テキストは 255 文字、指数 e は ±PF_MAXEXP までなので
+' 10^(255+400) < 2^2560 で範囲内に収まる。
 
-Const PF_LIMBS = 112
-Const PF_MAXIDX = 111
+Const PF_LIMBS = 160
+Const PF_MAXIDX = 159
 Const PF_MAXSIG = 40
+Const PF_MAXEXP = 400
 
 Sub PfClear(a As *Long)
     Dim i As Long
@@ -86,6 +88,43 @@ Sub PfReadText(text As *Byte, num As *Long, den As *Long)
         PfReadChar(text[i], num, den, VarPtr(st))
         i = i + 1
     Wend
+    PfApplyExp(text, i, num, den)
+End Sub
+
+' text[i] からの e±k を、正なら num、負なら den へ 10^|k| として掛ける
+Sub PfApplyExp(text As *Byte, i As Long, num As *Long, den As *Long)
+    Dim k As Long
+    If ToLowerChar(text[i]) <> CH_Le Then Exit Sub
+    k = PfExpValue(text, i + 1)
+    If k < 0 Then
+        PfMulPow10(den, 0 - k)
+    Else
+        PfMulPow10(num, k)
+    End If
+End Sub
+
+' 符号つき十進の指数（|k| は PF_MAXEXP で頭打ち）
+Function PfExpValue(text As *Byte, i As Long) As Long
+    Dim v As Long
+    Dim neg As Long
+    neg = 0
+    If text[i] = CH_MINUS Then neg = 1
+    If text[i] = CH_MINUS Or text[i] = CH_PLUS Then i = i + 1
+    v = 0
+    While IsDigit(text[i])
+        v = v * 10 + DigitValue(text[i])
+        If v > PF_MAXEXP Then v = PF_MAXEXP
+        i = i + 1
+    Wend
+    If neg <> 0 Then v = 0 - v
+    PfExpValue = v
+End Function
+
+Sub PfMulPow10(a As *Long, k As Long)
+    Dim i As Long
+    For i = 1 To k
+        PfMulAdd(a, 10, 0)
+    Next
 End Sub
 
 ' n を 2 倍して d 以上なら引く（商の次の 1 ビット）
@@ -137,12 +176,20 @@ Sub PfRound(n As *Long, d As *Long, ByRef outLo As Long, ByRef outHi As Long)
     outLo = outLo + 1
 End Sub
 
+' 指数が Double に入らなければ 1。大きすぎれば無限大、小さすぎれば 0（非正規化数は作らない）
+Function PfExpOut(e As Long, ByRef outHi As Long) As Long
+    PfExpOut = 1
+    If e >= 2047 Then outHi = &H7FF00000
+    If e <= 0 Or e >= 2047 Then Exit Function
+    PfExpOut = 0
+End Function
+
 ' num/den (>0) → IEEE754 Double ビット。num, den は壊す
 Sub PfToBits(n As *Long, d As *Long, ByRef outLo As Long, ByRef outHi As Long)
     Dim e As Long
     e = 1023 + PfShiftDen(n, d)
     e = e - PfShiftNum(n, d)
-    If e <= 0 Or e >= 2047 Then Exit Sub
+    If PfExpOut(e, outHi) <> 0 Then Exit Sub
     PfSub(n, d)
     outHi = e * 1048576 + PfBits(n, d, 20)
     outLo = PfBits(n, d, 32)

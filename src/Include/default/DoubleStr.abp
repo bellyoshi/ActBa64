@@ -3,7 +3,8 @@
 ' Print が Double 式を表示するとき StrD$ を呼ぶ。
 ' ネストした関数呼び出しを避けるため、一時変数経由で連結する。
 ' 小数は 6 桁に丸めてから出力し、末尾の 0 は落とす。
-' |d| が Long 範囲（約 2^31）を超える場合は簡略表示。
+' |d| が Long 範囲（約 2^31）を超えると StrDBig$。10^15 未満は整数部をそのまま、
+' それ以上は 1.5E+20 の形（仮数は小数 6 桁まで）。無限大は inf。
 '
 ' 注意: この関数内で Chr$ を While と組み合わせると、未使用でも
 ' Input 文字列比較が壊れる事例があるため、桁は Mid$ で取る。
@@ -99,19 +100,15 @@ Function StrD$(d As Double) As String
         neg = 1
         x = zero - x
     End If
-    If x > maxIp Then
-        If neg <> 0 Then
-            StrD$ = "-inf"
-        Else
-            StrD$ = "inf"
-        End If
-        Exit Function
-    End If
-    StrDParts(x, ip, n)
     sign = ""
     If neg <> 0 Then
         sign = "-"
     End If
+    If x > maxIp Then
+        StrD$ = StrDBig$(x, sign, digits)
+        Exit Function
+    End If
+    StrDParts(x, ip, n)
     t = Str$(ip)
     s = sign + t
     s = StrDFrac$(s, n, digits)
@@ -146,7 +143,7 @@ Function StrS$(d As Double) As String
     If x < zero Then sign = "-"
     If x < zero Then x = zero - x
     If x > maxIp Then
-        StrS$ = sign + "inf"
+        StrS$ = StrDBig$(x, sign, digits)
         Exit Function
     End If
     ip = x
@@ -155,4 +152,123 @@ Function StrS$(d As Double) As String
     t = Str$(ip)
     t = sign + t
     StrS$ = StrDFracN$(t, n, digits, fd)
+End Function
+
+' x（> 2^31-1、正）を sign の後ろへ。inf / 整数部そのまま / 指数形式
+Function StrDBig$(x As Double, sign As String, digits As String) As String
+    Dim lim As Double
+    Dim t As String
+    If StrDIsInf(x) <> 0 Then
+        StrDBig$ = sign + "inf"
+        Exit Function
+    End If
+    lim = StrDPow10(15)
+    If x < lim Then
+        t = StrDWide$(x, sign, digits)
+    Else
+        t = StrDExp$(x, sign, digits)
+    End If
+    StrDBig$ = t
+End Function
+
+' 正の無限大なら 1（半分にしても変わらない）
+Function StrDIsInf(x As Double) As Long
+    Dim h As Double
+    Dim two As Double
+    two = 2
+    h = x / two
+    StrDIsInf = 0
+    If h = x Then StrDIsInf = 1
+End Function
+
+Function StrDPow10(k As Long) As Double
+    Dim p As Double
+    Dim ten As Double
+    Dim i As Long
+    p = 1
+    ten = 10
+    For i = 1 To k
+        p = p * ten
+    Next
+    StrDPow10 = p
+End Function
+
+' 10^15 未満の x を、上の桁 q（10^6 未満）と下 9 桁（小数つき）に分けて並べる
+Function StrDWide$(x As Double, sign As String, digits As String) As String
+    Dim g As Double
+    Dim r As Double
+    Dim q As Long
+    Dim ip As Long
+    Dim n As Long
+    Dim s As String
+    Dim t As String
+    g = 1000000000
+    q = x / g
+    r = q
+    r = x - r * g
+    StrDParts(r, ip, n)
+    If ip >= 1000000000 Then
+        q = q + 1
+        ip = ip - 1000000000
+    End If
+    t = Str$(q)
+    s = sign + t
+    t = StrDPad9$(ip, digits)
+    s = s + t
+    StrDWide$ = StrDFrac$(s, n, digits)
+End Function
+
+' 0 埋め 9 桁
+Function StrDPad9$(ByVal ip As Long, digits As String) As String
+    Dim i As Long
+    Dim d As Long
+    Dim s As String
+    Dim t As String
+    s = ""
+    For i = 1 To 9
+        d = MathMod(ip, 10)
+        t = Mid$(digits, d + 1, 1)
+        s = t + s
+        ip = MathDiv(ip, 10)
+    Next
+    StrDPad9$ = s
+End Function
+
+' 10^15 以上。仮数 1 <= m < 10 と指数 e で m E+e
+Function StrDExp$(x As Double, sign As String, digits As String) As String
+    Dim e As Long
+    Dim p As Double
+    Dim m As Double
+    Dim ip As Long
+    Dim n As Long
+    Dim s As String
+    Dim t As String
+    e = StrDExpOf(x)
+    p = StrDPow10(e)
+    m = x / p
+    StrDParts(m, ip, n)
+    If ip >= 10 Then
+        ip = 1
+        e = e + 1
+    End If
+    t = Str$(ip)
+    s = sign + t
+    s = StrDFrac$(s, n, digits)
+    t = Str$(e)
+    StrDExp$ = s + "E+" + t
+End Function
+
+' 10^e <= x となる最大の e
+Function StrDExpOf(x As Double) As Long
+    Dim p As Double
+    Dim ten As Double
+    Dim e As Long
+    p = 1
+    ten = 10
+    e = 0
+    While p * ten <= x
+        p = p * ten
+        e = e + 1
+    Wend
+    StrDExpOf = e
 End Function
