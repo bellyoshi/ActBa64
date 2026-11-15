@@ -63,7 +63,7 @@ Print a +_
 
 ソース **1 行の最大長は 1024 バイト**（`PP_LINE_MAX`。改行は含まない）。超過するとコンパイルエラー（`too long line`）。長い `If` 条件などは複数行へ分割する（[§1.2](#line-continuation) の `_` や括弧内改行）。
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`CvtNum.abp`、`Pow.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Val.abp`、`Using.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`CvtNum.abp`、`Pow.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Val.abp`、`UsingDig.abp` / `UsingNum.abp` / `Using.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される（[`src/Include`](../src/Include)）。  
 `#console` / `#n88basic` はそれに加えて各プロファイル idx を挿入する。
 
 ### 1.4 `.pj`（プロジェクト）
@@ -718,7 +718,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
 
 ### 7.3 自動 Include
 
-`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`CvtNum.abp`、`Pow.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Val.abp`、`Using.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
+`Include\default\default.idx`（`Windows.sbp` / `WinConsts.sbp` / `WinTypes.sbp`、`Math.abp`、`CvtNum.abp`、`Pow.abp`、`Sleep.abp`、`Space.abp`、`DoubleStr.abp`、`BasicFile.abp`、`StringGc.abp`、`StrUtils.abp`、`Val.abp`、`UsingDig.abp` / `UsingNum.abp` / `Using.abp`、`SplitPath.abp`、`Memory.abp`、`BasicCmd.abp`）は **常時** 先頭へ挿入される。実体はリポジトリの [`src/Include`](../src/Include) 1 本。コンパイラは exe 隣 → 親〜3 階層上 → カレントの `Include\` を順に探す（詳細は [build.md](./build.md#include-の置き場所)）。  
 続けて Preproc が `api.idx`（主要 Win32 の `Declare Lib`）と `UnicodeApi.sbp`（Unicode 版 API）を挿入する。  
 加えてソースのディレクティブでプロファイルを挿入する:
 
@@ -748,7 +748,7 @@ Print Log(MathE())    ' ≒ 1
 `CDbl` / `CSng` / `CInt` / `CDWord` は `CvtNum.abp`（`CDbl` は Double、`CSng` は Single、`CInt` は四捨五入した Long。0.5 は 0 から遠い側。`CDWord` は切捨て）。
 `ldexp` / `frexp` / `ipow` / `pow` / `rand` / `srand` は `Pow.abp`。種の初期値は 1。`rand` は `next = next * 1103515245 + 12345` のあと `(next >> 16) And 32767`（0..32767）。`Rnd` はこの種を 2 回進める。
 `Val` は `Val.abp` で Double（空白、符号、小数、`&H` / `&O`）。`String$(n, s)` は `s` を `n` 回繰り返す。`GetBasicColor(0..7)` は N88 の 8 色。
-`Print Using "fmt"; expr` は値 1 つ。`#` / `.#` は数値、文字列リテラルは `@` と `& &`。同じ処理は `Using$` / `UsingStr$`。
+`Print Using "fmt"; 式 [;/, 式 ...] [;/,]` は N88-BASIC と同じ。書式は値ごとに前から当てはめ、終わりまで来たら先頭へ戻る。最後の値のあとは次の欄の手前まで出す。文末の `;` / `,` で改行しない。数値欄は `#`、`.`、`,`（3 桁区切り）、先頭の `+` と末尾の `+` / `-`（符号）、先頭の `**`（`*` 埋め）・`\\`（`\` を付ける）・`**\`、末尾の `^^^^`（指数形式）。入らない数は前に `%` を付ける。文字列欄は `!`（1 文字）、`& &`（幅つき）、`@`（全体）。`_` の次の 1 文字と、欄でない文字（全角も）はそのまま出す。値は Long / Double / String を型で見分ける（`PuUseVal$` の呼び分け）。値 1 つの同じ処理は `Using$` / `UsingStr$`。
 
 - 小数リテラル・`Function As Double` / Double 仮引数はすべて IEEE Double ビット
 - N88 `CIRCLE` の角度・aspect も `Double`（内部の千分率表現は廃止）

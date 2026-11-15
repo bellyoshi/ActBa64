@@ -1,4 +1,6 @@
-' ParserPrintUsing - Print Using fmt; expr を Using$ / UsingStr$ の Print にする
+' ParserPrintUsing - Print Using fmt; a, b ... を
+'   Print PuUseEnd$(PuUseVal$(PuUseVal$(PuUseBeg$(fmt), a), b)) にする（Include の Using.abp）
+' 文末が ; / , なら改行しない。PuUseVal$ は引数の型で Double / Long / String を呼び分ける。
 
 Function ParseAddArg(ast As *Ast, e As Long, prev As Long) As Long
     Dim nodes As *AstNode
@@ -11,40 +13,46 @@ Function ParseAddArg(ast As *Ast, e As Long, prev As Long) As Long
     If prev >= 0 Then nodes[prev].nxt = arg1
 End Function
 
-Sub ParseCall2Set(ast As *Ast, n As Long, a0 As Long)
+Sub ParseCallSet(ast As *Ast, n As Long, a0 As Long, cnt As Long)
     Dim nodes As *AstNode
     nodes = ast->nodes
     nodes[n].left = a0
-    nodes[n].num = 2
+    nodes[n].num = cnt
     nodes[n].right = -1
     nodes[n].extra = -1
 End Sub
 
-Function ParseCall2(ast As *Ast, name As *Byte, a0 As Long) As Long
+Function ParseCallN(ast As *Ast, name As *Byte, a0 As Long, cnt As Long) As Long
     Dim n As Long
     n = AstAddNode(ast, AST_CALL)
-    ParseCall2 = n
+    ParseCallN = n
     If n < 0 Then Exit Function
     AstSetStr(ast, n, name)
-    ParseCall2Set(ast, n, a0)
+    ParseCallSet(ast, n, a0, cnt)
 End Function
 
-Sub ParseUsingPick(ast As *Ast, val As Long, name As *Byte)
-    Dim nodes As *AstNode
-    lstrcpy(name, "Using$")
-    nodes = ast->nodes
-    If nodes[val].kind = AST_STRING Then lstrcpy(name, "UsingStr$")
+' 0 = PuUseBeg$  1 = PuUseVal$  2 = PuUseEnd$
+Sub ParseUsingName(which As Long, name As *Byte)
+    lstrcpy(name, "PuUseBeg$")
+    If which = 1 Then lstrcpy(name, "PuUseVal$")
+    If which = 2 Then lstrcpy(name, "PuUseEnd$")
 End Sub
 
-Function ParseUsingCall(p As *Parser, fmt As Long, val As Long) As Long
+Function ParseUsingArgN(y As Long) As Long
+    ParseUsingArgN = 1
+    If y >= 0 Then ParseUsingArgN = 2
+End Function
+
+' which の関数を引数 x（と y。y < 0 なら 1 引数）で呼ぶ式
+Function ParseUsingCall(p As *Parser, which As Long, x As Long, y As Long) As Long
     Dim ast As *Ast
     Dim a0 As Long
     Dim name(SYM_NAME_LEN - 1) As Byte
     ast = p->ast
-    ParseUsingPick(ast, val, VarPtr(name))
-    a0 = ParseAddArg(ast, fmt, -1)
-    ParseAddArg(ast, val, a0)
-    ParseUsingCall = ParseCall2(ast, VarPtr(name), a0)
+    ParseUsingName(which, VarPtr(name))
+    a0 = ParseAddArg(ast, x, -1)
+    If y >= 0 Then ParseAddArg(ast, y, a0)
+    ParseUsingCall = ParseCallN(ast, VarPtr(name), a0, ParseUsingArgN(y))
 End Function
 
 Sub ParsePrintSet(ast As *Ast, nPrint As Long, nFile As Long, nArg As Long, stay As Long)
@@ -81,32 +89,61 @@ Function ParseUsingSep(p As *Parser) As Long
     ParseUsingSep = 1
 End Function
 
-Function ParseUsingStay(p As *Parser) As Long
-    ParseUsingStay = 0
-    If ParseTokKind(p) <> TK_SEMI Then Exit Function
-    p->pos = p->pos + 1
-    ParseUsingStay = 1
+' 値のあとの ; / ,。1 = 同じ行に次の値  0 = 終わり（区切りで終わったら stay = 1）
+Function ParseUsingNext(p As *Parser, ByRef stay As Long) As Long
+    Dim srcLine As Long
+    ParseUsingNext = 0
+    srcLine = ParseTokLogLine(p)
+    If ParseUsingSep(p) = 0 Then Exit Function
+    stay = 1
+    If ParseIoSemiRewind(p, srcLine) Then Exit Function
+    stay = 0
+    ParseUsingNext = 1
 End Function
 
-Function ParsePrintUsingFinish(p As *Parser, nFile As Long, fmt As Long, val As Long) As Long
-    Dim callN As Long
-    Dim stay As Long
-    stay = ParseUsingStay(p)
-    callN = ParseUsingCall(p, fmt, val)
-    ParsePrintUsingFinish = -1
-    If callN < 0 Then Exit Function
-    ParsePrintUsingFinish = ParsePrintWrap(p, nFile, callN, stay)
+' 値を 1 つ読み、acc を PuUseVal$(acc, 値) で包む
+Function ParseUsingVal(p As *Parser, acc As Long) As Long
+    Dim val As Long
+    ParseUsingVal = -1
+    val = ParseExpr(p)
+    If val < 0 Then Exit Function
+    ParseUsingVal = ParseUsingCall(p, 1, acc, val)
+End Function
+
+Function ParseUsingMore(p As *Parser, acc As Long, ByRef stay As Long) As Long
+    ParseUsingMore = 0
+    If acc >= 0 Then ParseUsingMore = ParseUsingNext(p, stay)
+End Function
+
+Function ParseUsingVals(p As *Parser, acc As Long, ByRef stay As Long) As Long
+    Dim more As Long
+    more = 1
+    stay = 0
+    While more <> 0
+        acc = ParseUsingVal(p, acc)
+        more = ParseUsingMore(p, acc, stay)
+    Wend
+    ParseUsingVals = acc
+End Function
+
+Function ParseUsingChain(p As *Parser, fmt As Long, ByRef stay As Long) As Long
+    Dim acc As Long
+    ParseUsingChain = -1
+    acc = ParseUsingCall(p, 0, fmt, -1)
+    If acc >= 0 Then acc = ParseUsingVals(p, acc, stay)
+    If acc < 0 Then Exit Function
+    ParseUsingChain = ParseUsingCall(p, 2, acc, -1)
 End Function
 
 Function ParsePrintUsingBody(p As *Parser, nFile As Long) As Long
     Dim fmt As Long
-    Dim val As Long
-    fmt = ParseExpr(p)
+    Dim acc As Long
+    Dim stay As Long
     ParsePrintUsingBody = -1
+    fmt = ParseExpr(p)
     If fmt < 0 Or ParseUsingSep(p) = 0 Then Exit Function
-    val = ParseExpr(p)
-    If val < 0 Then Exit Function
-    ParsePrintUsingBody = ParsePrintUsingFinish(p, nFile, fmt, val)
+    acc = ParseUsingChain(p, fmt, stay)
+    If acc >= 0 Then ParsePrintUsingBody = ParsePrintWrap(p, nFile, acc, stay)
 End Function
 
 Function ParseUsingLead(p As *Parser, ByRef nFile As Long) As Long

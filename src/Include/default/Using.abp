@@ -1,347 +1,198 @@
 ' Using.abp — Print Using の書式（default 常時読込）
-' # は数値、@ は文字列の埋め込み、& & は幅つき文字列。値は 1 つ。
+' Print Using f; a, b は PuUseEnd$(PuUseVal$(PuUseVal$(PuUseBeg$(f), a), b)) になる。
+' 値ごとに書式を前から当てはめ、書式の終わりまで来たら先頭へ戻る。最後の値のあとは次の欄の手前まで出す。
+' 欄: 数値（UsingNum.abp）、! は 1 文字、& & は幅つき、@ は文字列全体。_ の次の 1 文字はそのまま出す。
+' 文字列は UTF-8。2 バイト目以降は 80h 以上なので欄の文字と取り違えない。
+Const PU_F_NONE = 0
+Const PU_F_NUM = 1
+Const PU_F_BANG = 2
+Const PU_F_AMP = 3
+Const PU_F_AT = 4
 
-Function PuCountHash(p As *Byte, n As Long, ByRef i As Long) As Long
-    Dim c As Long
-    c = 0
-    While i < n And p[i] = Asc("#")
-        c = c + 1
-        i = i + 1
-    Wend
-    PuCountHash = c
+Dim g_puFmt As String
+Dim g_puPos As Long
+
+' UTF-8 の先頭バイト c から 1 文字のバイト数
+Function PuU8Len(c As Long) As Long
+    PuU8Len = 1
+    If c >= 192 Then PuU8Len = 2
+    If c >= 224 Then PuU8Len = 3
+    If c >= 240 Then PuU8Len = 4
 End Function
 
-Function PuHalf(frac As Long) As Double
-    Dim s As Double
+' & から閉じの & までの幅。閉じがなければ -1
+Function PuAmpW(p As *Byte, i As Long) As Long
+    Dim j As Long
+    j = PuSkipSp(p, PU_BIG, i + 1)
+    PuAmpW = -1
+    If p[j] = Asc("&") Then PuAmpW = j - i + 1
+End Function
+
+Function PuFieldAt(p As *Byte, i As Long) As Long
+    PuFieldAt = PU_F_NONE
+    If PuNumAt(p, i) <> 0 Then PuFieldAt = PU_F_NUM
+    If p[i] = Asc("!") Then PuFieldAt = PU_F_BANG
+    If p[i] = Asc("@") Then PuFieldAt = PU_F_AT
+    If p[i] <> Asc("&") Then Exit Function
+    If PuAmpW(p, i) > 0 Then PuFieldAt = PU_F_AMP
+End Function
+
+Function PuCurKind() As Long
+    PuCurKind = PU_F_NONE
+    If g_puPos >= Len(g_puFmt) Then Exit Function
+    PuCurKind = PuFieldAt(StrPtr(g_puFmt), g_puPos)
+End Function
+
+' 欄でない 1 文字（_x は x。UTF-8 の 1 文字ごと）
+Function PuLit1(p As *Byte, acc As String) As String
     Dim k As Long
-    s = 0.5
-    For k = 1 To frac
-        s = s / 10
-    Next
-    PuHalf = s
+    If p[g_puPos] = Asc("_") Then g_puPos = g_puPos + 1
+    k = PuU8Len(p[g_puPos])
+    PuLit1 = acc + Mid$(g_puFmt, g_puPos + 1, k)
+    g_puPos = g_puPos + k
 End Function
 
-Function PuRound(n As Double, frac As Long) As Double
-    Dim s As Double
-    s = PuHalf(frac)
-    If n < 0 Then s = 0 - s
-    PuRound = n + s
+Function PuLitMore() As Long
+    PuLitMore = 0
+    If g_puPos >= Len(g_puFmt) Then Exit Function
+    If PuCurKind() = PU_F_NONE Then PuLitMore = 1
 End Function
 
-Function PuPow10(k As Long) As Double
-    Dim s As Double
-    Dim i As Long
-    s = 1
-    For i = 1 To k
-        s = s * 10
-    Next
-    PuPow10 = s
-End Function
-
-Function PuIntDigAt(x As Double, c As Long) As Long
-    While x >= 10
-        x = x / 10
-        c = c + 1
-    Wend
-    PuIntDigAt = c
-End Function
-
-Function PuIntDigits(n As Double) As Long
-    Dim x As Double
-    x = Abs(n)
-    PuIntDigits = PuIntDigAt(x, 1)
-End Function
-
-Function PuFracN(fh As Long) As Long
-    PuFracN = 0
-    If fh > 0 Then PuFracN = fh
-End Function
-
-Function PuHashN(k As Long) As String
+' 次の欄の手前（または書式の終わり）まで文字をそのまま足す
+Function PuLitRun(acc As String) As String
     Dim s As String
-    Dim i As Long
-    s = ""
-    For i = 1 To k
-        s = s + "#"
-    Next
-    PuHashN = s
+    s = acc
+    While PuLitMore() <> 0
+        s = PuLit1(StrPtr(g_puFmt), s)
+    Wend
+    PuLitRun = s
 End Function
 
-Function PuCatDot(s As String, a As String) As String
+Function PuHasField() As Long
+    Dim keep As Long
     Dim t As String
-    t = "." + a
-    PuCatDot = s + t
+    keep = g_puPos
+    g_puPos = 0
+    t = PuLitRun("")
+    PuHasField = 0
+    If g_puPos < Len(g_puFmt) Then PuHasField = 1
+    g_puPos = keep
 End Function
 
-Function PuHashDot(s As String, fh As Long) As String
-    Dim a As String
-    Dim k As Long
-    k = PuFracN(fh)
-    a = PuHashN(k)
-    PuHashDot = PuCatDot(s, a)
-End Function
-
-Function PuHashes(ih As Long, fh As Long) As String
+' 次の欄まで進む。書式の終わりまで来たら先頭へ戻る（欄が 1 つもなければ終わりのまま）
+Function PuLitToField(acc As String) As String
     Dim s As String
-    s = PuHashN(ih)
-    If fh >= 0 Then s = PuHashDot(s, fh)
-    PuHashes = s
+    s = PuLitRun(acc)
+    PuLitToField = s
+    If g_puPos < Len(g_puFmt) Then Exit Function
+    If PuHasField() = 0 Then Exit Function
+    g_puPos = 0
+    PuLitToField = PuLitRun(s)
 End Function
 
-Function PuTooWide(n As Double, ih As Long) As Long
-    Dim need As Long
-    need = PuIntDigits(Abs(n))
-    If n < 0 Then need = need + 1
-    PuTooWide = 0
-    If need > ih Then PuTooWide = 1
-End Function
-
-Function PuDigStep(ByRef x As Double, ByRef scale As Double) As Long
-    Dim d As Long
-    d = x / scale
-    If d > 9 Then d = 9
-    If d < 0 Then d = 0
-    x = x - d * scale
-    scale = scale / 10
-    PuDigStep = d
-End Function
-
-Function PuDigLoop$(ByRef x As Double, ByRef scale As Double, k As Long) As String
-    Dim s As String
-    s = ""
-    While k > 0
-        s = s + Chr$(Asc("0") + PuDigStep(x, scale))
-        k = k - 1
-    Wend
-    PuDigLoop$ = s
-End Function
-
-Function PuDigits(n As Double, scale As Double, k As Long) As String
-    Dim x As Double
-    x = n
-    PuDigits = PuDigLoop$(x, scale, k)
-End Function
-
-Function PuIntStr(n As Double) As String
-    Dim x As Double
-    Dim k As Long
-    k = PuIntDigits(n)
-    x = PuPow10(k - 1)
-    PuIntStr = PuDigits(n, x, k)
-End Function
-
-Function PuFracStr(n As Double, fh As Long) As String
-    Dim x As Double
-    Dim ip As Double
-    Dim scale As Double
-    ip = Fix(n)
-    x = (n - ip) * PuPow10(fh)
-    scale = PuPow10(fh - 1)
-    PuFracStr = PuDigits(x, scale, fh)
-End Function
-
-Function PuFracPart(n As Double, fh As Long) As String
-    PuFracPart = ""
-    If fh <= 0 Then Exit Function
-    PuFracPart = PuFracStr(n, fh)
-End Function
-
-Function PuPad(k As Long) As String
-    Dim s As String
+' 数値欄を読み飛ばして v を返す（PuSpec の結果は g_pu* に残る）
+Function PuSkipNum(v As String) As String
     Dim i As Long
-    s = ""
-    For i = 1 To k
-        s = s + " "
-    Next
-    PuPad = s
+    i = g_puPos
+    PuSpec(StrPtr(g_puFmt), i)
+    g_puPos = i
+    PuSkipNum = v
 End Function
 
-Function PuLead(n As Double, ih As Long, sign As Long) As String
-    Dim s As String
-    s = PuPad(ih - PuIntDigits(Abs(n)) - sign)
-    If sign <> 0 Then s = s + "-"
-    PuLead = s
-End Function
-
-Function PuFitCore(n As Double, ih As Long, sign As Long) As String
-    Dim a As String
-    Dim b As String
-    Dim x As Double
-    a = PuLead(n, ih, sign)
-    x = Abs(n)
-    b = PuIntStr(x)
-    PuFitCore = a + b
-End Function
-
-Function PuFitDot(s As String, n As Double, fh As Long) As String
-    Dim a As String
-    Dim x As Double
-    x = Abs(n)
-    a = PuFracPart(x, fh)
-    PuFitDot = PuCatDot(s, a)
-End Function
-
-Function PuFit(n As Double, ih As Long, fh As Long) As String
-    Dim s As String
-    Dim sign As Long
-    sign = 0
-    If n < 0 Then sign = 1
-    s = PuFitCore(n, ih, sign)
-    If fh >= 0 Then s = PuFitDot(s, n, fh)
-    PuFit = s
-End Function
-
-Function PuFormat(n As Double, ih As Long, fh As Long) As String
-    Dim r As Double
-    r = PuRound(n, PuFracN(fh))
-    If PuTooWide(r, ih) <> 0 Then
-        PuFormat = PuHashes(ih, fh)
-    Else
-        PuFormat = PuFit(r, ih, fh)
-    End If
-End Function
-
-Function PuFracHash(p As *Byte, m As Long, ByRef i As Long) As Long
-    PuFracHash = -1
-    If i >= m Or p[i] <> Asc(".") Then Exit Function
-    i = i + 1
-    PuFracHash = PuCountHash(p, m, i)
-End Function
-
-Function PuNumFmt(fmt As String, ByRef i As Long, n As Double) As String
-    Dim p As *Byte
-    Dim ih As Long
-    Dim fh As Long
-    p = StrPtr(fmt)
-    ih = PuCountHash(p, Len(fmt), i)
-    fh = PuFracHash(p, Len(fmt), i)
-    PuNumFmt = PuFormat(n, ih, fh)
-End Function
-
-Function PuNumField(fmt As String, ByRef i As Long, s As String, n As Double) As String
+Function PuNumField(v As Double) As String
     Dim t As String
-    t = PuNumFmt(fmt, i, n)
-    PuNumField = s + t
+    t = PuSkipNum("")
+    PuNumField = PuNumFmt(v)
 End Function
 
-Function PuCopy1(fmt As String, ByRef i As Long, s As String) As String
+Function PuFieldEnd(p As *Byte, k As Long) As Long
+    PuFieldEnd = g_puPos + 1
+    If k = PU_F_AMP Then PuFieldEnd = g_puPos + PuAmpW(p, g_puPos)
+End Function
+
+Function PuStrField(s As String) As String
     Dim p As *Byte
-    p = StrPtr(fmt)
-    PuCopy1 = s + Chr$(p[i])
-    i = i + 1
+    Dim k As Long
+    p = StrPtr(g_puFmt)
+    k = PuCurKind()
+    PuStrField = s
+    If k = PU_F_BANG Then PuStrField = PuFitStr(s, 1)
+    If k = PU_F_AMP Then PuStrField = PuFitStr(s, PuAmpW(p, g_puPos))
+    g_puPos = PuFieldEnd(p, k)
 End Function
 
-Function PuRoute(fmt As String, ByRef i As Long, s As String, n As Double, p As *Byte) As String
-    If p[i] = Asc("#") Then
-        PuRoute = PuNumField(fmt, i, s, n)
-        Exit Function
-    End If
-    PuRoute = PuCopy1(fmt, i, s)
+' 文字列欄に数値が来たときと、欄がない書式のときの書き方
+Function PuNumRaw(v As Double) As String
+    PuNumRaw = StrD$(v)
 End Function
 
-Function PuStep(fmt As String, ByRef i As Long, ByRef s As String, n As Double) As Long
-    Dim p As *Byte
-    p = StrPtr(fmt)
-    PuStep = 0
-    If i >= Len(fmt) Then Exit Function
-    s = PuRoute(fmt, i, s, n, p)
-    PuStep = 1
+Function PuValNumT(v As Double, k As Long) As String
+    Dim t As String
+    t = PuNumRaw(v)
+    PuValNumT = t
+    If k = PU_F_NUM Then PuValNumT = PuNumField(v)
+    If k > PU_F_NUM Then PuValNumT = PuStrField(t)
 End Function
 
+Function PuValNum(acc As String, v As Double) As String
+    Dim s As String
+    Dim t As String
+    s = PuLitToField(acc)
+    t = PuValNumT(v, PuCurKind())
+    PuValNum = s + t
+End Function
+
+Function PuValStrT(v As String, k As Long) As String
+    PuValStrT = v
+    If k = PU_F_NUM Then PuValStrT = PuSkipNum(v)
+    If k > PU_F_NUM Then PuValStrT = PuStrField(v)
+End Function
+
+Function PuValStr(acc As String, v As String) As String
+    Dim s As String
+    Dim t As String
+    s = PuLitToField(acc)
+    t = PuValStrT(v, PuCurKind())
+    PuValStr = s + t
+End Function
+
+Function PuUseBeg$(fmt As String) As String
+    g_puFmt = fmt
+    g_puPos = 0
+    PuUseBeg$ = ""
+End Function
+
+' 引数の型で呼び分ける（Double を先に置く。整数でも Double でもない型は Double へ）
+Function PuUseVal$(acc As String, v As Double) As String
+    PuUseVal$ = PuValNum(acc, v)
+End Function
+
+Function PuUseVal$(acc As String, v As Long) As String
+    Dim d As Double
+    d = v
+    PuUseVal$ = PuValNum(acc, d)
+End Function
+
+Function PuUseVal$(acc As String, v As String) As String
+    PuUseVal$ = PuValStr(acc, v)
+End Function
+
+Function PuUseEnd$(acc As String) As String
+    PuUseEnd$ = PuLitRun(acc)
+End Function
+
+' 値 1 つの Using（数値）
 Function Using$(fmt As String, n As Double) As String
     Dim s As String
-    Dim i As Long
-    s = ""
-    i = 0
-    While PuStep(fmt, i, s, n) <> 0
-        s = s
-    Wend
-    Using$ = s
+    s = PuUseBeg$(fmt)
+    s = PuValNum(s, n)
+    Using$ = PuUseEnd$(s)
 End Function
 
-Function PuSkipSp(p As *Byte, m As Long, j As Long) As Long
-    While j < m And p[j] = Asc(" ")
-        j = j + 1
-    Wend
-    PuSkipSp = j
-End Function
-
-Function PuAmpSpan(p As *Byte, m As Long, ByRef i As Long) As Long
-    Dim j As Long
-    j = PuSkipSp(p, m, i + 1)
-    PuAmpSpan = -1
-    If j >= m Or p[j] <> Asc("&") Then Exit Function
-    PuAmpSpan = j - i + 1
-    i = j + 1
-End Function
-
-Function PuFitStr(s As String, w As Long) As String
-    Dim t As String
-    If Len(s) >= w Then
-        PuFitStr = Left$(s, w)
-        Exit Function
-    End If
-    t = PuPad(w - Len(s))
-    PuFitStr = s + t
-End Function
-
-Function PuAmpPut(out As String, s As String, w As Long) As String
-    Dim t As String
-    t = PuFitStr(s, w)
-    PuAmpPut = out + t
-End Function
-
-Function PuAmpField(fmt As String, ByRef i As Long, out As String, ByRef s As String) As String
-    Dim w As Long
-    w = PuAmpSpan(StrPtr(fmt), Len(fmt), i)
-    If w < 0 Then
-        PuAmpField = PuCopy1(fmt, i, out)
-        Exit Function
-    End If
-    PuAmpField = PuAmpPut(out, s, w)
-    s = ""
-End Function
-
-Function PuAt(fmt As String, ByRef i As Long, out As String, ByRef s As String) As String
-    i = i + 1
-    PuAt = out + s
-    s = ""
-End Function
-
-Function PuAmpOr1(fmt As String, ByRef i As Long, out As String, ByRef s As String) As String
-    Dim p As *Byte
-    p = StrPtr(fmt)
-    If p[i] <> Asc("&") Then
-        PuAmpOr1 = PuCopy1(fmt, i, out)
-        Exit Function
-    End If
-    PuAmpOr1 = PuAmpField(fmt, i, out, s)
-End Function
-
-Function PuStrRoute(fmt As String, ByRef i As Long, out As String, ByRef s As String, p As *Byte) As String
-    If p[i] = Asc("@") Then
-        PuStrRoute = PuAt(fmt, i, out, s)
-        Exit Function
-    End If
-    PuStrRoute = PuAmpOr1(fmt, i, out, s)
-End Function
-
-Function PuStrStep(fmt As String, ByRef i As Long, ByRef out As String, ByRef s As String) As Long
-    Dim p As *Byte
-    p = StrPtr(fmt)
-    PuStrStep = 0
-    If i >= Len(fmt) Then Exit Function
-    out = PuStrRoute(fmt, i, out, s, p)
-    PuStrStep = 1
-End Function
-
+' 値 1 つの Using（文字列）
 Function UsingStr$(fmt As String, s As String) As String
-    Dim out As String
-    Dim i As Long
-    out = ""
-    i = 0
-    While PuStrStep(fmt, i, out, s) <> 0
-        out = out
-    Wend
-    UsingStr$ = out
+    Dim t As String
+    t = PuUseBeg$(fmt)
+    t = PuValStr(t, s)
+    UsingStr$ = PuUseEnd$(t)
 End Function
