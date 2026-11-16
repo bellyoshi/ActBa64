@@ -8,20 +8,30 @@ Function LexHexLit(lx As *Lexer) As Long
     Dim v As Long
     Dim idx As Long
     Dim toks As *Tok
+    Dim nd As Long
     LexHexLit = 0
     src = lx->src
     n2 = src[lx->pos + 1]
     If IsHexPrefix(n2) Then
         lx->pos = lx->pos + 2
         n = 0
+        nd = 0
+        LexLit64Clear()
         Do
             c = src[lx->pos]
             v = HexDigitValue(c)
             If v < 0 Then Exit Do
             n = n * LEX_RADIX_HEX + v
+            LexLit64MulAdd(LEX_RADIX_HEX, v)
+            nd = nd + 1
             lx->pos = lx->pos + 1
         Loop
         LexSkipLongSuffix(lx)
+        ' 9..16 桁の &H は、64bit 出力なら Int64 のリテラル
+        If nd > 8 And nd <= 16 And TyIs32() = 0 Then
+            LexHexLit = LexPushLit64(lx)
+            Exit Function
+        End If
         idx = LexPush(lx, TK_NUMBER)
         If idx < 0 Then Exit Function
         toks = lx->toks
@@ -68,6 +78,13 @@ Function LexNumber(lx As *Lexer) As Long
     isF = LexScanFrac(lx)
     If LexScanExp(lx) <> 0 Then isF = 1
     If isF = 0 Then isF = LexDecTooBig(lx->src, start, lx->pos)
+    ' 32bit に入らない十進の整数は、64bit 出力なら Int64 のリテラル（入らなければ Double）
+    If isF = 1 And LexDecIsInt(lx->src, start, lx->pos) <> 0 Then
+        If LexPushDec64(lx, start) <> 0 Then
+            LexNumber = 1
+            Exit Function
+        End If
+    End If
     If isF <> 0 Then
         LexNumber = LexPushFloat(lx, start)
     Else
@@ -106,6 +123,80 @@ Function LexScanExp(lx As *Lexer) As Long
     If IsDigit(src[k]) = false Then Exit Function
     lx->pos = LexSkipDigits(src, k)
     LexScanExp = 1
+End Function
+
+' start..fin が数字だけなら 1（小数点・指数なし）
+Function LexDecIsInt(src As *Byte, start As Long, fin As Long) As Long
+    Dim i As Long
+    LexDecIsInt = 0
+    For i = start To fin - 1
+        If IsDigit(src[i]) = false Then Exit Function
+    Next
+    LexDecIsInt = 1
+End Function
+
+' ---------------------------------------------------
+'  64bit の整数リテラル。コンパイラ自身は 32bit の算術だけで書く（stage0 は AB4.20）ので、
+'  16 ビットずつ 4 つ（g_lit64(0) が最下位）に分けて積む
+' ---------------------------------------------------
+Const LEX_NUM_I64 = 4
+Dim g_lit64(3) As Long
+
+Sub LexLit64Clear()
+    Dim i As Long
+    For i = 0 To 3
+        g_lit64(i) = 0
+    Next
+End Sub
+
+' g_lit64 = g_lit64 * m + a。2^64 を超えたら 0
+Function LexLit64MulAdd(m As Long, a As Long) As Long
+    Dim i As Long
+    Dim cur As Long
+    Dim carry As Long
+    carry = a
+    For i = 0 To 3
+        cur = g_lit64(i) * m + carry
+        g_lit64(i) = cur And &HFFFF
+        carry = cur >> 16
+    Next
+    LexLit64MulAdd = 1
+    If carry <> 0 Then LexLit64MulAdd = 0
+End Function
+
+Function LexLit64Lo() As Long
+    LexLit64Lo = g_lit64(0) Or (g_lit64(1) << 16)
+End Function
+
+Function LexLit64Hi() As Long
+    LexLit64Hi = g_lit64(2) Or (g_lit64(3) << 16)
+End Function
+
+Function LexPushLit64(lx As *Lexer) As Long
+    Dim idx As Long
+    Dim toks As *Tok
+    LexPushLit64 = 0
+    idx = LexPush(lx, TK_NUMBER)
+    If idx < 0 Then Exit Function
+    toks = lx->toks
+    toks[idx].num = LexLit64Lo()
+    toks[idx].numHi = LexLit64Hi()
+    toks[idx].wide = LEX_NUM_I64
+    LexPushLit64 = 1
+End Function
+
+' 十進 start..pos を Int64 のリテラルに。-actba32 や 9223372036854775807 を超えるときは 0（Double で読む）
+Function LexPushDec64(lx As *Lexer, start As Long) As Long
+    Dim i As Long
+    LexPushDec64 = 0
+    If TyIs32() <> 0 Then Exit Function
+    LexLit64Clear()
+    For i = start To lx->pos - 1
+        If LexLit64MulAdd(LEX_RADIX_DEC, DigitValue(lx->src[i])) = 0 Then Exit Function
+    Next
+    ' 符号ビットが立つ（2^63 以上）なら Int64 に入らない
+    If g_lit64(3) >= &H8000 Then Exit Function
+    LexPushDec64 = LexPushLit64(lx)
 End Function
 
 ' 整数が DWord（4294967295）に入らなければ 1。そのときは Double として読む（64bit 整数は無いので）

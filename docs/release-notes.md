@@ -5,7 +5,9 @@
 ### 言語
 
 - **`Int64` / `QWord` の第 1 段階（64bit 出力のみ）。** スカラーの変数・仮引数（値・ByRef）・Type メンバが 8 バイトになり、Long・Double との代入、`Print` / `Str$`、`SizeOf` が 64bit の値を扱います。Long は符号で、DWord と整数のリテラルは 0 で広げます。
-  - 算術と比較はまだ 32bit です。`Function ... As Int64` の戻り値、配列、`-actba32` は、これまでどおり 32bit として読んで警告します。
+- **`Int64` / `QWord` の第 2 段階。** `+ - * \ Mod And Or Xor Not << >>` と比較が 64bit になりました（両方 QWord の比較は符号なし）。`If x Then` も 64 ビットで見ます。
+  - 32bit に入らない十進の整数（`9223372036854775807` まで）と 9〜16 桁の `&H` は Int64 のリテラルです（これまでは Double、または 32bit に切り詰め）。
+  - `Function ... As Int64` の戻り値、配列、`For`、`Select Case`、`-actba32` は、これまでどおり 32bit として読んで警告します。
 
 ## v0.0.9（v0.0.8 からの変更点）
 

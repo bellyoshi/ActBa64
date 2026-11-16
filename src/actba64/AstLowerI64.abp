@@ -11,6 +11,190 @@ Function LowExprWide(ctx As *LowerCtx, idx As Long) As Long
     kind = LowNodeKind(ctx, idx)
     If kind = AST_VAR Then LowExprWide = LowVarWide(ctx, idx)
     If kind = AST_MEMBER Then LowExprWide = LowMemberWide(ctx, idx)
+    If kind = AST_NUM Then LowExprWide = LowNumWide(ctx, idx)
+    If kind = AST_UNARY Then LowExprWide = LowUnaryWide(ctx, idx)
+    If kind = AST_BINOP Then LowExprWide = LowBinopWide(ctx, idx)
+End Function
+
+Function LowNumWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowNumWide = 0
+    If nodes[idx].extra = AST_NUM_EXTRA_I64 Then LowNumWide = LOW_PTI_I64
+End Function
+
+' -x / Not x は x と同じ幅
+Function LowUnaryWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowUnaryWide = 0
+    If nodes[idx].num <> UOP_NEG And nodes[idx].num <> UOP_NOT Then Exit Function
+    LowUnaryWide = LowExprWide(ctx, nodes[idx].left)
+End Function
+
+' 整数の + - * \ Mod And Or Xor は、どちらかが 64bit なら 64bit（Int64 が入れば Int64、ほかは QWord）。
+' << >> は左辺の幅。浮動小数・文字列の演算は対象外（ポインタの演算は先に AstLowerPtrArith が取る）
+Function LowBinopWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim op As Long
+    Dim lw As Long
+    Dim rw As Long
+    LowBinopWide = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    op = nodes[idx].num
+    If LowWideOpOk(op) = 0 Then Exit Function
+    If LowWideOperandsInt(ctx, idx) = 0 Then Exit Function
+    lw = LowExprWide(ctx, nodes[idx].left)
+    If op = BOP_SHL Or op = BOP_SHR Then
+        LowBinopWide = lw
+        Exit Function
+    End If
+    rw = LowExprWide(ctx, nodes[idx].right)
+    LowBinopWide = LowWideJoin(lw, rw)
+End Function
+
+Function LowWideJoin(lw As Long, rw As Long) As Long
+    LowWideJoin = 0
+    If lw = 0 And rw = 0 Then Exit Function
+    LowWideJoin = LOW_PTI_I64
+    If lw = LOW_PTI_U64 And rw <> LOW_PTI_I64 Then LowWideJoin = LOW_PTI_U64
+    If rw = LOW_PTI_U64 And lw <> LOW_PTI_I64 Then LowWideJoin = LOW_PTI_U64
+End Function
+
+Function LowWideOpOk(op As Long) As Long
+    LowWideOpOk = 0
+    If op = BOP_ADD Or op = BOP_SUB Or op = BOP_MUL Or op = BOP_AND Or op = BOP_OR Or op = BOP_XOR Then LowWideOpOk = 1
+    If op = BOP_IDIV Or op = BOP_MOD Or op = BOP_SHL Or op = BOP_SHR Then LowWideOpOk = 1
+End Function
+
+' 両辺とも整数（Double / Single / 文字列でない）
+Function LowWideOperandsInt(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim fty As Long
+    LowWideOperandsInt = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowIsStringExpr(ctx, nodes[idx].left) <> 0 Then Exit Function
+    If LowIsStringExpr(ctx, nodes[idx].right) <> 0 Then Exit Function
+    fty = LowPromoteType(LowExprType(ctx, nodes[idx].left), LowExprType(ctx, nodes[idx].right))
+    If fty <> TY_LONG Then Exit Function
+    LowWideOperandsInt = 1
+End Function
+
+' 比較を 64bit でするなら 1（整数どうしで、どちらかが 64bit）
+Function LowCmpIsWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    LowCmpIsWide = 0
+    If LowWideOperandsInt(ctx, idx) = 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowExprWide(ctx, nodes[idx].left) <> 0 Then LowCmpIsWide = 1
+    If LowExprWide(ctx, nodes[idx].right) <> 0 Then LowCmpIsWide = 1
+End Function
+
+' 両方 QWord の比較は符号なし
+Function LowCmpIsU64(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowCmpIsU64 = 0
+    If LowExprWide(ctx, nodes[idx].left) <> LOW_PTI_U64 Then Exit Function
+    If LowExprWide(ctx, nodes[idx].right) <> LOW_PTI_U64 Then Exit Function
+    LowCmpIsU64 = 1
+End Function
+
+' 式を評価して 64bit に広げる
+Function LowEmitWideExpr(ctx As *LowerCtx, e As Long) As Long
+    LowEmitWideExpr = 0
+    If LowExpr(ctx, e) = 0 Then Exit Function
+    LowEmitCvtToWide(ctx, e)
+    LowEmitWideExpr = 1
+End Function
+
+' 64bit の二項演算。rcx = 左辺、rax = 右辺にしてから演算する
+Function LowExprBinopWide(ctx As *LowerCtx, idx As Long, op As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim list As *IrList
+    LowExprBinopWide = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    LowEmitBinHold(list)
+    If op = BOP_SHL Or op = BOP_SHR Then
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, TY_LONG)
+    Else
+        If LowEmitWideExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    End If
+    LowEmitBinTake(list)
+    LowEmitWideOp(list, op)
+    LowExprBinopWide = 1
+End Function
+
+Sub LowEmitWideOp(list As *IrList, op As Long)
+    If op = BOP_ADD Then
+        IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    ElseIf op = BOP_MUL Then
+        IrEmit(list, OP_IMUL_RAX_RCX, 0, 0)
+    ElseIf op = BOP_AND Then
+        IrEmit(list, OP_AND_RAX_RCX, 0, 0)
+    ElseIf op = BOP_OR Then
+        IrEmit(list, OP_OR_RAX_RCX, 0, 0)
+    ElseIf op = BOP_XOR Then
+        IrEmit(list, OP_XOR_RAX_RCX, 0, 0)
+    Else
+        ' 引き算・割り算・シフトは rax = 左辺、rcx = 右辺
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        LowEmitWideOrdered(list, op)
+    End If
+End Sub
+
+Sub LowEmitWideOrdered(list As *IrList, op As Long)
+    If op = BOP_SUB Then IrEmit(list, OP_SUB_RAX_RCX, 0, 0)
+    If op = BOP_SHL Then IrEmit(list, OP_SHL_RAX_CL, 0, 0)
+    If op = BOP_SHR Then IrEmit(list, OP_SAR_RAX_CL, 0, 0)
+    If op = BOP_IDIV Or op = BOP_MOD Then IrEmit(list, OP_IDIV_RCX, 0, 0)
+    If op = BOP_MOD Then IrEmit(list, OP_MOV_RAX_RDX, 0, 0)
+End Sub
+
+' 64bit の比較: rcx = 左辺、rax = 右辺で cmp rcx, rax
+Function LowEmitWideCmp(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim list As *IrList
+    LowEmitWideCmp = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    LowEmitBinHold(list)
+    If LowEmitWideExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    LowEmitBinTake(list)
+    IrEmit(list, OP_CMP_RCX_RAX, 0, 0)
+    LowEmitWideCmp = 1
+End Function
+
+Function LowExprUnaryWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    LowExprUnaryWide = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    If nodes[idx].num = UOP_NEG Then IrEmit(ctx->list, OP_NEG_RAX, 0, 0)
+    If nodes[idx].num = UOP_NOT Then IrEmit(ctx->list, OP_NOT_RAX, 0, 0)
+    LowExprUnaryWide = 1
 End Function
 
 Function LowTiWide(ti As Long) As Long
