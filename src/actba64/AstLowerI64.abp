@@ -3,19 +3,57 @@
 ' Type メンバの FIELDTY_INT64 / FIELDTY_QWORD（8 バイト）。
 ' 32bit の式（Long / DWord）は rax の上位が 0 なので、64bit へ入れるときに広げる。
 
+' LowExprWide の結果をノードごとに覚える（0 = まだ、1 = 64bit でない、2 = Int64、3 = QWord）。
+' 式の木を何度もたどらないように。AstToIrInitCtx で作り直す
+Dim g_wideCache As *Long
+Dim g_wideCacheCap As Long
+
+Sub LowWideCacheReset(ast As *Ast)
+    If g_wideCache <> NULL Then free(g_wideCache)
+    g_wideCacheCap = ast->capacity
+    g_wideCache = calloc(BytesN(g_wideCacheCap, SizeOf(Long))) As *Long
+    If g_wideCache = NULL Then g_wideCacheCap = 0
+End Sub
+
+Function LowWideCode(w As Long) As Long
+    LowWideCode = 1
+    If w = LOW_PTI_I64 Then LowWideCode = 2
+    If w = LOW_PTI_U64 Then LowWideCode = 3
+End Function
+
+Function LowWideFromCode(c As Long) As Long
+    LowWideFromCode = 0
+    If c = 2 Then LowWideFromCode = LOW_PTI_I64
+    If c = 3 Then LowWideFromCode = LOW_PTI_U64
+End Function
+
 ' 64bit の式なら LOW_PTI_I64 / LOW_PTI_U64、違えば 0
 Function LowExprWide(ctx As *LowerCtx, idx As Long) As Long
-    Dim kind As Long
+    Dim c As Long
     LowExprWide = 0
     If idx < 0 Then Exit Function
+    If idx < g_wideCacheCap Then
+        c = g_wideCache[idx]
+        If c <> 0 Then
+            LowExprWide = LowWideFromCode(c)
+            Exit Function
+        End If
+    End If
+    LowExprWide = LowExprWideCalc(ctx, idx)
+    If idx < g_wideCacheCap Then g_wideCache[idx] = LowWideCode(LowExprWide)
+End Function
+
+Function LowExprWideCalc(ctx As *LowerCtx, idx As Long) As Long
+    Dim kind As Long
+    LowExprWideCalc = 0
     kind = LowNodeKind(ctx, idx)
-    If kind = AST_VAR Then LowExprWide = LowVarWide(ctx, idx)
-    If kind = AST_MEMBER Then LowExprWide = LowMemberWide(ctx, idx)
-    If kind = AST_NUM Then LowExprWide = LowNumWide(ctx, idx)
-    If kind = AST_UNARY Then LowExprWide = LowUnaryWide(ctx, idx)
-    If kind = AST_BINOP Then LowExprWide = LowBinopWide(ctx, idx)
-    If kind = AST_CALL Then LowExprWide = LowCallWide(ctx, idx)
-    If kind = AST_INDEX Then LowExprWide = LowIndexWide(ctx, idx)
+    If kind = AST_VAR Then LowExprWideCalc = LowVarWide(ctx, idx)
+    If kind = AST_MEMBER Then LowExprWideCalc = LowMemberWide(ctx, idx)
+    If kind = AST_NUM Then LowExprWideCalc = LowNumWide(ctx, idx)
+    If kind = AST_UNARY Then LowExprWideCalc = LowUnaryWide(ctx, idx)
+    If kind = AST_BINOP Then LowExprWideCalc = LowBinopWide(ctx, idx)
+    If kind = AST_CALL Then LowExprWideCalc = LowCallWide(ctx, idx)
+    If kind = AST_INDEX Then LowExprWideCalc = LowIndexWide(ctx, idx)
 End Function
 
 ' Int64 / QWord の配列（TY_INT64_ARR / TY_QWORD_ARR）なら 1
@@ -314,7 +352,10 @@ Function LowVarWide(ctx As *LowerCtx, idx As Long) As Long
     Dim vOff As Long, vTy As Long, vTi As Long, vByRef As Long, vGlob As Long
     LowVarWide = 0
     AstCopyStr(ctx->ast, idx, VarPtr(name))
-    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vByRef), VarPtr(vGlob)) Then
+        LowVarWide = LowConstWide(ctx, VarPtr(name))
+        Exit Function
+    End If
     If vTy = TY_LONG Then LowVarWide = LowTiWide(vTi)
 End Function
 
@@ -342,6 +383,9 @@ Sub LowEmitCvtToWide(ctx As *LowerCtx, rhsIdx As Long)
         IrEmit(ctx->list, OP_CVT_SD_TO_I64, 0, 0)
         Exit Sub
     End If
+    ' ポインタ（*T・VoidPtr・VarPtr・ポインタの演算・ポインタを返す関数）は rax の 64bit のまま
+    If LowExprIsPtr(ctx, rhsIdx) <> 0 Then Exit Sub
+    If ty = TY_PTR_BYTE Or ty = TY_PTR_LONG Or ty = TY_PTR_UDT Or ty = TY_PTR_FUNC Then Exit Sub
     If LowExprIsU32(ctx, rhsIdx) <> 0 Or LowWideIsIntLit(ctx, rhsIdx) <> 0 Then
         LowEmitZxEax(ctx->list)
         Exit Sub

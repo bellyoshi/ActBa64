@@ -9,7 +9,9 @@
   - `+ - * \ Mod And Or Xor Not << >>` と比較、`If x Then`、`For` の制御変数（終値・Step も）、`Select Case` が 64bit です。
   - `Function` / Class のメソッド / `Declare Function` / 関数ポインタの `As Int64` / `As QWord` の戻り値も 64bit です（`GetTickCount64` など）。仮引数が `Long` と `Int64` だけ違う関数も重ねて定義できます。
   - Long は符号で、DWord と 4294967295 までの整数のリテラルは 0 で広げます。Int64 を Long へ入れると下位 32 ビットです。Double とは 0 へ切り捨てで変換します。
-  - `Print` / `Str$` は 64bit の十進で出します（`Include\default\Int64Str.abp` の `StrI64$` / `StrU64$`）。
+  - `Print` / `Print #` / `Write #` / `Str$` は 64bit の十進で出します（`Include\default\Int64Str.abp` の `StrI64$` / `StrU64$`）。`Hex$` / `Oct$` も 64bit、`Input` / `Input #` は 64bit の十進を正確に読みます。
+  - `Const BIG = 5000000000` は Int64 の定数です。`x As Double` / `As Single` / `As Long` のキャストも 64bit から変換します。ポインタ（`VarPtr`、`*T`、`VoidPtr`）を Int64 へ入れても 64bit のままです。
+  - `ByRef` の Int64 / QWord の仮引数へは 64bit の変数・メンバ・要素だけを渡せます（Long を渡すとエラー）。
   - QWord: 両辺とも符号なし（QWord・DWord・非負のリテラル）の `\` `Mod` と比較は符号なし、QWord の `>>` は論理シフトです。Double との変換は 2^63 以上も正しく扱います。
 - **64bit の整数リテラル。** 4294967295 を超える十進（`9223372036854775807` まで）と 9〜16 桁の `&H` は Int64 のリテラルです（これまでは Double、または 32bit に切り詰め）。
 
@@ -17,6 +19,10 @@
 
 - `-actba32` では、これまでどおり `Int64` を `Long`、`QWord` を `DWord` として読み、警告を出します。
 - `Val` は Double を返す（ActiveBasic と同じ）ので、Int64 へ入れる値は 2^53 まで正確です。
+
+### ビルド
+
+- 新しいコンパイラは `_INT64` を定義し、`Include\default\Int64Str.abp` はそのときだけ読みます（Int64 を Long と読む古いコンパイラでは `Hex$(n As QWord)` が Long の版と重なるため）。古い stage0 では `build.ps1` の stage1 / stage2 の比較が一致しません（stage2 → stage3 は一致します）。AB4.20 で stage0 を作り直してください。
 
 ## v0.0.9（v0.0.8 からの変更点）
 

@@ -29,6 +29,32 @@ Sub LowEmitArgCvt(ctx As *LowerCtx, expr As Long, name As *Byte, argIdx As Long)
     LowEmitCvtToLongIfNeeded(ctx, expr, ty)
 End Sub
 
+' 関数（isApi = 0）か Declare の仮引数 argIdx の幅の印。無ければ -1
+Function LowArgParamTi(ctx As *LowerCtx, name As *Byte, argIdx As Long, isApi As Long) As Long
+    Dim pti As Long
+    Dim r As Long
+    If isApi = 0 Then
+        LowArgParamTi = LowFuncParamTi(ctx, name, argIdx)
+        Exit Function
+    End If
+    pti = -1
+    LowArgParamTi = -1
+    ' 型の欄は As を書かない Long が -1（範囲外も -1 で、そのとき pti は -1 のまま）
+    r = LowStrictDeclScan(ctx, name, argIdx, pti)
+    If r >= 0 And r <> TY_LONG Then Exit Function
+    LowArgParamTi = pti
+End Function
+
+' ByRef の Int64 / QWord の仮引数には 64bit の変数・メンバ・要素だけを渡せる（4 バイトの所へ 8 バイト書かれないように）
+' 戻り値 true : 成り立つ  false : 成り立たない（エラーにした）
+Function LowByRefWideOk(ctx As *LowerCtx, e As Long, callIdx As Long, fn As *Byte, pti As Long) As boolean
+    LowByRefWideOk = true
+    If LowTiWide(pti) = 0 Then Exit Function
+    If LowExprWide(ctx, e) <> 0 Then Exit Function
+    LowByRefWideOk = false
+    LowerDiagError(ctx, callIdx, "Pass a 64-bit variable to ByRef Int64 / QWord ('" + MakeStr(fn) + "')")
+End Function
+
 ' 仮引数の幅の印（LOW_PTI_I64 など）。無ければ -1
 Function LowFuncParamTi(ctx As *LowerCtx, name As *Byte, argIdx As Long) As Long
     Dim fi As Long
@@ -67,6 +93,7 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
     Dim useAddr As Long
     Dim home As Long
     Dim slot As Long
+    Dim pti As Long
 
     LowEmitCallArgHomes = false
     ast = ctx->ast
@@ -85,6 +112,8 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
         useAddr = LowCallArgNeedsAddr(ctx, argNode, byBits, byRefBit, isApi)
         If useAddr <> 0 Then
             If Not LowByRefArgOk(ctx, nodes[argNode].left, idx, name) Then Exit Function
+            pti = LowArgParamTi(ctx, name, argIdx, isApi)
+            If Not LowByRefWideOk(ctx, nodes[argNode].left, idx, name, pti) Then Exit Function
             If LowAddr(ctx, nodes[argNode].left) = 0 Then Exit Function
         Else
             If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
