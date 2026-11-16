@@ -14,6 +14,30 @@ Function LowExprWide(ctx As *LowerCtx, idx As Long) As Long
     If kind = AST_NUM Then LowExprWide = LowNumWide(ctx, idx)
     If kind = AST_UNARY Then LowExprWide = LowUnaryWide(ctx, idx)
     If kind = AST_BINOP Then LowExprWide = LowBinopWide(ctx, idx)
+    If kind = AST_CALL Then LowExprWide = LowCallWide(ctx, idx)
+End Function
+
+' Function ... As Int64 / As QWord（メソッドも）の呼び出し。配列の要素・関数ポインタはまだ 32bit
+Function LowCallWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim sig(MANGLED_LEN - 1) As Byte
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim ti As Long
+    Dim vOff As Long, vTy As Long, vTi As Long, vByRef As Long, vGlob As Long
+    LowCallWide = 0
+    ti = LowCallMethodTi(ctx, idx)
+    If ti >= 0 Then
+        LowMethodSigTo(ctx, idx, ti, VarPtr(sig))
+        LowCallWide = LowFuncRetWideAt(LowFuncIndex(ctx, VarPtr(sig)))
+        Exit Function
+    End If
+    OvlFixCall(ctx, idx)
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    ' 配列の要素と関数ポインタは対象外（自分の名前の再帰呼び出しは戻り値の変数と同じ名前なので通す）
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vByRef), VarPtr(vGlob)) Then
+        If vTy = TY_PTR_FUNC Or LowIsArrTy(vTy) Then Exit Function
+    End If
+    LowCallWide = LowFuncRetWideAt(LowFuncIndex(ctx, VarPtr(name)))
+    If LowCallWide = 0 Then LowCallWide = LowDeclRetWide(ctx, VarPtr(name))
 End Function
 
 Function LowNumWide(ctx As *LowerCtx, idx As Long) As Long
@@ -195,6 +219,13 @@ Function LowExprUnaryWide(ctx As *LowerCtx, idx As Long) As Long
     If nodes[idx].num = UOP_NEG Then IrEmit(ctx->list, OP_NEG_RAX, 0, 0)
     If nodes[idx].num = UOP_NOT Then IrEmit(ctx->list, OP_NOT_RAX, 0, 0)
     LowExprUnaryWide = 1
+End Function
+
+' Function の flags から戻り値の変数の typeIdx（Int64 / QWord の印、無ければ -1）
+Function LowFuncRetTi(flags As Long) As Long
+    LowFuncRetTi = -1
+    If (flags And AST_FUNC_RET_I64) <> 0 Then LowFuncRetTi = LOW_PTI_I64
+    If (flags And AST_FUNC_RET_U64) <> 0 Then LowFuncRetTi = LOW_PTI_U64
 End Function
 
 Function LowTiWide(ti As Long) As Long

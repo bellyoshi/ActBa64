@@ -81,6 +81,7 @@ End Function
 Function ParseDeclareRetSkip(p As *Parser) As boolean
     Dim kw(KW_LEN - 1) As Byte
     Dim typeName(SYM_NAME_LEN - 1) As Byte
+    Dim w As Long
 
     ParseDeclareRetSkip = false
     lstrcpy(VarPtr(kw), "as")
@@ -89,6 +90,15 @@ Function ParseDeclareRetSkip(p As *Parser) As boolean
         Exit Function
     End If
     p->pos = p->pos + 1
+    ' As Int64 / As QWord は戻り値を 64bit として読む（rax のまま）
+    w = ParseTakeWide(p)
+    If w <> 0 Then
+        p->pos = p->pos + 1
+        g_parseRetWide = AST_FUNC_RET_I64
+        If w = LEX_WIDE_U64 Then g_parseRetWide = AST_FUNC_RET_U64
+        ParseDeclareRetSkip = true
+        Exit Function
+    End If
     lstrcpy(VarPtr(kw), "long")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
         p->pos = p->pos + 1
@@ -147,6 +157,7 @@ Function ParseDeclareStmt(p As *Parser) As Long
     ast = p->ast
     If Not ParseDeclareHdr(p, VarPtr(name), VarPtr(libName), VarPtr(apiName), isSub) Then Exit Function
     If Not ParseParamList(p, nFirst, nParams, 1, 1) Then Exit Function
+    g_parseRetWide = 0
     If isSub = 0 Then
         If Not ParseDeclareRetSkip(p) Then Exit Function
     End If
@@ -163,7 +174,7 @@ Function ParseDeclareStmt(p As *Parser) As Long
     nodes[nDecl].left = nFirst
     nodes[nDecl].right = nDll
     nodes[nDecl].extra = nApi
-    nodes[nDecl].num = nParams
+    nodes[nDecl].num = nParams Or g_parseRetWide
     ParseDeclareStmt = nDecl
 End Function
 
