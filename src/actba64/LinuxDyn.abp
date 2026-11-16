@@ -67,6 +67,96 @@ Sub LxCollectSoSigs(ctx As *LowerCtx)
     Next
 End Sub
 
+' -linux で .so を取り込む（動的な ELF）なら、ExitProcess は libc の exit にする。
+' exit は C の stdio（printf のバッファ）を書き出し、atexit を呼んでから終わる。静的な ELF は exit_group のまま
+Sub LxRedirectExit(dll As *Byte, api As *Byte)
+    If TyIsLinux() = 0 Or g_lxSoN = 0 Then Exit Sub
+    If ByteNameEqCI(dll, "kernel32.dll") = 0 Then Exit Sub
+    If ByteNameEqCI(api, "ExitProcess") = 0 Then Exit Sub
+    lstrcpy(dll, "libc.so.6")
+    lstrcpy(api, "exit")
+End Sub
+
+' ---- .so から BASIC へのコールバック（qsort の比較関数など）----
+' .so の Declare へ AddressOf(f) を直に渡すと、f の代わりに踏み台を渡す。.so は SysV で呼ぶが、
+' BASIC の関数は Win64（rcx, rdx, r8, r9 と 32 バイトの影の領域）なので並べ替える。整数・ポインタの引数 6 個まで。
+'   sub rsp,56 / OP_SYSV_TO_WIN64 / call f / add rsp,56 / ret（入口 rsp≡8 なので call の前で 16 に揃う）
+Const LX_CB_MAX = 64
+Dim g_lxCbN As Long
+Dim g_lxCbFn(LX_CB_MAX) As Long
+Dim g_lxCbLab(LX_CB_MAX) As Long
+
+Sub LxCbReset()
+    g_lxCbN = 0
+End Sub
+
+' 関数のラベル fnLab の踏み台のラベル（無ければ作る）。表があふれたら fnLab のまま
+Function LxCbThunkLab(ctx As *LowerCtx, fnLab As Long) As Long
+    Dim i As Long
+    LxCbThunkLab = fnLab
+    For i = 0 To g_lxCbN - 1
+        If g_lxCbFn(i) = fnLab Then
+            LxCbThunkLab = g_lxCbLab(i)
+            Exit Function
+        End If
+    Next
+    If g_lxCbN >= LX_CB_MAX Then Exit Function
+    g_lxCbFn(g_lxCbN) = fnLab
+    g_lxCbLab(g_lxCbN) = LowNewLabel(ctx)
+    LxCbThunkLab = g_lxCbLab(g_lxCbN)
+    g_lxCbN = g_lxCbN + 1
+End Function
+
+Sub LxEmitCbThunks(ctx As *LowerCtx)
+    Dim i As Long
+    Dim list As *IrList
+    list = ctx->list
+    For i = 0 To g_lxCbN - 1
+        IrEmit(list, OP_LABEL, g_lxCbLab(i), 0)
+        IrEmit(list, OP_SUB_RSP, 56, 0)
+        IrEmit(list, OP_SYSV_TO_WIN64, 0, 0)
+        IrEmit(list, OP_CALL_LAB, g_lxCbFn(i), 0)
+        IrEmit(list, OP_ADD_RSP, 56, 0)
+        IrEmit(list, OP_RET, 0, 0)
+    Next
+End Sub
+
+' 呼ぶ先が -linux の .so の Declare なら 1
+Function LxCallIsSo(ctx As *LowerCtx, name As *Byte) As Long
+    Dim di As Long
+    Dim dll(SYM_NAME_LEN - 1) As Byte
+    LxCallIsSo = 0
+    If TyIsLinux() = 0 Then Exit Function
+    di = LowDeclIndex(ctx, name)
+    If di < 0 Then Exit Function
+    LowDeclDllName(ctx, di, VarPtr(dll))
+    LxCallIsSo = LxIsSoName(VarPtr(dll))
+End Function
+
+' .so へ渡す実引数が AddressOf(f) なら、f の踏み台のアドレスを rax へ。1 = 済み、0 = 対象外、-1 = エラー
+Function LxEmitCbArg(ctx As *LowerCtx, e As Long, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim fname(SYM_NAME_LEN - 1) As Byte
+    Dim lab As Long
+    LxEmitCbArg = 0
+    If LxCallIsSo(ctx, name) = 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[e].kind <> AST_BUILTIN Then Exit Function
+    If nodes[e].num <> BIK_ADDRESSOF Then Exit Function
+    LxEmitCbArg = -1
+    AstCopyName(ast, e, VarPtr(fname))
+    lab = LowAddrOfLab(ctx, VarPtr(fname), nodes[e].extra)
+    If lab < 0 Then
+        LowPrintErr("error: AddressOf unknown function '" + MakeStr(VarPtr(fname)) + "'")
+        ctx->err = 1
+        Exit Function
+    End If
+    IrEmit(ctx->list, OP_LEA_RAX_LAB, LxCbThunkLab(ctx, lab), 0)
+    LxEmitCbArg = 1
+End Function
+
 ' 取り込みの名前（Declare の名前）から表の番号（無ければ -1）
 Function LxFindSoSig(key As *Byte) As Long
     Dim i As Long

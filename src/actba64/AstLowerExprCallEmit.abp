@@ -94,6 +94,7 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
     Dim home As Long
     Dim slot As Long
     Dim pti As Long
+    Dim cb As Long
 
     LowEmitCallArgHomes = false
     ast = ctx->ast
@@ -116,9 +117,14 @@ Function LowEmitCallArgHomes(ctx As *LowerCtx, idx As Long, nArgs As Long, byBit
             If Not LowByRefWideOk(ctx, nodes[argNode].left, idx, name, pti) Then Exit Function
             If LowAddr(ctx, nodes[argNode].left) = 0 Then Exit Function
         Else
-            If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
-            If isApi = 0 Then LowEmitArgCvt(ctx, nodes[argNode].left, name, argIdx)
-            If isApi <> 0 Then LowEmitApiArgCvt(ctx, nodes[argNode].left, name, argIdx)
+            cb = 0
+            If isApi <> 0 Then cb = LxEmitCbArg(ctx, nodes[argNode].left, name)
+            If cb < 0 Then Exit Function
+            If cb = 0 Then
+                If LowExprArg(ctx, nodes[argNode].left) = 0 Then Exit Function
+                If isApi = 0 Then LowEmitArgCvt(ctx, nodes[argNode].left, name, argIdx)
+                If isApi <> 0 Then LowEmitApiArgCvt(ctx, nodes[argNode].left, name, argIdx)
+            End If
         End If
         slot = LowNextArgBytes(ctx, name, argIdx, useAddr, isApi)
         LowEmitHomeStore(list, home, slot)
@@ -171,6 +177,9 @@ Function LowExprCallEmit(ctx As *LowerCtx, idx As Long, lab As Long, isApi As Lo
     LowEmitLoadRegArgs(list, LowCallAllArgs(ctx, VarPtr(name), nArgs, isApi))
     If isApi <> 0 Then
         IrEmitStr(list, OP_CALL_API, dllKind, apiName)
+        ' Double / Single の戻り値は xmm0（Win64 も SysV も）。この言語では rax のビットで持つ
+        If LowDeclRetFloat(ctx, VarPtr(name)) = TY_DOUBLE Then IrEmit(list, OP_MOVQ_RAX_XMM0, 0, 0)
+        If LowDeclRetFloat(ctx, VarPtr(name)) = TY_SINGLE Then IrEmit(list, OP_MOVD_EAX_XMM0, 0, 0)
     Else
         IrEmit(list, OP_CALL_LAB, lab, 0)
     End If

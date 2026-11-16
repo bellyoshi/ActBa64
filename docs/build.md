@@ -176,7 +176,10 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 - **共有ライブラリ**（`ElfDyn` / `LinuxDyn` / `LinuxThunk`）: `Declare Function strlen Lib "libc.so.6" (s As BytePtr) As Long` のように Lib が `xxx.so` / `xxx.so.N` なら、その ELF は動的リンクになる（`PT_INTERP` = `/lib64/ld-linux-x86-64.so.2`、`PT_DYNAMIC`、`DT_NEEDED`、`R_X86_64_GLOB_DAT`）。ブロブは `.idata` の後ろのページ、GOT はその DLL の ILT（Linux では使わない）。`.so` が無ければ今までどおり静的
   - IAT スロットは取り込みごとの踏み台を指す。踏み台は `[rsp+8+8i]` の引数を SysV 規約に並べ替える（整数 → rdi, rsi, rdx, rcx, r8, r9、ByVal の `Double` / `Single` → xmm0..7、残りはスタック、`al` = xmm の数なので `printf` のような可変長引数も呼べる）。rsi / rdi は踏み台が保存する
   - 取り込みの名前は Declare の名前、シンボル名は Alias（同じ関数を型の違う Declare で呼べる）。Declare の `Double` / `Single` の仮引数へは呼び出し側でその型に変換する（Windows でも同じ）
-  - 未対応: 戻り値の `Double`（Declare の戻り値の型は読み捨てている）、構造体の値渡し、`.so` から BASIC へのコールバック（`qsort` など）。`ExitProcess` は exit_group なので libc の `stdio` はバッファが残る（`puts` などを使うなら `fflush(0)` を呼ぶ）
+  - 戻り値の `Double` / `Single`（`Declare Function sqrt Lib "libm.so.6" (x As Double) As Double`）は `xmm0` から受け取る（Windows の DLL も同じ）。
+  - `.so` の Declare へ `AddressOf(f)` を直に渡すと、`f` の代わりに SysV → Win64 の踏み台を渡す（`qsort` / `bsearch` の比較関数、`pthread_create` など。整数・ポインタの引数 6 個まで）。変数に入れてから渡すと踏み台にならない。
+  - 動的な ELF の `ExitProcess`（`End` やプログラムの終わりも）は libc の `exit` を呼ぶので、`printf` などの `stdio` のバッファも書き出される。静的な ELF は今までどおり exit_group。
+  - 未対応: 構造体の値渡し、Double の引数を取るコールバック
   - 名前が実行時ルーチンと同じ（`rand` など）だとそちらが呼ばれるので、Alias で別の名前にする
 - テストのメタ（`run_test_linux.ps1` だけ）: `' Args: …` 実行時の引数、`' Warn: N` 警告の数（省略時 0）、`' WarnAt: file(行)` 警告の場所、`' MaxSize: N` ELF の上限バイト数
 - **ヒープ**（`LxHeap`）: `HeapAlloc` などは mmap した 4MB の領域から 16<<k バイトの区分で切り出し、区分ごとの空きリストで使い回す。1MB を超えるものは 1 つずつ mmap / munmap
