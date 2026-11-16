@@ -401,6 +401,11 @@ End Function
 ' eax が整数のとき Single 代入用に IEEE ビットへ（既にビットなら何もしない）
 Sub LowEmitCvtToSingleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
     If LowExprIsSingleBits(ctx, rhsIdx) <> 0 Then Exit Sub
+    If LowExprWide(ctx, rhsIdx) <> 0 Then
+        LowEmitCvtWideToDouble(ctx)
+        IrEmit(ctx->list, OP_CVT_SD_TO_SS, 0, 0)
+        Exit Sub
+    End If
     If LowExprIsDoubleBits(ctx, rhsIdx) <> 0 Or LowExprType(ctx, rhsIdx) = TY_DOUBLE Then
         IrEmit(ctx->list, OP_CVT_SD_TO_SS, 0, 0)
         Exit Sub
@@ -418,6 +423,10 @@ Sub LowEmitCvtToDoubleIfNeeded(ctx As *LowerCtx, rhsIdx As Long)
     nodes = ast->nodes
     rty = LowExprType(ctx, rhsIdx)
     If rty = TY_DOUBLE Then Exit Sub
+    If LowExprWide(ctx, rhsIdx) <> 0 Then
+        LowEmitCvtWideToDouble(ctx)
+        Exit Sub
+    End If
     If rty = TY_SINGLE Or (nodes[rhsIdx].kind = AST_NUM And nodes[rhsIdx].extra = AST_NUM_EXTRA_SINGLE) Then
         IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
         Exit Sub
@@ -428,6 +437,11 @@ End Sub
 ' Double 式を Long 変数へ格納するとき trunc
 Sub LowEmitCvtToLongIfNeeded(ctx As *LowerCtx, rhsIdx As Long, dstTy As Long)
     If dstTy <> TY_LONG And dstTy <> TY_BYTE Then Exit Sub
+    ' Int64 / QWord を 32bit へ入れるときは下位 32 ビット（上位を 0 に戻す）
+    If LowExprWide(ctx, rhsIdx) <> 0 Then
+        LowEmitZxEax(ctx->list)
+        Exit Sub
+    End If
     If LowExprType(ctx, rhsIdx) = TY_DOUBLE Then
         IrEmit(ctx->list, OP_CVT_SD_TO_I32, 0, 0)
     ElseIf LowExprType(ctx, rhsIdx) = TY_SINGLE Then

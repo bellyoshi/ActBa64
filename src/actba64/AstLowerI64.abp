@@ -1,0 +1,76 @@
+' AstLowerI64 - Int64 / QWord（x64 のみ）
+' 値は rax の 64bit。印は変数・仮引数の LOW_PTI_I64 / LOW_PTI_U64（TY_LONG の typeIdx）と、
+' Type メンバの FIELDTY_INT64 / FIELDTY_QWORD（8 バイト）。
+' 32bit の式（Long / DWord）は rax の上位が 0 なので、64bit へ入れるときに広げる。
+
+' 64bit の式なら LOW_PTI_I64 / LOW_PTI_U64、違えば 0
+Function LowExprWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim kind As Long
+    LowExprWide = 0
+    If idx < 0 Then Exit Function
+    kind = LowNodeKind(ctx, idx)
+    If kind = AST_VAR Then LowExprWide = LowVarWide(ctx, idx)
+    If kind = AST_MEMBER Then LowExprWide = LowMemberWide(ctx, idx)
+End Function
+
+Function LowTiWide(ti As Long) As Long
+    LowTiWide = 0
+    If ti = LOW_PTI_I64 Or ti = LOW_PTI_U64 Then LowTiWide = ti
+End Function
+
+Function LowVarWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vByRef As Long, vGlob As Long
+    LowVarWide = 0
+    AstCopyStr(ctx->ast, idx, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+    If vTy = TY_LONG Then LowVarWide = LowTiWide(vTi)
+End Function
+
+Function LowMemberWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim ft As Long
+    LowMemberWide = 0
+    If LowMemberIsArr(ctx, idx) <> 0 Then Exit Function
+    ft = LowMemberFieldTy(ctx, idx)
+    If ft = FIELDTY_INT64 Then LowMemberWide = LOW_PTI_I64
+    If ft = FIELDTY_QWORD Then LowMemberWide = LOW_PTI_U64
+End Function
+
+' 評価済みの右辺 rhsIdx（rax）を 64bit の整数にする
+' Double / Single は 0 へ切り捨て、DWord と整数のリテラルは 0 で、Long は符号で広げる
+Sub LowEmitCvtToWide(ctx As *LowerCtx, rhsIdx As Long)
+    Dim ty As Long
+    If LowExprWide(ctx, rhsIdx) <> 0 Then Exit Sub
+    ty = LowExprType(ctx, rhsIdx)
+    If ty = TY_DOUBLE Then
+        IrEmit(ctx->list, OP_CVT_SD_TO_I64, 0, 0)
+        Exit Sub
+    End If
+    If ty = TY_SINGLE Then
+        IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+        IrEmit(ctx->list, OP_CVT_SD_TO_I64, 0, 0)
+        Exit Sub
+    End If
+    If LowExprIsU32(ctx, rhsIdx) <> 0 Or LowWideIsIntLit(ctx, rhsIdx) <> 0 Then
+        LowEmitZxEax(ctx->list)
+        Exit Sub
+    End If
+    IrEmit(ctx->list, OP_MOVSXD_RAX_EAX, 0, 0)
+End Sub
+
+' 整数のリテラル（3000000000 は 0..4294967295 として読む。-5 は単項の - なので Long の式）
+Function LowWideIsIntLit(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    LowWideIsIntLit = 0
+    If LowNodeKind(ctx, idx) <> AST_NUM Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[idx].extra = AST_NUM_EXTRA_SINGLE Or nodes[idx].extra = AST_NUM_EXTRA_DOUBLE Then Exit Function
+    LowWideIsIntLit = 1
+End Function
+
+' 64bit の式（rax）を Double へ。QWord もいまは符号つきで読む
+Sub LowEmitCvtWideToDouble(ctx As *LowerCtx)
+    IrEmit(ctx->list, OP_CVT_I64_TO_SD, 0, 0)
+End Sub

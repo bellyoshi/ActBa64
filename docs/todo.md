@@ -52,7 +52,7 @@
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
-| `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は 32bit として読み警告を出す（`Char` は `Byte`） |
+| `Int64` / `QWord` | 4.20 基本型一覧。段階 1（スカラーの格納・変換・表示・仮引数）は済み。算術・比較、戻り値、配列、`Val`、符号なしの規則は未。`-actba32` は 32bit として読み警告を出す（`Char` は `Byte`） |
 
 ## 数値・型
 
