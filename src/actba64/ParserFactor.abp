@@ -281,9 +281,12 @@ Function ParseFactorIdentIndex(p As *Parser, name As *Byte) As Long
     Dim head As Long
     Dim nArgs As Long
     Dim arg0 As Long
+    Dim idLine As Long
 
     ParseFactorIdentIndex = -1
     ast = p->ast
+    ' 添字の診断は a[...] の行で出す（後ろに .x が付くと外側はメンバのノード）
+    idLine = ParseTokLine(p)
     p->pos = p->pos + 1
     head = ParseIdxExprs(p, nArgs)
     If head < 0 Then Exit Function
@@ -291,6 +294,7 @@ Function ParseFactorIdentIndex(p As *Parser, name As *Byte) As Long
     If nArgs >= 3 Then
         n = ParseIdxCall(ast, name, head, nArgs)
         If n < 0 Then Exit Function
+        AstSetSrcLine(ast, n, idLine)
         ParseFactorIdentIndex = ParsePostfixMemIdx(p, n)
         Exit Function
     End If
@@ -305,6 +309,7 @@ Function ParseFactorIdentIndex(p As *Parser, name As *Byte) As Long
     nodes[n].extra = -1
     If nArgs = 2 Then nodes[n].extra = ParseIdxSecond(ast, head)
     nodes[n].num = 1
+    AstSetSrcLine(ast, n, idLine)
     ParseFactorIdentIndex = ParsePostfixMemIdx(p, n)
 End Function
 
@@ -327,6 +332,13 @@ Function ParseFactorIdentCall(p As *Parser, name As *Byte) As Long
     nodes[n].right = -1
     nodes[n].extra = -1
     nodes[n].num = nArgs
+    ' 配列要素のメンバ a(i, j).x
+    If ParseTokKind(p) = TK_DOT Then
+        AstSetSrcLine(ast, n, ParsePrevLine(p))
+        n = ParsePostfixMemIdx(p, n)
+        If n < 0 Then Exit Function
+        n = ParseMemberCall(p, n)
+    End If
     ParseFactorIdentCall = n
 End Function
 

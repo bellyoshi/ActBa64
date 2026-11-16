@@ -263,7 +263,7 @@ Dim a(N, M, L) As T     ' 3 次元以上。最大 8 次元
 
 境界は定数式可（例: `Dim Board(BOARD_SIZE - 1, BOARD_SIZE - 1) As Long`）。  
 `ELM(n)` は要素数 `n` に対する上限で、値は `n - 1`。`Dim a[ELM(10)]` は `Dim a[9]` と同じ（添字 0..9）。  
-要素型は `Byte` / `Long` / `Single` / `Double` / `String` / UDT。UDT 配列は添字 1 個（平坦な通し番号）だけ。
+要素型は `Byte` / `Long` / `Single` / `Double` / `String` / UDT。UDT 配列も多次元にでき、`a(i, j).x` / `a[i, j].x` でメンバを読み書きできる。
 
 **レイアウト（最後の添字が連続。ActiveBasic・C と同じ）:** 各次元の長さは上限+1。`VarPtr(a[i, 0])` から `[0]..[M]` で `a[i, 0..M]` を読める。
 
@@ -293,7 +293,7 @@ TypeDef PBYTE = *Byte
 TypeDef PADD = *Function(a As Long, b As Long) As Long
 ```
 
-メンバ参照: `x.field` / `p->field` / `a(i).field` / `p[i]`（組み合わせ可）。2 次元以上の UDT 配列のメンバ参照（`a(i, j).field`）は未対応。  
+メンバ参照: `x.field` / `p->field` / `a(i).field` / `a(i, j).field` / `p[i]`（組み合わせ可）。  
 関数ポインタ型（`*Function` / `*Sub`）は [§5.2.1](#521-関数ポインタ型)。
 
 ---

@@ -200,6 +200,35 @@ Function ParseAssignIndexLhs(p As *Parser, name As *Byte) As Long
     ParseAssignIndexLhs = ParseAssignOpRhs(p, nIdx)
 End Function
 
+' 配列要素のメンバへの代入 a(i, j).x = v（メソッド呼び出し a(i).M() はそのまま文）
+Function ParseAssignParenMem(p As *Parser, name As *Byte, arg0 As Long, nArgs As Long, idLine As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+
+    ParseAssignParenMem = -1
+    ast = p->ast
+    n = AstAddNode(ast, AST_CALL)
+    If n < 0 Then Exit Function
+    AstSetStr(ast, n, name)
+    nodes = ast->nodes
+    nodes[n].left = arg0
+    nodes[n].right = -1
+    nodes[n].extra = -1
+    nodes[n].num = nArgs
+    AstSetSrcLine(ast, n, idLine)
+    n = ParsePostfixMemIdx(p, n)
+    If n < 0 Then Exit Function
+    n = ParseMemberCall(p, n)
+    If n < 0 Then Exit Function
+    nodes = ast->nodes
+    If nodes[n].kind = AST_CALL Then
+        ParseAssignParenMem = n
+        Exit Function
+    End If
+    ParseAssignParenMem = ParseAssignOpRhs(p, n)
+End Function
+
 Function ParseAssignParen(p As *Parser, name As *Byte) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -215,6 +244,10 @@ Function ParseAssignParen(p As *Parser, name As *Byte) As Long
     idLine = ParseTokLine(p)
     p->pos = p->pos + 1
     If ParseArgList(p, arg0, nArgs) = 0 Then Exit Function
+    If ParseTokKind(p) = TK_DOT Then
+        ParseAssignParen = ParseAssignParenMem(p, name, arg0, nArgs, idLine)
+        Exit Function
+    End If
     If ParseIsAssignOpAhead(p) Then
         If nArgs < 1 Or nArgs > ARR_RANK_MAX Then
             If nArgs > ARR_RANK_MAX Then
