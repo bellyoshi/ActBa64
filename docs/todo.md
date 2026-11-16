@@ -52,7 +52,7 @@
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
-| `Int64` / `QWord` | 4.20 基本型一覧。段階 1（スカラーの格納・変換・表示・仮引数）と段階 2（算術・比較・リテラル）、段階 3（Function / メソッド / Declare の戻り値）は済み。関数ポインタの戻り値、Int64 と Long の多重定義の区別、配列、`For`、`Select Case`、`Val`、QWord の割り算・シフト・Double 変換の符号なしは未。`-actba32` は 32bit として読み警告を出す（`Char` は `Byte`） |
+| `Int64` / `QWord` | 4.20 基本型一覧。段階 1（スカラーの格納・変換・表示・仮引数）と段階 2（算術・比較・リテラル）、段階 3（Function / メソッド / Declare の戻り値）、段階 4（配列・`For`・`Select Case`）は済み。Type メンバの配列、関数ポインタの戻り値、Int64 と Long の多重定義の区別、2^53 を超える `Val`、QWord の割り算・シフト・Double 変換の符号なしは未。`-actba32` は 32bit として読み警告を出す（`Char` は `Byte`） |
 
 ## 数値・型
 

@@ -15,6 +15,29 @@ Function LowExprWide(ctx As *LowerCtx, idx As Long) As Long
     If kind = AST_UNARY Then LowExprWide = LowUnaryWide(ctx, idx)
     If kind = AST_BINOP Then LowExprWide = LowBinopWide(ctx, idx)
     If kind = AST_CALL Then LowExprWide = LowCallWide(ctx, idx)
+    If kind = AST_INDEX Then LowExprWide = LowIndexWide(ctx, idx)
+End Function
+
+' Int64 / QWord の配列（TY_INT64_ARR / TY_QWORD_ARR）なら 1
+Function LowIsWideArr(ty As Long) As Long
+    LowIsWideArr = 0
+    If ty = TY_INT64_ARR Or ty = TY_QWORD_ARR Then LowIsWideArr = 1
+End Function
+
+Function LowWideArrMark(ty As Long) As Long
+    LowWideArrMark = 0
+    If ty = TY_INT64_ARR Then LowWideArrMark = LOW_PTI_I64
+    If ty = TY_QWORD_ARR Then LowWideArrMark = LOW_PTI_U64
+End Function
+
+' a[i] / a[i, j]（左が配列の変数）
+Function LowIndexWide(ctx As *LowerCtx, idx As Long) As Long
+    Dim base As Long
+    LowIndexWide = 0
+    base = LowNodeLeft(ctx, idx)
+    If base < 0 Then Exit Function
+    If LowNodeKind(ctx, base) <> AST_VAR Then Exit Function
+    LowIndexWide = LowWideArrMark(LowNameElemTy(ctx, base))
 End Function
 
 ' Function ... As Int64 / As QWord（メソッドも）の呼び出し。配列の要素・関数ポインタはまだ 32bit
@@ -34,6 +57,8 @@ Function LowCallWide(ctx As *LowerCtx, idx As Long) As Long
     AstCopyStr(ctx->ast, idx, VarPtr(name))
     ' 配列の要素と関数ポインタは対象外（自分の名前の再帰呼び出しは戻り値の変数と同じ名前なので通す）
     If LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vByRef), VarPtr(vGlob)) Then
+        ' a(i) / a(i, j) の要素
+        LowCallWide = LowWideArrMark(vTy)
         If vTy = TY_PTR_FUNC Or LowIsArrTy(vTy) Then Exit Function
     End If
     LowCallWide = LowFuncRetWideAt(LowFuncIndex(ctx, VarPtr(name)))

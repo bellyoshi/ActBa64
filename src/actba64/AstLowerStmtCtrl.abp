@@ -122,11 +122,34 @@ Function LowStmtWhile(ctx As *LowerCtx, idx As Long) As Long
         LowStmtWhile = 1
 End Function
 
-' 整数 For の初期値・終値・Step。Double / Single は代入と同じく Long へ切り捨てる
+' 制御変数が Int64 / QWord の For なら 1（LowStmtFor が各段の前に立てる。入れ子のために本体の後でも立て直す）
+Dim g_forWide As Long
+
+' 整数 For の初期値・終値・Step。Double / Single は代入と同じく Long へ切り捨てる（64bit の For は 64bit に広げる）
 Function LowForIntExpr(ctx As *LowerCtx, expr As Long) As Long
+    If g_forWide <> 0 Then
+        LowForIntExpr = LowEmitWideExpr(ctx, expr)
+        Exit Function
+    End If
     LowForIntExpr = LowExpr(ctx, expr)
     If LowForIntExpr = 0 Then Exit Function
     LowEmitCvtToLongIfNeeded(ctx, expr, TY_LONG)
+End Function
+
+' 64bit の For の 1 段: 変数 += Step（Step 無しは 1）
+Function LowStmtForStepWide(ctx As *LowerCtx, vOff As Long, vGlob As Long, stepIdx As Long) As boolean
+    LowStmtForStepWide = false
+    LowEmitLoadOff(ctx->list, vOff, vGlob)
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    If stepIdx >= 0 Then
+        If LowForIntExpr(ctx, stepIdx) = 0 Then Exit Function
+    Else
+        IrEmit(ctx->list, OP_MOV_EAX_IMM, 1, 0)
+    End If
+    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+    IrEmit(ctx->list, OP_ADD_RAX_RCX, 0, 0)
+    LowEmitStoreOff(ctx->list, vOff, vGlob)
+    LowStmtForStepWide = true
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
@@ -137,6 +160,10 @@ Function LowStmtForStep(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Lo
     LowStmtForStep = false
     ast = ctx->ast
     nodes = ast->nodes
+    If g_forWide <> 0 Then
+        LowStmtForStep = LowStmtForStepWide(ctx, vOff, vGlob, stepIdx)
+        Exit Function
+    End If
     If useInc <> 0 And vGlob = 0 Then
         IrEmit(ctx->list, OP_INC_LOCAL, vOff, 0)
     ElseIf useInc <> 0 Then
@@ -208,7 +235,11 @@ Function LowForIntRel(ctx As *LowerCtx, vOff As Long, vGlob As Long, limit As Lo
     IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
     If LowForIntExpr(ctx, limit) = 0 Then Exit Function
     IrEmit(ctx->list, OP_POP_RCX, 0, 0)
-    IrEmit(ctx->list, OP_CMP_ECX_EAX, 0, 0)
+    If g_forWide <> 0 Then
+        IrEmit(ctx->list, OP_CMP_RCX_RAX, 0, 0)
+    Else
+        IrEmit(ctx->list, OP_CMP_ECX_EAX, 0, 0)
+    End If
     IrEmit(ctx->list, jcc, labEnd, 0)
     LowForIntRel = true
 End Function
@@ -217,7 +248,11 @@ End Function
 Function LowStmtForCmpStep(ctx As *LowerCtx, vOff As Long, vGlob As Long, limit As Long, stepIdx As Long, labStepNeg As Long, labStepCont As Long, labEnd As Long) As boolean
     LowStmtForCmpStep = false
     If LowForIntExpr(ctx, stepIdx) = 0 Then Exit Function
-    IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
+    If g_forWide <> 0 Then
+        IrEmit(ctx->list, OP_TEST_RAX, 0, 0)
+    Else
+        IrEmit(ctx->list, OP_TEST_EAX, 0, 0)
+    End If
     IrEmit(ctx->list, OP_JL, labStepNeg, 0)
     If Not LowForIntRel(ctx, vOff, vGlob, limit, OP_JG, labEnd) Then Exit Function
     IrEmit(ctx->list, OP_JMP, labStepCont, 0)
@@ -251,6 +286,7 @@ Function LowStmtFor(ctx As *LowerCtx, idx As Long) As Long
     Dim labStepCont As Long
     Dim labForCont As Long
     Dim useInc As Long
+    Dim wide As Long
 
     LowStmtFor = 0
     ast = ctx->ast
@@ -259,16 +295,22 @@ Function LowStmtFor(ctx As *LowerCtx, idx As Long) As Long
         LowStmtFor = LowStmtForDbl(ctx, idx)
         Exit Function
     End If
+    wide = LowExprWide(ctx, nodes[idx].left)
     saveFor = g_forEndLab
     saveForCont = g_forContLab
+    g_forWide = wide
     If Not LowStmtForPrep(ctx, idx, vOff, vGlob, stepIdx, useInc, labTop, labEnd, labStepNeg, labStepCont, labForCont) Then Exit Function
     IrEmit(ctx->list, OP_LABEL, labTop, 0)
     LowMaybeLoopStrCollect(ctx, nodes[idx].extra, nodes[idx].num, stepIdx)
+    g_forWide = wide
     If Not LowStmtForCmp(ctx, vOff, vGlob, nodes[idx].extra, stepIdx, labStepNeg, labStepCont, labEnd) Then Exit Function
+    g_forWide = 0
     body = nodes[idx].num
     If LowStmtList(ctx, body) = 0 Then Exit Function
     IrEmit(ctx->list, OP_LABEL, labForCont, 0)
+    g_forWide = wide
     If Not LowStmtForStep(ctx, idx, vOff, vGlob, stepIdx, useInc) Then Exit Function
+    g_forWide = 0
     IrEmit(ctx->list, OP_JMP, labTop, 0)
     IrEmit(ctx->list, OP_LABEL, labEnd, 0)
     g_forEndLab = saveFor
