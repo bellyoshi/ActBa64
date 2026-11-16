@@ -52,6 +52,7 @@
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
+| 多次元 UDT 配列のメンバ参照 | `a(i, j).x` は `'.' member access outside With block`、`a[i, j].x` は codegen 失敗 |
 | `Int64` / `QWord` | 4.20 基本型一覧。ActBa64 は 32bit として読み警告を出す（`Char` は `Byte`） |
 
 ## 数値・型

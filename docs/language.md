@@ -293,7 +293,7 @@ TypeDef PBYTE = *Byte
 TypeDef PADD = *Function(a As Long, b As Long) As Long
 ```
 
-メンバ参照: `x.field` / `p->field` / `a(i)` / `a(i, j)` / `p[i]`（組み合わせ可）。  
+メンバ参照: `x.field` / `p->field` / `a(i).field` / `p[i]`（組み合わせ可）。2 次元以上の UDT 配列のメンバ参照（`a(i, j).field`）は未対応。  
 関数ポインタ型（`*Function` / `*Sub`）は [§5.2.1](#521-関数ポインタ型)。
 
 ---
