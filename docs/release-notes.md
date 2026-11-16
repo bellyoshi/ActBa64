@@ -2,15 +2,21 @@
 
 ## 未リリース（v0.0.9 からの変更点）
 
-### 言語
+### ハイライト
 
-- **`Int64` / `QWord` の第 1 段階（64bit 出力のみ）。** スカラーの変数・仮引数（値・ByRef）・Type メンバが 8 バイトになり、Long・Double との代入、`Print` / `Str$`、`SizeOf` が 64bit の値を扱います。Long は符号で、DWord と整数のリテラルは 0 で広げます。
-- **`Int64` / `QWord` の第 2 段階。** `+ - * \ Mod And Or Xor Not << >>` と比較が 64bit になりました（両方 QWord の比較は符号なし）。`If x Then` も 64 ビットで見ます。
-  - 32bit に入らない十進の整数（`9223372036854775807` まで）と 9〜16 桁の `&H` は Int64 のリテラルです（これまでは Double、または 32bit に切り詰め）。
-- **`Int64` / `QWord` の第 3 段階。** `Function` / Class のメソッド / `Declare Function` の `As Int64` / `As QWord` の戻り値が 64bit になりました（`GetTickCount64` など）。
-- **`Int64` / `QWord` の第 4 段階。** 配列（`Dim a(n) As Int64`、多次元、`= [...]` の初期化子、`Len`）、`For` の制御変数（終値・Step も 64bit）、`Select Case` が 64bit になりました。`Val` は Double を経るので 2^53 まで正確です。
-- **`Int64` / `QWord` の第 5 段階（符号なし）。** 両辺とも符号なし（QWord・DWord・非負のリテラル）の `\` `Mod` と比較は符号なしになり、QWord の `>>` は論理シフトです。QWord と Double の変換は 2^63 以上も正しく扱います。
-  - Type メンバの配列、関数ポインタ（`*Function(...) As Int64`）の戻り値、`-actba32` は、これまでどおり 32bit として読んで警告します。
+- **`Int64` / `QWord` が 64bit の整数になりました（64bit 出力と `-linux`）。** これまでは `Long` / `DWord` として読み、警告を出していました。詳しくは [different.md](./different.md) を見てください。
+  - 変数・仮引数（値・ByRef）・Type メンバ（配列のメンバも）・配列（多次元、`= [...]` の初期化子）が 8 バイトです。`SizeOf` / `Len` も 8 バイトで数えます。
+  - `+ - * \ Mod And Or Xor Not << >>` と比較、`If x Then`、`For` の制御変数（終値・Step も）、`Select Case` が 64bit です。
+  - `Function` / Class のメソッド / `Declare Function` / 関数ポインタの `As Int64` / `As QWord` の戻り値も 64bit です（`GetTickCount64` など）。仮引数が `Long` と `Int64` だけ違う関数も重ねて定義できます。
+  - Long は符号で、DWord と 4294967295 までの整数のリテラルは 0 で広げます。Int64 を Long へ入れると下位 32 ビットです。Double とは 0 へ切り捨てで変換します。
+  - `Print` / `Str$` は 64bit の十進で出します（`Include\default\Int64Str.abp` の `StrI64$` / `StrU64$`）。
+  - QWord: 両辺とも符号なし（QWord・DWord・非負のリテラル）の `\` `Mod` と比較は符号なし、QWord の `>>` は論理シフトです。Double との変換は 2^63 以上も正しく扱います。
+- **64bit の整数リテラル。** 4294967295 を超える十進（`9223372036854775807` まで）と 9〜16 桁の `&H` は Int64 のリテラルです（これまでは Double、または 32bit に切り詰め）。
+
+### 互換性
+
+- `-actba32` では、これまでどおり `Int64` を `Long`、`QWord` を `DWord` として読み、警告を出します。
+- `Val` は Double を返す（ActiveBasic と同じ）ので、Int64 へ入れる値は 2^53 まで正確です。
 
 ## v0.0.9（v0.0.8 からの変更点）
 

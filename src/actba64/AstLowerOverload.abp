@@ -7,6 +7,8 @@ Const OVL_K_FLT = 1
 Const OVL_K_PTR = 2
 Const OVL_K_UDT = 3
 Const OVL_K_STR = 4
+' Int64 / QWord（Long の引数も受けられる）
+Const OVL_K_WIDE = 5
 
 Dim g_ovlN As Long
 Dim g_ovlNames As *Byte
@@ -121,6 +123,8 @@ Function OvlSameSig(ctx As *LowerCtx, fi As Long, stmt As Long) As Long
         ty = nodes[param].extra
         If ty < 0 Then ty = TY_LONG
         If ty <> LowSigTy(g_freeFuncPty As *Long, g_freeFuncNArgs As *Long, fi, k) Then Exit Function
+        ' Long と Int64 / QWord の仮引数は別の定義
+        If OvlParamWide(fi, k) <> LowTiWide(nodes[param].right) Then Exit Function
         k = k + 1
         param = nodes[param].nxt
     Wend
@@ -151,6 +155,19 @@ Function OvlArgKind(ctx As *LowerCtx, e As Long) As Long
     If ty = TY_STRING Or LowIsStringExpr(ctx, e) <> 0 Then OvlArgKind = OVL_K_STR
     If LowExprIsPtr(ctx, e) <> 0 Then OvlArgKind = OVL_K_PTR
     If LowArgIsUdtVar(ctx, e) <> 0 Then OvlArgKind = OVL_K_UDT
+    If OvlArgKind = OVL_K_INT And LowExprWide(ctx, e) <> 0 Then OvlArgKind = OVL_K_WIDE
+End Function
+
+' 定義 fi の仮引数 argIdx が Int64 / QWord なら LOW_PTI_I64 / LOW_PTI_U64、違えば 0
+Function OvlParamWide(fi As Long, argIdx As Long) As Long
+    Dim pti As Long
+    Dim r As Long
+    OvlParamWide = 0
+    pti = -1
+    ' 型の欄は As を書かない Long が -1（範囲外も -1 で、そのとき pti は -1 のまま）
+    r = LowStrictFuncAt(fi, argIdx, pti)
+    If r >= 0 And r <> TY_LONG Then Exit Function
+    OvlParamWide = LowTiWide(pti)
 End Function
 
 ' 定義 fi の仮引数 argIdx の種類
@@ -164,12 +181,14 @@ Function OvlParamKind(fi As Long, argIdx As Long, byRefs As Long) As Long
     If ty = TY_STRING Then OvlParamKind = OVL_K_STR
     If ty = TY_PTR_BYTE Or ty = TY_PTR_LONG Or ty = TY_PTR_UDT Then OvlParamKind = OVL_K_PTR
     If ty = TY_UDT And (byRefs And bit) <> 0 Then OvlParamKind = OVL_K_UDT
+    If ty = TY_LONG And OvlParamWide(fi, argIdx) <> 0 Then OvlParamKind = OVL_K_WIDE
 End Function
 
 Function OvlKindScore(a As Long, b As Long) As Long
     OvlKindScore = 0
     If a = b Then OvlKindScore = 2
     If (a = OVL_K_INT And b = OVL_K_PTR) Or (a = OVL_K_PTR And b = OVL_K_INT) Then OvlKindScore = 1
+    If (a = OVL_K_INT And b = OVL_K_WIDE) Or (a = OVL_K_WIDE And b = OVL_K_INT) Then OvlKindScore = 1
 End Function
 
 ' 定義 cand が実引数（arg から nUser 個、先頭の This を数える skip）にどれだけ合うか。合わなければ -1
