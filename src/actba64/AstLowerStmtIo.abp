@@ -35,6 +35,22 @@ Sub LowEmitInputCvt(ctx As *LowerCtx, vTy As Long)
     End If
 End Sub
 
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowEmitInputWide(ctx As *LowerCtx) As boolean
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim lab As Long
+    LowEmitInputWide = false
+    lstrcpy(VarPtr(name), "StrToI64")
+    lab = LowFindFunc(ctx, VarPtr(name))
+    If lab < 0 Then
+        LowPrintErr("error: missing 'StrToI64' (Include\default\Int64Str.abp)")
+        ctx->err = 1
+        Exit Function
+    End If
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitInputWide = true
+End Function
+
 ' rax を Input 先の変数へ格納
 Sub LowStoreInputVar(ctx As *LowerCtx, vOff As Long, vTy As Long, vByRef As Long, vGlob As Long)
     If LowEmitStoreIfDbl(ctx->list, vOff, vTy, vByRef, vGlob) <> 0 Then Exit Sub
@@ -79,7 +95,12 @@ Function LowStmtInputOne(ctx As *LowerCtx, nVarIdx As Long, labIn As Long) As bo
         Exit Function
     End If
     LowStmtInputRead(ctx, labIn)
-    LowEmitInputCvt(ctx, vTy)
+    If vTy = TY_LONG And LowTiWide(vTypeIdx) <> 0 Then
+        ' Int64 / QWord は 64bit の十進で読む（Include\default\Int64Str.abp）
+        If Not LowEmitInputWide(ctx) Then Exit Function
+    Else
+        LowEmitInputCvt(ctx, vTy)
+    End If
     LowStoreInputVar(ctx, vOff, vTy, vByRef, vGlob)
     LowStmtInputOne = true
 End Function
@@ -231,7 +252,11 @@ Function LowStmtFInputOne(ctx As *LowerCtx, varIdx As Long, labIn As Long) As bo
     End If
     ' rax = file number（呼び出し側が再設定）
     LowEmitCall1Rax(list, 0, 0, 0, labIn)
-    LowEmitInputCvt(ctx, vTy)
+    If vTy = TY_LONG And LowTiWide(vTypeIdx) <> 0 Then
+        If Not LowEmitInputWide(ctx) Then Exit Function
+    Else
+        LowEmitInputCvt(ctx, vTy)
+    End If
     LowStoreInputVar(ctx, vOff, vTy, vByRef, vGlob)
     LowStmtFInputOne = true
 End Function

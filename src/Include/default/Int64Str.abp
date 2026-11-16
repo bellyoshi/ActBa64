@@ -1,9 +1,11 @@
 ' Int64Str.abp — Int64 / QWord → 十進の文字列（default 常時読込。64bit 出力のみ）
+' _INT64 は Int64 を 64bit として読むコンパイラが定義する。それより古いコンパイラ（ブートストラップの stage0）は
+' Int64 / QWord を Long / DWord と読むので、Hex$(n As QWord) が Long の版と重なる。そのため全体を読み飛ばさせる
 '
 ' Print / Str$ が 64bit の整数を表示するとき StrI64$ を呼ぶ。
 ' 64bit の割り算に頼らず、値を 16 ビットずつ 4 つに分けて 10 で割っていく。
 
-#ifdef _WIN64
+#ifdef _INT64
 
 Function StrI64$(v As Int64) As String
     StrI64$ = StrW64Core$(VarPtr(v) As *Long, 1)
@@ -59,6 +61,76 @@ Function StrW64Core$(p As *Long, isSigned As Long) As String
     Loop
     If neg <> 0 Then s = "-" + s
     StrW64Core$ = s
+End Function
+
+' Hex$ / Oct$ の 64bit 版（Long の版は StrUtils.abp。Int64 / QWord の実引数はこちらが選ばれる）
+Function Hex$(n As QWord) As String
+    Dim d As Long
+    Dim out As String
+    If n = 0 Then
+        Hex$ = "0"
+        Exit Function
+    End If
+    out = ""
+    While n <> 0
+        d = n And 15
+        n = n >> 4
+        out = Mid$("0123456789abcdef", d + 1, 1) + out
+    Wend
+    Hex$ = out
+End Function
+
+Function Oct$(n As QWord) As String
+    Dim d As Long
+    Dim out As String
+    If n = 0 Then
+        Oct$ = "0"
+        Exit Function
+    End If
+    out = ""
+    While n <> 0
+        d = n And 7
+        n = n >> 3
+        out = Mid$("01234567", d + 1, 1) + out
+    Wend
+    Oct$ = out
+End Function
+
+' Print Using の Int64 / QWord の値（書式は Double と同じ。2^53 まで正確）
+Function PuUseVal$(acc As String, v As Int64) As String
+    Dim d As Double
+    d = v
+    PuUseVal$ = PuUseVal$(acc, d)
+End Function
+
+' Input で Int64 / QWord の変数へ読む十進（前の空白、+ / -、数字）。Double を経ないので 64bit とも正確
+Function StrToI64(p As *Byte) As Int64
+    Dim i As Long
+    Dim c As Long
+    Dim neg As Long
+    Dim r As Int64
+    StrToI64 = 0
+    If p = 0 Then Exit Function
+    i = 0
+    While p[i] = 32 Or p[i] = 9
+        i = i + 1
+    Wend
+    neg = 0
+    If p[i] = 45 Then
+        neg = 1
+        i = i + 1
+    ElseIf p[i] = 43 Then
+        i = i + 1
+    End If
+    r = 0
+    Do
+        c = p[i]
+        If c < 48 Or c > 57 Then Exit Do
+        r = r * 10 + (c - 48)
+        i = i + 1
+    Loop
+    If neg <> 0 Then r = -r
+    StrToI64 = r
 End Function
 
 #endif
