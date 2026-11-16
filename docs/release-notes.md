@@ -1,5 +1,46 @@
 # リリースノート
 
+## 未リリース（v0.0.8 からの変更点）
+
+### ハイライト
+
+- **`-X` で exe が小さくなります。** 呼ばれない関数・メソッドと、そこからしか呼ばない API を exe に入れません（Hello World 64bit: 185KB → 50KB）。ProjectEditor の Basic メニュー「使用していない命令を削除(-X)」でも入り切りできます。詳しくは [language.md](./language.md) と [projecteditor.md](./projecteditor.md) を見てください。
+- **大域変数の `.data` をファイルに持たなくなりました（BSS）。** Hello World は 185KB → 144KB、`-X` と合わせると 9KB です。
+- **`Forms.sbp` が `-linux` で X11 の窓になります。** 同じソースを ELF にでき、`libX11.so.6` を呼びます（X サーバーが要ります。WSL なら WSLg）。`Form.Close()` も追加しました。詳しくは [language.md](./language.md) の「7.8 フォーム（Forms.sbp）」を見てください。
+
+### 言語
+
+- **多次元配列の並びを ActiveBasic・C と同じにしました。** `Dim a(N, M)` の `a(i, j)` は `i * (M + 1) + j` 番目で、最後の添字が連続します。`VarPtr(a[i, 0])` から `a[i, 0..M]` を続けて読めます。
+  - 多次元配列を平坦な添字 `a(k)` で読むと、`bad array index count` のコンパイルエラーになります。次元数と違う個数の添字も同じです。
+- 配列・ポインタの添字に Double / Single を書けます（`a[(i + j) / 2]`）。Long に変換します。
+- `VarPtr(a[i, j])` / `VarPtr(a(i, j))` を読みます。
+- `TypeDef X = *T` の別名で `Dim` した変数は `*T` と同じ型になります（`Dim d As DWordPtr` の `d[i]`）。
+- `Print Using fmt; a, b, ...` で複数の値を出せます。書式は値ごとに前から当てはめて繰り返します。N88-BASIC の書式 `+` `-` `**` `\` `,` `^^^^` `!` `_` を読み、入らない数には `%` を付けます。
+- 指数のリテラル（`1.5e10`、`2.5E-3`、`1E+3`）を読みます。4294967295 を超える十進の整数リテラルは Double になります（これまでは 32bit に切り詰めていました）。
+- DWord の変数・仮引数・Type メンバを Double にするとき、符号なし（0..4294967295）として読みます。
+- `#strict` で Byte を Long に代入しても警告しません。
+
+### 修正
+
+- `A() + B()` のように、名前が `$` で終わらない `As String` の関数どうしを足すと落ちていました。文字列の連結にします。
+- Byte 配列（変数・Type メンバ）と文字列の比較（`If FileName = "" Then` など）が正しくありませんでした。C 文字列として比べます。
+- 2^31 を超える Double の `Print` / `Str$` が `inf` になっていました。10^15 未満は整数部をそのまま、それ以上は `1.5E+20` の形で出します。
+- `LoadImage`（`LR_LOADFROMFILE`）で日本語を含むパスのビットマップを開けませんでした。UTF-8 のパスを `LoadImageW` へ渡します。
+- `ReadFile` / `WriteFile` のバイト数の受け取り先と `lpOverlapped` を `VoidPtr` にしました。64bit でアドレスが 32bit に切り詰められていました。コンパイラと ProjectEditor のビルドの警告が 0 になります。
+
+### Include
+
+- `Const RAND_MAX = &H7FFF` を追加しました。
+
+### ProjectEditor
+
+- 「使用していない命令を削除(-X)」を Basic メニューに追加しました。題名に `-X` が付きます。
+- DLL を出力する `.pj` では、実行メニューを灰色にします。
+
+### ビルド
+
+- PE の書き出しが変わったので、古い stage0 では `build.ps1` の stage1 / stage2 の比較が一致しません（stage2 → stage3 は一致します）。AB4.20 で stage0 を作り直してください。
+
 ## v0.0.8（v0.0.7 からの変更点）
 
 v0.0.7 のコンパイラを、自分自身をコンパイルできる状態に戻す修正です。
