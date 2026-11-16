@@ -1,0 +1,64 @@
+' Int64Str.abp — Int64 / QWord → 十進の文字列（default 常時読込。64bit 出力のみ）
+'
+' Print / Str$ が 64bit の整数を表示するとき StrI64$ を呼ぶ。
+' 64bit の割り算に頼らず、値を 16 ビットずつ 4 つに分けて 10 で割っていく。
+
+#ifdef _WIN64
+
+Function StrI64$(v As Int64) As String
+    StrI64$ = StrW64Core$(VarPtr(v) As *Long, 1)
+End Function
+
+Function StrU64$(v As QWord) As String
+    StrU64$ = StrW64Core$(VarPtr(v) As *Long, 0)
+End Function
+
+' p[0] = 下位 32 ビット、p[1] = 上位 32 ビット。isSigned なら上位の最上位ビットを符号として読む
+Function StrW64Core$(p As *Long, isSigned As Long) As String
+    Dim w(3) As Long
+    Dim lo As Long
+    Dim hi As Long
+    Dim neg As Long
+    Dim i As Long
+    Dim r As Long
+    Dim cur As Long
+    Dim nz As Long
+    Dim s As String
+    Dim digits As String
+
+    digits = "0123456789"
+    lo = p[0]
+    hi = p[1]
+    w[0] = lo And &HFFFF
+    w[1] = (lo >> 16) And &HFFFF
+    w[2] = hi And &HFFFF
+    w[3] = (hi >> 16) And &HFFFF
+    neg = 0
+    If isSigned <> 0 And hi < 0 Then
+        neg = 1
+        ' 2 の補数の絶対値: ビットを反転して 1 を足す
+        r = 1
+        For i = 0 To 3
+            cur = (w[i] Xor &HFFFF) + r
+            w[i] = cur And &HFFFF
+            r = cur >> 16
+        Next
+    End If
+    s = ""
+    Do
+        r = 0
+        nz = 0
+        For i = 3 To 0 Step -1
+            cur = r * 65536 + w[i]
+            w[i] = cur \ 10
+            r = cur Mod 10
+            If w[i] <> 0 Then nz = 1
+        Next
+        s = Mid$(digits, r + 1, 1) + s
+        If nz = 0 Then Exit Do
+    Loop
+    If neg <> 0 Then s = "-" + s
+    StrW64Core$ = s
+End Function
+
+#endif

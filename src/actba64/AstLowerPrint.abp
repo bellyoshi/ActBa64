@@ -53,7 +53,7 @@ Function LowEmitPrintLong(ctx As *LowerCtx, exprIdx As Long) As boolean
     LowEmitPrintLong = true
 End Function
 
-' 0 文字列、1 Byte 配列、2 *Byte、3 Double、4 その他の数値、5 Single
+' 0 文字列、1 Byte 配列、2 *Byte、3 Double、4 その他の数値、5 Single、6 Int64 / QWord
 Function LowEmitPrintKind(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Long
     LowEmitPrintKind = 0
     If vTy = TY_BYTE_ARR Then LowEmitPrintKind = 1
@@ -64,6 +64,7 @@ Function LowEmitPrintKind(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As Lon
     LowEmitPrintKind = 4
     If LowExprType(ctx, exprIdx) = TY_DOUBLE Then LowEmitPrintKind = 3
     If LowExprType(ctx, exprIdx) = TY_SINGLE And LowExprIsDoubleBits(ctx, exprIdx) = 0 Then LowEmitPrintKind = 5
+    If LowExprWide(ctx, exprIdx) <> 0 Then LowEmitPrintKind = 6
 End Function
 
 Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As boolean
@@ -76,6 +77,34 @@ Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As bo
     If kind = 3 Then LowEmitPrintValue = LowEmitPrintNumD(ctx, exprIdx)
     If kind = 4 Then LowEmitPrintValue = LowEmitPrintNumL(ctx, exprIdx)
     If kind = 5 Then LowEmitPrintValue = LowEmitPrintNumS(ctx, exprIdx)
+    If kind = 6 Then LowEmitPrintValue = LowEmitPrintNumW(ctx, exprIdx)
+End Function
+
+' Int64 / QWord は StrI64$ / StrU64$（Include\default\Int64Str.abp）
+Function LowStrWLab(ctx As *LowerCtx, e As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    lstrcpy(VarPtr(name), "StrI64$")
+    If LowExprWide(ctx, e) = LOW_PTI_U64 Then lstrcpy(VarPtr(name), "StrU64$")
+    LowStrWLab = LowFindFunc(ctx, VarPtr(name))
+    If LowStrWLab >= 0 Then Exit Function
+    LowPrintErr("error: missing '" + MakeStr(VarPtr(name)) + "' (Include\default\Int64Str.abp)")
+    ctx->err = 1
+End Function
+
+Function LowEmitExprStrW(ctx As *LowerCtx, e As Long) As boolean
+    Dim lab As Long
+    LowEmitExprStrW = false
+    lab = LowStrWLab(ctx, e)
+    If lab < 0 Then Exit Function
+    If LowExpr(ctx, e) = 0 Then Exit Function
+    LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
+    LowEmitExprStrW = true
+End Function
+
+Function LowEmitPrintNumW(ctx As *LowerCtx, exprIdx As Long) As boolean
+    LowEmitPrintNumW = false
+    If Not LowEmitExprStrW(ctx, exprIdx) Then Exit Function
+    LowEmitPrintNumW = LowEmitPrintPad(ctx)
 End Function
 
 ' 数値の Print の整形。-pN88 は N88_NumStr$（符号の桁と後ろの空白）
@@ -114,6 +143,8 @@ Function LowExprBuiltinStrNum(ctx As *LowerCtx, e As Long) As Long
         If LowEmitExprStrD(ctx, e) Then LowExprBuiltinStrNum = 1
     ElseIf kind = 5 Then
         If LowEmitExprStrS(ctx, e) Then LowExprBuiltinStrNum = 1
+    ElseIf kind = 6 Then
+        If LowEmitExprStrW(ctx, e) Then LowExprBuiltinStrNum = 1
     Else
         LowExprBuiltinStrNum = LowEmitExprStrL(ctx, e)
     End If
@@ -124,6 +155,7 @@ Function LowStrNumKind(ctx As *LowerCtx, e As Long) As Long
     LowStrNumKind = 4
     If LowExprType(ctx, e) = TY_DOUBLE Then LowStrNumKind = 3
     If LowExprType(ctx, e) = TY_SINGLE And LowExprIsDoubleBits(ctx, e) = 0 Then LowStrNumKind = 5
+    If LowExprWide(ctx, e) <> 0 Then LowStrNumKind = 6
 End Function
 
 Function LowEmitExprStrL(ctx As *LowerCtx, e As Long) As Long
