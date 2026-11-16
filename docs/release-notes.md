@@ -8,7 +8,8 @@
 - **`Int64` / `QWord` の第 2 段階。** `+ - * \ Mod And Or Xor Not << >>` と比較が 64bit になりました（両方 QWord の比較は符号なし）。`If x Then` も 64 ビットで見ます。
   - 32bit に入らない十進の整数（`9223372036854775807` まで）と 9〜16 桁の `&H` は Int64 のリテラルです（これまでは Double、または 32bit に切り詰め）。
 - **`Int64` / `QWord` の第 3 段階。** `Function` / Class のメソッド / `Declare Function` の `As Int64` / `As QWord` の戻り値が 64bit になりました（`GetTickCount64` など）。
-  - 配列、`For`、`Select Case`、関数ポインタ（`*Function(...) As Int64`）の戻り値、`-actba32` は、これまでどおり 32bit として読んで警告します。
+- **`Int64` / `QWord` の第 4 段階。** 配列（`Dim a(n) As Int64`、多次元、`= [...]` の初期化子、`Len`）、`For` の制御変数（終値・Step も 64bit）、`Select Case` が 64bit になりました。`Val` は Double を経るので 2^53 まで正確です。
+  - Type メンバの配列、関数ポインタ（`*Function(...) As Int64`）の戻り値、`-actba32` は、これまでどおり 32bit として読んで警告します。
 
 ## v0.0.9（v0.0.8 からの変更点）
 
