@@ -144,7 +144,7 @@ CIRCLE ,r[,...]                       ' 中心は LP
 N88 `LOCATE` / `PAINT` / `PSET`:
 
 ```text
-LOCATE x, y                 ' または Locate(x, y) — 桁 x, 行 y（0 始まり。本家 N88 の 行,桁 1 始まりとは異なる）
+LOCATE x, y                 ' または Locate(x, y) — 桁 x, 行 y（0 始まり）
 PAINT (x, y), color1 [, color2]
 PSET (x, y) [, color]       ' 1 ドット。color 省略は 7（白）
 ```
