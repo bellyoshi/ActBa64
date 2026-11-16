@@ -141,14 +141,30 @@ Sub LowRegDeclSig(nodes As *AstNode, stmt As Long, i As Long)
     pti = g_freeDeclPti As *Long
     nargs = g_freeDeclNArgs As *Long
     SigFill(nodes, nodes[stmt].left, pty, pti, nargs, i)
-    LowDeclRetSet(i, LowFuncRetTi(nodes[stmt].num))
+    LowDeclRetSet(i, nodes[stmt].num)
 End Sub
 
-Sub LowDeclRetSet(i As Long, ti As Long)
+' 戻り値の印: LOW_PTI_I64 / LOW_PTI_U64（Int64 / QWord）、LOW_PTI_DBL / LOW_PTI_SGL（Double / Single）、ほかは 0
+Sub LowDeclRetSet(i As Long, flags As Long)
     Dim rw As *Long
     rw = g_freeDeclRetW As *Long
-    rw[i] = LowTiWide(ti)
+    rw[i] = LowTiWide(LowFuncRetTi(flags))
+    If (flags And AST_FUNC_RET_DBL) <> 0 Then rw[i] = LOW_PTI_DBL
+    If (flags And AST_FUNC_RET_SGL) <> 0 Then rw[i] = LOW_PTI_SGL
 End Sub
+
+' Declare Function ... As Double / As Single なら TY_DOUBLE / TY_SINGLE、違えば TY_LONG（-actba32 は x87 なので未対応）
+Function LowDeclRetFloat(ctx As *LowerCtx, name As *Byte) As Long
+    Dim i As Long
+    Dim rw As *Long
+    LowDeclRetFloat = TY_LONG
+    If TyIs32() <> 0 Then Exit Function
+    i = LowDeclIndex(ctx, name)
+    If i < 0 Then Exit Function
+    rw = g_freeDeclRetW As *Long
+    If rw[i] = LOW_PTI_DBL Then LowDeclRetFloat = TY_DOUBLE
+    If rw[i] = LOW_PTI_SGL Then LowDeclRetFloat = TY_SINGLE
+End Function
 
 ' Declare Function ... As Int64 / As QWord なら LOW_PTI_I64 / LOW_PTI_U64、違えば 0
 Function LowDeclRetWide(ctx As *LowerCtx, name As *Byte) As Long
@@ -158,7 +174,7 @@ Function LowDeclRetWide(ctx As *LowerCtx, name As *Byte) As Long
     i = LowDeclIndex(ctx, name)
     If i < 0 Then Exit Function
     rw = g_freeDeclRetW As *Long
-    LowDeclRetWide = rw[i]
+    LowDeclRetWide = LowTiWide(rw[i])
 End Function
 
 Function LowStrictAt(pty As *Long, pti As *Long, nargs As *Long, i As Long, argIndex As Long, ByRef outPti As Long) As Long
