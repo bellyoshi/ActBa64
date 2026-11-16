@@ -149,16 +149,9 @@ Function LowCmpIsWide(ctx As *LowerCtx, idx As Long) As Long
     If LowExprWide(ctx, nodes[idx].right) <> 0 Then LowCmpIsWide = 1
 End Function
 
-' 両方 QWord の比較は符号なし
+' 64bit の比較は、両辺とも符号なし（QWord・DWord・非負のリテラル）なら符号なし
 Function LowCmpIsU64(ctx As *LowerCtx, idx As Long) As Long
-    Dim ast As *Ast
-    Dim nodes As *AstNode
-    ast = ctx->ast
-    nodes = ast->nodes
-    LowCmpIsU64 = 0
-    If LowExprWide(ctx, nodes[idx].left) <> LOW_PTI_U64 Then Exit Function
-    If LowExprWide(ctx, nodes[idx].right) <> LOW_PTI_U64 Then Exit Function
-    LowCmpIsU64 = 1
+    LowCmpIsU64 = LowWideOpUnsigned(ctx, idx, BOP_EQ)
 End Function
 
 ' 式を評価して 64bit に広げる
@@ -187,9 +180,21 @@ Function LowExprBinopWide(ctx As *LowerCtx, idx As Long, op As Long) As Long
         If LowEmitWideExpr(ctx, nodes[idx].right) = 0 Then Exit Function
     End If
     LowEmitBinTake(list)
-    LowEmitWideOp(list, op)
+    If LowWideOpUnsigned(ctx, idx, op) <> 0 And (op = BOP_IDIV Or op = BOP_MOD Or op = BOP_SHR) Then
+        IrEmit(list, OP_XCHG_RAX_RCX, 0, 0)
+        LowEmitWideUnsigned(list, op)
+    Else
+        LowEmitWideOp(list, op)
+    End If
     LowExprBinopWide = 1
 End Function
+
+' 符号なしの \ Mod >>（rax = 左辺、rcx = 右辺）
+Sub LowEmitWideUnsigned(list As *IrList, op As Long)
+    If op = BOP_SHR Then IrEmit(list, OP_SHR_RAX_CL, 0, 0)
+    If op = BOP_IDIV Or op = BOP_MOD Then IrEmit(list, OP_DIV_RCX, 0, 0)
+    If op = BOP_MOD Then IrEmit(list, OP_MOV_RAX_RDX, 0, 0)
+End Sub
 
 Sub LowEmitWideOp(list As *IrList, op As Long)
     If op = BOP_ADD Then
@@ -216,6 +221,37 @@ Sub LowEmitWideOrdered(list As *IrList, op As Long)
     If op = BOP_IDIV Or op = BOP_MOD Then IrEmit(list, OP_IDIV_RCX, 0, 0)
     If op = BOP_MOD Then IrEmit(list, OP_MOV_RAX_RDX, 0, 0)
 End Sub
+
+' 符号なしとして読める整数の式: QWord、DWord、整数のリテラル（Int64 のリテラルは非負のときだけ）
+Function LowExprUnsignedW(ctx As *LowerCtx, e As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    LowExprUnsignedW = 1
+    If LowExprWide(ctx, e) = LOW_PTI_U64 Then Exit Function
+    If LowExprIsU32(ctx, e) <> 0 Then Exit Function
+    If LowWideIsIntLit(ctx, e) <> 0 Then
+        ast = ctx->ast
+        nodes = ast->nodes
+        If nodes[e].extra <> AST_NUM_EXTRA_I64 Then Exit Function
+        If nodes[e].left >= 0 Then Exit Function
+    End If
+    LowExprUnsignedW = 0
+End Function
+
+' 64bit の演算を符号なしでするなら 1（AB 4.20 と同じく、両辺とも符号なしのとき）。>> は左辺が QWord のとき
+Function LowWideOpUnsigned(ctx As *LowerCtx, idx As Long, op As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowWideOpUnsigned = 0
+    If op = BOP_SHR Then
+        If LowExprWide(ctx, nodes[idx].left) = LOW_PTI_U64 Then LowWideOpUnsigned = 1
+        Exit Function
+    End If
+    If LowExprUnsignedW(ctx, nodes[idx].left) = 0 Then Exit Function
+    LowWideOpUnsigned = LowExprUnsignedW(ctx, nodes[idx].right)
+End Function
 
 ' 64bit の比較: rcx = 左辺、rax = 右辺で cmp rcx, rax
 Function LowEmitWideCmp(ctx As *LowerCtx, idx As Long) As Long
@@ -310,7 +346,29 @@ Function LowWideIsIntLit(ctx As *LowerCtx, idx As Long) As Long
     LowWideIsIntLit = 1
 End Function
 
-' 64bit の式（rax）を Double へ。QWord もいまは符号つきで読む
-Sub LowEmitCvtWideToDouble(ctx As *LowerCtx)
-    IrEmit(ctx->list, OP_CVT_I64_TO_SD, 0, 0)
+' 64bit の式 e（rax）を Double へ。QWord は符号なしで（2^63 以上も）
+Sub LowEmitCvtWideToDouble(ctx As *LowerCtx, e As Long)
+    If LowExprWide(ctx, e) = LOW_PTI_U64 Then
+        IrEmit(ctx->list, OP_CVT_U64_TO_SD, 0, 0)
+    Else
+        IrEmit(ctx->list, OP_CVT_I64_TO_SD, 0, 0)
+    End If
+End Sub
+
+' 入れる先が QWord のときの LowEmitCvtToWide（Double は 2^63 以上も符号なしで切り捨てる）
+Sub LowEmitCvtToWideT(ctx As *LowerCtx, rhsIdx As Long, dstMark As Long)
+    Dim ty As Long
+    If dstMark = LOW_PTI_U64 And LowExprWide(ctx, rhsIdx) = 0 Then
+        ty = LowExprType(ctx, rhsIdx)
+        If ty = TY_DOUBLE Then
+            IrEmit(ctx->list, OP_CVT_SD_TO_U64, 0, 0)
+            Exit Sub
+        End If
+        If ty = TY_SINGLE Then
+            IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+            IrEmit(ctx->list, OP_CVT_SD_TO_U64, 0, 0)
+            Exit Sub
+        End If
+    End If
+    LowEmitCvtToWide(ctx, rhsIdx)
 End Sub
