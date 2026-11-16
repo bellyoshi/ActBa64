@@ -30,7 +30,7 @@
 ### P2 — OOP・メディア・規模
 
 - **ネスト手続き**
-- **`Int64` / `QWord` / `Char`** と算術
+- **`Int64` / `QWord`** の `-actba32`（64bit 出力は済み）
 - **符号無し演算**の AB 4.20 ルール完全化
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
@@ -52,14 +52,14 @@
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
-| `Int64` / `QWord` | 4.20 基本型一覧。段階 1（スカラーの格納・変換・表示・仮引数）と段階 2（算術・比較・リテラル）、段階 3（Function / メソッド / Declare の戻り値）、段階 4（配列・`For`・`Select Case`）は済み。Type メンバの配列、関数ポインタの戻り値、Int64 と Long の多重定義の区別、2^53 を超える `Val` は未。符号なしの規則は 64bit の式だけ（DWord どうしの 32bit の演算は従来どおり）。`-actba32` は 32bit として読み警告を出す（`Char` は `Byte`） |
+| `Int64` / `QWord` | 4.20 基本型一覧。64bit 出力と `-linux` は済み。`-actba32`（edx:eax の組）は未で、32bit として読み警告を出す（`Char` は `Byte`） |
 
 ## 数値・型
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
 | 符号無し演算 | 4.20: 両オペランドが符号無し型なら符号無し演算 |
-| `LongLong` / `QWord` / `Int64` 算術 | 4.20 基本型。型・算術とも未 |
+| `LongLong` / `QWord` / `Int64` 算術 | 64bit 出力は済み。`-actba32` は未 |
 
 ## GUI・Win32・マルチメディア
 
