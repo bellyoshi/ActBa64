@@ -112,6 +112,16 @@ Function LowDimUdtArrBytes(ctx As *LowerCtx, dimIdx As Long, namePtr As *Byte, B
         Exit Function
     End If
     If Not LowDimEvalBoundNode(ctx, nodes[dimIdx].left, nElems, arrLen0) Then Exit Function
+    ' 多次元なら次元を stride pool に置く（記号の typeIdx は UDT 型のまま）
+    g_dimUdtPool = -1
+    If nodes[nodes[dimIdx].left].kind = AST_ARG And g_dimRank >= 2 Then
+        g_dimUdtPool = g_dimPool
+        If g_dimUdtPool < 0 Then g_dimUdtPool = LowArrPush()
+        If g_dimUdtPool < 0 Then
+            LowerDiagError(ctx, dimIdx, "too many multi-dim arrays")
+            Exit Function
+        End If
+    End If
     tsizes = typeTable->typeSizes
     nbytes = tsizes[typeIdx]
     If nbytes <= 0 Then
@@ -185,6 +195,7 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
     Dim nbytes As Long
     Dim typeIdx As Long
     Dim arrLen0 As Long
+    Dim si As Long
 
     LowRegisterDimNode = false
     g_dimPool = -1
@@ -213,18 +224,42 @@ Function LowRegisterDimNode(ctx As *LowerCtx, dimIdx As Long, asGlob As Long) As
     End If
     ' *Double / *Word などの要素の型の印（AstLowerPtrElem）
     If typeKind = TY_PTR_LONG And nodes[dimIdx].extra < -1 Then typeIdx = nodes[dimIdx].extra
+    If typeKind <> TY_UDT_ARR Then g_dimUdtPool = -1
     If asGlob <> 0 Then
-        If LowAddGlob(ctx, VarPtr(namePtr), typeKind, nbytes, typeIdx) < 0 Then
+        si = LowAddGlob(ctx, VarPtr(namePtr), typeKind, nbytes, typeIdx)
+        If si < 0 Then
             LowPrintErr("error: register global '" + MakeStr(VarPtr(namePtr)) + "' typeKind=" + Str$(typeKind))
             Exit Function
         End If
     Else
-        If LowAddSym(ctx, VarPtr(namePtr), typeKind, nbytes, typeIdx, 0) < 0 Then
+        si = LowAddSym(ctx, VarPtr(namePtr), typeKind, nbytes, typeIdx, 0)
+        If si < 0 Then
             LowPrintErr("error: register local '" + MakeStr(VarPtr(namePtr)) + "' typeKind=" + Str$(typeKind))
             Exit Function
         End If
     End If
+    If Not LowDimNoteUdt(ctx, dimIdx, si, asGlob) Then Exit Function
     LowRegisterDimNode = true
+End Function
+
+' 多次元 UDT 配列の次元を (大域か, オフセット) の表へ（ArrUdtNote）
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowDimNoteUdt(ctx As *LowerCtx, dimIdx As Long, si As Long, asGlob As Long) As boolean
+    Dim offs As *Long
+    Dim off As Long
+    LowDimNoteUdt = true
+    If g_dimUdtPool < 0 Then Exit Function
+    If asGlob <> 0 Then
+        offs = g_globOffs As *Long
+    Else
+        offs = ctx->offs
+    End If
+    off = offs[si]
+    If ArrUdtNote(asGlob, off, g_dimUdtPool) = 0 Then
+        LowerDiagError(ctx, dimIdx, "too many multi-dim arrays")
+        LowDimNoteUdt = false
+    End If
+    g_dimUdtPool = -1
 End Function
 
 ' Walk statement list (and nested If/While/For/Do bodies) to register Dims.

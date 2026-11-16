@@ -246,6 +246,24 @@ Function LowAddrIndexRankOk(ctx As *LowerCtx, idx As Long, vTy As Long, vTypeIdx
     LowAddrIndexRankOk = false
 End Function
 
+' UDT 配列の a[i] / a[i, j]。次元数は ArrUdtRank の表から
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowAddrIndexUdtRankOk(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Long, i1 As Long) As boolean
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim nArgs As Long
+    LowAddrIndexUdtRankOk = true
+    nArgs = 1
+    If i1 >= 0 Then nArgs = 2
+    If nArgs = ArrUdtRank(vGlob, vOff) Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    AstCopyStr(ast, nodes[idx].left, VarPtr(name))
+    LowerDiagError(ctx, idx, "bad array index count '" + MakeStr(VarPtr(name)) + "'")
+    LowAddrIndexUdtRankOk = false
+End Function
+
 Function LowAddrIndexBase(ctx As *LowerCtx, idx As Long) As Long
     Dim vOff As Long
     Dim vTy As Long
@@ -274,12 +292,15 @@ Function LowAddrIndexBase(ctx As *LowerCtx, idx As Long) As Long
     End If
     i1 = nodes[idx].extra
     If Not LowAddrIndexRankOk(ctx, idx, vTy, vTypeIdx, i1) Then Exit Function
+    If vTy = TY_UDT_ARR Then
+        If Not LowAddrIndexUdtRankOk(ctx, idx, vOff, vGlob, i1) Then Exit Function
+    End If
     If i1 >= 0 Then
         If vTy = TY_UDT_ARR Then
-            ctx->err = 1
+            If Not LowEmitFlat2D(ctx, list, nodes[idx].right, i1, LowArrStrideAt(ArrUdtPool(vGlob, vOff), 0)) Then Exit Function
+        ElseIf Not LowEmitFlat2D(ctx, list, nodes[idx].right, i1, vTypeIdx) Then
             Exit Function
         End If
-        If Not LowEmitFlat2D(ctx, list, nodes[idx].right, i1, vTypeIdx) Then Exit Function
     Else
         If LowIdxExpr(ctx, nodes[idx].right) = 0 Then Exit Function
     End If

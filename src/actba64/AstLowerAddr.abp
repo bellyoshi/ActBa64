@@ -26,7 +26,18 @@ Function LowAddrVar(ctx As *LowerCtx, idx As Long) As Long
     LowAddrVar = 1
 End Function
 
-' AST_INDEX を基底に持つメンバの基底アドレスを出力し、UDT 型を tiOut へ返す
+' a[i] / a[i, j] は左の AST_VAR、a(i, j) / a[i, j, k] は AST_CALL 自身が配列名
+Sub LowIdxBaseName(ast As *Ast, base As Long, name As *Byte)
+    Dim nodes As *AstNode
+    nodes = ast->nodes
+    If nodes[base].kind = AST_CALL Then
+        AstCopyStr(ast, base, name)
+    Else
+        AstCopyStr(ast, nodes[base].left, name)
+    End If
+End Sub
+
+' AST_INDEX / 配列の AST_CALL を基底に持つメンバの基底アドレスを出力し、UDT 型を tiOut へ返す
 ' 戻り値 true : 正常終了  false : エラーあり
 Function LowAddrMemberIdxBase(ctx As *LowerCtx, base As Long, ByRef tiOut As Long) As boolean
     Dim vOff As Long
@@ -43,7 +54,7 @@ Function LowAddrMemberIdxBase(ctx As *LowerCtx, base As Long, ByRef tiOut As Lon
     ast = ctx->ast
     nodes = ast->nodes
     If LowAddr(ctx, base) = 0 Then Exit Function
-    AstCopyStr(ast, nodes[base].left, VarPtr(name))
+    LowIdxBaseName(ast, base, VarPtr(name))
     If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
@@ -111,7 +122,7 @@ Function LowAddrMember(ctx As *LowerCtx, idx As Long) As Long
             ctx->err = 1
             Exit Function
         End If
-    ElseIf nodes[base].kind = AST_INDEX Then
+    ElseIf nodes[base].kind = AST_INDEX Or nodes[base].kind = AST_CALL Then
         If Not LowAddrMemberIdxBase(ctx, base, typeIdx) Then Exit Function
     ElseIf nodes[base].kind = AST_VAR Then
         If Not LowAddrMemberVarBase(ctx, idx, base, typeIdx) Then Exit Function
@@ -313,6 +324,27 @@ Function LowAddrArrFinish(ctx As *LowerCtx, vOff As Long, vGlob As Long, vTy As 
     LowAddrArrFinish = LowAddrArrayCallScale(ctx, list, typeTable, vTy, vTypeIdx)
 End Function
 
+' UDT 配列の a(i) / a(i, j, ...)。次元は ArrUdtPool の表から
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowAddrArrUdtIndex(ctx As *LowerCtx, idx As Long, nArgs As Long, vOff As Long, vGlob As Long) As boolean
+    Dim ast As *Ast, nodes As *AstNode, pool As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowAddrArrUdtIndex = false
+    ast = ctx->ast: nodes = ast->nodes
+    If nArgs <> ArrUdtRank(vGlob, vOff) Then
+        AstCopyStr(ast, idx, VarPtr(name))
+        LowerDiagError(ctx, idx, "bad array index count '" + MakeStr(VarPtr(name)) + "'")
+        Exit Function
+    End If
+    If nArgs = 1 Then
+        LowAddrArrUdtIndex = LowAddrArrEval1(ctx, idx)
+        Exit Function
+    End If
+    pool = ArrUdtPool(vGlob, vOff)
+    LowAddrArrUdtIndex = LowEmitFlatN(ctx, ctx->list, nodes[idx].left, pool)
+    If Not LowAddrArrUdtIndex Then ctx->err = 1
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function LowAddrArrEmit(ctx As *LowerCtx, idx As Long) As boolean
     Dim vOff As Long, vTy As Long, vTypeIdx As Long, vGlob As Long, nArgs As Long
@@ -320,8 +352,12 @@ Function LowAddrArrEmit(ctx As *LowerCtx, idx As Long) As boolean
     nArgs = LowAddrArrNArgs(ctx, idx)
     If Not LowAddrArrRankOk(ctx, nArgs) Then Exit Function
     If Not LowAddrArrLookup(ctx, idx, vOff, vTy, vTypeIdx, vGlob) Then Exit Function
-    If Not LowAddrArrCountOk(ctx, idx, vTy, vTypeIdx, nArgs) Then Exit Function
-    If Not LowAddrArrIndex(ctx, idx, nArgs, vTy, vTypeIdx) Then Exit Function
+    If vTy = TY_UDT_ARR Then
+        If Not LowAddrArrUdtIndex(ctx, idx, nArgs, vOff, vGlob) Then Exit Function
+    Else
+        If Not LowAddrArrCountOk(ctx, idx, vTy, vTypeIdx, nArgs) Then Exit Function
+        If Not LowAddrArrIndex(ctx, idx, nArgs, vTy, vTypeIdx) Then Exit Function
+    End If
     LowAddrArrEmit = LowAddrArrFinish(ctx, vOff, vGlob, vTy, vTypeIdx)
 End Function
 

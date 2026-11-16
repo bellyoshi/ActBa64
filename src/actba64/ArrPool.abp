@@ -14,6 +14,7 @@ Dim g_dimPool As Long
 
 Sub ArrPoolReset()
     g_arrN = 0
+    ArrUdtReset()
     g_dimRank = 0
     g_dimPool = -1
 End Sub
@@ -182,4 +183,83 @@ Function LowArrIdxOk(vTy As Long, ti As Long, nArgs As Long) As Long
     u = LowArrUdtOk(vTy, nArgs)
     If u < 0 Then u = LowArrMatch(ti, nArgs)
     LowArrIdxOk = u
+End Function
+
+' ---------------------------------------------------
+'  多次元 UDT 配列: 記号の typeIdx は UDT 型なので、次元（stride pool id）は
+'  (大域か, オフセット) をキーにした別表に置く。局所は関数ごとに消す
+' ---------------------------------------------------
+Const ARR_UDT_MAX = 256
+Dim g_udtArrN As Long
+Dim g_udtArrGlob(255) As Long
+Dim g_udtArrOff(255) As Long
+Dim g_udtArrPool(255) As Long
+' Dim の登録中に LowDimUdtArrBytes が決めた pool id（多次元でなければ -1）
+Dim g_dimUdtPool As Long
+
+Sub ArrUdtReset()
+    g_udtArrN = 0
+    g_dimUdtPool = -1
+End Sub
+
+' 局所の記号を消す（関数の先頭・モジュール本体の先頭）
+Sub ArrUdtDropLocals()
+    Dim i As Long, k As Long
+    k = 0
+    For i = 0 To g_udtArrN - 1
+        If g_udtArrGlob(i) <> 0 Then
+            g_udtArrGlob(k) = g_udtArrGlob(i)
+            g_udtArrOff(k) = g_udtArrOff(i)
+            g_udtArrPool(k) = g_udtArrPool(i)
+            k = k + 1
+        End If
+    Next
+    g_udtArrN = k
+End Sub
+
+Function ArrUdtFind(isGlob As Long, off As Long) As Long
+    Dim i As Long, g As Long
+    ArrUdtFind = -1
+    g = 0
+    If isGlob <> 0 Then g = 1
+    For i = 0 To g_udtArrN - 1
+        If g_udtArrGlob(i) = g And g_udtArrOff(i) = off Then
+            ArrUdtFind = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' 戻り値 1 : 登録した  0 : 表があふれた
+Function ArrUdtNote(isGlob As Long, off As Long, pool As Long) As Long
+    Dim i As Long
+    ArrUdtNote = 1
+    i = ArrUdtFind(isGlob, off)
+    If i < 0 Then
+        If g_udtArrN >= ARR_UDT_MAX Then
+            ArrUdtNote = 0
+            Exit Function
+        End If
+        i = g_udtArrN
+        g_udtArrN = g_udtArrN + 1
+    End If
+    g_udtArrGlob(i) = 0
+    If isGlob <> 0 Then g_udtArrGlob(i) = 1
+    g_udtArrOff(i) = off
+    g_udtArrPool(i) = pool
+End Function
+
+' 多次元 UDT 配列の stride pool id。1 次元なら -1
+Function ArrUdtPool(isGlob As Long, off As Long) As Long
+    Dim i As Long
+    ArrUdtPool = -1
+    i = ArrUdtFind(isGlob, off)
+    If i >= 0 Then ArrUdtPool = g_udtArrPool(i)
+End Function
+
+Function ArrUdtRank(isGlob As Long, off As Long) As Long
+    Dim pool As Long
+    ArrUdtRank = 1
+    pool = ArrUdtPool(isGlob, off)
+    If pool >= 0 Then ArrUdtRank = g_arrRank(pool)
 End Function
