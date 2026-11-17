@@ -1,0 +1,211 @@
+' フォームデザイナ（RAD 第一段階）の文字列処理と大きさの計算。
+' Form を継承したクラスの InitializeComponent の中の「名前 = 値」の行を読み書きする。
+' 位置は 1 始まり（Mid$ / InStr と同じ）。名前は大文字小文字を区別しない。
+' コメント行（' で始まる）と、InitializeComponent の外の行は見ない。
+
+Const FD_ORG_X = 16                 ' デザイン画面での窓の左上
+Const FD_ORG_Y = 16
+Const FD_GRIP = 4                   ' 辺を掴める幅（片側）
+Const FD_MIN_W = 80                 ' 引いて縮められる下限
+Const FD_MIN_H = 40
+Const FD_DEF_W = 400                ' Width / Height が書かれていないときの表示
+Const FD_DEF_H = 300
+
+' pos の行の終わり（LF の位置。無ければ Len + 1）
+Function FormDesign_LineEnd(text As String, ByVal pos As Long) As Long
+    FormDesign_LineEnd = Len(text) + 1
+    If pos > Len(text) Then Exit Function
+    FormDesign_LineEnd = InStr(pos, text, Chr$(10))
+    If FormDesign_LineEnd = 0 Then FormDesign_LineEnd = Len(text) + 1
+End Function
+
+' pos の行（前後の空白と CR を除く）
+Function FormDesign_Line$(text As String, ByVal pos As Long) As String
+    FormDesign_Line$ = Trim$(Mid$(text, pos, FormDesign_LineEnd(text, pos) - pos))
+End Function
+
+Function FormDesign_IsBlank(c As String) As Long
+    FormDesign_IsBlank = 0
+    If c = " " Or c = Chr$(9) Then FormDesign_IsBlank = 1
+End Function
+
+' 値の字句の 1 字（空白・改行・コメントの手前まで）
+Function FormDesign_IsTok(c As String) As Long
+    FormDesign_IsTok = 0
+    If Len(c) = 0 Or FormDesign_IsBlank(c) <> 0 Then Exit Function
+    If c = Chr$(13) Or c = Chr$(10) Or c = "'" Then Exit Function
+    FormDesign_IsTok = 1
+End Function
+
+Function FormDesign_SkipBlank(text As String, ByVal i As Long) As Long
+    While FormDesign_IsBlank(Mid$(text, i, 1)) <> 0
+        i = i + 1
+    Wend
+    FormDesign_SkipBlank = i
+End Function
+
+Function FormDesign_TokEnd(text As String, ByVal i As Long) As Long
+    While FormDesign_IsTok(Mid$(text, i, 1)) <> 0
+        i = i + 1
+    Wend
+    FormDesign_TokEnd = i
+End Function
+
+' 「name = ...」の行か（name の次の空白でない字が =）
+Function FormDesign_IsProp(ln As String, name As String) As Long
+    FormDesign_IsProp = 0
+    If StartsWithCI(ln, name) = 0 Then Exit Function
+    If Left$(Trim$(Mid$(ln, Len(name) + 1)), 1) = "=" Then FormDesign_IsProp = 1
+End Function
+
+' kind 1: Sub InitializeComponent の行、2: End Sub の行、3: name = の行
+Function FormDesign_Match(ln As String, ByVal kind As Long, name As String) As Long
+    FormDesign_Match = 0
+    If Left$(ln, 1) = "'" Then Exit Function
+    If kind = 1 And InStrCI(ln, "sub initializecomponent") > 0 Then FormDesign_Match = 1
+    If kind = 2 And StartsWithCI(ln, "end sub") <> 0 Then FormDesign_Match = 1
+    If kind = 3 Then FormDesign_Match = FormDesign_IsProp(ln, name)
+End Function
+
+' pos の行から下で、kind に合う最初の行の始まり。無ければ 0
+Function FormDesign_FindLine(text As String, ByVal pos As Long, ByVal kind As Long, name As String) As Long
+    Dim ln As String
+    FormDesign_FindLine = 0
+    While pos <= Len(text)
+        ln = FormDesign_Line$(text, pos)
+        If FormDesign_Match(ln, kind, name) <> 0 Then FormDesign_FindLine = pos
+        If FormDesign_FindLine <> 0 Then Exit Function
+        pos = FormDesign_LineEnd(text, pos) + 1
+    Wend
+End Function
+
+' InitializeComponent の中身の始まり（Sub の次の行）。無ければ 0
+Function FormDesign_BodyStart(text As String) As Long
+    Dim p As Long
+    FormDesign_BodyStart = 0
+    p = FormDesign_FindLine(text, 1, 1, "")
+    If p = 0 Then Exit Function
+    FormDesign_BodyStart = FormDesign_LineEnd(text, p) + 1
+End Function
+
+' InitializeComponent の End Sub の行の始まり。無ければ 0
+Function FormDesign_BodyEnd(text As String) As Long
+    Dim b As Long
+    FormDesign_BodyEnd = 0
+    b = FormDesign_BodyStart(text)
+    If b = 0 Then Exit Function
+    FormDesign_BodyEnd = FormDesign_FindLine(text, b, 2, "")
+End Function
+
+' デザインできる文書か（InitializeComponent があり End Sub で閉じている）
+Function FormDesign_IsForm(text As String) As Long
+    FormDesign_IsForm = 0
+    If FormDesign_BodyEnd(text) > 0 Then FormDesign_IsForm = 1
+End Function
+
+' InitializeComponent の中の name = の行の始まり。無ければ 0
+Function FormDesign_PropLine(text As String, name As String) As Long
+    Dim p As Long, e As Long
+    FormDesign_PropLine = 0
+    e = FormDesign_BodyEnd(text)
+    If e = 0 Then Exit Function
+    p = FormDesign_FindLine(text, FormDesign_BodyStart(text), 3, name)
+    If p > 0 And p < e Then FormDesign_PropLine = p
+End Function
+
+' name = のあとの値の始まり。無ければ 0
+Function FormDesign_ValStart(text As String, name As String) As Long
+    Dim p As Long
+    FormDesign_ValStart = 0
+    p = FormDesign_PropLine(text, name)
+    If p = 0 Then Exit Function
+    FormDesign_ValStart = FormDesign_SkipBlank(text, InStr(p, text, "=") + 1)
+End Function
+
+Function FormDesign_IsNum(c As String) As Long
+    FormDesign_IsNum = 0
+    If c >= "0" And c <= "9" Then FormDesign_IsNum = 1
+    If c = "-" Or c = "&" Then FormDesign_IsNum = 1
+End Function
+
+' name の数値。無いか数でなければ def
+Function FormDesign_GetNum(text As String, name As String, ByVal def As Long) As Long
+    Dim i As Long
+    FormDesign_GetNum = def
+    i = FormDesign_ValStart(text, name)
+    If i = 0 Then Exit Function
+    If FormDesign_IsNum(Mid$(text, i, 1)) = 0 Then Exit Function
+    FormDesign_GetNum = Val(Mid$(text, i, FormDesign_TokEnd(text, i) - i))
+End Function
+
+' name の文字列（"..." の中身）。無いか文字列でなければ ""
+Function FormDesign_GetStr$(text As String, name As String) As String
+    Dim i As Long, j As Long
+    FormDesign_GetStr$ = ""
+    i = FormDesign_ValStart(text, name)
+    If i = 0 Then Exit Function
+    If Mid$(text, i, 1) <> Chr$(34) Then Exit Function
+    j = InStr(i + 1, text, Chr$(34))
+    If j = 0 Or j > FormDesign_LineEnd(text, i) Then Exit Function
+    FormDesign_GetStr$ = Mid$(text, i + 1, j - i - 1)
+End Function
+
+Function FormDesign_Num$(ByVal v As Long) As String
+    FormDesign_Num$ = Str$(v)
+    If Left$(FormDesign_Num$, 1) = " " Then FormDesign_Num$ = Mid$(FormDesign_Num$, 2)
+End Function
+
+' 文書の改行（CR があれば CRLF）
+Function FormDesign_Nl$(text As String) As String
+    FormDesign_Nl$ = Chr$(10)
+    If InStr(1, text, Chr$(13)) > 0 Then FormDesign_Nl$ = Chr$(13) & Chr$(10)
+End Function
+
+' pos の行の先頭の空白
+Function FormDesign_Indent$(text As String, ByVal pos As Long) As String
+    FormDesign_Indent$ = Mid$(text, pos, FormDesign_SkipBlank(text, pos) - pos)
+End Function
+
+' End Sub の直前に「name = v」の行を足す（End Sub の字下げ + 4）
+Function FormDesign_AddProp$(text As String, name As String, ByVal v As Long) As String
+    Dim e As Long, ln As String
+    FormDesign_AddProp$ = text
+    e = FormDesign_BodyEnd(text)
+    If e = 0 Then Exit Function
+    ln = FormDesign_Indent$(text, e) & "    " & name & " = " & FormDesign_Num$(v) & FormDesign_Nl$(text)
+    FormDesign_AddProp$ = Left$(text, e - 1) & ln & Mid$(text, e)
+End Function
+
+' name の値を v に書き換える。行が無ければ足す。デザインできない文書はそのまま
+Function FormDesign_SetNum$(text As String, name As String, ByVal v As Long) As String
+    Dim i As Long
+    FormDesign_SetNum$ = FormDesign_AddProp$(text, name, v)
+    i = FormDesign_ValStart(text, name)
+    If i = 0 Then Exit Function
+    FormDesign_SetNum$ = Left$(text, i - 1) & FormDesign_Num$(v) & Mid$(text, FormDesign_TokEnd(text, i))
+End Function
+
+Function FormDesign_Near(ByVal a As Long, ByVal b As Long) As Long
+    FormDesign_Near = 0
+    If a >= b - FD_GRIP And a <= b + FD_GRIP Then FormDesign_Near = 1
+End Function
+
+' 窓（w x h）のどこを掴んだか。1: 右辺、2: 下辺、3: 右下、0: それ以外
+Function FormDesign_Hit(ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As Long
+    Dim r As Long, b As Long
+    r = FormDesign_Near(x, FD_ORG_X + w)
+    b = FormDesign_Near(y, FD_ORG_Y + h)
+    If y < FD_ORG_Y Or y > FD_ORG_Y + h + FD_GRIP Then r = 0
+    If x < FD_ORG_X Or x > FD_ORG_X + w + FD_GRIP Then b = 0
+    FormDesign_Hit = r + b * 2
+End Function
+
+' 掴んだ所（kind）を dx, dy だけ引いたあとの大きさ
+Sub FormDesign_DragSize(ByVal kind As Long, ByVal w0 As Long, ByVal h0 As Long, ByVal dx As Long, ByVal dy As Long, ByRef w As Long, ByRef h As Long)
+    w = w0
+    h = h0
+    If (kind And 1) <> 0 Then w = w0 + dx
+    If (kind And 2) <> 0 Then h = h0 + dy
+    If w < FD_MIN_W Then w = FD_MIN_W
+    If h < FD_MIN_H Then h = FD_MIN_H
+End Sub
