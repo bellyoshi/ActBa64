@@ -422,11 +422,37 @@ Function LexEscapeChar(n2 As Long) As Long
         LexEscapeChar = CH_NUL
     ElseIf n2 = CH_BSLASH Then
         LexEscapeChar = CH_BSLASH
-    ElseIf n2 = CH_DQUOTE Then
+    ElseIf n2 = CH_DQUOTE Or n2 = CH_Lq Then
         LexEscapeChar = CH_DQUOTE
     Else
         LexEscapeChar = n2
     End If
+End Function
+
+' 16 進 1 桁を読めば値（lx->pos を進める）、無ければ -1
+Function LexExHex1(lx As *Lexer) As Long
+    Dim src As *Byte
+    src = lx->src
+    LexExHex1 = HexDigitValue(src[lx->pos])
+    If LexExHex1 >= 0 Then lx->pos = lx->pos + 1
+End Function
+
+' \x の後ろの 16 進 2 桁まで（AB 4.20 の \xhh）。1 桁も無ければ x そのもの
+Function LexExHex(lx As *Lexer) As Long
+    Dim d As Long
+    LexExHex = LexExHex1(lx)
+    If LexExHex < 0 Then LexExHex = CH_Lx : Exit Function
+    d = LexExHex1(lx)
+    If d >= 0 Then LexExHex = LexExHex * 16 + d
+End Function
+
+' \ の次の文字（lx->pos）から 1 文字を読み、lx->pos を後ろへ進める
+Function LexExEscape(lx As *Lexer) As Long
+    Dim src As *Byte
+    src = lx->src
+    LexExEscape = LexEscapeChar(src[lx->pos])
+    lx->pos = lx->pos + 1
+    If src[lx->pos - 1] = CH_Lx Then LexExEscape = LexExHex(lx)
 End Function
 
 Function LexExString(lx As *Lexer) As Long
@@ -455,8 +481,7 @@ Function LexExString(lx As *Lexer) As Long
                 lx->err = 1
                 Exit Function
             End If
-            c = LexEscapeChar(src[lx->pos])
-            lx->pos = lx->pos + 1
+            c = LexExEscape(lx)
         Else
             c = src[lx->pos]
             lx->pos = lx->pos + 1

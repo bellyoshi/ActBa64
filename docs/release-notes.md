@@ -5,6 +5,7 @@
 ### コンパイラ
 
 - コンパイラのメッセージを英語に揃えました（これまで「無効な識別子です。」など一部が日本語）。`actba64.exe` と同じフォルダに `actba_lang_ja.csv` があると日本語で出します（リリース一式には入っているので、英語にしたいときは消してください）。メッセージは ID で管理し、CSV は ProjectEditor の言語パックと同じ `id,text` です。詳しくは [build.md](./build.md#メッセージの言語) を見てください。
+- `Ex"..."` で AB 4.20 の `\q`（`"`）と `\xhh`（16 進 2 桁の文字コード）を使えるようにしました。
 - `src/common/StringFormat.abp` に `StringFormat("{0} message {1}", a, b)` を足しました（引数は String を 5 個まで）。
 
 ### ProjectEditor
