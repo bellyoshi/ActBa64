@@ -180,7 +180,7 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 - **呼ばれない関数を消す**（`LinuxPrune`、`-linux` は常に、Windows の PE は `-X` のとき。Windows では API から先はたどらない）: IR を関数（`OP_LABEL` の直後が `OP_ENTER`）に分け、先頭（`jmp main`）から分岐・`OP_CALL_LAB`・`OP_LEA_RAX_LAB`（`AddressOf` / `Virtual`）・次の関数への落ち込み・API の Lx_ 版をたどる。届かない関数は `OP_NOP` にするので、コードも API の取り込みも文字列も出ない（Hello World は 212KB → 29KB）
 - **警告**（`LinuxCheck`）: 残った呼び出しのうち Linux 版の無い API は `warning: file(行): 'MessageBeep' has no Linux version; …` を出す。行は呼んだ文（`OP_CALL_API` の `arg2`）。実行時ルーチンの中なら `warning: (runtime): …`
 - 実際には通らないが静的には届く Windows 専用の呼び出し（`BasicPath` の W 版、`Sleep` のメッセージ処理など）は `#ifndef _LINUX` で外す
-- **N88BASIC**（`Include\N88BASIC`）: 窓・GDI・UI スレッドの部分（`n88graph` の描く所、`n88thread` / `n88input` / `n88key` / `n88caret` 全体など）は `#ifndef _LINUX` で外し、`n88tty.abp` が同じ名前の関数（`N88_EnsureWindow` / `N88_PutText` / `N88_Print` / `N88_ReadLine` / `N88_DrawOnBoth` ほか）を端末向けに持つ。`LINE` などの本体（座標・`STEP`・LP）は共通のまま。`-pN88` の前置き（`PpN88HeadChunks`）にも `Include\linux` を入れる
+- **N88BASIC**（`Include\N88BASIC`）: 窓・GDI・UI スレッドの部分（`n88graph` の描く所、`n88thread` / `n88input` / `n88key` / `n88caret` 全体など）は `#ifndef _LINUX` で外し、`n88tty.abp` が同じ名前の関数（`N88_EnsureWindow` / `N88_PutText` / `N88_Print` / `N88_ReadLine` / `N88_DrawOnBoth` ほか）を持つ。`N88_EnsureWindow` が `n88x11.abp` の `N88X_Open`（XOpenDisplay）を試し、つながれば `g_n88X` で X の版（`N88X_*`。Pixmap に描いて窓の背景にする。PAINT は XGetImage → 自前の塗りつぶし → XPutImage）へ、つながらなければ端末へ。`SLEEP` の待ちは `Include\linux\LxTime` の `g_lxMsgWait` で X の版に差し替える。`LINE` などの本体（座標・`STEP`・LP）は共通のまま。`-pN88` の前置き（`PpN88HeadChunks`）にも `Include\linux` を入れる
 - `MultiByteToWideChar` / `WideCharToMultiByte`（`LxUnicode`）: コードページは何でも UTF-8 として扱う（Linux に CP932 は無い）
 - ELF のファイルでは `.idata` を `.text` の直後のページに置く（`.data` の 0 はファイルに持たない）
 - **共有ライブラリ**（`ElfDyn` / `LinuxDyn` / `LinuxThunk`）: `Declare Function strlen Lib "libc.so.6" (s As BytePtr) As Long` のように Lib が `xxx.so` / `xxx.so.N` なら、その ELF は動的リンクになる（`PT_INTERP` = `/lib64/ld-linux-x86-64.so.2`、`PT_DYNAMIC`、`DT_NEEDED`、`R_X86_64_GLOB_DAT`）。ブロブは `.idata` の後ろのページ、GOT はその DLL の ILT（Linux では使わない）。`.so` が無ければ今までどおり静的
@@ -189,9 +189,10 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
   - 戻り値の `Double` / `Single`（`Declare Function sqrt Lib "libm.so.6" (x As Double) As Double`）は `xmm0` から受け取る（Windows の DLL も同じ）。
   - `.so` の Declare へ `AddressOf(f)` を直に渡すと、`f` の代わりに SysV → Win64 の踏み台を渡す（`qsort` / `bsearch` の比較関数、`pthread_create` など。整数・ポインタの引数 6 個まで）。変数に入れてから渡すと踏み台にならない。
   - 動的な ELF の `ExitProcess`（`End` やプログラムの終わりも）は libc の `exit` を呼ぶので、`printf` などの `stdio` のバッファも書き出される。静的な ELF は今までどおり exit_group。
+  - 踏み台は `and rsp,-16` で rsp をそろえてから呼ぶ（式の途中の呼び出し `Str$(f(x))` などでは呼ぶ側の rsp が 16 にそろっていない。SysV の関数は movaps で落ちる）
   - 未対応: 構造体の値渡し、Double の引数を取るコールバック
   - 名前が実行時ルーチンと同じ（`rand` など）だとそちらが呼ばれるので、Alias で別の名前にする
-- テストのメタ（`run_test_linux.ps1` だけ）: `' Args: …` 実行時の引数、`' Warn: N` 警告の数（省略時 0）、`' WarnAt: file(行)` 警告の場所、`' MaxSize: N` ELF の上限バイト数
+- テストのメタ（`run_test_linux.ps1` だけ）: `' Args: …` 実行時の引数、`' Warn: N` 警告の数（省略時 0）、`' WarnAt: file(行)` 警告の場所、`' MaxSize: N` ELF の上限バイト数、`' Env: NAME=値` 実行時の環境変数（`DISPLAY=` で X の窓を開かせない）
 - **ヒープ**（`LxHeap`）: `HeapAlloc` などは mmap した 4MB の領域から 16<<k バイトの区分で切り出し、区分ごとの空きリストで使い回す。1MB を超えるものは 1 つずつ mmap / munmap
 
 ```powershell

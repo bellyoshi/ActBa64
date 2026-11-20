@@ -1,9 +1,10 @@
-' n88tty - -linux の N88BASIC。窓の代わりに端末（標準入出力）を使う（段階1: 文字だけ）
+' n88tty - -linux の N88BASIC の入口。X の窓（n88x11.abp）が開ければそちらへ、開けなければ端末（標準入出力）へ
 '   Windows 版の窓・GDI・UI スレッド（n88graph / n88thread / n88input / n88key / n88caret）の代わりに、
 '   ここが同じ名前の関数を持つ。LINE / CIRCLE / PSET / PAINT の本体（n88graph / n88pset）はそのまま通り、
-'   描く所（N88_DrawOnBoth ほか）だけがここに来る。段階1 では描かず、最初の 1 回だけ標準エラーに知らせる。
+'   描く所（N88_DrawOnBoth ほか）だけがここに来る。g_n88X なら N88X_ の版を呼ぶ。
+'   端末のときは図形を描かず、最初の 1 回だけ標準エラーに知らせる。
 '
-'   標準出力が端末なら ANSI エスケープを使う（開始時に画面を消す・LOCATE・CLS・COLOR）。
+'   端末のとき、標準出力が端末なら ANSI エスケープを使う（開始時に画面を消す・LOCATE・CLS・COLOR）。
 '   端末でなければ（パイプ・ファイル）文字だけを書く。LOCATE は位置を覚えるだけ。
 '   INKEY$ / INPUT$ は標準入力が端末ならカノニカルモードとエコーを切る。INPUT と終わりで元に戻す。
 '   窓が無いので g_n88Hwnd は 1（出力先あり）にする。Cls / Circle / Paint はこれを見る。
@@ -202,18 +203,19 @@ End Sub
 Sub N88_EnsureWindow()
     Dim probe(63) As Byte
     If g_n88Ready <> 0 Then Exit Sub
-    g_n88TtyOut = N88_IsTty(1, VarPtr(probe))
-    g_n88TtyIn = N88_IsTty(0, VarPtr(g_n88TermSave))
-    g_n88EmitFg = N88_LX_NOCOLOR
-    g_n88EmitBg = N88_LX_NOCOLOR
     g_n88Hwnd = 1
     _PromptSys_hWnd = g_n88Hwnd
     g_n88LPx = 0
     g_n88LPy = 0
     g_n88CurX = 0
     g_n88CurY = 0
-    If g_n88TtyOut <> 0 Then N88_TtyClear()
     g_n88Ready = 1
+    If N88X_Open() <> 0 Then Exit Sub
+    g_n88TtyOut = N88_IsTty(1, VarPtr(probe))
+    g_n88TtyIn = N88_IsTty(0, VarPtr(g_n88TermSave))
+    g_n88EmitFg = N88_LX_NOCOLOR
+    g_n88EmitBg = N88_LX_NOCOLOR
+    If g_n88TtyOut <> 0 Then N88_TtyClear()
 End Sub
 
 ' UI スレッドは無い
@@ -227,8 +229,9 @@ End Sub
 Sub N88_Unlock()
 End Sub
 
-' プログラムの終わり（END / 最後の行の後ろ）。端末を元に戻すだけで、待たない
+' プログラムの終わり（END / 最後の行の後ろ）。窓なら閉じるまで待つ。端末なら元に戻すだけで、待たない
 Sub N88_WaitClose()
+    If g_n88X <> 0 Then N88X_WaitClose()
     N88_RawOff()
     N88_TtyColorReset()
 End Sub
@@ -238,6 +241,10 @@ End Sub
 Sub N88_PutText(s As *Byte)
     N88_EnsureWindow()
     If s = 0 Then Exit Sub
+    If g_n88X <> 0 Then
+        N88X_Text(s)
+        Exit Sub
+    End If
     N88_TtyColor()
     N88_OutZ(s)
 End Sub
@@ -245,7 +252,7 @@ End Sub
 ' Print → 書いて次の行へ
 Sub N88_Print(s As *Byte)
     N88_PutText(s)
-    N88_OutByte(10)
+    If g_n88X = 0 Then N88_OutByte(10)
     g_n88CurX = 0
     g_n88CurY = g_n88CurY + 1
 End Sub
@@ -255,6 +262,7 @@ Sub N88_TtyTab()
     Dim was As Long
     was = g_n88CurX
     N88_TabZone()
+    If g_n88X <> 0 Then Exit Sub
     If g_n88TtyOut <> 0 Then
         N88_Csi(g_n88CurX - was, -1, 67)
     Else
@@ -280,13 +288,14 @@ End Sub
 ' CLS 2（図形だけ）は段階1 では消すものが無い
 Sub Cls(mode As Long)
     N88_EnsureWindow()
+    If g_n88X <> 0 Then N88X_Cls()
     If mode = 2 Then Exit Sub
     If g_n88TtyOut <> 0 Then N88_TtyClear()
     g_n88CurX = 0
     g_n88CurY = 0
 End Sub
 
-' ---- 図形（段階1: 描かない） ----
+' ---- 図形（X の窓へ。端末では描かない） ----
 
 Sub N88_GfxNote()
     Dim msg As String
@@ -297,18 +306,34 @@ Sub N88_GfxNote()
 End Sub
 
 Sub N88_DrawOnBoth(sx As Long, sy As Long, ex As Long, ey As Long, color As Long, mode As Long)
+    If g_n88X <> 0 Then
+        N88X_Line(sx, sy, ex, ey, color, mode)
+        Exit Sub
+    End If
     N88_GfxNote()
 End Sub
 
 Sub N88_CircleDraw(x As Long, y As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
+    If g_n88X <> 0 Then
+        N88X_Circle(x, y, r, color, startAng, endAng, aspect, flags, fillColor)
+        Exit Sub
+    End If
     N88_GfxNote()
 End Sub
 
 Sub N88_PaintDraw(x As Long, y As Long, fr As Long, br As Long)
+    If g_n88X <> 0 Then
+        N88X_Paint(x, y, fr, br)
+        Exit Sub
+    End If
     N88_GfxNote()
 End Sub
 
 Sub N88_PSetDraw(x As Long, y As Long, color As Long)
+    If g_n88X <> 0 Then
+        N88X_PSet(x, y, color)
+        Exit Sub
+    End If
     N88_GfxNote()
 End Sub
 
@@ -348,6 +373,10 @@ Function N88_ReadLine() As String
     Dim ch As Long
     Dim ok As Long
     N88_EnsureWindow()
+    If g_n88X <> 0 Then
+        N88_ReadLine = N88X_ReadLine()
+        Exit Function
+    End If
     N88_RawOff()
     N88_LineReset()
     Do
@@ -365,6 +394,10 @@ End Function
 Function Inkey$() As String
     Dim ch As Long
     N88_EnsureWindow()
+    If g_n88X <> 0 Then
+        Inkey$ = N88X_Inkey$()
+        Exit Function
+    End If
     N88_RawOn()
     If N88_KeyReady() = 0 Then Exit Function
     ch = N88_ReadByte()
@@ -379,6 +412,10 @@ Function Input$(length As Long) As String
     Dim ch As Long
     N88_EnsureWindow()
     If length <= 0 Then Exit Function
+    If g_n88X <> 0 Then
+        Input$ = N88X_InputN$(length)
+        Exit Function
+    End If
     N88_RawOn()
     s = ""
     i = 0

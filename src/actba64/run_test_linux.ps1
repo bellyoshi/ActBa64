@@ -14,6 +14,7 @@
 #   ' Warn: N        … コンパイラの「has no Linux version」警告の数（省略時 0）
 #   ' WarnAt: text   … その警告の場所（コンパイラの出力にこの文字列があること）
 #   ' MaxSize: N     … 出力 ELF の上限バイト数（呼ばれない関数を消せているか）
+#   ' Env: NAME=val  … 実行時の環境変数（複数行可。`DISPLAY=` で X の窓を開かせない）
 # 期待する出力（あれば一致を見る。バイト単位、LF のまま）:
 #   test\linux\<base>.out.txt     … 標準出力
 #   test\linux\<base>.stderr.txt  … 標準エラー
@@ -75,23 +76,24 @@ function Write-Stdin([string]$path, [string[]]$lines) {
     [System.IO.File]::WriteAllBytes($path, [System.Text.Encoding]::UTF8.GetBytes($text))
 }
 
-function Invoke-Wsl([string]$base, [bool]$hasStdin, [string]$runArgs) {
+function Invoke-Wsl([string]$base, [bool]$hasStdin, [string]$runArgs, [string]$envs) {
     $dir = Get-WslPath $OutDir
     $in = "/dev/null"
     if ($hasStdin) { $in = "./$base.stdin" }
     # 引数の " を Windows PowerShell が崩さないよう、コマンドはファイルに書いて sh で読む
-    $run = "timeout 5 ./$base $runArgs < $in > $base.stdout 2> $base.stderr; echo `$?`n"
+    $run = "${envs}timeout 5 ./$base $runArgs < $in > $base.stdout 2> $base.stderr; echo `$?`n"
     [System.IO.File]::WriteAllBytes((Join-Path $OutDir "$base.run"), [System.Text.Encoding]::UTF8.GetBytes($run))
     $code = (& wsl.exe -e sh -c "cd '$dir' && sh ./$base.run") | Select-Object -Last 1
     return [int]$code
 }
 
 function Get-LinuxMeta([string]$path) {
-    $m = @{ Warn = 0; MaxSize = 0; WarnAt = "" }
+    $m = @{ Warn = 0; MaxSize = 0; WarnAt = ""; Env = "" }
     foreach ($line in (Get-Content -LiteralPath $path -Encoding UTF8)) {
         if ($line -match '^\s*''\s*Warn\s*:\s*(\d+)\s*$') { $m.Warn = [int]$Matches[1] }
         if ($line -match '^\s*''\s*MaxSize\s*:\s*(\d+)\s*$') { $m.MaxSize = [int]$Matches[1] }
         if ($line -match '^\s*''\s*WarnAt\s*:\s*(\S+)\s*$') { $m.WarnAt = $Matches[1] }
+        if ($line -match '^\s*''\s*Env\s*:\s*([A-Za-z_][A-Za-z0-9_]*=\S*)\s*$') { $m.Env += $Matches[1] + " " }
     }
     return $m
 }
@@ -120,7 +122,8 @@ function Invoke-OneTest([System.IO.FileInfo]$file) {
         Add-Result $name "FAIL" ((($log | Select-Object -Last 3) -join " / "))
         return
     }
-    $why = Test-Build (Get-LinuxMeta $file.FullName) $log $exe
+    $lm = Get-LinuxMeta $file.FullName
+    $why = Test-Build $lm $log $exe
     if ($why) {
         $stats.fail++
         Add-Result $name "FAIL" $why
@@ -128,7 +131,7 @@ function Invoke-OneTest([System.IO.FileInfo]$file) {
     }
     $hasStdin = $meta.Stdin.Count -gt 0
     if ($hasStdin) { Write-Stdin (Join-Path $OutDir "$base.stdin") $meta.Stdin }
-    $actual = Invoke-Wsl $base $hasStdin $meta.Args
+    $actual = Invoke-Wsl $base $hasStdin $meta.Args $lm.Env
     Test-Outcome $name $base $meta $actual
     if (-not $KeepArtifacts) {
         Get-ChildItem -LiteralPath $OutDir -Filter "$base*" | Remove-Item -Force -ErrorAction SilentlyContinue
