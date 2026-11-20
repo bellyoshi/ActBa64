@@ -6,6 +6,7 @@ Declare Function EditorBuild_GetExitCodeProcess Lib "kernel32" Alias "GetExitCod
 Const EDITORBUILD_HANDLE_FLAG_INHERIT = 1
 Dim g_buildSi As STARTUPINFO
 Dim g_buildPi As PROCESS_INFORMATION
+Dim g_buildNullIn As HANDLE
 
 ' 0 = 64bit (actba64) / 1 = 32bit (actba64 -actba32)
 Dim g_buildTarget32 As Long
@@ -36,7 +37,9 @@ Function EditorBuild_Is32BitTarget() As Long
 End Function
 
 Function EditorBuild_TargetLabel$() As String
-    If g_buildTarget32 <> 0 Then
+    If g_buildLinux <> 0 Then
+        EditorBuild_TargetLabel$ = "Linux"
+    ElseIf g_buildTarget32 <> 0 Then
         EditorBuild_TargetLabel$ = "32bit"
     Else
         EditorBuild_TargetLabel$ = "64bit"
@@ -57,7 +60,8 @@ End Function
 
 Function EditorBuild_TargetOpt$() As String
     EditorBuild_TargetOpt$ = ""
-    If g_buildTarget32 <> 0 Then EditorBuild_TargetOpt$ = " -actba32"
+    If g_buildTarget32 <> 0 And g_buildLinux = 0 Then EditorBuild_TargetOpt$ = " -actba32"
+    If g_buildLinux <> 0 Then EditorBuild_TargetOpt$ = " -linux"
     EditorBuild_TargetOpt$ = EditorBuild_TargetOpt$ + EditorBuild_N88Opt$() + EditorBuild_AB2Opt$() + EditorBuild_StripOpt$()
 End Function
 
@@ -81,13 +85,15 @@ Sub EditorBuild_UpdateTargetMenu()
     If g_targetMenuInitialized = 0 Then Exit Sub
     flags64 = MF_BYCOMMAND
     flags32 = MF_BYCOMMAND
-    If g_buildTarget32 = 0 Then
+    If g_buildLinux <> 0 Then
+    ElseIf g_buildTarget32 = 0 Then
         flags64 = flags64 Or MF_CHECKED
     Else
         flags32 = flags32 Or MF_CHECKED
     End If
     CheckMenuItem(hMenu_M_MAIN_2, IDM_TARGET64, flags64)
     CheckMenuItem(hMenu_M_MAIN_2, IDM_TARGET32, flags32)
+    EditorBuild_CheckLinuxMenu()
     EditorBuild_CheckN88Menu()
     EditorBuild_CheckAB2Menu()
     EditorBuild_CheckStripMenu()
@@ -101,12 +107,14 @@ Sub EditorBuild_LoadTarget()
     Dim p As *Byte
 
     g_buildTarget32 = 0
+    EditorBuild_DefaultLinux()
     path = EditorBuild_TargetConfigPath$()
     s = EditorDoc_LoadTextFile$(path)
     n = Len(s)
     If n <= 0 Then Exit Sub
     p = StrPtr(s)
     If p = 0 Then Exit Sub
+    EditorBuild_LoadLinux(s)
     EditorBuild_LoadN88(s)
     EditorBuild_LoadAB2(s)
     EditorBuild_LoadStrip(s)
@@ -119,9 +127,9 @@ Sub EditorBuild_SaveTarget()
     Dim path As String
     path = EditorBuild_TargetConfigPath$()
     If g_buildTarget32 <> 0 Then
-        EditorDoc_WriteTextFile(path, "32" + EditorBuild_N88Tag$() + EditorBuild_AB2Tag$() + EditorBuild_StripTag$())
+        EditorDoc_WriteTextFile(path, "32" + EditorBuild_N88Tag$() + EditorBuild_AB2Tag$() + EditorBuild_StripTag$() + EditorBuild_LinuxTag$())
     Else
-        EditorDoc_WriteTextFile(path, "64" + EditorBuild_N88Tag$() + EditorBuild_AB2Tag$() + EditorBuild_StripTag$())
+        EditorDoc_WriteTextFile(path, "64" + EditorBuild_N88Tag$() + EditorBuild_AB2Tag$() + EditorBuild_StripTag$() + EditorBuild_LinuxTag$())
     End If
 End Sub
 
@@ -150,8 +158,8 @@ Function EditorBuild_ExeFromPath$(path As String) As String
         If Mid$(path, dotPos, 1) = "." Then Exit While
         dotPos = dotPos - 1
     Wend
-    If dotPos > 0 Then EditorBuild_ExeFromPath$ = Left$(path, dotPos - 1) + ".exe"
-    If dotPos = 0 Then EditorBuild_ExeFromPath$ = path + ".exe"
+    If dotPos > 0 Then EditorBuild_ExeFromPath$ = Left$(path, dotPos - 1) + EditorBuild_ExeExt$()
+    If dotPos = 0 Then EditorBuild_ExeFromPath$ = path + EditorBuild_ExeExt$()
 End Function
 
 Function EditorBuild_ExePathFromDoc$() As String
@@ -286,6 +294,13 @@ Sub EditorBuild_ArmSi(hWrite As HANDLE)
     g_buildSi.wShowWindow = SW_HIDE
     g_buildSi.hStdOutput = hWrite
     g_buildSi.hStdError = hWrite
+#ifdef _LINUX
+    ' 子が Input で待ってもエディタが止まらないよう、標準入力は /dev/null
+    Dim nul As String
+    nul = "/dev/null"
+    If g_buildNullIn = 0 Then g_buildNullIn = CreateFile(StrPtr(nul), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0)
+    If g_buildNullIn <> -1 Then g_buildSi.hStdInput = g_buildNullIn
+#endif
 End Sub
 
 ' コマンドラインの UTF-8 を CP932 にして CreateProcessA へ（子は GetCommandLineA で読む）
@@ -427,10 +442,50 @@ Function EditorBuild_ConsoleScript$() As String
 End Function
 #endif
 
+#ifdef _LINUX
+' 端末の窓を開けるか（$TERMINAL か、よくある端末が $PATH にある）
+Function EditorBuild_HasTerminal() As Long
+    Dim buf(1023) As Byte
+    Dim names As String, one As String
+    Dim i As Long
+    EditorBuild_HasTerminal = 1
+    If GetEnvironmentVariable("TERMINAL", VarPtr(buf(0)), 1024) > 0 Then Exit Function
+    names = "x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm "
+    one = ""
+    For i = 1 To Len(names)
+        If Mid$(names, i, 1) = " " Then
+            If LxWhich(StrPtr(one), VarPtr(buf(0))) <> 0 Then Exit Function
+            one = ""
+        Else
+            one = one + Mid$(names, i, 1)
+        End If
+    Next
+    EditorBuild_HasTerminal = 0
+End Function
+
+' 端末が無ければ、exe のフォルダーで動かして出力をメッセージ欄に出す（標準入力は /dev/null）
+Function EditorBuild_RunInPane(exePath As String, runDir As String) As Long
+    Dim outText As String, code As Long
+    Dim cur(1023) As Byte
+    Dim n As Long
+    n = GetCurrentDirectory(1024, VarPtr(cur(0)))
+    If Len(runDir) > 0 Then SetCurrentDirectory(StrPtr(runDir))
+    EditorBuild_RunInPane = EditorBuild_RunCapture(EditorBuild_QuoteArg$(exePath), outText, code)
+    If n > 0 Then SetCurrentDirectory(VarPtr(cur(0)))
+    If EditorBuild_RunInPane = 0 Then Exit Function
+    MessageWnd_Append(outText)
+    MessageWnd_Append("[exit " + EditorGutter_Num$(code) + "]" + Chr$(10))
+End Function
+#endif
+
 Function EditorBuild_ShellConsole(hWnd As HWND, exePath As String, runDir As String) As Long
 #ifdef _LINUX
     Dim script As String
     EditorBuild_ShellConsole = 0
+    If EditorBuild_HasTerminal() = 0 Then
+        EditorBuild_ShellConsole = EditorBuild_RunInPane(exePath, runDir)
+        Exit Function
+    End If
     script = EditorBuild_ConsoleScript$()
     If Len(script) = 0 Then Exit Function
     EditorBuild_ShellConsole = EditorBuild_Shell(hWnd, "/usr/bin/env", "EXE=" + Chr$(34) + exePath + Chr$(34) + " /bin/sh " + Chr$(34) + script + Chr$(34), runDir)
@@ -456,6 +511,10 @@ Sub EditorBuild_RunBody(hWnd As HWND)
     If EditorBuild_DoCompile(hWnd) = 0 Then Exit Sub
 
     exePath = EditorBuild_ExePathFromDoc$()
+    If EditorBuild_CanRun() = 0 Then
+        MessageWnd_Append("Cannot run this target here (compiled only): " + exePath + Chr$(13) + Chr$(10))
+        Exit Sub
+    End If
     MessageWnd_Append("Running " + exePath + Chr$(13) + Chr$(10))
     If EditorBuild_LaunchExe(hWnd, exePath) = 0 Then
         MessageWnd_Append("Failed to run program." + Chr$(13) + Chr$(10))
