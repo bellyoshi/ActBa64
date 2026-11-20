@@ -21,6 +21,32 @@
 ' メッセージは Override Function WndProc(msg, wParam, lParam) で受け取り、
 ' 自分で扱わないものは Super.WndProc(msg, wParam, lParam) に渡す。
 '
+' 部品（今は Button だけ）はメンバーにして、InitializeComponent で AddControl する。
+' 子窓はフォームの窓ができたとき（WM_CREATE の前）に作られる。
+' 押されたことは、フォームの WndProc に WM_COMMAND（HIWORD(wParam) = BN_CLICKED、
+' lParam = ボタンの Handle）として届く。
+'
+'   Class Form1
+'       Inherits Form
+'   Public
+'       Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+'           If msg = WM_COMMAND Then
+'               If HIWORD(wParam) = BN_CLICKED And lParam = Button1.Handle Then Button1Click()
+'           End If
+'           WndProc = Super.WndProc(msg, wParam, lParam)
+'       End Function
+'   Private
+'       Button1 As Button
+'       Sub Button1Click()
+'           ...
+'       End Sub
+'       Override Sub InitializeComponent()
+'           Button1.Left = 8 : Button1.Top = 8 : Button1.Width = 100 : Button1.Height = 30
+'           Button1.Caption = "Button1"
+'           AddControl(Button1)
+'       End Sub
+'   End Class
+'
 ' -linux では X11（libX11.so.6）の窓になる（ELF は動的リンク）。WndProc に届くのは
 ' WM_CREATE / WM_PAINT / WM_SIZE / WM_KEYDOWN / WM_CHAR / WM_?BUTTONDOWN・UP /
 ' WM_MOUSEMOVE / WM_CLOSE / WM_DESTROY。Super.WndProc は WM_CLOSE で窓を壊し、
@@ -65,7 +91,29 @@ Dim g_formsHint(79) As Byte         ' XSizeHints
 Dim g_formsKey(15) As Byte          ' XLookupString の文字
 Dim g_formsSym(7) As Byte           ' KeySym
 
+' 部品。X11 版ではまだ子窓を作らない（AddControl は通るが、窓には出ない）
+Class Control
+Public
+    Left As Long
+    Top As Long
+    Width As Long
+    Height As Long
+    Caption As String
+    Handle As HWND
+    NextControl As *Control     ' 同じ Form に載せた次の部品（Forms.sbp が使う）
+
+    Virtual Sub CreateHandle(parent As HWND)
+    End Sub
+End Class
+
+Class Button
+    Inherits Control
+End Class
+
 Class Form
+Private
+    firstControl As *Control        ' AddControl で載せた部品（NextControl でつなぐ）
+    lastControl As *Control
 Public
     Left As Long
     Top As Long
@@ -84,6 +132,31 @@ Public
 
     ' フォームデザイナが Override して、位置・大きさ・見出しなどを入れる
     Virtual Sub InitializeComponent()
+    End Sub
+
+    ' 部品を載せる。窓がもうあれば、すぐ子窓を作る
+    Sub AddControl(ByRef c As Control)
+        Dim p As *Control, q As *Control
+        p = VarPtr(c)
+        p->NextControl = 0
+        If lastControl = 0 Then
+            firstControl = p
+        Else
+            q = lastControl
+            q->NextControl = p
+        End If
+        lastControl = p
+        If Handle <> 0 Then c.CreateHandle(Handle)
+    End Sub
+
+    ' 載せた部品の子窓を作る（窓ができたときに Forms.sbp が呼ぶ）
+    Sub CreateControls()
+        Dim c As *Control
+        c = firstControl
+        While c <> 0
+            c->CreateHandle(Handle)
+            c = c->NextControl
+        Wend
     End Sub
 
     ' 窓のメッセージ。既定は、WM_CLOSE で窓を壊し、窓が壊れたらメッセージループを終わらせる
@@ -208,6 +281,7 @@ Sub FormsCreate(p As VoidPtr)
 
     XSetWMProtocols(g_formsDpy, w, VarPtr(g_formsAtom(0)), 1)
     XSelectInput(g_formsDpy, w, FORMS_X_MASK)
+    f->CreateControls()
     f->WndProc(WM_CREATE, 0, 0)
 End Sub
 
@@ -346,7 +420,41 @@ Dim g_formsClass(31) As Byte
 Dim g_formsReg As Long
 Dim g_formsNew As VoidPtr           ' CreateWindowEx のあいだだけ、窓を作っている Form
 
+' 部品。子のクラスが CreateHandle で子窓を作る
+Class Control
+Public
+    Left As Long
+    Top As Long
+    Width As Long
+    Height As Long
+    Caption As String
+    Handle As HWND
+    NextControl As *Control     ' 同じ Form に載せた次の部品（Forms.sbp が使う）
+
+    ' parent の中に子窓を作る
+    Virtual Sub CreateHandle(parent As HWND)
+    End Sub
+End Class
+
+' 押しボタン。押されると、親の WndProc に WM_COMMAND（BN_CLICKED）が届く
+Class Button
+    Inherits Control
+Public
+    Override Sub CreateHandle(parent As HWND)
+        Handle = CreateWindowEx(0, "BUTTON", StrPtr(Caption), WS_CHILD Or WS_VISIBLE Or WS_TABSTOP Or BS_PUSHBUTTON, Left, Top, Width, Height, parent, 0, GetModuleHandle(0), 0)
+        FormsSetFont(Handle)
+    End Sub
+End Class
+
+' 子窓の文字を、システムの文字（DEFAULT_GUI_FONT）にする
+Sub FormsSetFont(h As HWND)
+    SendMessage(h, WM_SETFONT, GetStockObject(DEFAULT_GUI_FONT) As WPARAM, 0)
+End Sub
+
 Class Form
+Private
+    firstControl As *Control        ' AddControl で載せた部品（NextControl でつなぐ）
+    lastControl As *Control
 Public
     Left As Long
     Top As Long
@@ -365,6 +473,31 @@ Public
 
     ' フォームデザイナが Override して、位置・大きさ・見出しなどを入れる
     Virtual Sub InitializeComponent()
+    End Sub
+
+    ' 部品を載せる。窓がもうあれば、すぐ子窓を作る
+    Sub AddControl(ByRef c As Control)
+        Dim p As *Control, q As *Control
+        p = VarPtr(c)
+        p->NextControl = 0
+        If lastControl = 0 Then
+            firstControl = p
+        Else
+            q = lastControl
+            q->NextControl = p
+        End If
+        lastControl = p
+        If Handle <> 0 Then c.CreateHandle(Handle)
+    End Sub
+
+    ' 載せた部品の子窓を作る（WM_CREATE の前に Forms.sbp が呼ぶ）
+    Sub CreateControls()
+        Dim c As *Control
+        c = firstControl
+        While c <> 0
+            c->CreateHandle(Handle)
+            c = c->NextControl
+        Wend
     End Sub
 
     ' 窓のメッセージ。既定は、窓が壊れたらメッセージループを終わらせる
@@ -414,6 +547,7 @@ Function FormsWndProc(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LP
         FormsWndProc = DefWindowProc(hWnd, msg, wParam, lParam)
         Exit Function
     End If
+    If msg = WM_CREATE Then f->CreateControls()
     FormsWndProc = f->WndProc(msg, wParam, lParam)
 End Function
 
