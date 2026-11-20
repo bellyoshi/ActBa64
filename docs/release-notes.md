@@ -1,6 +1,12 @@
 # リリースノート
 
-## 未リリース（v0.1.0 からの変更点）
+## v0.1.1（v0.1.0 からの変更点）
+
+### ハイライト
+
+- **ProjectEditor にフォームデザイナが付きました（RAD の第一段階）。** 「新しいフォーム」でフォームを作り、ツールボックスから Button / Image / Panel を置き、Button をダブルクリックするとクリックの処理を書けます。「コード」「デザイナー」のタブか F12 で切り替えます。
+- **`Forms.sbp` の部品が増えました。** `Control` / `Button` / `Label` / `PictureBox` と `Form.AddControl`、`OpenFileDialog` を使えます。
+- **`-linux` で N88BASIC（`-pN88`）のプログラムが動きます。** X につながれば 640x480 の窓に描き、つながらなければ端末で文字だけ出します。
 
 ### コンパイラ
 
@@ -8,19 +14,35 @@
 - `Ex"..."` で AB 4.20 の `\q`（`"`）と `\xhh`（16 進 2 桁の文字コード）を使えるようにしました。
 - `src/common/StringFormat.abp` に `StringFormat("{0} message {1}", a, b)` を足しました（引数は String を 5 個まで）。
 - `Str$` の結果が、String の GC にほかの生きた String を掃き出させることがあったのを直しました。`Str$` は塊の後ろに数字を置き、塊の先頭の 4 バイトを書かずにいたので、GC が古いヒープのゴミを長さとして読み、その範囲に入るポインタの印を横取りしていました（ProjectEditor で新しいフォームを作って終了すると、保存を尋ねる画面のパスがソースの 1 行になり、「はい」でも保存に失敗しました）。
+- `MsgBox "文字列"` のように引数が 1 つでもコンパイルできます（hWnd は 0）。
+- クラスのメソッドの中で、`p As *Foo` のフィールドに `p->M()`・`Delete p`・`p[i]` を使えるようにしました。これまでは `method call on non-class` / `Delete needs a class pointer` のエラーになり、`p[i]` は 1 バイトずつ進んでいました。
+- メッセージのパスを UTF-8 にそろえました（日本語の訳と CP932 のパスが混ざり、ProjectEditor で文字化けしていました）。`actba_lang_ja.csv` は CP932 で保存したもの（BOM 付きも）を読みます。256 バイトで切る診断が UTF-8 の文字の途中で切れないようにしました。
+- AB 4.20 でビルドできるように、メッセージの文から `""` をなくしました（出力は変わりません）。
+
+### Include
+
+- `Forms.sbp` に `Control` / `Button` と `Form.AddControl` を足しました。`InitializeComponent` で `AddControl` した部品は、フォームの窓ができたときに子窓になります。Button の押下は親の `WndProc` に `WM_COMMAND` / `BN_CLICKED` で届きます。
+- `Forms.sbp` に `Label`（STATIC）、`PictureBox`（`SetBitmap`）、`Control.SetCaption` / `SetBounds` / `Enabled` / `SetEnabled`、`Form.SetCaption`、`OpenFileDialog`、`ExtractFileName` を足しました。詳しくは [language.md](./language.md) の「7.8 フォーム（Forms.sbp）」を見てください。
+- `InitializeComponent` はフォームの ctor ではなく最初の `Show` で 1 度だけ呼びます（メンバの Class の ctor が、入れた値を上書きしていたため）。窓を出す前に値を読みたいときは `InitComponents()` を呼んでください。
+- Win32 の構造体の 16bit のメンバを `Integer` から `Word` にしました（`BITMAP` / `BITMAPINFOHEADER` / `DEVMODE` / `CHARFORMAT` / `PARAFORMAT` / `SYSTEM_INFO` / `HOSTENT` / `SERVENT`）。このコンパイラの `Integer` は 4 バイトなので大きさが違い、`CreateDIBSection` などが失敗していました。`BITMAPFILEHEADER` も 14 バイトにしました。
+- `Trim$` を `Include\default` から `src/common/StrTrim.abp` に移しました（AB 4.20 に `Trim$` は無いため）。使うときは `StrTrim.abp` を取り込んでください。
 
 ### ProjectEditor
 
 - フォームデザイナ（RAD の第一段階）を足しました。`InitializeComponent` のある文書で F12 を押すとデザイン画面になり、窓の右辺・下辺・右下を引くと `Width` / `Height` の行を書き換えます。もう一度 F12 でソースに戻ります。詳しくは [projecteditor.md](./projecteditor.md#12-フォームデザイナ) を見てください。
 - 名前を付けて保存の既定の拡張子を `.sbp` から `.abp` にしました。`.abp`（Active Basic Program）はメインのコード、`.sbp`（Sub Basic Program）は `#include` で読むファイルです。ファイルダイアログのフィルタも `*.abp` を先にしました。
-- フォームデザイナの左にツールボックス（Button / Image / Panel）を足しました。ツールを選んで窓を押すと、フィールドの `名前 As 型` と `InitializeComponent` の位置・大きさ・`AddControl` の行を書き足します。部品はフィールドの型で描き分けます（[projecteditor.md](./projecteditor.md#12-フォームデザイナ)）。
+- フォームデザイナの左にツールボックス（Button / Image / Panel）を足しました。ツールを選んで窓を押すと、フィールドの `名前 As 型` と `InitializeComponent` の位置・大きさ・`AddControl` の行を書き足します。部品はフィールドの型で描き分けます（[projecteditor.md](./projecteditor.md#12-フォームデザイナ)）。フィールドはメソッドより前の `Private` に書きます（新しいフォームで `WndProc` の後ろに書いてコンパイルできなかったのを直しました）。
 - ファイルメニューに「新しいフォーム」を足しました。プロジェクトを開いていなければ、まず一時フォルダー（`%TEMP%\ActBa64Temp\NewN\`）に `project1.pj`・`project1.abp`（メイン）・`Form1.abp` を書き（保存先は上書き保存・名前を付けて保存か終了のときに尋ねて、そこへ移します）、開いていれば `FormN.abp` を書いて `#SOURCE` に足します。書いたフォームはそのままフォームデザイナで開きます。N88BASIC構文・ActiveBasic2構文のときは灰色です。
 - 無題の文書の実行・コンパイルは、N88BASIC構文・ActiveBasic2構文のときだけでなくいつも、保存先を尋ねずに `%TEMP%\ActBa64Temp\untitled.abp` に書いて訳すようにしました（これまでの `%TEMP%\ActBa64N88\` から変えました）。
 - ソースの子ウィンドウの上に「コード」「デザイナー」のタブを足しました。押すとソースとフォームデザイナが切り替わります（F12 と同じ）。
 - フォームデザイナで Button をダブルクリックすると、`Sub Button1Click()` と、それを呼ぶ `WndProc` の行（`WM_COMMAND` / `BN_CLICKED`）を書き足し、コードの画面でその `Sub` の中にキャレットを置きます。
+- N88BASIC構文（`-pN88`）のとき、`REM` から行末をコメントの色にします。
 
 ### -linux
 
+- N88BASIC構文（`-pN88`）のプログラムを ELF にできます。X につながれば `libX11.so.6` で 640x480 の窓を開き、文字・`LINE`・`CIRCLE`・`PSET`・`PAINT` を描き、`INPUT` / `INKEY$` / `INPUT$` は窓のキーを読みます。X につながらなければ端末で `PRINT` / `INPUT` / `INKEY$` / `INPUT$` / `LOCATE` / `COLOR` / `CLS` を動かします（図形は描かず、標準エラーに 1 回知らせます）。
+- `.so` を呼ぶときにスタックを 16 バイトにそろえます（式の途中の呼び出しで libX11 が落ちていました）。
+- `Forms.sbp` の `AddControl` などは通りますが、子窓は作らず値を覚えるだけです。`OpenFileDialog.Execute` はいつも False です。
 - `.so` の `Declare Function ... As Double` / `As Single` の戻り値を受け取ります（`sqrt` / `pow` など。Windows の DLL も同じ）。これまでは戻り値の型を読み捨てていました。
 - `.so` の関数へ `AddressOf(f)` を直に渡すと、BASIC の関数を `.so` から呼べます（`qsort` の比較関数など。整数・ポインタの引数 6 個まで）。
 - `.so` を使う（動的な）ELF は、終わるときに libc の `exit` を呼ぶので、改行の無い `printf` なども書き出されます。
