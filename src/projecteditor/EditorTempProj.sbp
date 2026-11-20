@@ -1,0 +1,258 @@
+' EditorTempProj - 新しいプロジェクトは、まず %TEMP%\ActBa64Temp\NewN\ に project1.pj として作る。
+' 上書き保存・名前を付けて保存（メニュー、Ctrl+S、閉じるときの「はい」）と、終了するときに
+' 保存先の .pj を尋ね、そのフォルダーへメンバーごと移す（メインの project1.abp は xxx.abp に）。
+' 移したら一時フォルダーのファイルは消す。終了で「いいえ」なら、一時フォルダーに残したまま閉じる。
+' 実行・コンパイルの前の保存は一時フォルダーに書くだけで、保存先は尋ねない。
+
+Declare Function EditorTemp_DeleteFileA Lib "kernel32" Alias "DeleteFileA" (ByVal lpFileName As *Byte) As Long
+Declare Function EditorTemp_RemoveDirectoryA Lib "kernel32" Alias "RemoveDirectoryA" (ByVal lpPathName As *Byte) As Long
+
+' 1 = 開いているプロジェクトは一時フォルダーにある
+Dim g_projTemp As Long
+' 1 = 終了で「いいえ」と答えた（一時プロジェクトの文書の保存確認を出さない）
+Dim g_projTempDrop As Long
+
+Function EditorTemp_Base$() As String
+    EditorTemp_Base$ = "project1"
+End Function
+
+' %TEMP%\ActBa64Temp\（作る）。%TEMP% が取れなければ ""
+Function EditorTemp_Root$() As String
+    EditorTemp_Root$ = EditorBuild_TempDir$()
+    If Len(EditorTemp_Root$) = 0 Then Exit Function
+    EditorTemp_Root$ = EditorTemp_Root$ & "ActBa64Temp\"
+    EditorBuild_MakeDir(EditorTemp_Root$)
+End Function
+
+Function EditorTemp_Missing(path As String) As Long
+    EditorTemp_Missing = 0
+    If GetFileAttributes(StrPtr(path)) = -1 Then EditorTemp_Missing = 1
+End Function
+
+' まだ無い %TEMP%\ActBa64Temp\NewN\ を作って返す。作れなければ ""
+Function EditorTemp_NewDir$() As String
+    Dim root As String, n As Long
+    EditorTemp_NewDir$ = ""
+    root = EditorTemp_Root$()
+    If Len(root) = 0 Then Exit Function
+    n = 1
+    While n < 1000
+        EditorTemp_NewDir$ = root & "New" & FormDesign_Num$(n) & "\"
+        If EditorTemp_Missing(EditorTemp_NewDir$) <> 0 Then Exit While
+        n = n + 1
+    Wend
+    EditorBuild_MakeDir(EditorTemp_NewDir$)
+    If EditorTemp_Missing(EditorTemp_NewDir$) <> 0 Then EditorTemp_NewDir$ = ""
+End Function
+
+' 新しいプロジェクトを一時フォルダーに書いて開く。書けなければ 0
+Function EditorTemp_NewProject() As Long
+    Dim dir As String, base As String
+    EditorTemp_NewProject = 0
+    dir = EditorTemp_NewDir$()
+    If Len(dir) = 0 Then Exit Function
+    base = EditorTemp_Base$()
+    If EditorNewForm_WriteProject(dir & base & ".pj", dir, base) = 0 Then Exit Function
+    ProjOpen(dir & base & ".pj")
+    g_projTemp = 1
+    g_projTempDrop = 0
+    EditorNewForm_Design(dir & "Form1.abp")
+    EditorTemp_NewProject = 1
+End Function
+
+' ---- 一時プロジェクトのメンバー ----
+
+' path は一時プロジェクトのメンバーか
+Function EditorTemp_IsMember(path As String) As Long
+    EditorTemp_IsMember = 0
+    If g_projTemp = 0 Then Exit Function
+    EditorTemp_IsMember = ProjHas(path)
+End Function
+
+' 移すメンバー（.pj と同じフォルダーにあり、ファイル名だけで書いてあるもの）
+Function EditorTemp_Movable(i As Long) As Long
+    Dim rel As String
+    rel = g_projRel(i)
+    EditorTemp_Movable = 0
+    If ProjAbs(rel) <> 0 Then Exit Function
+    If InStr(1, rel, "\") > 0 Or InStr(1, rel, "/") > 0 Then Exit Function
+    EditorTemp_Movable = 1
+End Function
+
+Function EditorTemp_Dest$(i As Long, dir As String, base As String) As String
+    EditorTemp_Dest$ = dir & EditorNewForm_MovedRel$(g_projRel(i), EditorTemp_Base$(), base)
+End Function
+
+' 開いているメンバーの今の内容を一時フォルダーに書く
+Function EditorTemp_Flush() As Long
+    Dim i As Long
+    EditorTemp_Flush = 1
+    If g_activeChild <> 0 And ProjHas(g_docPath) <> 0 Then
+        EditorTemp_Flush = EditorDoc_WriteTextFile(g_docPath, TextBuf_GetConfirmed$())
+        If EditorTemp_Flush = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & Chr$(13) & Chr$(10) & g_docPath, "editor")
+        If EditorTemp_Flush = 0 Then Exit Function
+        g_docDirty = 0
+    End If
+    For i = 0 To 7
+        If ProjSaveSlot(i) = 0 Then EditorTemp_Flush = 0
+    Next
+End Function
+
+' 移し先にもうあるファイルがあれば、メッセージを出して 1
+Function EditorTemp_AnyTaken(dir As String, base As String) As Long
+    Dim i As Long
+    EditorTemp_AnyTaken = 0
+    For i = 0 To g_projCount - 1
+        If EditorTemp_Movable(i) <> 0 Then EditorTemp_AnyTaken = EditorNewForm_Taken(EditorTemp_Dest$(i, dir, base))
+        If EditorTemp_AnyTaken <> 0 Then Exit Function
+    Next
+End Function
+
+' バイトのまま写す（文字コードはそのまま）
+Function EditorTemp_CopyFile(src As String, dst As String) As Long
+    Dim p As *Byte, n As Long
+    EditorTemp_CopyFile = 0
+    p = LoadFile(StrPtr(src), n)
+    If p = 0 And EditorDoc_FileThere(StrPtr(src)) = 0 Then Exit Function
+    EditorTemp_CopyFile = WriteAll(StrPtr(dst), p, n)
+    EditorDoc_FreeBytes(p)
+End Function
+
+Function EditorTemp_CopyMembers(dir As String, base As String) As Long
+    Dim i As Long, dst As String
+    EditorTemp_CopyMembers = 1
+    For i = 0 To g_projCount - 1
+        If EditorTemp_Movable(i) <> 0 Then
+            dst = EditorTemp_Dest$(i, dir, base)
+            EditorTemp_CopyMembers = EditorTemp_CopyFile(g_projFull(i), dst)
+            If EditorTemp_CopyMembers = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & Chr$(13) & Chr$(10) & dst, "editor")
+            If EditorTemp_CopyMembers = 0 Then Exit Function
+        End If
+    Next
+End Function
+
+' .pj を、名前を base にして pj に書く（元の文字コードのまま）
+Function EditorTemp_WritePj(pj As String, base As String) As Long
+    Dim saved As Long, body As String
+    saved = g_docEncoding
+    body = EditorDoc_LoadTextFile$(g_projectPath)
+    EditorTemp_WritePj = EditorDoc_WriteTextFile(pj, EditorNewForm_RenamePj$(body, EditorTemp_Base$(), base))
+    g_docEncoding = saved
+    If EditorTemp_WritePj = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & Chr$(13) & Chr$(10) & pj, "editor")
+End Function
+
+' ---- 開いている文書のパスを移し先に付け替える ----
+
+' path が移したメンバーなら移し先のパス、ほかはそのまま
+Function EditorTemp_Mapped$(path As String, dir As String, base As String) As String
+    Dim i As Long
+    EditorTemp_Mapped$ = path
+    For i = 0 To g_projCount - 1
+        If EditorTemp_Movable(i) <> 0 And ProjSamePath(g_projFull(i), path) <> 0 Then EditorTemp_Mapped$ = EditorTemp_Dest$(i, dir, base)
+    Next
+End Function
+
+Sub EditorTemp_Remap(dir As String, base As String)
+    Dim i As Long
+    g_docPath = EditorTemp_Mapped$(g_docPath, dir, base)
+    For i = 0 To 7
+        If g_docUsed(i) <> 0 And g_docHwnd(i) <> g_activeChild Then
+            g_docPathSlot(i) = EditorTemp_Mapped$(g_docPathSlot(i), dir, base)
+            If g_docHwnd(i) <> 0 Then SetWindowText(g_docHwnd(i), "editor - " + g_docPathSlot(i))
+        End If
+    Next
+End Sub
+
+' ---- 一時フォルダーを片付ける ----
+
+Sub EditorTemp_Delete(path As String)
+    Dim a As *Byte
+    a = BasicAnsiPtr(StrPtr(path))
+    EditorTemp_DeleteFileA(a)
+    BasicFreeAnsi(a, StrPtr(path))
+End Sub
+
+Sub EditorTemp_RemoveDir(dir As String)
+    Dim a As *Byte
+    a = BasicAnsiPtr(StrPtr(dir))
+    EditorTemp_RemoveDirectoryA(a)
+    BasicFreeAnsi(a, StrPtr(dir))
+End Sub
+
+' 一時フォルダーの .pj・移したメンバー・実行ファイルを消し、空ならフォルダーも消す
+Sub EditorTemp_Clean(oldPj As String)
+    Dim i As Long, dir As String, base As String
+    dir = ProjDirOf$(oldPj)
+    base = EditorTemp_Base$()
+    For i = 0 To g_projCount - 1
+        If EditorTemp_Movable(i) <> 0 Then EditorTemp_Delete(g_projFull(i))
+    Next
+    EditorTemp_Delete(oldPj)
+    EditorTemp_Delete(dir & base & ".exe")
+    EditorTemp_Delete(dir & base & "_debug.exe")
+    EditorTemp_RemoveDir(dir)
+End Sub
+
+' ---- 保存 ----
+
+' 保存先の .pj を尋ねて、一時プロジェクトをそこへ移して開き直す。1 = 移した
+Function EditorTemp_SaveProject() As Long
+    Dim pj As String, dir As String, base As String, oldPj As String
+    EditorTemp_SaveProject = 0
+    If EditorTemp_Flush() = 0 Then Exit Function
+    pj = EditorNewForm_BrowsePj$(hMainWnd)
+    If Len(pj) = 0 Then Exit Function
+    dir = ProjDirOf$(pj)
+    base = EditorNewForm_Base$(pj)
+    If ProjSamePath(pj, g_projectPath) <> 0 Then Exit Function
+    If EditorTemp_AnyTaken(dir, base) <> 0 Then Exit Function
+    If EditorTemp_CopyMembers(dir, base) = 0 Then Exit Function
+    If EditorTemp_WritePj(pj, base) = 0 Then Exit Function
+    oldPj = g_projectPath
+    EditorTemp_Remap(dir, base)
+    EditorTemp_Clean(oldPj)
+    g_projTemp = 0
+    g_projTempDrop = 0
+    ProjOpen(pj)
+    If g_activeChild <> 0 Then EditorDoc_ClearDirty()
+    EditorTemp_SaveProject = 1
+End Function
+
+' 上書き保存・名前を付けて保存。一時プロジェクトの文書なら、保存先を尋ねてプロジェクトごと移す
+Function EditorTemp_UserSave(hWnd As HWND, asNew As Long) As Long
+    If EditorTemp_IsMember(g_docPath) <> 0 Then
+        EditorTemp_UserSave = EditorTemp_SaveProject()
+    ElseIf asNew <> 0 Then
+        EditorTemp_UserSave = EditorDoc_SaveAs(hWnd)
+    Else
+        EditorTemp_UserSave = EditorDoc_Save(hWnd)
+    End If
+End Function
+
+' 一時プロジェクトを閉じる前に、保存するか尋ねる。1 = 閉じてよい、0 = やめる
+' quitting = 1（終了・再起動）で「いいえ」なら、そのメンバーの保存確認も出さない
+Function EditorTemp_AskClose(quitting As Long) As Long
+    Dim r As Long
+    EditorTemp_AskClose = 1
+    If g_projTemp = 0 Then Exit Function
+    r = UiMsgBoxYesNoCancel(hMainWnd, UiText$(UI_TEMP_ASK_SAVE) & Chr$(13) & Chr$(10) & Chr$(13) & Chr$(10) & g_projectPath, "ProjectEditor")
+    If r = UI_IDCANCEL Then EditorTemp_AskClose = 0
+    If r = UI_IDYES Then EditorTemp_AskClose = EditorTemp_SaveProject()
+    If r = UI_IDNO And quitting <> 0 Then g_projTempDrop = 1
+    If r = UI_IDNO And quitting = 0 Then g_projTemp = 0
+End Function
+
+' 終了・再起動の前に尋ねる（一時プロジェクト、保存していない文書の順）。1 = 閉じてよい
+Function EditorTemp_AskQuit() As Long
+    EditorTemp_AskQuit = EditorTemp_AskClose(1)
+    If EditorTemp_AskQuit <> 0 Then EditorTemp_AskQuit = MdiAskSaveAll()
+    ' やめたら続けるので、一時プロジェクトの保存確認をまた出す
+    If EditorTemp_AskQuit = 0 Then g_projTempDrop = 0
+End Function
+
+' 終了で「いいえ」と答えた一時プロジェクトのメンバーか（保存確認を出さない）
+Function EditorTemp_Dropped(path As String) As Long
+    EditorTemp_Dropped = 0
+    If g_projTempDrop = 0 Then Exit Function
+    EditorTemp_Dropped = EditorTemp_IsMember(path)
+End Function

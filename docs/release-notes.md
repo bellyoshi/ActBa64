@@ -13,7 +13,8 @@
 - フォームデザイナ（RAD の第一段階）を足しました。`InitializeComponent` のある文書で F12 を押すとデザイン画面になり、窓の右辺・下辺・右下を引くと `Width` / `Height` の行を書き換えます。もう一度 F12 でソースに戻ります。詳しくは [projecteditor.md](./projecteditor.md#12-フォームデザイナ) を見てください。
 - 名前を付けて保存の既定の拡張子を `.sbp` から `.abp` にしました。`.abp`（Active Basic Program）はメインのコード、`.sbp`（Sub Basic Program）は `#include` で読むファイルです。ファイルダイアログのフィルタも `*.abp` を先にしました。
 - フォームデザイナの左にツールボックス（Button / Image / Panel）を足しました。ツールを選んで窓を押すと、フィールドの `名前 As 型` と `InitializeComponent` の位置・大きさ・`AddControl` の行を書き足します。部品はフィールドの型で描き分けます（[projecteditor.md](./projecteditor.md#12-フォームデザイナ)）。
-- ファイルメニューに「新しいフォーム」を足しました。プロジェクトを開いていなければ保存先を尋ねて `project1.pj`・`project1.abp`（メイン）・`Form1.abp` を書き、開いていれば `FormN.abp` を書いて `#SOURCE` に足します。書いたフォームはそのままフォームデザイナで開きます。N88BASIC構文・ActiveBasic2構文のときは灰色です。
+- ファイルメニューに「新しいフォーム」を足しました。プロジェクトを開いていなければ、まず一時フォルダー（`%TEMP%\ActBa64Temp\NewN\`）に `project1.pj`・`project1.abp`（メイン）・`Form1.abp` を書き（保存先は上書き保存・名前を付けて保存か終了のときに尋ねて、そこへ移します）、開いていれば `FormN.abp` を書いて `#SOURCE` に足します。書いたフォームはそのままフォームデザイナで開きます。N88BASIC構文・ActiveBasic2構文のときは灰色です。
+- 無題の文書の実行・コンパイルは、N88BASIC構文・ActiveBasic2構文のときだけでなくいつも、保存先を尋ねずに `%TEMP%\ActBa64Temp\untitled.abp` に書いて訳すようにしました（これまでの `%TEMP%\ActBa64N88\` から変えました）。
 - ソースの子ウィンドウの上に「コード」「デザイナー」のタブを足しました。押すとソースとフォームデザイナが切り替わります（F12 と同じ）。
 - フォームデザイナで Button をダブルクリックすると、`Sub Button1Click()` と、それを呼ぶ `WndProc` の行（`WM_COMMAND` / `BN_CLICKED`）を書き足し、コードの画面でその `Sub` の中にキャレットを置きます。
 
