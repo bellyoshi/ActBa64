@@ -287,3 +287,19 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 ## 13. このエディタがしないこと
 
 置換、折り返し、符号の手選び、プロジェクトの新規作成ウィザード、デバッガは持っていません。フォームデザイナは、窓の大きさと部品の位置と大きさを変え、ツールボックスから部品を足すだけです。部品の削除、名前や `Caption` の書き換え、Button 以外のイベントの行の生成はできません。Ctrl+N や Ctrl+O もありません。RAD 用の `Callback.wbp` / `MakeWindow.wbp` は、このエディタ自身を組むためのファイルです。
+
+## 14. Linux 版
+
+`actba64 ProjectEditor.pj -linux -o ProjectEditor` で、x86-64 Linux で動くエディタになります（`libX11.so.6` と `libfreetype.so.6` を使う動的リンクの ELF）。隣に置くものは Windows 版と同じで、Linux 版の `actba64`（拡張子なし）、`Include`、`fonts/UDEVGothic-Regular.ttf`、`keywords.txt`、`help`、言語パックです。X の窓が開けなければ（`DISPLAY` が無いなど）メッセージを出して終了します。
+
+窓は 1 枚です。上からメニューの帯、文書のタブ、文書、メッセージ欄（訳したときに開き、見出しの × で閉じる）を並べます。MDI の子窓の代わりに文書ごとのタブがあり、タブの × か中ボタンで閉じます（保存の確認は Windows 版と同じ）。`.pj` を開くと左にプロジェクトの欄が出て、行を押すとそのファイルを開きます。欄の見出しの × でプロジェクトを閉じます。文書が無いときは Ctrl+N で新規、Ctrl+O で開きます。
+
+描くところ（[UiDraw.sbp](../src/projecteditor/UiDraw.sbp) の `Ui_` 関数）は Windows 版と同じコードで、Linux 版は [UiX11.sbp](../src/projecteditor/UiX11.sbp) が画素バッファと FreeType で描きます。キー・マウス・メニューの処理も Windows 版と同じで、X のイベントを `WM_*` にして渡します（[LxFrame.sbp](../src/projecteditor/LxFrame.sbp)）。メニュー、右クリックのメニュー、メッセージボックス、ファイルの選択、検索の入力、設定の言語の選択は自前で描きます（[LxMenu.sbp](../src/projecteditor/LxMenu.sbp)、[LxDialog.sbp](../src/projecteditor/LxDialog.sbp)）。
+
+- **ファイルの選択**: 入力欄にファイル名かパス（相対なら一覧のフォルダーから）を書いて Enter。一覧のダブルクリックでフォルダーに入る・ファイルを選ぶ。`.` で始まる名前は出しません。保存で拡張子が無ければ `.abp` を付け、あれば上書きを尋ねます
+- **クリップボード**: X の `CLIPBOARD`（UTF-8）。ほかのアプリとやり取りできます
+- **訳し先**: Basic メニューに **Linux (ELF)** が増え、Linux 版の既定です（`-linux`、出力に `.exe` を付けない）。64bit / 32bit も選べますが、Windows の exe はここでは実行できないので訳すだけです
+- **実行**: コンソールのプログラムは端末（`$TERMINAL`、無ければ `x-terminal-emulator` / `gnome-terminal` / `konsole` / `xfce4-terminal` / `xterm`）の窓で動かし、終わると Enter を待ちます。端末が無ければ、exe のフォルダーで動かして出力と終了コードをメッセージ欄に出します（標準入力は `/dev/null`）
+- **ヘルプ**: `xdg-open` で開きます
+
+Linux 版にまだ無いもの: 日本語入力（IME / XIM）、ファイルのドロップ、フォームデザイナ（デザイナーのタブと F12 は音が鳴るだけ）、入力欄の途中の編集。
