@@ -1,6 +1,6 @@
 ' フォームデザイナのツールボックス（RAD 第三段階）の文字列処理。
 ' ツール（Button / Image / Panel）で窓を押すと、部品を 1 つ足す:
-'   1. クラスのフィールドに「名前 As 型」の行（最後の部品の宣言の次。無ければ Inherits の次）
+'   1. クラスのフィールドに「名前 As 型」の行（最後の部品の宣言の次。無ければ Private、Inherits の次）
 '   2. InitializeComponent に「名前.Left / .Top / .Width / .Height (/ .Caption)」と「AddControl(名前)」
 '      （最後の AddControl の次。無ければ End Sub の直前）
 ' 部品の種類は、フィールドの「名前 As 型」の型で見分ける（FormDesign_CtlType$）。
@@ -91,10 +91,10 @@ Function FormDesign_CtlType$(text As String, name As String) As String
     Wend
 End Function
 
-' 宣言の行を足す所（行の始まり）と字下げ。最後の部品の宣言の次、無ければ Inherits の次。
-' Class の行が無ければ 0
+' 宣言の行を足す所（行の始まり）と字下げ。最後の部品の宣言の次、無ければ最後の Private の次、
+' それも無ければ Inherits の次、Class の次。Class の行が無ければ 0
 Function FormDesign_DeclPos(text As String, ByRef ind As String) As Long
-    Dim p As Long, b As Long, pos As Long, ln As String, nm As String
+    Dim p As Long, b As Long, pos As Long, rank As Long, r As Long
     FormDesign_DeclPos = 0
     b = FormDesign_BodyStart(text)
     p = FormDesign_ClassLine(text)
@@ -102,12 +102,27 @@ Function FormDesign_DeclPos(text As String, ByRef ind As String) As Long
     FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p) & "    ", pos, ind)
     p = FormDesign_LineEnd(text, p) + 1
     While p < b
-        ln = FormDesign_Line$(text, p)
-        If StartsWithCI(ln, "inherits ") <> 0 Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p), pos, ind)
-        If FormDesign_IsCtlType(FormDesign_DeclOf$(ln, nm)) <> 0 Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p), pos, ind)
+        r = FormDesign_DeclRank(FormDesign_Line$(text, p))
+        If r >= rank And r > 0 Then FormDesign_DeclAfter(text, p, FormDesign_DeclIndent$(text, p, r), pos, ind)
+        If r >= rank And r > 0 Then rank = r
         p = FormDesign_LineEnd(text, p) + 1
     Wend
     FormDesign_DeclPos = pos
+End Function
+
+' 宣言を足す目印の強さ。1: Inherits、2: Private、3: 部品の宣言、0: 目印でない
+Function FormDesign_DeclRank(ln As String) As Long
+    Dim nm As String
+    FormDesign_DeclRank = 0
+    If StartsWithCI(ln, "inherits ") <> 0 Then FormDesign_DeclRank = 1
+    If FormDesign_EqCI(ln, "private") <> 0 Then FormDesign_DeclRank = 2
+    If FormDesign_IsCtlType(FormDesign_DeclOf$(ln, nm)) <> 0 Then FormDesign_DeclRank = 3
+End Function
+
+' 目印の行 p の次に足す宣言の字下げ（Private の次は Private の字下げ + 4、ほかはその行と同じ）
+Function FormDesign_DeclIndent$(text As String, ByVal p As Long, ByVal r As Long) As String
+    FormDesign_DeclIndent$ = FormDesign_Indent$(text, p)
+    If r = 2 Then FormDesign_DeclIndent$ = FormDesign_DeclIndent$ & "    "
 End Function
 
 ' p の行の次の行の始まりと、字下げ i を pos, ind に

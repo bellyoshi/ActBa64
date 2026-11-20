@@ -1,0 +1,68 @@
+' EditorNewForm - ファイルメニューの「新しいフォーム」
+' Forms.sbp の Form を継承した Form1 の雛形を無題の文書で開き、そのままフォームデザイナにする。
+' N88BASIC 構文（-pN88）と ActiveBasic2 構文（-pAB2）では Forms.sbp を使えないので灰色にする。
+
+Const IDM_NEWFORM = 1330
+
+Dim g_newFormMenu As Long
+
+' 使えるか（-pN88 / -pAB2 でない）
+Function EditorNewForm_Can() As Long
+    EditorNewForm_Can = 1
+    If EditorBuild_IsN88() <> 0 Or EditorBuild_IsAB2() <> 0 Then EditorNewForm_Can = 0
+End Function
+
+' 雛形（改行は LF）
+Function EditorNewForm_Text$() As String
+    Dim nl As String, s As String
+    nl = Chr$(10)
+    s = "#include <Forms.sbp>" & nl & nl & "Class Form1" & nl & "    Inherits Form" & nl & "Public" & nl
+    s = s & "    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT" & nl
+    s = s & "        WndProc = Super.WndProc(msg, wParam, lParam)" & nl & "    End Function" & nl & "Private" & nl
+    s = s & "    Override Sub InitializeComponent()" & nl & "        Width = 400" & nl & "        Height = 300" & nl
+    s = s & "        Caption = " & Chr$(34) & "Form1" & Chr$(34) & nl & "    End Sub" & nl & "End Class" & nl & nl
+    EditorNewForm_Text$ = s & "Dim mainForm As Form1" & nl & "Application.Initialize()" & nl & "Application.Run(mainForm)" & nl
+End Function
+
+' 雛形の無題の文書を開き、デザイン画面にする
+Sub EditorNewForm_Open()
+    Dim s As Long
+    If EditorNewForm_Can() = 0 Then
+        MessageBeep(0)
+        Exit Sub
+    End If
+    s = MdiAllocSlot()
+    If s < 0 Then Exit Sub
+    g_docText(s) = EditorNewForm_Text$()
+    g_childTitle = "untitled"
+    MdiCreateChild(s)
+    If g_activeChild <> 0 Then FormDesign_Enter(g_activeChild)
+End Sub
+
+' ---- メニュー ----
+
+' 新規の次（開くの前）に差し込む。2 回目からは表示名だけ更新
+Sub EditorNewForm_ApplyMenu()
+    If g_newFormMenu = 0 Then EditorNewForm_InsertMenu()
+    EditorMenu_SetCmd(hMenu_M_MAIN_0, IDM_NEWFORM, UI_MENU_NEWFORM)
+    EditorNewForm_UpdateMenu()
+End Sub
+
+Sub EditorNewForm_InsertMenu()
+    Dim wide As *Byte
+    Dim chars As Long
+    wide = Enc_Utf8ToWide(UiText$(UI_MENU_NEWFORM), chars)
+    If wide = 0 Then Exit Sub
+    InsertMenuW(hMenu_M_MAIN_0, IDM_FILEOPEN, MF_BYCOMMAND Or MF_STRING, IDM_NEWFORM, wide)
+    free(wide)
+    g_newFormMenu = 1
+End Sub
+
+' -pN88 / -pAB2 なら灰色
+Sub EditorNewForm_UpdateMenu()
+    Dim flags As Long
+    If g_newFormMenu = 0 Then Exit Sub
+    flags = MF_BYCOMMAND
+    If EditorNewForm_Can() = 0 Then flags = flags Or MF_GRAYED
+    EnableMenuItem(hMenu_M_MAIN_0, IDM_NEWFORM, flags)
+End Sub
