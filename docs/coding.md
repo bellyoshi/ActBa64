@@ -43,6 +43,7 @@ ActBa64 のソース（主に `.abp` / `.sbp` / `.wbp`）向け。言語仕様�
 - **stage0（AB 4.20）予約語に注意**: `Line` は図形命令のため、行番号用ローカルは `srcLine` など別名にする（`line = …` は「パラメータ指定が間違っています」になる）
 - **stage0（AB 4.20）の 16bit 演算**: 定数と `Long` の加算、3 項以上の連鎖加算、定数の乗算は 16bit になることがある。コンパイラ本体で RVA やイメージベースを足すときは、`DWord` の局所へ一度ずつ代入する（`AlignUp`、`PeCalcImage`、`CgSnapRva`、`CgAbs32Add`、`PeRelocRva`）。`p[off]` の `off` も 16bit になることがあり、256 未満の索引だけ使う（`PtrAddTo`）
 - **Win32 定数の置き場**: 共有定数は `src/Include/default/WinConsts.sbp`（`default.idx` が自動挿入）。AB 4.20 の標準ヘッダにある名前（`WM_*` / `WS_*` / `LB_*` など）を `.sbp` に再 `Const` すると、AB 4.20 ビルドが「すでに定義されています」になる
+- **コンパイラのメッセージ**: `Print "error: ..."` / `DiagError` などの文は `Tr$(id, "英語")` / `Tr1$`〜`Tr4$` を通す（ID の付け方は [build.md §メッセージの言語](./build.md#メッセージの言語)）。追加・変更したら `python tools/check_msg_ids.py` と `src/actba64/actba_lang_ja.csv` の訳も直す
 - **ソース 1 行は最大 1024 バイト**（`PP_LINE_MAX`）。長い条件は `_` や括弧内改行で分割する（詳細は [language.md §7.1](./language.md#71-行長上限)）
 
 ## 4. 変更時のチェック

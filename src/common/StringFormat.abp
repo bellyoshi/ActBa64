@@ -1,0 +1,95 @@
+' StringFormat.abp - "{0} message {1}" の {n} を引数で置き換える
+'
+'   s = StringFormat("{0} message {1}", hensuu1, hensuu2)
+'
+' - 引数は String（数値は Str$ などで文字列にして渡す）。引数は 0 〜 5 個。
+' - {0} 〜 {4} が 1 つ目〜 5 つ目の引数。同じ番号を何度書いてもよい。
+' - "{{" は "{"、"}}" は "}" になる。
+' - 引数の無い番号や {abc} のような形は、そのまま残す。
+' - 置き換えは 1 回だけ（引数の中の "{1}" をさらに置き換えることはない）。
+
+' StrFmtTok が見つけた番号。-1 は "{{" / "}}"
+Dim g_sfIdx As Long
+
+' p[j] から数字を読み、値を g_sfIdx に。数字の後ろの位置を返す
+Function StrFmtDigits(p As *Byte, j As Long, nLen As Long) As Long
+    Dim k As Long
+    k = j
+    g_sfIdx = 0
+    While k < nLen And p[k] >= &H30 And p[k] <= &H39 And g_sfIdx < 1000
+        g_sfIdx = g_sfIdx * 10 + (p[k] - &H30)
+        k = k + 1
+    Wend
+    StrFmtDigits = k
+End Function
+
+' p[j] から "数字}" を読む。番号が n 未満なら "{" から "}" までの長さ、ほかは 0
+Function StrFmtNum(p As *Byte, j As Long, nLen As Long, n As Long) As Long
+    Dim k As Long
+    StrFmtNum = 0
+    k = StrFmtDigits(p, j, nLen)
+    If k > j And k < nLen And p[k] = &H7D And g_sfIdx < n Then StrFmtNum = k - j + 2
+End Function
+
+' p[i] から始まる置き換えの長さ。置き換えでなければ 0
+Function StrFmtTok(p As *Byte, i As Long, nLen As Long, n As Long) As Long
+    StrFmtTok = 0
+    g_sfIdx = -1
+    If i + 1 < nLen And (p[i] = &H7B Or p[i] = &H7D) And p[i + 1] = p[i] Then
+        StrFmtTok = 2
+        Exit Function
+    End If
+    If p[i] = &H7B Then StrFmtTok = StrFmtNum(p, i + 1, nLen, n)
+End Function
+
+' 置き換える文字列。g_sfIdx が -1 なら c（"{" か "}"）そのもの
+Function StrFmtPick(c As Long, a0 As String, a1 As String, a2 As String, a3 As String, a4 As String) As String
+    StrFmtPick = Chr$(c)
+    If g_sfIdx = 0 Then StrFmtPick = a0
+    If g_sfIdx = 1 Then StrFmtPick = a1
+    If g_sfIdx = 2 Then StrFmtPick = a2
+    If g_sfIdx = 3 Then StrFmtPick = a3
+    If g_sfIdx = 4 Then StrFmtPick = a4
+End Function
+
+' fmt の st バイト目（0 起点）から後ろ
+Function StrFmtRest(fmt As String, st As Long) As String
+    StrFmtRest = ""
+    If st < Len(fmt) Then StrFmtRest = Mid$(fmt, st + 1, Len(fmt) - st)
+End Function
+
+' {n} を 1 回だけ走査して置き換える本体。n は渡した引数の数
+Function StringFormatN(fmt As String, ByVal n As Long, a0 As String, a1 As String, a2 As String, a3 As String, a4 As String) As String
+    Dim p As *Byte, i As Long, st As Long, k As Long, r As String
+    p = StrPtr(fmt) : i = 0 : st = 0 : r = ""
+    While i < Len(fmt)
+        k = StrFmtTok(p, i, Len(fmt), n)
+        If k > 0 Then r = r & Mid$(fmt, st + 1, i - st) & StrFmtPick(p[i], a0, a1, a2, a3, a4) : st = i + k
+        If k > 0 Then i = st Else i = i + 1
+    Wend
+    StringFormatN = r & StrFmtRest(fmt, st)
+End Function
+
+Function StringFormat(fmt As String) As String
+    StringFormat = StringFormatN(fmt, 0, "", "", "", "", "")
+End Function
+
+Function StringFormat(fmt As String, a0 As String) As String
+    StringFormat = StringFormatN(fmt, 1, a0, "", "", "", "")
+End Function
+
+Function StringFormat(fmt As String, a0 As String, a1 As String) As String
+    StringFormat = StringFormatN(fmt, 2, a0, a1, "", "", "")
+End Function
+
+Function StringFormat(fmt As String, a0 As String, a1 As String, a2 As String) As String
+    StringFormat = StringFormatN(fmt, 3, a0, a1, a2, "", "")
+End Function
+
+Function StringFormat(fmt As String, a0 As String, a1 As String, a2 As String, a3 As String) As String
+    StringFormat = StringFormatN(fmt, 4, a0, a1, a2, a3, "")
+End Function
+
+Function StringFormat(fmt As String, a0 As String, a1 As String, a2 As String, a3 As String, a4 As String) As String
+    StringFormat = StringFormatN(fmt, 5, a0, a1, a2, a3, a4)
+End Function

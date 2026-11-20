@@ -139,6 +139,8 @@ Copy-Item -LiteralPath $Actba64Exe -Destination (Join-Path $ReleaseDir "actba64.
 # actba64.exe は #resource の .rc を隣の rc.exe で .res にする
 Copy-Item -LiteralPath $tmpRc -Destination (Join-Path $ReleaseDir "rc.exe") -Force
 Remove-Item -LiteralPath $tmpRc -Force
+# actba64.exe の隣にあればメッセージを日本語で出す（消せば英語）
+Copy-Item -LiteralPath (Join-Path $Actba64Dir "actba_lang_ja.csv") -Destination (Join-Path $ReleaseDir "actba_lang_ja.csv") -Force
 Copy-Item -LiteralPath $IncludeSrc -Destination (Join-Path $ReleaseDir "Include") -Recurse -Force
 Copy-Item -LiteralPath $HelpSrc -Destination (Join-Path $ReleaseDir "help") -Recurse -Force
 Copy-Item -LiteralPath $FontsSrc -Destination (Join-Path $ReleaseDir "fonts") -Recurse -Force
