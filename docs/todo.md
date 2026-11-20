@@ -34,7 +34,7 @@
 - **符号無し演算**の AB 4.20 ルール完全化
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
-- **ProjectEditor の RAD**: 第一段階（F12 で切り替え、窓の大きさを `InitializeComponent` へ書き戻す）は済み。次はフォーム上にコントロールを置き、`MakeWindow.wbp` / `Callback.wbp` / `MainWnd.sbp` を生成する。4.20 のウィンドウ RAD
+- **ProjectEditor の RAD**: F12 の切り替え、窓と部品の位置・大きさの書き戻し、ツールボックス（Button / Image / Panel）での部品の追加は済み。次は部品の削除・名前と Caption の編集・イベントの行の生成と、`MakeWindow.wbp` / `Callback.wbp` / `MainWnd.sbp` を生成する。4.20 のウィンドウ RAD
 - **Win32 `api_*.sbp` 増分**: 需要に応じ `Declare` / idx 追加
 
 ### P3 — 保留・非推奨に近い
@@ -65,7 +65,7 @@
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
-| ProjectEditor の RAD | フォームデザイナは窓の大きさだけ（F12）。コントロール配置から `MakeWindow.wbp` / `Callback.wbp` / `MainWnd.sbp` を出す 4.20 のウィンドウ RAD |
+| ProjectEditor の RAD | フォームデザイナは窓と部品の位置・大きさ、ツールボックスでの部品の追加（F12）。コントロール配置から `MakeWindow.wbp` / `Callback.wbp` / `MainWnd.sbp` を出す 4.20 のウィンドウ RAD |
 | `InitProc` / `QuitProc` / `RenderProc` / `InputActionProc` | 4.20 DirectX プロジェクトのフック。手書きメッセージループで代替 |
 | Win32 `api_*.sbp` 全量 | 4.20 は 382 関数超。主要 API は `default.idx` + `Declare` |
 | MENU 等の型付きリソース | ICON / BITMAP は対応。LoadMenu 向けは未 |

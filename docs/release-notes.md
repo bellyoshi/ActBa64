@@ -11,6 +11,7 @@
 ### ProjectEditor
 
 - フォームデザイナ（RAD の第一段階）を足しました。`InitializeComponent` のある文書で F12 を押すとデザイン画面になり、窓の右辺・下辺・右下を引くと `Width` / `Height` の行を書き換えます。もう一度 F12 でソースに戻ります。詳しくは [projecteditor.md](./projecteditor.md#12-フォームデザイナ) を見てください。
+- フォームデザイナの左にツールボックス（Button / Image / Panel）を足しました。ツールを選んで窓を押すと、フィールドの `名前 As 型` と `InitializeComponent` の位置・大きさ・`AddControl` の行を書き足します。部品はフィールドの型で描き分けます（[projecteditor.md](./projecteditor.md#12-フォームデザイナ)）。
 
 ### -linux
 

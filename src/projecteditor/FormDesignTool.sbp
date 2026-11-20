@@ -1,0 +1,191 @@
+' フォームデザイナのツールボックス（RAD 第三段階）の文字列処理。
+' ツール（Button / Image / Panel）で窓を押すと、部品を 1 つ足す:
+'   1. クラスのフィールドに「名前 As 型」の行（最後の部品の宣言の次。無ければ Inherits の次）
+'   2. InitializeComponent に「名前.Left / .Top / .Width / .Height (/ .Caption)」と「AddControl(名前)」
+'      （最後の AddControl の次。無ければ End Sub の直前）
+' 部品の種類は、フィールドの「名前 As 型」の型で見分ける（FormDesign_CtlType$）。
+
+Const FD_TOOL_NONE = 0
+Const FD_TOOL_BUTTON = 1
+Const FD_TOOL_IMAGE = 2             ' 型は PictureBox（Lazarus の TImage）
+Const FD_TOOL_PANEL = 3
+Const FD_TOOL_COUNT = 3
+
+' ツールの名前（ツールボックスの文字と、部品の名前の頭）
+Function FormDesign_ToolName$(ByVal tool As Long) As String
+    FormDesign_ToolName$ = ""
+    If tool = FD_TOOL_BUTTON Then FormDesign_ToolName$ = "Button"
+    If tool = FD_TOOL_IMAGE Then FormDesign_ToolName$ = "Image"
+    If tool = FD_TOOL_PANEL Then FormDesign_ToolName$ = "Panel"
+End Function
+
+' ツールで足す部品の型（Forms.sbp のクラス）
+Function FormDesign_ToolType$(ByVal tool As Long) As String
+    FormDesign_ToolType$ = FormDesign_ToolName$(tool)
+    If tool = FD_TOOL_IMAGE Then FormDesign_ToolType$ = "PictureBox"
+End Function
+
+' ツールで足す部品の大きさ
+Sub FormDesign_ToolSize(ByVal tool As Long, ByRef w As Long, ByRef h As Long)
+    w = FD_CTL_DEF_W
+    h = FD_CTL_DEF_H
+    If tool = FD_TOOL_IMAGE Then w = 100
+    If tool = FD_TOOL_IMAGE Then h = 100
+    If tool = FD_TOOL_PANEL Then w = 200
+    If tool = FD_TOOL_PANEL Then h = 100
+End Sub
+
+' 大文字小文字を区別せずに同じか
+Function FormDesign_EqCI(a As String, b As String) As Long
+    FormDesign_EqCI = 0
+    If Len(a) = Len(b) And StartsWithCI(a, b) <> 0 Then FormDesign_EqCI = 1
+End Function
+
+' ---- フィールドの宣言 ----
+
+' 「名前 As 型」の行なら型を返し、名前を nm に。ほかは ""
+Function FormDesign_DeclOf$(ln As String, ByRef nm As String) As String
+    Dim i As Long, rest As String
+    FormDesign_DeclOf$ = ""
+    nm = ""
+    If Left$(ln, 1) = "'" Then Exit Function
+    i = InStr(1, ln, " ")
+    If i < 2 Then Exit Function
+    rest = Trim$(Mid$(ln, i + 1))
+    If StartsWithCI(rest, "as ") = 0 Then Exit Function
+    rest = Trim$(Mid$(rest, 4))
+    FormDesign_DeclOf$ = Left$(rest, FormDesign_TokEnd(rest, 1) - 1)
+    nm = Left$(ln, i - 1)
+End Function
+
+' Forms.sbp の部品の型か
+Function FormDesign_IsCtlType(t As String) As Long
+    FormDesign_IsCtlType = FormDesign_EqCI(t, "Button") Or FormDesign_EqCI(t, "Label")
+    FormDesign_IsCtlType = FormDesign_IsCtlType Or FormDesign_EqCI(t, "PictureBox") Or FormDesign_EqCI(t, "Panel")
+    FormDesign_IsCtlType = FormDesign_IsCtlType Or FormDesign_EqCI(t, "OpenFileDialog")
+End Function
+
+' InitializeComponent を持つクラスの Class の行の始まり。無ければ 0
+Function FormDesign_ClassLine(text As String) As Long
+    Dim p As Long, b As Long
+    FormDesign_ClassLine = 0
+    b = FormDesign_BodyStart(text)
+    p = 1
+    While p < b
+        If StartsWithCI(FormDesign_Line$(text, p), "class ") <> 0 Then FormDesign_ClassLine = p
+        p = FormDesign_LineEnd(text, p) + 1
+    Wend
+End Function
+
+' 部品 name のフィールドの型（Class の行から InitializeComponent までで探す）。無ければ ""
+Function FormDesign_CtlType$(text As String, name As String) As String
+    Dim p As Long, b As Long, t As String, nm As String
+    FormDesign_CtlType$ = ""
+    b = FormDesign_BodyStart(text)
+    p = FormDesign_ClassLine(text)
+    If p = 0 Or name = "" Then Exit Function
+    While p < b And FormDesign_CtlType$ = ""
+        t = FormDesign_DeclOf$(FormDesign_Line$(text, p), nm)
+        If FormDesign_EqCI(nm, name) <> 0 Then FormDesign_CtlType$ = t
+        p = FormDesign_LineEnd(text, p) + 1
+    Wend
+End Function
+
+' 宣言の行を足す所（行の始まり）と字下げ。最後の部品の宣言の次、無ければ Inherits の次。
+' Class の行が無ければ 0
+Function FormDesign_DeclPos(text As String, ByRef ind As String) As Long
+    Dim p As Long, b As Long, pos As Long, ln As String, nm As String
+    FormDesign_DeclPos = 0
+    b = FormDesign_BodyStart(text)
+    p = FormDesign_ClassLine(text)
+    If p = 0 Then Exit Function
+    FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p) & "    ", pos, ind)
+    p = FormDesign_LineEnd(text, p) + 1
+    While p < b
+        ln = FormDesign_Line$(text, p)
+        If StartsWithCI(ln, "inherits ") <> 0 Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p), pos, ind)
+        If FormDesign_IsCtlType(FormDesign_DeclOf$(ln, nm)) <> 0 Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p), pos, ind)
+        p = FormDesign_LineEnd(text, p) + 1
+    Wend
+    FormDesign_DeclPos = pos
+End Function
+
+' p の行の次の行の始まりと、字下げ i を pos, ind に
+Sub FormDesign_DeclAfter(text As String, ByVal p As Long, i As String, ByRef pos As Long, ByRef ind As String)
+    pos = FormDesign_LineEnd(text, p) + 1
+    ind = i
+End Sub
+
+' ---- InitializeComponent の行 ----
+
+' 部品の行を足す所（行の始まり）と字下げ。最後の AddControl の次、無ければ End Sub の直前。
+' デザインできない文書は 0
+Function FormDesign_CtlPos(text As String, ByRef ind As String) As Long
+    Dim p As Long, e As Long, pos As Long
+    FormDesign_CtlPos = 0
+    e = FormDesign_BodyEnd(text)
+    If e = 0 Then Exit Function
+    pos = e
+    ind = FormDesign_Indent$(text, e) & "    "
+    p = FormDesign_BodyStart(text)
+    While p < e
+        If FormDesign_CtlOf$(FormDesign_Line$(text, p)) <> "" Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p), pos, ind)
+        p = FormDesign_LineEnd(text, p) + 1
+    Wend
+    FormDesign_CtlPos = pos
+End Function
+
+' 名前がもう使われているか（載せた部品か、フィールドの宣言）
+Function FormDesign_NameUsed(text As String, name As String) As Long
+    FormDesign_NameUsed = FormDesign_CtlHas(text, name)
+    If FormDesign_CtlType$(text, name) <> "" Then FormDesign_NameUsed = 1
+End Function
+
+' ツールで足す部品の名前（Button1、Image2 など、使われていない一番小さい番号）
+Function FormDesign_NewName$(text As String, ByVal tool As Long) As String
+    Dim n As Long
+    n = 1
+    FormDesign_NewName$ = FormDesign_ToolName$(tool) & "1"
+    While FormDesign_NameUsed(text, FormDesign_NewName$) <> 0
+        n = n + 1
+        FormDesign_NewName$ = FormDesign_ToolName$(tool) & FormDesign_Num$(n)
+    Wend
+End Function
+
+' 「ind name.prop = v」の 1 行
+Function FormDesign_PropLn$(ind As String, name As String, prop As String, v As String, nl As String) As String
+    FormDesign_PropLn$ = ind & name & "." & prop & " = " & v & nl
+End Function
+
+' InitializeComponent に足す行（頭に空行）。Image は Caption を書かない
+Function FormDesign_CtlLines$(name As String, ByVal tool As Long, ByVal x As Long, ByVal y As Long, ind As String, nl As String) As String
+    Dim w As Long, h As Long, s As String
+    FormDesign_ToolSize(tool, w, h)
+    s = nl & FormDesign_PropLn$(ind, name, "Left", FormDesign_Num$(x), nl)
+    s = s & FormDesign_PropLn$(ind, name, "Top", FormDesign_Num$(y), nl)
+    s = s & FormDesign_PropLn$(ind, name, "Width", FormDesign_Num$(w), nl)
+    s = s & FormDesign_PropLn$(ind, name, "Height", FormDesign_Num$(h), nl)
+    If tool <> FD_TOOL_IMAGE Then s = s & FormDesign_PropLn$(ind, name, "Caption", Chr$(34) & name & Chr$(34), nl)
+    FormDesign_CtlLines$ = s & ind & "AddControl(" & name & ")" & nl
+End Function
+
+' text の pos（行の始まり）に s を入れる
+Function FormDesign_Insert$(text As String, ByVal pos As Long, s As String) As String
+    FormDesign_Insert$ = Left$(text, pos - 1) & s & Mid$(text, pos)
+End Function
+
+' ツール tool の部品を x, y（窓のクライアント座標）に足した本文。足した部品の名前を name に。
+' デザインできない文書はそのまま（name は ""）
+Function FormDesign_AddCtl$(text As String, ByVal tool As Long, ByVal x As Long, ByVal y As Long, ByRef name As String) As String
+    Dim p As Long, ind As String, nl As String, u As String
+    FormDesign_AddCtl$ = text
+    name = ""
+    p = FormDesign_CtlPos(text, ind)
+    If p = 0 Or FormDesign_ToolName$(tool) = "" Then Exit Function
+    name = FormDesign_NewName$(text, tool)
+    nl = FormDesign_Nl$(text)
+    u = FormDesign_Insert$(text, p, FormDesign_CtlLines$(name, tool, x, y, ind, nl))
+    p = FormDesign_DeclPos(u, ind)
+    If p > 0 Then u = FormDesign_Insert$(u, p, ind & name & " As " & FormDesign_ToolType$(tool) & nl)
+    FormDesign_AddCtl$ = u
+End Function

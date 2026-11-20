@@ -1,0 +1,101 @@
+' フォームデザイナのツールボックスの画面（RAD 第三段階）。
+' デザイン画面の左の帯（幅 FD_TB_W）に Button / Image / Panel を並べる。
+' ツールを押すと選ばれ（もう一度押すか Esc でやめる）、窓のクライアント領域を押すと
+' そこへ部品を足して選ぶ（FormDesign_AddCtl$）。足すのは 1 回の編集として元に戻せる。
+
+Const FD_TB_TOP = 28                ' 最初のツールの上端（上は見出し）
+Const FD_TB_ITEM_H = 28             ' ツール 1 つの高さ（間を含む）
+Const FD_KIND_TOOL = 16             ' ツールを選んでいて、押すと部品を足せる所（カーソル）
+
+Dim g_fdTool As Long                ' 選んでいるツール（FD_TOOL_*）。0 は選んでいない
+
+' ツール tool の四角
+Sub FormDesign_ToolRect(ByVal tool As Long, ByRef rc As RECT)
+    Dim t As Long
+    t = FD_TB_TOP + (tool - 1) * FD_TB_ITEM_H
+    FormDesign_Rect(rc, 6, t, FD_TB_W - 6, t + FD_TB_ITEM_H - 4)
+End Sub
+
+' 点の上のツール。無ければ 0
+Function FormDesign_ToolAt(ByVal x As Long, ByVal y As Long) As Long
+    Dim i As Long, rc As RECT
+    FormDesign_ToolAt = 0
+    For i = 1 To FD_TOOL_COUNT
+        FormDesign_ToolRect(i, rc)
+        If FormDesign_In(x, y, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top) <> 0 Then FormDesign_ToolAt = i
+    Next
+End Function
+
+' ---- 描画 ----
+
+Sub FormDesign_DrawTool(hDC As HDC, ByVal tool As Long)
+    Dim rc As RECT, st As Long
+    FormDesign_ToolRect(tool, rc)
+    st = DFCS_BUTTONPUSH
+    If tool = g_fdTool Then st = st Or DFCS_PUSHED
+    DrawFrameControl(hDC, rc, DFC_BUTTON, st)
+    SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT))
+    FormDesign_DrawTextC(hDC, rc, FormDesign_ToolName$(tool))
+End Sub
+
+Sub FormDesign_DrawToolbox(hDC As HDC, ByRef rc As RECT)
+    Dim i As Long, r As RECT
+    FormDesign_Fill(hDC, 0, 0, FD_TB_W, rc.bottom, GetSysColor(COLOR_BTNFACE))
+    FormDesign_Rect(r, 0, 0, FD_TB_W, rc.bottom)
+    DrawEdge(hDC, r, EDGE_RAISED, BF_RECT)
+    SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT))
+    Enc_TextOutUtf8(hDC, 8, 6, "Toolbox")
+    For i = 1 To FD_TOOL_COUNT
+        FormDesign_DrawTool(hDC, i)
+    Next
+End Sub
+
+' ---- マウス ----
+
+' ツールを選んでいれば、窓のクライアント領域の上で FD_KIND_TOOL。ほかは 0
+Function FormDesign_ToolHitAt(ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As Long
+    FormDesign_ToolHitAt = 0
+    If g_fdTool = 0 Then Exit Function
+    If FormDesign_In(x, y, FormDesign_ClientX(), FormDesign_ClientY(), FD_ORG_X + w - 4 - FormDesign_ClientX(), FD_ORG_Y + h - 4 - FormDesign_ClientY()) <> 0 Then FormDesign_ToolHitAt = FD_KIND_TOOL
+End Function
+
+' ツールボックスを押した。押したツールを選ぶ（選んでいたツールならやめる）
+Sub FormDesign_ToolClick(ByVal x As Long, ByVal y As Long)
+    Dim t As Long
+    t = FormDesign_ToolAt(x, y)
+    If t = 0 Then Exit Sub
+    If t = g_fdTool Then t = 0
+    g_fdTool = t
+    g_fdSel = ""
+End Sub
+
+' 押した所（デザイン画面）に、選んでいるツールの部品を足して選ぶ
+Sub FormDesign_ToolPlace(ByVal x As Long, ByVal y As Long)
+    Dim t As String, u As String, name As String
+    t = TextBuf_GetConfirmed$()
+    u = FormDesign_AddCtl$(t, g_fdTool, x - FormDesign_ClientX(), y - FormDesign_ClientY(), name)
+    g_fdTool = 0
+    If u = t Then Exit Sub
+    FormDesign_Replace(u)
+    g_fdSel = name
+End Sub
+
+' ツールボックスかツールの置き場所を押したなら扱って 1（窓の大きさ w x h）
+Function FormDesign_ToolDown(ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As Long
+    FormDesign_ToolDown = 1
+    If x < FD_TB_W Then
+        FormDesign_ToolClick(x, y)
+        Exit Function
+    End If
+    If FormDesign_ToolHitAt(x, y, w, h) <> 0 Then
+        FormDesign_ToolPlace(x, y)
+        Exit Function
+    End If
+    FormDesign_ToolDown = 0
+    g_fdTool = 0
+End Function
+
+' 左下の文字（ツールを選んでいるとき）
+Function FormDesign_ToolInfo$() As String
+    FormDesign_ToolInfo$ = FormDesign_ToolName$(g_fdTool) & ": click the form to place (Esc: cancel)"
+End Function
