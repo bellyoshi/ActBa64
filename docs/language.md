@@ -896,8 +896,10 @@ Application.Run(mainForm)
 | `Virtual Function WndProc(msg, wParam, lParam) As LRESULT` | 窓のメッセージ。子が `Override` し、扱わないものは `Super.WndProc(msg, wParam, lParam)` へ。既定は `WM_DESTROY` で `PostQuitMessage(0)` し、`DefWindowProc` を返す |
 | `Show()` | 窓が無ければ作って表示する |
 | `Close()` | `WM_CLOSE` を窓へ送る（既定の `WndProc` が窓を壊す）。`Class` の中では `This.Close()` と書く（裸の `Close` はファイルの `Close` 文になる） |
-| `AddControl(c)` | 部品（`Control` の子。今は `Button` だけ）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
+| `AddControl(c)` | 部品（`Control` の子。今は `Button` と `Label`）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
 | `Button` | `Left` / `Top` / `Width` / `Height` / `Caption` / `Handle`。押されると、フォームの `WndProc` に `WM_COMMAND`（`HIWORD(wParam) = BN_CLICKED`、`lParam` = ボタンの `Handle`）が届く。文字は `DEFAULT_GUI_FONT` |
+| `Label` | 文字だけの部品（`STATIC`）。メンバーは `Button` と同じ。押しても何も届かない |
+| `SetCaption(s)` | 部品の `Caption` を `s` にし、窓がもうあれば窓の文字も変える。窓ができたあとで `Caption` に入れるだけでは窓は変わらない（プロパティが無いため） |
 | `Application.Initialize()` | 今は何もしない |
 | `Application.Run(form)` | `form.Show()` のあと、窓が閉じるまでメッセージループを回す |
 
@@ -911,7 +913,7 @@ Application.Run(mainForm)
   - 既定の `WndProc` は `WM_CLOSE` で窓を壊し（その前に `WM_DESTROY`）、`WM_DESTROY` でループを終わらせて `0` を返す（`DefWindowProc` / `PostQuitMessage` は無い）
   - 見出しは `_NET_WM_NAME`（UTF-8）にも入れる。位置と大きさは `XSizeHints` の `USPosition` / `USSize` で WM に渡す。背景は `&HF0F0F0`
   - 描画（GDI）はまだ無い。`Handle` は X の Window（`HWND` に入れている）
-  - `Button` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）
+  - `Button` / `Label` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` は `Caption` を変えるだけ
 
 ## 8. WinAPI / IAT
 
