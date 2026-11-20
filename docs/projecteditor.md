@@ -220,7 +220,15 @@ CSV は UTF-8 の `id,text` です。空行と、`#` `;` `[` で始まる行は�
 
 ## 12. フォームデザイナ
 
-**ファイル → 新しいフォーム** は、[Forms.sbp](../src/Include/Forms.sbp) の `Form` を継承した `Form1`（400 x 300、見出し `Form1`、`WndProc` と `InitializeComponent` と、`Application.Run` で出す 3 行）の雛形を無題の文書で開き、すぐデザイン画面にします。N88BASIC構文(-pN88) と ActiveBasic2構文(-pAB2) では `Forms.sbp` を使えないので、項目は灰色で選べません。
+**ファイル → 新しいフォーム** は、[Forms.sbp](../src/Include/Forms.sbp) の `Form` を継承したフォームのファイルを書き、開いてすぐデザイン画面にします。フォームは `Class FormN`（400 x 300、見出しは名前、`WndProc` と `InitializeComponent`）だけで、`#include` は書きません。N88BASIC構文(-pN88) と ActiveBasic2構文(-pAB2) では `Forms.sbp` を使えないので、項目は灰色で選べません。
+
+- プロジェクトを開いていないとき: 新しいプロジェクトの保存先を尋ねます（既定の名前は `project1.pj`）。選んだフォルダーに次の 3 つを書いてプロジェクトを開き、`Form1.abp` をデザイン画面で開きます。`xxx.abp` か `Form1.abp` がもうあれば、何も書かずにやめます
+  - `xxx.pj`: `#NAME=xxx`、`#PLATFORM` は今の 64bit / 32bit、`#USEWINDOW=1`、`#OUTPUT_RELEASE=.\xxx.exe`、`#SOURCE` に `xxx.abp` と `Form1.abp`
+  - `xxx.abp`（メイン）: `#include <Forms.sbp>` と、`Dim mainForm As Form1` / `Application.Initialize()` / `Application.Run(mainForm)`
+  - `Form1.abp`: `Form1` のクラス
+- プロジェクトを開いているとき: `.pj` のフォルダーにも `#SOURCE` にも無い `FormN.abp`（N は 1 から）を書き、`.pj` の `#SOURCE` の最後に足して（`.pj` の文字コードと改行はそのまま）、デザイン画面で開きます。メインからそのフォームを出す行は書きません
+
+新しく書くファイルは UTF-8（BOM なし）、改行は CRLF です。
 
 RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`Override Sub InitializeComponent()` など）があり、その `End Sub` で閉じていれば、**F12** でデザイン画面に切り替わります。もう一度 F12 でソースに戻ります。`InitializeComponent` の無い文書では音が鳴るだけです。デザイン中はタイトルに ` [Design]` が付きます。デザイン中かどうかは子ウィンドウごとに覚えます。
 
