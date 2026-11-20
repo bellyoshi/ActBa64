@@ -56,7 +56,7 @@ N88BASIC構文か ActiveBasic2構文のとき、プロジェクトを開いて�
 
 | メニュー | 項目 |
 |---|---|
-| ファイル(&F) | 新規(&N) / 開く(&O) / 名前を付けて保存(&A) / 上書き保存(&S) |
+| ファイル(&F) | 新規(&N) / 新しいフォーム(&M)（N88BASIC構文・ActiveBasic2構文のときは灰色） / 開く(&O) / 名前を付けて保存(&A) / 上書き保存(&S) |
 | 編集(&E) | 元に戻す(&U) / やり直し(&R) / 切り取り(&T) / コピー(&C) / 貼り付け(&P) / すべて選択(&A) / 削除(&D) / 検索(&F) / 次を検索(&N) / 前を検索(&V) |
 | Basic | 64bit / 32bit（チェック） / N88BASIC構文(-pN88)（チェック） / ActiveBasic2構文(-pAB2)（チェック。-pN88 と同時には入らない） / 実行(&R) / 実行（終了後に待機）(&W) / コンパイル(&C) |
 | 設定(&S) | 設定 |
@@ -220,6 +220,8 @@ CSV は UTF-8 の `id,text` です。空行と、`#` `;` `[` で始まる行は�
 
 ## 12. フォームデザイナ
 
+**ファイル → 新しいフォーム** は、[Forms.sbp](../src/Include/Forms.sbp) の `Form` を継承した `Form1`（400 x 300、見出し `Form1`、`WndProc` と `InitializeComponent` と、`Application.Run` で出す 3 行）の雛形を無題の文書で開き、すぐデザイン画面にします。N88BASIC構文(-pN88) と ActiveBasic2構文(-pAB2) では `Forms.sbp` を使えないので、項目は灰色で選べません。
+
 RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`Override Sub InitializeComponent()` など）があり、その `End Sub` で閉じていれば、**F12** でデザイン画面に切り替わります。もう一度 F12 でソースに戻ります。`InitializeComponent` の無い文書では音が鳴るだけです。デザイン中はタイトルに ` [Design]` が付きます。デザイン中かどうかは子ウィンドウごとに覚えます。
 
 デザイン画面は、`InitializeComponent` の中の `Width` / `Height` の大きさの窓を左上（104, 16。左のツールボックスの右）に描きます。見出しは `Caption = "..."` の文字です。`Width` / `Height` が無いか数でなければ 400 x 300 で描きます。左下に今の大きさを出します。
@@ -252,7 +254,7 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 
 番号は、載せた部品にもフィールドの宣言にも無い一番小さい数です。書き足すのは次の 2 か所で、1 回の編集として元に戻せます。
 
-- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `OpenFileDialog`）の次に足します。無ければ `Inherits` の行の次、それも無ければ `Class` の行の次です。字下げは前の行に合わせます
+- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `OpenFileDialog`）の次に足します。無ければ最後の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行の次、`Class` の行の次です。字下げは前の行に合わせます
 - `InitializeComponent`: 空行と、`名前.Left` / `.Top` / `.Width` / `.Height`（Image 以外は `.Caption = "名前"`）と `AddControl(名前)` の行を、最後の `AddControl` の行の次に足します。`AddControl` が無ければ `End Sub` の直前（字下げは `End Sub` + 4）です
 
 パネルの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。ボタンを押したときの `WndProc` の行は書きません。
