@@ -1,0 +1,394 @@
+' n88tty - -linux の N88BASIC。窓の代わりに端末（標準入出力）を使う（段階1: 文字だけ）
+'   Windows 版の窓・GDI・UI スレッド（n88graph / n88thread / n88input / n88key / n88caret）の代わりに、
+'   ここが同じ名前の関数を持つ。LINE / CIRCLE / PSET / PAINT の本体（n88graph / n88pset）はそのまま通り、
+'   描く所（N88_DrawOnBoth ほか）だけがここに来る。段階1 では描かず、最初の 1 回だけ標準エラーに知らせる。
+'
+'   標準出力が端末なら ANSI エスケープを使う（開始時に画面を消す・LOCATE・CLS・COLOR）。
+'   端末でなければ（パイプ・ファイル）文字だけを書く。LOCATE は位置を覚えるだけ。
+'   INKEY$ / INPUT$ は標準入力が端末ならカノニカルモードとエコーを切る。INPUT と終わりで元に戻す。
+'   窓が無いので g_n88Hwnd は 1（出力先あり）にする。Cls / Circle / Paint はこれを見る。
+
+#ifdef _LINUX
+
+Const N88_LX_SYS_IOCTL = 16
+Const N88_LX_SYS_POLL = 7
+Const N88_LX_TCGETS = &H5401
+Const N88_LX_TCSETS = &H5402
+Const N88_LX_ICRNL = &H100
+Const N88_LX_ICANON = 2
+Const N88_LX_ECHO = 8
+Const N88_LX_POLLIN = 1
+Const N88_LX_TERMIOS = 64
+Const N88_LX_NOCOLOR = -100
+Const N88_CH_ESC = 27
+
+Dim g_n88TtyOut As Long
+Dim g_n88TtyIn As Long
+Dim g_n88Raw As Long
+Dim g_n88TermSave(63) As Byte
+Dim g_n88TermRaw(63) As Byte
+Dim g_n88EmitFg As Long
+Dim g_n88EmitBg As Long
+Dim g_n88GfxWarned As Long
+
+' ---- 書き出し ----
+
+Sub N88_Out(s As *Byte, n As Long)
+    If n <= 0 Then Exit Sub
+    Lx_Syscall(LX_SYS_WRITE, 1, s, n, 0, 0, 0)
+End Sub
+
+Sub N88_OutZ(s As *Byte)
+    If s = 0 Then Exit Sub
+    N88_Out(s, lstrlen(s))
+End Sub
+
+Sub N88_OutByte(b As Long)
+    Dim buf(1) As Byte
+    buf[0] = b
+    N88_Out(VarPtr(buf), 1)
+End Sub
+
+Sub N88_Spaces(n As Long)
+    Dim i As Long
+    i = 0
+    While i < n
+        N88_OutByte(32)
+        i = i + 1
+    Wend
+End Sub
+
+' buf[n] から 10 進（0..9999）を足す
+Sub N88_PutDec(buf As *Byte, ByRef n As Long, v As Long)
+    Dim x As Long
+    Dim d As Long
+    Dim unit As Long
+    Dim started As Long
+    x = v
+    If x < 0 Then x = 0
+    If x > 9999 Then x = 9999
+    started = 0
+    unit = 1000
+    While unit > 0
+        d = 0
+        While x >= unit
+            x = x - unit
+            d = d + 1
+        Wend
+        If d <> 0 Or started <> 0 Or unit = 1 Then
+            buf[n] = 48 + d
+            n = n + 1
+            started = 1
+        End If
+        If unit = 1000 Then
+            unit = 100
+        ElseIf unit = 100 Then
+            unit = 10
+        ElseIf unit = 10 Then
+            unit = 1
+        Else
+            unit = 0
+        End If
+    Wend
+End Sub
+
+' ESC [ a ; b fin（b が負なら ESC [ a fin）
+Sub N88_Csi(a As Long, b As Long, fin As Long)
+    Dim buf(31) As Byte
+    Dim n As Long
+    buf[0] = N88_CH_ESC
+    buf[1] = 91
+    n = 2
+    N88_PutDec(VarPtr(buf), n, a)
+    If b >= 0 Then
+        buf[n] = 59
+        n = n + 1
+        N88_PutDec(VarPtr(buf), n, b)
+    End If
+    buf[n] = fin
+    n = n + 1
+    N88_Out(VarPtr(buf), n)
+End Sub
+
+' ESC [ 2 J ESC [ H
+Sub N88_TtyClear()
+    N88_Csi(2, -1, 74)
+    N88_Csi(1, 1, 72)
+End Sub
+
+Sub N88_TtyGoto()
+    If g_n88TtyOut = 0 Then Exit Sub
+    N88_Csi(g_n88CurY + 1, g_n88CurX + 1, 72)
+End Sub
+
+' ---- 色（COLOR は n88color が g_n88TextCol / g_n88BackCol に覚える） ----
+
+' N88 の色番号（1 青 2 赤 4 緑）→ ANSI（1 赤 2 緑 4 青）
+Function N88_AnsiOf(c As Long) As Long
+    N88_AnsiOf = 0
+    If (c And 2) <> 0 Then N88_AnsiOf = N88_AnsiOf + 1
+    If (c And 4) <> 0 Then N88_AnsiOf = N88_AnsiOf + 2
+    If (c And 1) <> 0 Then N88_AnsiOf = N88_AnsiOf + 4
+End Function
+
+Sub N88_TtyColor()
+    Dim fg As Long
+    Dim bg As Long
+    If g_n88TtyOut = 0 Then Exit Sub
+    If g_n88ColorOn = 0 Then Exit Sub
+    fg = 30 + N88_AnsiOf(g_n88TextCol)
+    bg = 49
+    If g_n88BackCol >= 0 Then bg = 40 + N88_AnsiOf(g_n88BackCol)
+    If fg = g_n88EmitFg And bg = g_n88EmitBg Then Exit Sub
+    N88_Csi(fg, bg, 109)
+    g_n88EmitFg = fg
+    g_n88EmitBg = bg
+End Sub
+
+Sub N88_TtyColorReset()
+    If g_n88EmitFg = N88_LX_NOCOLOR Then Exit Sub
+    N88_Csi(0, -1, 109)
+    g_n88EmitFg = N88_LX_NOCOLOR
+    g_n88EmitBg = N88_LX_NOCOLOR
+End Sub
+
+' ---- 端末のモード ----
+
+Function N88_IsTty(fd As Long, buf As *Byte) As Long
+    Dim r As VoidPtr
+    r = Lx_Syscall(N88_LX_SYS_IOCTL, fd, N88_LX_TCGETS, buf, 0, 0, 0)
+    N88_IsTty = 0
+    If (r As Long) = 0 Then N88_IsTty = 1
+End Function
+
+Sub N88_TermCopy(dst As *Byte, src As *Byte)
+    Dim i As Long
+    i = 0
+    While i < N88_LX_TERMIOS
+        dst[i] = src[i]
+        i = i + 1
+    Wend
+End Sub
+
+Sub N88_TermSet(buf As *Byte)
+    Lx_Syscall(N88_LX_SYS_IOCTL, 0, N88_LX_TCSETS, buf, 0, 0, 0)
+End Sub
+
+' カノニカルモード・エコー・CR→LF を切る。VMIN=1 VTIME=0（INPUT$ は 1 文字ずつ待つ）
+Sub N88_RawOn()
+    Dim iflag As *Long
+    Dim lflag As *Long
+    If g_n88TtyIn = 0 Then Exit Sub
+    If g_n88Raw <> 0 Then Exit Sub
+    N88_TermCopy(VarPtr(g_n88TermRaw), VarPtr(g_n88TermSave))
+    iflag = VarPtr(g_n88TermRaw[0])
+    lflag = VarPtr(g_n88TermRaw[12])
+    iflag[0] = iflag[0] - (iflag[0] And N88_LX_ICRNL)
+    lflag[0] = lflag[0] - (lflag[0] And N88_LX_ICANON) - (lflag[0] And N88_LX_ECHO)
+    g_n88TermRaw[22] = 0
+    g_n88TermRaw[23] = 1
+    N88_TermSet(VarPtr(g_n88TermRaw))
+    g_n88Raw = 1
+End Sub
+
+Sub N88_RawOff()
+    If g_n88Raw = 0 Then Exit Sub
+    N88_TermSet(VarPtr(g_n88TermSave))
+    g_n88Raw = 0
+End Sub
+
+' ---- 窓の代わり ----
+
+Sub N88_EnsureWindow()
+    Dim probe(63) As Byte
+    If g_n88Ready <> 0 Then Exit Sub
+    g_n88TtyOut = N88_IsTty(1, VarPtr(probe))
+    g_n88TtyIn = N88_IsTty(0, VarPtr(g_n88TermSave))
+    g_n88EmitFg = N88_LX_NOCOLOR
+    g_n88EmitBg = N88_LX_NOCOLOR
+    g_n88Hwnd = 1
+    _PromptSys_hWnd = g_n88Hwnd
+    g_n88LPx = 0
+    g_n88LPy = 0
+    g_n88CurX = 0
+    g_n88CurY = 0
+    If g_n88TtyOut <> 0 Then N88_TtyClear()
+    g_n88Ready = 1
+End Sub
+
+' UI スレッドは無い
+Sub N88_StartUi()
+    N88_EnsureWindow()
+End Sub
+
+Sub N88_Lock()
+End Sub
+
+Sub N88_Unlock()
+End Sub
+
+' プログラムの終わり（END / 最後の行の後ろ）。端末を元に戻すだけで、待たない
+Sub N88_WaitClose()
+    N88_RawOff()
+    N88_TtyColorReset()
+End Sub
+
+' ---- 文字 ----
+
+Sub N88_PutText(s As *Byte)
+    N88_EnsureWindow()
+    If s = 0 Then Exit Sub
+    N88_TtyColor()
+    N88_OutZ(s)
+End Sub
+
+' Print → 書いて次の行へ
+Sub N88_Print(s As *Byte)
+    N88_PutText(s)
+    N88_OutByte(10)
+    g_n88CurX = 0
+    g_n88CurY = g_n88CurY + 1
+End Sub
+
+' 14 桁の区切りまで進める。端末なら CSI n C（文字は消さない）、そうでなければ空白
+Sub N88_TtyTab()
+    Dim was As Long
+    was = g_n88CurX
+    N88_TabZone()
+    If g_n88TtyOut <> 0 Then
+        N88_Csi(g_n88CurX - was, -1, 67)
+    Else
+        N88_Spaces(g_n88CurX - was)
+    End If
+End Sub
+
+Sub N88_PrintStay(s As *Byte)
+    N88_EnsureWindow()
+    If N88_IsTab(s) <> 0 Then N88_TtyTab()
+    If N88_IsTab(s) <> 0 Then Exit Sub
+    N88_PutText(s)
+    If s <> 0 Then g_n88CurX = g_n88CurX + N88_Cells(s, lstrlen(s))
+End Sub
+
+Sub Locate(x As Long, y As Long)
+    N88_EnsureWindow()
+    g_n88CurX = x
+    g_n88CurY = y
+    N88_TtyGoto()
+End Sub
+
+' CLS 2（図形だけ）は段階1 では消すものが無い
+Sub Cls(mode As Long)
+    N88_EnsureWindow()
+    If mode = 2 Then Exit Sub
+    If g_n88TtyOut <> 0 Then N88_TtyClear()
+    g_n88CurX = 0
+    g_n88CurY = 0
+End Sub
+
+' ---- 図形（段階1: 描かない） ----
+
+Sub N88_GfxNote()
+    Dim msg As String
+    If g_n88GfxWarned <> 0 Then Exit Sub
+    g_n88GfxWarned = 1
+    msg = "N88BASIC: LINE / CIRCLE / PSET / PAINT are not drawn on Linux yet" + Chr$(10)
+    Lx_Syscall(LX_SYS_WRITE, 2, StrPtr(msg), Len(msg), 0, 0, 0)
+End Sub
+
+Sub N88_DrawOnBoth(sx As Long, sy As Long, ex As Long, ey As Long, color As Long, mode As Long)
+    N88_GfxNote()
+End Sub
+
+Sub N88_CircleDraw(x As Long, y As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
+    N88_GfxNote()
+End Sub
+
+Sub N88_PaintDraw(x As Long, y As Long, fr As Long, br As Long)
+    N88_GfxNote()
+End Sub
+
+Sub N88_PSetDraw(x As Long, y As Long, color As Long)
+    N88_GfxNote()
+End Sub
+
+' ---- 入力 ----
+
+Function N88_ReadByte() As Long
+    Dim b(1) As Byte
+    Dim r As VoidPtr
+    N88_ReadByte = -1
+    r = Lx_Syscall(LX_SYS_READ, 0, VarPtr(b), 1, 0, 0, 0)
+    If (r As Long) <> 1 Then Exit Function
+    N88_ReadByte = b[0]
+End Function
+
+' 標準入力に読めるものがあれば 1（待たない）
+Function N88_KeyReady() As Long
+    Dim pfd(7) As Byte
+    Dim r As VoidPtr
+    N88_KeyReady = 0
+    FillMemory(VarPtr(pfd), 8, 0)
+    pfd[4] = N88_LX_POLLIN
+    r = Lx_Syscall(N88_LX_SYS_POLL, VarPtr(pfd), 1, 0, 0, 0, 0)
+    If (r As Long) <= 0 Then Exit Function
+    If (pfd[6] And N88_LX_POLLIN) = 0 Then Exit Function
+    N88_KeyReady = 1
+End Function
+
+' 標準入力が端末でなければ、入力した行を画面と同じように出す
+Sub N88_EchoLine()
+    If g_n88TtyIn <> 0 Then Exit Sub
+    N88_OutZ(VarPtr(g_n88Line))
+    N88_OutByte(10)
+End Sub
+
+' INPUT の 1 行（CR は捨てる。LF か終端で完成）
+Function N88_ReadLine() As String
+    Dim ch As Long
+    Dim ok As Long
+    N88_EnsureWindow()
+    N88_RawOff()
+    N88_LineReset()
+    Do
+        ch = N88_ReadByte()
+        If ch < 0 Or ch = N88_CH_LF Then Exit Do
+        If ch <> N88_CH_CR Then ok = N88_LineAdd(ch)
+    Loop
+    ok = N88_LineEnter()
+    N88_EchoLine()
+    g_n88CurX = 0
+    g_n88CurY = g_n88CurY + 1
+    N88_ReadLine = N88_LineText$()
+End Function
+
+Function Inkey$() As String
+    Dim ch As Long
+    N88_EnsureWindow()
+    N88_RawOn()
+    If N88_KeyReady() = 0 Then Exit Function
+    ch = N88_ReadByte()
+    If ch < 0 Then Exit Function
+    Inkey$ = Chr$(ch)
+End Function
+
+' length 文字そろうまで待つ（エコーしない）。終端なら読めた分だけ
+Function Input$(length As Long) As String
+    Dim s As String
+    Dim i As Long
+    Dim ch As Long
+    N88_EnsureWindow()
+    If length <= 0 Then Exit Function
+    N88_RawOn()
+    s = ""
+    i = 0
+    While i < length
+        ch = N88_ReadByte()
+        If ch < 0 Then i = length
+        If ch >= 0 Then s = s + Chr$(ch)
+        i = i + 1
+    Wend
+    Input$ = s
+End Function
+
+#endif

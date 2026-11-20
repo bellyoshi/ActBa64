@@ -197,6 +197,12 @@ actba64 a.abp -pN88 -o a.exe
 - 命令の途中の引数は省略できる（`CONSOLE ,,,1`）。省いた引数には `-2` を渡す。`-2` を省略として扱うのは `COLOR` と `CONSOLE` だけ
 - 1 行の `IF 条件 THEN 文[:文...] [ELSE 文...]`。`THEN` / `ELSE` の後ろが行番号なら `GOTO`。`IF 条件 GOTO 行番号` も書ける
 - 未対応: `WHILE` などのほかの制御文、配列の暗黙宣言
+- **`-linux`**（`-pN88` / `#N88BASIC` とも）では窓の代わりに端末へ出す（`Include\N88BASIC\n88tty.abp`）。今は文字だけ
+  - `PRINT` / `INPUT` / `INKEY$` / `INPUT$` / `LOCATE` / `COLOR` / `CLS` が使える。標準出力が端末なら、始めに画面を消し、`LOCATE` / `CLS` / `COLOR` を ANSI エスケープで出す。端末でなければ文字だけを書く（`LOCATE` は位置を覚えるだけ）
+  - `INKEY$` / `INPUT$` の間は端末のカノニカルモードとエコーを切る（Enter は `CHR$(13)`、矢印キーなどはエスケープの 1 バイトずつ）。`INPUT` とプログラムの終わりで元に戻す。`EXITPROCESS` で直に終えると戻らない
+  - 標準入力が端末でないときは、`INPUT` で読んだ行を画面と同じように書き出す
+  - `LINE` / `CIRCLE` / `PSET` / `PAINT` は描かない（最初の 1 回だけ標準エラーに知らせる）。`LP`（最後の点）は動く
+  - 終わりで窓が閉じるのを待たない
 
 ```text
 10 REM 赤い円
