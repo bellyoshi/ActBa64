@@ -14,7 +14,7 @@
 '       End Sub
 '   End Class
 '
-'   Dim mainForm As Form1           ' ctor が InitializeComponent を呼ぶ
+'   Dim mainForm As Form1           ' InitializeComponent は最初の Show（Application.Run）で呼ばれる
 '   Application.Initialize()
 '   Application.Run(mainForm)       ' 窓を出し、閉じるまでメッセージを回す
 '
@@ -22,7 +22,11 @@
 ' 自分で扱わないものは Super.WndProc(msg, wParam, lParam) に渡す。
 '
 ' 部品（今は Button と Label）はメンバーにして、InitializeComponent で AddControl する。
-' 窓ができたあとで文字を変えるときは SetCaption(s) を使う（Caption に入れるだけでは窓は変わらない）。
+' 窓ができたあとで文字を変えるときは SetCaption(s)、使える・使えないは SetEnabled(b) を使う
+' （Caption / Enabled に入れるだけでは窓は変わらない）。Enabled の初めの値は True。
+'
+' InitializeComponent は ctor ではなく最初の Show で呼ぶ。メンバーの部品の ctor は
+' Form の ctor のあとに走るので、ctor の中で値を入れると部品の ctor に上書きされるため。
 ' 子窓はフォームの窓ができたとき（WM_CREATE の前）に作られる。
 ' 押されたことは、フォームの WndProc に WM_COMMAND（HIWORD(wParam) = BN_CLICKED、
 ' lParam = ボタンの Handle）として届く。
@@ -101,7 +105,12 @@ Public
     Height As Long
     Caption As String
     Handle As HWND
+    Enabled As Long             ' 使えるか（初めは True）
     NextControl As *Control     ' 同じ Form に載せた次の部品（Forms.sbp が使う）
+
+    Sub Control()
+        Enabled = True
+    End Sub
 
     Virtual Sub CreateHandle(parent As HWND)
     End Sub
@@ -109,6 +118,11 @@ Public
     ' 文字を変える（X11 版は Caption を変えるだけ）
     Sub SetCaption(s As String)
         Caption = s
+    End Sub
+
+    ' 使える・使えないを変える（X11 版は Enabled を変えるだけ）
+    Sub SetEnabled(b As Long)
+        Enabled = b
     End Sub
 End Class
 
@@ -124,6 +138,7 @@ Class Form
 Private
     firstControl As *Control        ' AddControl で載せた部品（NextControl でつなぐ）
     lastControl As *Control
+    componentsDone As Long          ' InitializeComponent を呼んだか
 Public
     Left As Long
     Top As Long
@@ -137,11 +152,17 @@ Public
         Top = CW_USEDEFAULT
         Width = CW_USEDEFAULT
         Height = CW_USEDEFAULT
-        InitializeComponent()
     End Sub
 
-    ' フォームデザイナが Override して、位置・大きさ・見出しなどを入れる
+    ' フォームデザイナが Override して、位置・大きさ・見出し・部品を入れる。最初の Show で 1 度だけ呼ばれる
     Virtual Sub InitializeComponent()
+    End Sub
+
+    ' まだなら InitializeComponent を呼ぶ（Show が呼ぶ。窓を出す前に値を読みたいときにも使える）
+    Sub InitComponents()
+        If componentsDone <> 0 Then Exit Sub
+        componentsDone = 1
+        InitializeComponent()
     End Sub
 
     ' 部品を載せる。窓がもうあれば、すぐ子窓を作る
@@ -178,6 +199,7 @@ Public
 
     ' 窓がまだ無ければ作って、表示する
     Sub Show()
+        InitComponents()
         If Handle = 0 Then FormsCreate(This)
         XMapWindow(g_formsDpy, Handle)
         XFlush(g_formsDpy)
@@ -439,7 +461,12 @@ Public
     Height As Long
     Caption As String
     Handle As HWND
+    Enabled As Long             ' 使えるか（初めは True）
     NextControl As *Control     ' 同じ Form に載せた次の部品（Forms.sbp が使う）
+
+    Sub Control()
+        Enabled = True
+    End Sub
 
     ' parent の中に子窓を作る
     Virtual Sub CreateHandle(parent As HWND)
@@ -450,6 +477,18 @@ Public
         Caption = s
         If Handle <> 0 Then SetWindowText(Handle, StrPtr(Caption))
     End Sub
+
+    ' 使える・使えないを変える。窓がもうあれば窓も変える
+    Sub SetEnabled(b As Long)
+        Enabled = b
+        If Handle <> 0 Then EnableWindow(Handle, b)
+    End Sub
+
+    ' 子窓を作った直後に、文字（DEFAULT_GUI_FONT）と Enabled を窓へ
+    Sub AfterCreate()
+        FormsSetFont(Handle)
+        If Enabled = False Then EnableWindow(Handle, FALSE)
+    End Sub
 End Class
 
 ' 押しボタン。押されると、親の WndProc に WM_COMMAND（BN_CLICKED）が届く
@@ -458,7 +497,7 @@ Class Button
 Public
     Override Sub CreateHandle(parent As HWND)
         Handle = CreateWindowEx(0, "BUTTON", StrPtr(Caption), WS_CHILD Or WS_VISIBLE Or WS_TABSTOP Or BS_PUSHBUTTON, Left, Top, Width, Height, parent, 0, GetModuleHandle(0), 0)
-        FormsSetFont(Handle)
+        AfterCreate()
     End Sub
 End Class
 
@@ -468,7 +507,7 @@ Class Label
 Public
     Override Sub CreateHandle(parent As HWND)
         Handle = CreateWindowEx(0, "STATIC", StrPtr(Caption), WS_CHILD Or WS_VISIBLE Or SS_LEFT, Left, Top, Width, Height, parent, 0, GetModuleHandle(0), 0)
-        FormsSetFont(Handle)
+        AfterCreate()
     End Sub
 End Class
 
@@ -481,6 +520,7 @@ Class Form
 Private
     firstControl As *Control        ' AddControl で載せた部品（NextControl でつなぐ）
     lastControl As *Control
+    componentsDone As Long          ' InitializeComponent を呼んだか
 Public
     Left As Long
     Top As Long
@@ -494,11 +534,17 @@ Public
         Top = CW_USEDEFAULT
         Width = CW_USEDEFAULT
         Height = CW_USEDEFAULT
-        InitializeComponent()
     End Sub
 
-    ' フォームデザイナが Override して、位置・大きさ・見出しなどを入れる
+    ' フォームデザイナが Override して、位置・大きさ・見出し・部品を入れる。最初の Show で 1 度だけ呼ばれる
     Virtual Sub InitializeComponent()
+    End Sub
+
+    ' まだなら InitializeComponent を呼ぶ（Show が呼ぶ。窓を出す前に値を読みたいときにも使える）
+    Sub InitComponents()
+        If componentsDone <> 0 Then Exit Sub
+        componentsDone = 1
+        InitializeComponent()
     End Sub
 
     ' 部品を載せる。窓がもうあれば、すぐ子窓を作る
@@ -534,6 +580,7 @@ Public
 
     ' 窓がまだ無ければ作って、表示する
     Sub Show()
+        InitComponents()
         If Handle = 0 Then CreateHandle()
         ShowWindow(Handle, SW_SHOW)
         UpdateWindow(Handle)

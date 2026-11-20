@@ -421,6 +421,7 @@ End Class
   - 本体に中身のある `Virtual` がある Class は、先頭（オフセット 0）に隠しフィールド `__vptr` を持つ。そのため最初に `Virtual` を持つ Class は `Inherits` できない（子孫は `Inherits` してよい）
   - 子は `Override Sub` / `Override Function` で差し替える。親に同じ名前の `Virtual` が無い `Override`、`Override` を付けずに親の `Virtual` と同じ名前の `Sub` / `Function` を書くのはコンパイルエラー。ユーザーの vtable の Class の `Virtual` は本体が要る（宣言だけは COM 用）
   - vtable は `Dim` / `New` / メンバ Class でオブジェクトを作るとき、ctor より前に設定する。基底の ctor の中の呼び出しも、作っている Class の `Override` へ行く。`Private` の `Override` でも基底から呼べる
+  - 子のメンバの Class の ctor は、基底の ctor のあとに走る（C++ と同じ順）。基底の ctor から呼んだ `Override` がメンバに値を入れても、ctor のあるメンバならその ctor が上書きする（`Forms.sbp` が `InitializeComponent` を ctor でなく最初の `Show` で呼ぶのはこのため）
   - `obj.M()`、`p->M()`、メソッド内の `M()` は vtable 経由。`Super.M()` は親の定義を直接呼ぶ
 - `Super.Name(args)` は親の `Name` を `This` 付きで直接呼ぶ。`Super.Parent(args)` は親 ctor、`Super.~Parent()` は親 dtor
 - 基底の ctor/dtor は自動で呼ぶ。ctor は 基底 ctor → メンバ ctor → 本体、dtor は 本体 → メンバ dtor → 基底 dtor の順。省略した ctor/dtor（暗黙の空の版）でも同じ
@@ -891,8 +892,9 @@ Application.Run(mainForm)
 
 | 名前 | 意味 |
 |---|---|
-| `Form` | `Left` / `Top` / `Width` / `Height`（既定 `CW_USEDEFAULT`）、`Caption`、`Handle`（窓ができてから）。ctor が `InitializeComponent()` を呼ぶ |
-| `Virtual Sub InitializeComponent()` | 子が `Override` して位置・大きさ・見出しを入れる |
+| `Form` | `Left` / `Top` / `Width` / `Height`（既定 `CW_USEDEFAULT`）、`Caption`、`Handle`（窓ができてから）。最初の `Show()`（`Application.Run` の中）が `InitializeComponent()` を呼ぶ |
+| `Virtual Sub InitializeComponent()` | 子が `Override` して位置・大きさ・見出し・部品を入れる。ctor ではなく最初の `Show()` で 1 度だけ呼ばれる（メンバの部品の ctor が先に済むように） |
+| `InitComponents()` | まだなら `InitializeComponent()` を呼ぶ。窓を出す前に値を読みたいとき |
 | `Virtual Function WndProc(msg, wParam, lParam) As LRESULT` | 窓のメッセージ。子が `Override` し、扱わないものは `Super.WndProc(msg, wParam, lParam)` へ。既定は `WM_DESTROY` で `PostQuitMessage(0)` し、`DefWindowProc` を返す |
 | `Show()` | 窓が無ければ作って表示する |
 | `Close()` | `WM_CLOSE` を窓へ送る（既定の `WndProc` が窓を壊す）。`Class` の中では `This.Close()` と書く（裸の `Close` はファイルの `Close` 文になる） |
@@ -900,6 +902,7 @@ Application.Run(mainForm)
 | `Button` | `Left` / `Top` / `Width` / `Height` / `Caption` / `Handle`。押されると、フォームの `WndProc` に `WM_COMMAND`（`HIWORD(wParam) = BN_CLICKED`、`lParam` = ボタンの `Handle`）が届く。文字は `DEFAULT_GUI_FONT` |
 | `Label` | 文字だけの部品（`STATIC`）。メンバーは `Button` と同じ。押しても何も届かない |
 | `SetCaption(s)` | 部品の `Caption` を `s` にし、窓がもうあれば窓の文字も変える。窓ができたあとで `Caption` に入れるだけでは窓は変わらない（プロパティが無いため） |
+| `Enabled` / `SetEnabled(b)` | 部品が使えるか。初めは `True`（`Control` の ctor）。`InitializeComponent` で `Enabled = False` と書けば使えない子窓で作る。窓ができたあとは `SetEnabled(b)`（`EnableWindow`） |
 | `Application.Initialize()` | 今は何もしない |
 | `Application.Run(form)` | `form.Show()` のあと、窓が閉じるまでメッセージループを回す |
 
@@ -913,7 +916,7 @@ Application.Run(mainForm)
   - 既定の `WndProc` は `WM_CLOSE` で窓を壊し（その前に `WM_DESTROY`）、`WM_DESTROY` でループを終わらせて `0` を返す（`DefWindowProc` / `PostQuitMessage` は無い）
   - 見出しは `_NET_WM_NAME`（UTF-8）にも入れる。位置と大きさは `XSizeHints` の `USPosition` / `USSize` で WM に渡す。背景は `&HF0F0F0`
   - 描画（GDI）はまだ無い。`Handle` は X の Window（`HWND` に入れている）
-  - `Button` / `Label` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` は `Caption` を変えるだけ
+  - `Button` / `Label` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` / `SetEnabled` は `Caption` / `Enabled` を変えるだけ
 
 ## 8. WinAPI / IAT
 
