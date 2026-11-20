@@ -1,0 +1,78 @@
+' FormDesign_Ctl*（フォームデザイナの部品の文字列処理と当たり判定）。
+' InitializeComponent の中の AddControl(名前) を部品とみなし、名前.Left などを読み書きする。
+
+Dim fcNl As String
+Dim fcQ As String
+Dim fcSrc As String
+Dim fcOut As String
+Dim fcKind As Long
+Dim fcX As Long, fcY As Long, fcW As Long, fcH As Long
+fcNl = Chr$(10)
+fcQ = Chr$(34)
+fcSrc = "Class Form1" & fcNl & "    Inherits Form" & fcNl & "Private" & fcNl & "    Button1 As Button" & fcNl
+fcSrc = fcSrc & "    Override Sub InitializeComponent()" & fcNl
+fcSrc = fcSrc & "        Width = 320" & fcNl
+fcSrc = fcSrc & "        Button1.Left = 8" & fcNl & "        Button1.Top = 8" & fcNl
+fcSrc = fcSrc & "        Button1.Width = 100" & fcNl & "        Button1.Height = 30" & fcNl
+fcSrc = fcSrc & "        Button1.Caption = " & fcQ & "OK" & fcQ & fcNl
+fcSrc = fcSrc & "        AddControl(Button1)" & fcNl
+fcSrc = fcSrc & "        ' AddControl(Gone)" & fcNl
+fcSrc = fcSrc & "        Button2.Left = 50" & fcNl & "        addcontrol( Button2 )" & fcNl
+fcSrc = fcSrc & "        Panel1.AddControl(Image1)" & fcNl
+fcSrc = fcSrc & "    End Sub" & fcNl & "    Sub Other()" & fcNl & "        AddControl(Outside)" & fcNl
+fcSrc = fcSrc & "    End Sub" & fcNl & "End Class" & fcNl
+
+Assert(-1, FormDesign_CtlOf$("AddControl(Button1)") = "Button1", "fc of")
+Assert(-1, FormDesign_CtlOf$("addcontrol( B )") = "B", "fc of ci trim")
+Assert(-1, FormDesign_CtlOf$("Panel1.AddControl(Image1)") = "", "fc of panel")
+Assert(-1, FormDesign_CtlOf$("AddControl") = "", "fc of no paren")
+Assert(-1, FormDesign_CtlName$(fcSrc, 0) = "Button1", "fc name 0")
+Assert(-1, FormDesign_CtlName$(fcSrc, 1) = "Button2", "fc name 1")
+Assert(-1, FormDesign_CtlName$(fcSrc, 2) = "", "fc name end")
+Assert(-1, FormDesign_CtlName$("Dim a", 0) = "", "fc name not form")
+Assert(1, FormDesign_CtlHas(fcSrc, "Button2"), "fc has")
+Assert(0, FormDesign_CtlHas(fcSrc, "Outside"), "fc has outside")
+Assert(0, FormDesign_CtlHas(fcSrc, ""), "fc has empty")
+
+FormDesign_CtlRect(fcSrc, "Button1", fcX, fcY, fcW, fcH)
+Assert(-1, fcX = 8 And fcY = 8 And fcW = 100 And fcH = 30, "fc rect")
+FormDesign_CtlRect(fcSrc, "Button2", fcX, fcY, fcW, fcH)
+Assert(-1, fcX = 50 And fcY = 0 And fcW = FD_CTL_DEF_W And fcH = FD_CTL_DEF_H, "fc rect default")
+Assert(-1, FormDesign_GetStr$(fcSrc, "Button1.Caption") = "OK", "fc caption")
+
+' 当たり判定。選んでいなければ中だけ、選んでいれば辺も
+Assert(FD_KIND_MOVE, FormDesign_CtlHit(10, 10, 8, 8, 100, 30, 0), "fc hit in")
+Assert(0, FormDesign_CtlHit(7, 10, 8, 8, 100, 30, 0), "fc hit out")
+Assert(FD_KIND_MOVE, FormDesign_CtlHit(108, 20, 8, 8, 100, 30, 1) - 1, "fc hit right")
+Assert(FD_KIND_MOVE + 2, FormDesign_CtlHit(50, 38, 8, 8, 100, 30, 1), "fc hit bottom")
+Assert(FD_KIND_MOVE + 3, FormDesign_CtlHit(108, 38, 8, 8, 100, 30, 1), "fc hit corner")
+Assert(0, FormDesign_CtlHit(108, 38, 8, 8, 100, 30, 0), "fc hit corner unselected")
+
+' 重なっていれば後に載せた方。選んでいる部品の辺が先
+Assert(-1, FormDesign_CtlAt$(fcSrc, 60, 10, "", fcKind) = "Button2", "fc at top")
+Assert(FD_KIND_MOVE, fcKind, "fc at top kind")
+Assert(-1, FormDesign_CtlAt$(fcSrc, 20, 10, "", fcKind) = "Button1", "fc at under")
+Assert(-1, FormDesign_CtlAt$(fcSrc, 300, 200, "Button1", fcKind) = "", "fc at none")
+Assert(0, fcKind, "fc at none kind")
+Assert(-1, FormDesign_CtlAt$(fcSrc, 108, 38, "Button1", fcKind) = "Button1", "fc at sel edge")
+Assert(FD_KIND_MOVE + 3, fcKind, "fc at sel edge kind")
+
+' 引く
+FormDesign_CtlDrag(FD_KIND_MOVE, 8, 8, 100, 30, 5, -3, fcX, fcY, fcW, fcH)
+Assert(-1, fcX = 13 And fcY = 5 And fcW = 100 And fcH = 30, "fc drag move")
+FormDesign_CtlDrag(FD_KIND_MOVE, 8, 8, 100, 30, -20, -20, fcX, fcY, fcW, fcH)
+Assert(-1, fcX = 0 And fcY = 0, "fc drag clamp")
+FormDesign_CtlDrag(FD_KIND_MOVE + 3, 8, 8, 100, 30, 10, -50, fcX, fcY, fcW, fcH)
+Assert(-1, fcX = 8 And fcY = 8 And fcW = 110 And fcH = FD_CTL_MIN, "fc drag size")
+FormDesign_CtlDrag(FD_KIND_MOVE + 1, 8, 8, 100, 30, 10, 10, fcX, fcY, fcW, fcH)
+Assert(-1, fcW = 110 And fcH = 30, "fc drag right only")
+
+' 書き戻し。変わった値だけ、無い行は End Sub の直前に足す
+fcOut = FormDesign_SetCtl$(fcSrc, "Button1", 16, 8, 100, 40)
+FormDesign_CtlRect(fcOut, "Button1", fcX, fcY, fcW, fcH)
+Assert(-1, fcX = 16 And fcY = 8 And fcW = 100 And fcH = 40, "fc set")
+Assert(-1, InStr(1, fcOut, "        Button1.Left = 16" & fcNl) > 0, "fc set in place")
+Assert(-1, Len(fcOut) = Len(fcSrc) + 1, "fc set only changed")
+fcOut = FormDesign_SetCtl$(fcSrc, "Button2", 50, 20, FD_CTL_DEF_W, FD_CTL_DEF_H)
+Assert(-1, InStr(1, fcOut, "Panel1.AddControl(Image1)" & fcNl & "        Button2.Top = 20" & fcNl & "    End Sub") > 0, "fc set add")
+Assert(-1, FormDesign_SetCtl$(fcSrc, "Button1", 8, 8, 100, 30) = fcSrc, "fc set same")

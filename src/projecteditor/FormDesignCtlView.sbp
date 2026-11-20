@@ -1,0 +1,126 @@
+' フォームデザイナの部品の画面（RAD 第二段階）。
+' AddControl した部品を、窓のクライアント領域（見出しの帯の下）に押しボタンとして描く。
+' 部品を押すと選ばれ、引くと動き、選んだ部品の右辺・下辺・右下を引くと大きさが変わる。
+' 離したときに「名前.Left / .Top / .Width / .Height」の数を書き換える（FormDesign_Commit）。
+
+' 選んでいる部品と引いている間の値（g_fdSel / g_fdC*）は FormDesignView.sbp の Dim。
+
+' デザイン画面での、窓のクライアント領域の左上（DrawWindow の枠と見出しの帯の内側）
+Function FormDesign_ClientX() As Long
+    FormDesign_ClientX = FD_ORG_X + 4
+End Function
+
+Function FormDesign_ClientY() As Long
+    FormDesign_ClientY = FD_ORG_Y + 4 + GetSystemMetrics(SM_CYCAPTION)
+End Function
+
+' 描く部品の位置と大きさ。引いている部品は引いている間の値
+Sub FormDesign_CtlNow(text As String, name As String, ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long)
+    FormDesign_CtlRect(text, name, x, y, w, h)
+    If g_fdDrag < FD_KIND_MOVE Or name <> g_fdSel Then Exit Sub
+    x = g_fdCX
+    y = g_fdCY
+    w = g_fdCW
+    h = g_fdCH
+End Sub
+
+' 部品のデザイン画面での四角
+Sub FormDesign_CtlScreen(text As String, name As String, ByRef rc As RECT)
+    Dim x As Long, y As Long, w As Long, h As Long
+    FormDesign_CtlNow(text, name, x, y, w, h)
+    x = x + FormDesign_ClientX()
+    y = y + FormDesign_ClientY()
+    FormDesign_Rect(rc, x, y, x + w, y + h)
+End Sub
+
+' ---- 描画 ----
+
+' UTF-8 の文字を四角の真ん中に 1 行で
+Sub FormDesign_DrawTextC(hDC As HDC, ByRef rc As RECT, s As String)
+    Dim wide As *Byte, n As Long
+    wide = Enc_Utf8ToWide(s, n)
+    If wide = 0 Then Exit Sub
+    DrawTextW(hDC, wide, n, rc, DT_CENTER Or DT_VCENTER Or DT_SINGLELINE)
+    free(wide)
+End Sub
+
+Sub FormDesign_DrawCtl(hDC As HDC, text As String, name As String)
+    Dim rc As RECT
+    FormDesign_CtlScreen(text, name, rc)
+    DrawFrameControl(hDC, rc, DFC_BUTTON, DFCS_BUTTONPUSH)
+    SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT))
+    FormDesign_DrawTextC(hDC, rc, FormDesign_GetStr$(text, name & ".Caption"))
+End Sub
+
+Sub FormDesign_DrawCtlList(hDC As HDC, text As String)
+    Dim i As Long, s As String
+    s = FormDesign_CtlName$(text, 0)
+    While s <> ""
+        FormDesign_DrawCtl(hDC, text, s)
+        i = i + 1
+        s = FormDesign_CtlName$(text, i)
+    Wend
+End Sub
+
+' 選んでいる部品の、大きさを変えられる所に白い四角
+Sub FormDesign_DrawSel(hDC As HDC, text As String)
+    Dim rc As RECT
+    If FormDesign_CtlHas(text, g_fdSel) = 0 Then Exit Sub
+    FormDesign_CtlScreen(text, g_fdSel, rc)
+    FormDesign_Grip(hDC, rc.right, (rc.top + rc.bottom) \ 2)
+    FormDesign_Grip(hDC, (rc.left + rc.right) \ 2, rc.bottom)
+    FormDesign_Grip(hDC, rc.right, rc.bottom)
+End Sub
+
+' 部品は窓のクライアント領域からはみ出た所を描かない（選んだ印は描く）
+Sub FormDesign_DrawCtls(hDC As HDC, text As String, ByVal w As Long, ByVal h As Long)
+    IntersectClipRect(hDC, FormDesign_ClientX(), FormDesign_ClientY(), FD_ORG_X + w - 4, FD_ORG_Y + h - 4)
+    FormDesign_DrawCtlList(hDC, text)
+    SelectClipRgn(hDC, 0)
+    FormDesign_DrawSel(hDC, text)
+End Sub
+
+' 左下の文字。部品を選んでいればその位置と大きさ、無ければ窓の大きさ
+Function FormDesign_InfoText$(text As String, ByVal w As Long, ByVal h As Long) As String
+    Dim x As Long, y As Long, cw As Long, ch As Long
+    FormDesign_InfoText$ = "Width " & FormDesign_Num$(w) & " x Height " & FormDesign_Num$(h)
+    If FormDesign_CtlHas(text, g_fdSel) = 0 Then Exit Function
+    FormDesign_CtlNow(text, g_fdSel, x, y, cw, ch)
+    FormDesign_InfoText$ = g_fdSel & ": Left " & FormDesign_Num$(x) & ", Top " & FormDesign_Num$(y)
+    FormDesign_InfoText$ = FormDesign_InfoText$ & ", Width " & FormDesign_Num$(cw) & " x Height " & FormDesign_Num$(ch)
+End Function
+
+' ---- マウス ----
+
+' マウスの位置（デザイン画面）で掴める部品と所。部品の上でなければ "" と 0
+Function FormDesign_CtlAtXY$(text As String, ByVal x As Long, ByVal y As Long, ByRef kind As Long) As String
+    FormDesign_CtlAtXY$ = FormDesign_CtlAt$(text, x - FormDesign_ClientX(), y - FormDesign_ClientY(), g_fdSel, kind)
+End Function
+
+' 押した所の部品を選び、掴んだ所を返す。部品の上でなければ選びを外して 0
+Function FormDesign_CtlDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim t As String, kind As Long
+    t = FormDesign_Text$(hWnd)
+    g_fdSel = FormDesign_CtlAtXY$(t, x, y, kind)
+    FormDesign_CtlDown = kind
+    If kind = 0 Then Exit Function
+    FormDesign_CtlRect(t, g_fdSel, g_fdCX0, g_fdCY0, g_fdCW0, g_fdCH0)
+    FormDesign_CtlDrag(0, g_fdCX0, g_fdCY0, g_fdCW0, g_fdCH0, 0, 0, g_fdCX, g_fdCY, g_fdCW, g_fdCH)
+End Function
+
+' マウスが部品の上なら掴める所（カーソルの形）
+Function FormDesign_CtlHitAt(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim kind As Long, s As String
+    s = FormDesign_CtlAtXY$(FormDesign_Text$(hWnd), x, y, kind)
+    FormDesign_CtlHitAt = kind
+End Function
+
+' 引いている部品を、押した位置から dx, dy 動かす
+Sub FormDesign_CtlMove(ByVal dx As Long, ByVal dy As Long)
+    FormDesign_CtlDrag(g_fdDrag, g_fdCX0, g_fdCY0, g_fdCW0, g_fdCH0, dx, dy, g_fdCX, g_fdCY, g_fdCW, g_fdCH)
+End Sub
+
+' 引いた部品の位置と大きさを書いた本文
+Function FormDesign_CtlCommit$(text As String) As String
+    FormDesign_CtlCommit$ = FormDesign_SetCtl$(text, g_fdSel, g_fdCX, g_fdCY, g_fdCW, g_fdCH)
+End Function

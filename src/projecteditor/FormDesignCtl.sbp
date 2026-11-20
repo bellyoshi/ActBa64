@@ -1,0 +1,142 @@
+' フォームデザイナの部品（RAD 第二段階）の文字列処理と当たり判定。
+' InitializeComponent の中の「AddControl(名前)」の行を部品とみなし、
+' 「名前.Left / .Top / .Width / .Height / .Caption = 値」を読み書きする。
+' 部品の座標はフォームのクライアント領域の左上が 0, 0（Forms.sbp の子窓と同じ）。
+' 今は種類を見ず、どの部品も押しボタンとして描く。
+
+Const FD_CTL_MIN = 8                ' 引いて縮められる下限
+Const FD_CTL_DEF_W = 75             ' Width / Height が書かれていないときの表示
+Const FD_CTL_DEF_H = 25
+Const FD_KIND_MOVE = 8              ' 部品を動かす。8 + 1 / 2 / 3 は部品の右辺・下辺・右下
+
+' 「AddControl(name)」の行なら name、ほかは ""
+Function FormDesign_CtlOf$(ln As String) As String
+    Dim i As Long, j As Long
+    FormDesign_CtlOf$ = ""
+    If StartsWithCI(ln, "addcontrol") = 0 Then Exit Function
+    i = InStr(1, ln, "(")
+    j = InStr(1, ln, ")")
+    If i = 0 Or j < i Then Exit Function
+    FormDesign_CtlOf$ = Trim$(Mid$(ln, i + 1, j - i - 1))
+End Function
+
+' pos の行から下（e の手前まで）で、index 番目（0 始まり）の部品の名前。無ければ ""
+Function FormDesign_CtlFrom$(text As String, ByVal pos As Long, ByVal e As Long, ByVal index As Long) As String
+    Dim s As String
+    FormDesign_CtlFrom$ = ""
+    While pos < e And FormDesign_CtlFrom$ = ""
+        s = FormDesign_CtlOf$(FormDesign_Line$(text, pos))
+        If s <> "" And index = 0 Then FormDesign_CtlFrom$ = s
+        If s <> "" Then index = index - 1
+        pos = FormDesign_LineEnd(text, pos) + 1
+    Wend
+End Function
+
+' InitializeComponent の中で index 番目（0 始まり）に載せた部品の名前。無ければ ""
+Function FormDesign_CtlName$(text As String, ByVal index As Long) As String
+    Dim e As Long
+    FormDesign_CtlName$ = ""
+    e = FormDesign_BodyEnd(text)
+    If e = 0 Then Exit Function
+    FormDesign_CtlName$ = FormDesign_CtlFrom$(text, FormDesign_BodyStart(text), e, index)
+End Function
+
+' 部品 name が載っているか
+Function FormDesign_CtlHas(text As String, name As String) As Long
+    Dim i As Long, s As String
+    FormDesign_CtlHas = 0
+    s = FormDesign_CtlName$(text, 0)
+    While s <> "" And FormDesign_CtlHas = 0
+        If s = name Then FormDesign_CtlHas = 1
+        i = i + 1
+        s = FormDesign_CtlName$(text, i)
+    Wend
+End Function
+
+' 部品 name の位置と大きさ（書かれていなければ 0, 0, FD_CTL_DEF_W, FD_CTL_DEF_H）
+Sub FormDesign_CtlRect(text As String, name As String, ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long)
+    x = FormDesign_GetNum(text, name & ".Left", 0)
+    y = FormDesign_GetNum(text, name & ".Top", 0)
+    w = FormDesign_GetNum(text, name & ".Width", FD_CTL_DEF_W)
+    h = FormDesign_GetNum(text, name & ".Height", FD_CTL_DEF_H)
+End Sub
+
+' 点が部品（x, y, w, h）の中か
+Function FormDesign_In(ByVal px As Long, ByVal py As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As Long
+    FormDesign_In = 0
+    If px >= x And px < x + w And py >= y And py < y + h Then FormDesign_In = 1
+End Function
+
+' 部品のどこを掴んだか。0: 外、FD_KIND_MOVE: 中、選んでいれば（sel <> 0）辺は FD_KIND_MOVE + 1 / 2 / 3
+Function FormDesign_CtlHit(ByVal px As Long, ByVal py As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long, ByVal sel As Long) As Long
+    FormDesign_CtlHit = 0
+    If sel <> 0 Then FormDesign_CtlHit = FormDesign_EdgeHit(px, py, x, y, w, h)
+    If FormDesign_CtlHit <> 0 Then
+        FormDesign_CtlHit = FormDesign_CtlHit + FD_KIND_MOVE
+        Exit Function
+    End If
+    If FormDesign_In(px, py, x, y, w, h) <> 0 Then FormDesign_CtlHit = FD_KIND_MOVE
+End Function
+
+' 部品 name で点が当たる所（FormDesign_CtlHit）。name が "" なら 0
+Function FormDesign_CtlKind(text As String, name As String, ByVal px As Long, ByVal py As Long, ByVal sel As Long) As Long
+    Dim x As Long, y As Long, w As Long, h As Long
+    FormDesign_CtlKind = 0
+    If FormDesign_CtlHas(text, name) = 0 Then Exit Function
+    FormDesign_CtlRect(text, name, x, y, w, h)
+    FormDesign_CtlKind = FormDesign_CtlHit(px, py, x, y, w, h, sel)
+End Function
+
+' 点の上にある部品のうち、いちばん後に載せたもの（上に描かれるもの）。無ければ ""
+Function FormDesign_CtlTop$(text As String, ByVal px As Long, ByVal py As Long) As String
+    Dim i As Long, s As String
+    FormDesign_CtlTop$ = ""
+    s = FormDesign_CtlName$(text, 0)
+    While s <> ""
+        If FormDesign_CtlKind(text, s, px, py, 0) <> 0 Then FormDesign_CtlTop$ = s
+        i = i + 1
+        s = FormDesign_CtlName$(text, i)
+    Wend
+End Function
+
+' 点（部品の座標）で掴む部品と所（kind）。選んでいる部品 sel の辺を先に見る。無ければ "" と 0
+Function FormDesign_CtlAt$(text As String, ByVal px As Long, ByVal py As Long, sel As String, ByRef kind As Long) As String
+    FormDesign_CtlAt$ = sel
+    kind = FormDesign_CtlKind(text, sel, px, py, 1)
+    If kind > FD_KIND_MOVE Then Exit Function
+    FormDesign_CtlAt$ = FormDesign_CtlTop$(text, px, py)
+    kind = 0
+    If FormDesign_CtlAt$ <> "" Then kind = FD_KIND_MOVE
+End Function
+
+' 部品を掴んだ所（kind）で dx, dy だけ引いたあとの位置と大きさ。左上は 0 より前に出ない
+Sub FormDesign_CtlDrag(ByVal kind As Long, ByVal x0 As Long, ByVal y0 As Long, ByVal w0 As Long, ByVal h0 As Long, ByVal dx As Long, ByVal dy As Long, ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long)
+    x = x0
+    y = y0
+    If kind = FD_KIND_MOVE Then x = x0 + dx
+    If kind = FD_KIND_MOVE Then y = y0 + dy
+    If x < 0 Then x = 0
+    If y < 0 Then y = 0
+    FormDesign_CtlSize(kind - FD_KIND_MOVE, w0, h0, dx, dy, w, h)
+End Sub
+
+Sub FormDesign_CtlSize(ByVal edge As Long, ByVal w0 As Long, ByVal h0 As Long, ByVal dx As Long, ByVal dy As Long, ByRef w As Long, ByRef h As Long)
+    w = w0
+    h = h0
+    If (edge And 1) <> 0 Then w = w0 + dx
+    If (edge And 2) <> 0 Then h = h0 + dy
+    If w < FD_CTL_MIN Then w = FD_CTL_MIN
+    If h < FD_CTL_MIN Then h = FD_CTL_MIN
+End Sub
+
+' 部品 name の位置と大きさを書き換える（変わった値だけ。行が無ければ End Sub の直前に足す）
+Function FormDesign_SetCtl$(text As String, name As String, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As String
+    Dim x0 As Long, y0 As Long, w0 As Long, h0 As Long, u As String
+    FormDesign_CtlRect(text, name, x0, y0, w0, h0)
+    u = text
+    If x <> x0 Then u = FormDesign_SetNum$(u, name & ".Left", x)
+    If y <> y0 Then u = FormDesign_SetNum$(u, name & ".Top", y)
+    If w <> w0 Then u = FormDesign_SetNum$(u, name & ".Width", w)
+    If h <> h0 Then u = FormDesign_SetNum$(u, name & ".Height", h)
+    FormDesign_SetCtl$ = u
+End Function
