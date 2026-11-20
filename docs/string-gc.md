@@ -308,6 +308,9 @@ StrGcRegion / Globals / UserBssSize / InRange / GcMarkUserBss / GcMarkStack
 7. **関数ラベル ID と戻り型の衝突（修正済）**  
    `AST_FUNC.extra` をラベルで上書きすると `TY_STRING` と衝突し、戻りが precise から外れた。extra は Parser の戻り型のまま。
 
+8. **塊の先頭のヘッダを書かない確保（`Str$`、修正済）**  
+   `StrGcMarkOne` は `blocks[i]`（base）のヘッダで範囲を出し、**最初に当たった塊に印を付けて抜ける**。`Str$` は 20 バイトの塊の後ろに数字を右詰めで置き、長さは `start-4` に書くだけで、base の 4 バイトは HeapAlloc の未初期化のままだった。そこに古い文字列のゴミ（例: 0x5A5A5A5A）が残ると巨大な範囲になり、あとから確保した生きた String のポインタの印をこの塊が横取りし、本物の塊が掃き出された。いまは base にも `0x8000000F`（base+4〜base+19）を書く。StrHeapAlloc で取った塊は、中身をどこに置くにしても **base に塊全体を覆うヘッダを書く**こと（回帰: `t_gc_str_hdr.abp`）。
+
 これらが重なると、解放済みポインタを `TextOut` / `lstrlenA` に渡し、画面のゴミ・白画面・アクセス違反になりうる。x64 では故障アドレスがヒープの下位 32bit だけに見えることがある（昔の符号付き 32bit 比較の名残、または既に unmap された下位アドレス）。
 
 ---
@@ -325,6 +328,7 @@ StrGcRegion / Globals / UserBssSize / InRange / GcMarkUserBss / GcMarkStack
 | `t_gc_param.abp` | ByVal String 引数が callee 内ループ後も残る |
 | `t_gc_udt.abp` | UDT の String メンバ（precise 外）がグローバル/ローカルとも残る |
 | `t_gc_blocks.abp` | 3000 回 Cat 後も `StrGcGetCount` が小さく、掃き出しが効いている（`Skip32`: 32bit MAIN ループ Collect は未） |
+| `t_gc_str_hdr.abp` | `Str$` の塊がヒープのゴミの上に取られても、あとの String の印を横取りしない |
 | `t_str_ret.abp` | String 戻りが、先行する Cat で有効になった Collect に潰されない |
 | `t_malloc_makestr.abp` | UDT の `*Byte` + `malloc` + `MakeStr`。ヒープが高位でも複製が残る |
 
