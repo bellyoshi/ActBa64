@@ -1,0 +1,83 @@
+' ClassPtrField - クラスのポインタのフィールド（p As *Foo）が指すクラス
+'
+' フィールドの型の印（fieldTypeIdxs）は *Foo を *Byte と同じ FIELDTY_PTR_BYTE で持つ。
+' 印を変えると *Byte としての扱い（添字・代入）まで変わるので、クラスは別の表に持つ。
+' 表はフィールド番号 → クラスの型番号（無ければ -1）。g_fpTi / g_fpCap / g_pfPtrTi は ClassAcc.abp の Dim。
+' メソッドの中の p->M() と Delete p（p はフィールド）は、この表でクラスを知る。
+
+Sub FpFree()
+    If g_fpTi <> NULL Then free(g_fpTi)
+    g_fpTi = NULL
+    g_fpCap = 0
+End Sub
+
+Function FpGrow(ncap As Long) As Long
+    Dim p As *Byte
+    FpGrow = 0
+    p = MemGrow(g_fpTi As BytePtr, BytesN(g_fpCap, SizeOf(Long)), BytesN(ncap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_fpTi = p As *Long
+    AccFillNeg(g_fpTi, g_fpCap, ncap)
+    g_fpCap = ncap
+    FpGrow = 1
+End Function
+
+Function FpSet(fi As Long, ti As Long) As Long
+    FpSet = 0
+    If fi < 0 Then Exit Function
+    If fi >= g_fpCap Then
+        If FpGrow(AccCapFor(g_fpCap, fi + 1)) = 0 Then Exit Function
+    End If
+    g_fpTi[fi] = ti
+    FpSet = 1
+End Function
+
+' フィールド fi が *クラス なら、そのクラスの型番号。ほかは -1
+Function FpGet(fi As Long) As Long
+    FpGet = -1
+    If fi < 0 Or fi >= g_fpCap Then Exit Function
+    FpGet = g_fpTi[fi]
+End Function
+
+' ParseFieldTypeSize が読んだ *名前 がクラスなら、その型番号を g_pfPtrTi に（ほかは -1）
+Sub FpNotePtrName(types As *TypeTable, tname As *Byte)
+    Dim ti As Long
+    g_pfPtrTi = -1
+    ti = TyFind(types, tname)
+    If ti < 0 Then Exit Sub
+    If TyIsClass(types, ti) <> 0 Then g_pfPtrTi = ti
+End Sub
+
+' AST_MEMBER の左（This / 変数 / 入れ子のフィールド）の型番号。分からなければ -1
+Function LowMemberBaseTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim base As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    LowMemberBaseTi = -1
+    ast = ctx->ast
+    nodes = ast->nodes
+    base = nodes[idx].left
+    If base < 0 Then Exit Function
+    If nodes[base].kind = AST_MEMBER Then LowMemberBaseTi = LowMemberFieldType(ctx, base)
+    If nodes[base].kind <> AST_VAR Then Exit Function
+    AstCopyName(ast, base, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    LowMemberBaseTi = vTi
+End Function
+
+' idx が *クラス のフィールド（メソッドの中の p は This.p）なら、そのクラスの型番号。ほかは -1
+Function LowFieldPtrClassTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim fname(SYM_NAME_LEN - 1) As Byte
+    Dim ti As Long
+    LowFieldPtrClassTi = -1
+    If idx < 0 Then Exit Function
+    If LowNodeKind(ctx, idx) <> AST_MEMBER Then Exit Function
+    ti = LowMemberBaseTi(ctx, idx)
+    If ti < 0 Then Exit Function
+    ast = ctx->ast
+    AstCopyName(ast, idx, VarPtr(fname))
+    LowFieldPtrClassTi = FpGet(AccFindField(ast->types, ti, VarPtr(fname)))
+End Function
