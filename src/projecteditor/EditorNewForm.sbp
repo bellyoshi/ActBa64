@@ -1,5 +1,9 @@
 ' EditorNewForm - ファイルメニューの「新しいフォーム」
-' Forms.sbp の Form を継承した Form1 の雛形を無題の文書で開き、そのままフォームデザイナにする。
+' プロジェクトを開いていなければ、保存先の .pj を尋ね、同じフォルダーに
+'   xxx.pj（#SOURCE に xxx.abp と Form1.abp）、xxx.abp（メイン）、Form1.abp
+' を書いてプロジェクトを開く。開いていれば、.pj のフォルダーに FormN.abp（N は無い番号）を書き、
+' .pj の #SOURCE に足す。どちらも、書いたフォームを開いてそのままフォームデザイナにする。
+' ファイルの中身は EditorNewFormText.sbp。新しいファイルは UTF-8（BOM なし）、改行は CRLF。
 ' N88BASIC 構文（-pN88）と ActiveBasic2 構文（-pAB2）では Forms.sbp を使えないので灰色にする。
 
 Const IDM_NEWFORM = 1330
@@ -12,32 +16,156 @@ Function EditorNewForm_Can() As Long
     If EditorBuild_IsN88() <> 0 Or EditorBuild_IsAB2() <> 0 Then EditorNewForm_Can = 0
 End Function
 
-' 雛形（改行は LF）
-Function EditorNewForm_Text$() As String
-    Dim nl As String, s As String
-    nl = Chr$(10)
-    s = "#include <Forms.sbp>" & nl & nl & "Class Form1" & nl & "    Inherits Form" & nl & "Public" & nl
-    s = s & "    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT" & nl
-    s = s & "        WndProc = Super.WndProc(msg, wParam, lParam)" & nl & "    End Function" & nl & "Private" & nl
-    s = s & "    Override Sub InitializeComponent()" & nl & "        Width = 400" & nl & "        Height = 300" & nl
-    s = s & "        Caption = " & Chr$(34) & "Form1" & Chr$(34) & nl & "    End Sub" & nl & "End Class" & nl & nl
-    EditorNewForm_Text$ = s & "Dim mainForm As Form1" & nl & "Application.Initialize()" & nl & "Application.Run(mainForm)" & nl
-End Function
-
-' 雛形の無題の文書を開き、デザイン画面にする
 Sub EditorNewForm_Open()
-    Dim s As Long
     If EditorNewForm_Can() = 0 Then
         MessageBeep(0)
         Exit Sub
     End If
-    s = MdiAllocSlot()
-    If s < 0 Then Exit Sub
-    g_docText(s) = EditorNewForm_Text$()
-    g_childTitle = "untitled"
-    MdiCreateChild(s)
-    If g_activeChild <> 0 Then FormDesign_Enter(g_activeChild)
+    If Len(g_projectPath) = 0 Then
+        EditorNewForm_NewProject()
+    Else
+        EditorNewForm_AddToProject()
+    End If
 End Sub
+
+' ---- ファイル ----
+
+Function EditorNewForm_Nl$() As String
+    EditorNewForm_Nl$ = Chr$(13) & Chr$(10)
+End Function
+
+Function EditorNewForm_There(path As String) As Long
+    EditorNewForm_There = EditorDoc_FileThere(StrPtr(path))
+End Function
+
+' UTF-8 で書く。書けなければメッセージを出して 0
+Function EditorNewForm_Write(path As String, text As String) As Long
+    Dim saved As Long
+    saved = g_docEncoding
+    g_docEncoding = ENC_UTF8
+    EditorNewForm_Write = EditorDoc_WriteTextFile(path, text)
+    g_docEncoding = saved
+    If EditorNewForm_Write = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & Chr$(13) & Chr$(10) & path, "editor")
+End Function
+
+' もうあるファイルなら、メッセージを出して 1
+Function EditorNewForm_Taken(path As String) As Long
+    EditorNewForm_Taken = EditorNewForm_There(path)
+    If EditorNewForm_Taken <> 0 Then UiMsgBox(hMainWnd, UiText$(UI_NEWFORM_EXISTS) & Chr$(13) & Chr$(10) & path, "editor")
+End Function
+
+' フォームのファイルを開いてデザイン画面にする（開けなかったときは何もしない）
+Sub EditorNewForm_Design(path As String)
+    MdiOpenPath(path)
+    If g_activeChild = 0 Then Exit Sub
+    If ProjSamePath(g_docPath, path) = 0 Then Exit Sub
+    FormDesign_Enter(g_activeChild)
+End Sub
+
+' ---- プロジェクトが無いとき ----
+
+' パスのファイル名から拡張子を除いたもの
+Function EditorNewForm_Base$(path As String) As String
+    Dim i As Long
+    EditorNewForm_Base$ = Mid$(path, Len(ProjDirOf$(path)) + 1)
+    i = Len(EditorNewForm_Base$)
+    While i > 0
+        If Mid$(EditorNewForm_Base$, i, 1) = "." Then Exit While
+        i = i - 1
+    Wend
+    If i > 1 Then EditorNewForm_Base$ = Left$(EditorNewForm_Base$, i - 1)
+End Function
+
+Sub EditorNewForm_NewProject()
+    Dim pj As String, dir As String, base As String
+    pj = EditorNewForm_BrowsePj$(hMainWnd)
+    If Len(pj) = 0 Then Exit Sub
+    dir = ProjDirOf$(pj)
+    base = EditorNewForm_Base$(pj)
+    If EditorNewForm_Taken(dir & base & ".abp") <> 0 Then Exit Sub
+    If EditorNewForm_Taken(dir & "Form1.abp") <> 0 Then Exit Sub
+    If EditorNewForm_WriteProject(pj, dir, base) = 0 Then Exit Sub
+    ProjOpen(pj)
+    EditorNewForm_Design(dir & "Form1.abp")
+End Sub
+
+Function EditorNewForm_WriteProject(pj As String, dir As String, base As String) As Long
+    Dim nl As String, bits As String
+    nl = EditorNewForm_Nl$()
+    bits = "64"
+    If g_buildTarget32 <> 0 Then bits = "32"
+    EditorNewForm_WriteProject = 0
+    If EditorNewForm_Write(dir & "Form1.abp", EditorNewForm_FormText$("Form1", nl)) = 0 Then Exit Function
+    If EditorNewForm_Write(dir & base & ".abp", EditorNewForm_MainText$(nl)) = 0 Then Exit Function
+    EditorNewForm_WriteProject = EditorNewForm_Write(pj, EditorNewForm_PjText$(base, bits, nl))
+End Function
+
+' 新しいプロジェクトの .pj の保存先（既定は project1.pj）。やめたら ""
+Function EditorNewForm_BrowsePj$(hWnd As HWND) As String
+    Dim ofn As OPENFILENAME
+    Dim fileName[MAX_PATH] As Byte
+    Dim filter[63] As Byte
+    Dim defExt As String, o As Long
+    EditorNewForm_BrowsePj$ = ""
+    FillMemory(VarPtr(fileName), MAX_PATH, 0)
+    FillMemory(VarPtr(filter), 64, 0)
+    EditorDoc_PutFilt(VarPtr(fileName), o, "project1.pj")
+    o = 0
+    EditorDoc_PutFilt(VarPtr(filter), o, "Project (*.pj)")
+    EditorDoc_PutFilt(VarPtr(filter), o, "*.pj")
+    defExt = "pj"
+    FillMemory(VarPtr(ofn), Len(ofn), 0)
+    ofn.lStructSize = Len(ofn)
+    ofn.hwndOwner = hWnd
+    ofn.lpstrFilter = VarPtr(filter)
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = VarPtr(fileName)
+    ofn.nMaxFile = MAX_PATH
+    ofn.Flags = OFN_OVERWRITEPROMPT Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER
+    ofn.lpstrDefExt = StrPtr(defExt)
+    If GetSaveFileName(ofn) = 0 Then Exit Function
+    EditorNewForm_BrowsePj$ = Enc_DupCStr$(VarPtr(fileName), lstrlen(VarPtr(fileName)))
+End Function
+
+' ---- プロジェクトを開いているとき ----
+
+' .pj のフォルダーに無く、プロジェクトにも無い FormN（N は 1 から）
+Function EditorNewForm_FreeName$() As String
+    Dim n As Long
+    n = 1
+    EditorNewForm_FreeName$ = "Form1"
+    While EditorNewForm_Used(g_pjDir & EditorNewForm_FreeName$ & ".abp") <> 0
+        n = n + 1
+        EditorNewForm_FreeName$ = "Form" & FormDesign_Num$(n)
+    Wend
+End Function
+
+' フォルダーにあるか、プロジェクトに載っているか
+Function EditorNewForm_Used(path As String) As Long
+    EditorNewForm_Used = EditorNewForm_There(path) Or ProjHas(path)
+End Function
+
+Sub EditorNewForm_AddToProject()
+    Dim name As String, path As String
+    g_pjDir = ProjDirOf$(g_projectPath)
+    name = EditorNewForm_FreeName$()
+    path = g_pjDir & name & ".abp"
+    If EditorNewForm_Write(path, EditorNewForm_FormText$(name, EditorNewForm_Nl$())) = 0 Then Exit Sub
+    If EditorNewForm_AddToPj(name & ".abp") = 0 Then Exit Sub
+    ProjOpen(g_projectPath)
+    EditorNewForm_Design(path)
+End Sub
+
+' .pj の #SOURCE に rel を足す（元の文字コードのまま）
+Function EditorNewForm_AddToPj(rel As String) As Long
+    Dim saved As Long, enc As Long, body As String
+    saved = g_docEncoding
+    body = EditorDoc_LoadTextFile$(g_projectPath)
+    enc = g_docEncoding
+    g_docEncoding = saved
+    EditorNewForm_AddToPj = ProjRewrite(EditorNewForm_AddSource$(body, rel), enc)
+    If EditorNewForm_AddToPj = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & Chr$(13) & Chr$(10) & g_projectPath, "editor")
+End Function
 
 ' ---- メニュー ----
 

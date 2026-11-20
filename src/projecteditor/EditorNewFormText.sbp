@@ -1,0 +1,75 @@
+' 「新しいフォーム」が書くファイルの中身（文字列だけ。ファイルとメニューは EditorNewForm.sbp）。
+'   フォーム     FormN.abp   Form を継承した FormN（WndProc と InitializeComponent）
+'   プロジェクト xxx.pj      #SOURCE に xxx.abp と Form1.abp
+'   メイン       xxx.abp     #include <Forms.sbp> と、Form1 を出す 3 行
+' 改行は nl（CRLF か LF）。
+
+Function EditorNewForm_FormText$(name As String, nl As String) As String
+    Dim s As String
+    s = "Class " & name & nl & "    Inherits Form" & nl & "Public" & nl
+    s = s & "    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT" & nl
+    s = s & "        WndProc = Super.WndProc(msg, wParam, lParam)" & nl & "    End Function" & nl & "Private" & nl
+    s = s & "    Override Sub InitializeComponent()" & nl & "        Width = 400" & nl & "        Height = 300" & nl
+    EditorNewForm_FormText$ = s & "        Caption = " & Chr$(34) & name & Chr$(34) & nl & "    End Sub" & nl & "End Class" & nl
+End Function
+
+Function EditorNewForm_MainText$(nl As String) As String
+    Dim s As String
+    s = "#include <Forms.sbp>                ' Application / Form と部品のクラス" & nl
+    s = s & "Dim mainForm As Form1               ' スタック上で Form1 の ctor が走る" & nl
+    s = s & "Application.Initialize()" & nl
+    EditorNewForm_MainText$ = s & "Application.Run(mainForm)           ' 窓を表示してメッセージループ。閉じたら戻る" & nl
+End Function
+
+' 「#key=v」と空行
+Function EditorNewForm_PjKey$(key As String, v As String, nl As String) As String
+    EditorNewForm_PjKey$ = "#" & key & "=" & v & nl & nl
+End Function
+
+' base はプロジェクト名（拡張子なし）、bits は "32" / "64"
+Function EditorNewForm_PjText$(base As String, bits As String, nl As String) As String
+    Dim s As String
+    s = "' ActiveBasic Project file." & nl & nl & EditorNewForm_PjKey$("VERSION", "9", nl)
+    s = s & EditorNewForm_PjKey$("MODULETYPE", "0", nl) & EditorNewForm_PjKey$("NAME", base, nl)
+    s = s & EditorNewForm_PjKey$("PLATFORM", bits, nl) & EditorNewForm_PjKey$("USEWINDOW", "1", nl)
+    s = s & EditorNewForm_PjKey$("OPTION", "&H00000000", nl)
+    s = s & EditorNewForm_PjKey$("OUTPUT_RELEASE", ".\" & base & ".exe", nl)
+    s = s & EditorNewForm_PjKey$("OUTPUT_DEBUG", ".\" & base & "_debug.exe", nl)
+    s = s & EditorNewForm_PjKey$("RESOURCE", "0", nl)
+    EditorNewForm_PjText$ = s & "#SOURCE" & nl & base & ".abp" & nl & "Form1.abp" & nl
+End Function
+
+' ---- 開いているプロジェクトの #SOURCE に足す ----
+
+' pos の行の終わりの次（次の行の始まり。無ければ Len + 1）
+Function EditorNewForm_NextLine(text As String, ByVal pos As Long) As Long
+    EditorNewForm_NextLine = FormDesign_LineEnd(text, pos) + 1
+    If EditorNewForm_NextLine > Len(text) + 1 Then EditorNewForm_NextLine = Len(text) + 1
+End Function
+
+' #SOURCE の中で最後の空でない行の次の行の始まり（#SOURCE の中が空なら #SOURCE の次）。#SOURCE が無ければ 0
+Function EditorNewForm_SourceEnd(text As String) As Long
+    Dim p As Long, ln As String, inSrc As Long
+    EditorNewForm_SourceEnd = 0
+    p = 1
+    While p <= Len(text)
+        ln = FormDesign_Line$(text, p)
+        If Left$(ln, 1) = "#" Then inSrc = FormDesign_EqCI(ln, "#source")
+        If inSrc <> 0 And ln <> "" Then EditorNewForm_SourceEnd = EditorNewForm_NextLine(text, p)
+        p = EditorNewForm_NextLine(text, p)
+    Wend
+End Function
+
+' #SOURCE の最後に rel の行を足した .pj。#SOURCE が無ければ末尾に #SOURCE と rel を足す
+Function EditorNewForm_AddSource$(text As String, rel As String) As String
+    Dim p As Long, nl As String, t As String
+    nl = FormDesign_Nl$(text)
+    t = text
+    If Len(t) > 0 And Mid$(t, Len(t), 1) <> Chr$(10) Then t = t & nl
+    p = EditorNewForm_SourceEnd(t)
+    If p = 0 Then
+        EditorNewForm_AddSource$ = t & "#SOURCE" & nl & rel & nl
+        Exit Function
+    End If
+    EditorNewForm_AddSource$ = Left$(t, p - 1) & rel & nl & Mid$(t, p)
+End Function
