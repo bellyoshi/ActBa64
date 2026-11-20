@@ -28,7 +28,6 @@
 
 | 項目 | ActiveBasic 仕様 (BasicHelp) | ActBa64 |
 |---|---|---|
-| `Trim$` | なし | `StrUtils.abp`（`default.idx` 自動挿入）。前後の空白（スペース、タブ、CR、LF）を除く |
 | 省略できる引数 | `Function F(a)(ByRef e As Long)` の 2 つ目の括弧 | 対応。省いた引数は 0、`ByRef` は `VarPtr` が 0。2 つ目の括弧がない `Sub` / `Function` も、省いた残りは 0 |
 | 関数ポインタの引数型 | 引数型の一致検査 | 厳密照合は未（呼び出し自体は [language.md §5.2.1](./language.md#521-関数ポインタ型)） |
 
