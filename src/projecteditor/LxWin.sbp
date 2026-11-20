@@ -436,7 +436,25 @@ End Function
 #endif
 
 #ifdef _LINUX
-' == クリップボード（今は同じプロセスの中だけ。X のセレクションは後で） ==
+' == クリップボード（X の CLIPBOARD セレクション） ==
+' コピーすると自分が CLIPBOARD を持ち、ほかのアプリの求め（SelectionRequest）に UTF-8 で答える。
+' 貼り付けは、自分が持っていればそのまま、ほかが持っていれば XConvertSelection で UTF8_STRING を
+' もらう（SelectionNotify を 1 秒ほど待つ。待つ間のほかのイベントは描き直しだけ扱う）。
+
+Declare Function Ux_XSetSelectionOwner Lib "libX11.so.6" Alias "XSetSelectionOwner" (d As VoidPtr, sel As VoidPtr, w As VoidPtr, t As VoidPtr) As Long
+Declare Function Ux_XGetSelectionOwner Lib "libX11.so.6" Alias "XGetSelectionOwner" (d As VoidPtr, sel As VoidPtr) As VoidPtr
+Declare Function Ux_XConvertSelection Lib "libX11.so.6" Alias "XConvertSelection" (d As VoidPtr, sel As VoidPtr, target As VoidPtr, prop As VoidPtr, w As VoidPtr, t As VoidPtr) As Long
+Declare Function Ux_XGetWindowProperty Lib "libX11.so.6" Alias "XGetWindowProperty" (d As VoidPtr, w As VoidPtr, prop As VoidPtr, off As VoidPtr, n As VoidPtr, del As Long, req As VoidPtr, actType As VoidPtr, actFmt As VoidPtr, nItems As VoidPtr, after As VoidPtr, data As VoidPtr) As Long
+Declare Function Ux_XSendEvent Lib "libX11.so.6" Alias "XSendEvent" (d As VoidPtr, w As VoidPtr, propagate As Long, mask As VoidPtr, ev As VoidPtr) As Long
+Declare Function Ux_XFree Lib "libX11.so.6" Alias "XFree" (p As VoidPtr) As Long
+
+Const LXC_XA_ATOM = 4
+Const LXC_XA_STRING = 31
+
+Dim g_lxClipOwn As Long             ' 自分が CLIPBOARD を持っている
+Dim g_lxcEv(191) As Byte            ' 貼り付けを待つ間に受けるイベント
+Dim g_lxcSend(191) As Byte          ' SelectionNotify を送る
+Dim g_lxcTargets(23) As Byte        ' TARGETS の答え（Atom 3 つ）
 
 Dim g_lxClip As String              ' UTF-8
 Dim g_lxClipHas As Long
@@ -500,25 +518,101 @@ Function Lx_GetClipboardData(ByVal fmt As DWord) As VoidPtr
     Lx_GetClipboardData = g_lxClipMem
 End Function
 
-' 自分が持つ（X のセレクションは後で）
+Function LxClip_Atom(name As String) As VoidPtr
+    LxClip_Atom = Ux_XInternAtom(g_uxDpy, StrPtr(name), 0)
+End Function
+
+' 自分が CLIPBOARD を持つ
 Sub LxClip_Own()
+    If g_uxDpy = 0 Then Exit Sub
+    Ux_XSetSelectionOwner(g_uxDpy, LxClip_Atom("CLIPBOARD"), g_uxWin, 0)
+    g_lxClipOwn = 0
+    If Ux_XGetSelectionOwner(g_uxDpy, LxClip_Atom("CLIPBOARD")) = g_uxWin Then g_lxClipOwn = 1
 End Sub
+
+' ほかのアプリの求め（SelectionRequest: owner +32, requestor +40, selection +48, target +56, property +64, time +72）
+Sub LxClip_Request(e As VoidPtr)
+    Dim req As VoidPtr, target As VoidPtr, prop As VoidPtr, n As VoidPtr
+    Dim b As VoidPtr
+    req = LxGetQ(e, 40)
+    target = LxGetQ(e, 56)
+    prop = LxGetQ(e, 64)
+    If prop = 0 Then prop = target
+    If target = LxClip_Atom("TARGETS") Then
+        LxSetQ(VarPtr(g_lxcTargets(0)), 0, LxClip_Atom("TARGETS"))
+        LxSetQ(VarPtr(g_lxcTargets(0)), 8, LxClip_Atom("UTF8_STRING"))
+        LxSetQ(VarPtr(g_lxcTargets(0)), 16, LXC_XA_STRING)
+        Ux_XChangeProperty(g_uxDpy, req, prop, LXC_XA_ATOM, 32, 0, VarPtr(g_lxcTargets(0)), 3)
+    ElseIf target = LxClip_Atom("UTF8_STRING") Or target = LXC_XA_STRING Or target = LxClip_Atom("TEXT") Then
+        Ux_XChangeProperty(g_uxDpy, req, prop, target, 8, 0, StrPtr(g_lxClip), Len(g_lxClip))
+    Else
+        prop = 0
+    End If
+    ' SelectionNotify: requestor +32, selection +40, target +48, property +56, time +64
+    b = VarPtr(g_lxcSend(0))
+    FillMemory(b, 192, 0)
+    Ux_SetL(b, 0, 31)
+    Ux_SetL(b, 16, 1)
+    LxSetQ(b, 32, req)
+    LxSetQ(b, 40, LxGetQ(e, 48))
+    LxSetQ(b, 48, target)
+    LxSetQ(b, 56, prop)
+    LxSetQ(b, 64, LxGetQ(e, 72))
+    Ux_XSendEvent(g_uxDpy, req, 0, 0, b)
+    Ux_XFlush(g_uxDpy)
+End Sub
+
+' X のイベントのうちクリップボードのもの（SelectionClear 29 / SelectionRequest 30）を扱って 1
+Function LxClip_Event(e As VoidPtr, t As Long) As Long
+    LxClip_Event = 0
+    If t = 29 Then g_lxClipOwn = 0
+    If t = 30 Then LxClip_Request(e)
+    If t = 29 Or t = 30 Then LxClip_Event = 1
+End Function
+
+' ほかのアプリの CLIPBOARD を UTF-8 でもらう。もらえたら g_lxClip に入れて 1
+Function LxClip_Convert() As Long
+    Dim prop As VoidPtr, e As VoidPtr
+    Dim actType As VoidPtr, actFmt As VoidPtr, nItems As VoidPtr, after As VoidPtr, data As VoidPtr
+    Dim i As Long, t As Long
+    LxClip_Convert = 0
+    prop = LxClip_Atom("ACTBA64_CLIP")
+    Ux_XConvertSelection(g_uxDpy, LxClip_Atom("CLIPBOARD"), LxClip_Atom("UTF8_STRING"), prop, g_uxWin, 0)
+    Ux_XFlush(g_uxDpy)
+    e = VarPtr(g_lxcEv(0))
+    For i = 1 To 100
+        While Ux_XPending(g_uxDpy) > 0
+            Ux_XNextEvent(g_uxDpy, e)
+            t = Ux_L(e, 0)
+            If t = 31 Then
+                If LxGetQ(e, 56) = 0 Then Exit Function
+                data = 0
+                Ux_XGetWindowProperty(g_uxDpy, g_uxWin, prop, 0, &H1000000, 1, 0, VarPtr(actType), VarPtr(actFmt), VarPtr(nItems), VarPtr(after), VarPtr(data))
+                If data = 0 Then Exit Function
+                g_lxClip = Enc_DupCStr$(data As *Byte, nItems As Long)
+                Ux_XFree(data)
+                LxClip_Convert = 1
+                Exit Function
+            End If
+            If LxClip_Event(e, t) = 0 And (t = 12 Or t = 22) Then g_uxDirty = 1
+        Wend
+        Sleep(10)
+    Next
+End Function
 
 ' 貼り付けられる文字があれば g_lxClip に入れて 1
 Function LxClip_Fetch() As Long
-    LxClip_Fetch = g_lxClipHas
+    LxClip_Fetch = 0
+    If g_lxClipOwn <> 0 Or g_uxDpy = 0 Then
+        LxClip_Fetch = g_lxClipHas
+        Exit Function
+    End If
+    If Ux_XGetSelectionOwner(g_uxDpy, LxClip_Atom("CLIPBOARD")) = 0 Then Exit Function
+    If LxClip_Convert() = 0 Then Exit Function
+    If Len(g_lxClip) > 0 Then LxClip_Fetch = 1
 End Function
 
 ' == ほかの小さな代わり ==
-
-' ファイルの選択はまだ無い（キャンセルと同じ）
-Function Lx_GetOpenFileNameA(ByVal ofn As VoidPtr) As Long
-    Lx_GetOpenFileNameA = 0
-End Function
-
-Function Lx_GetSaveFileNameA(ByVal ofn As VoidPtr) As Long
-    Lx_GetSaveFileNameA = 0
-End Function
 
 ' ドロップは来ない
 Function Lx_DragQueryFileA(ByVal h As VoidPtr, ByVal i As DWord, ByVal buf As *Byte, ByVal n As DWord) As DWord

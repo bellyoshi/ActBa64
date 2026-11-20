@@ -1,0 +1,499 @@
+' LxDialog - Linux 版の自前のダイアログ（-linux のときだけ）。
+' 1 つの形（見出し・1 行の入力欄・一覧・OK / キャンセル）で 3 つを作る:
+'   ファイルを開く・保存（GetOpenFileNameA / GetSaveFileNameA の代わり）: 入力欄はファイル名、一覧はフォルダーの中身
+'   1 行の入力（検索の Ctrl+F）
+'   一覧から 1 つ選ぶ（設定の言語）
+' 開いている間は LxFrame の自前の窓（LXS_MODAL_DLG）としてイベントを受ける。
+' 入力欄は最後に足す・消すだけ（文字の途中は編集しない）。Ctrl+V で貼り付け、Ctrl+U で空にする。
+
+#ifdef _LINUX
+
+Const LXS_MODAL_DLG = 3
+Const LXD_INPUT = 0
+Const LXD_FILE = 1
+Const LXD_CHOICE = 2
+Const LXD_MAX = 512                 ' 一覧の数の上限
+Const LXD_ROW_H = 18
+Const LXD_ROWS = 14                 ' 一覧に見せる行の数
+Const LXS_SYS_GETDENTS64 = 217
+Const LXS_O_DIRECTORY = &H10000
+
+Dim g_lxdKind As Long
+Dim g_lxdTitle As String
+Dim g_lxdField As String
+Dim g_lxdItem(511) As String
+Dim g_lxdIsDir(511) As Long
+Dim g_lxdN As Long
+Dim g_lxdSel As Long
+Dim g_lxdTop As Long
+Dim g_lxdDir As String              ' ファイルのダイアログの今のフォルダー（末尾は /）
+Dim g_lxdSave As Long               ' 保存（上書きの確認をする）
+Dim g_lxdX As Long, g_lxdY As Long, g_lxdW As Long, g_lxdH As Long
+Dim g_lxdListT As Long, g_lxdBtnT As Long
+Dim g_lxdOkL As Long, g_lxdOkR As Long, g_lxdCanL As Long, g_lxdCanR As Long
+
+' == 入力欄 ==
+
+' 最後の 1 文字（UTF-8）を消す
+Function LxDlg_DropLast$(s As String) As String
+    Dim p As *Byte, i As Long
+    LxDlg_DropLast$ = s
+    If Len(s) = 0 Then Exit Function
+    p = StrPtr(s)
+    i = Len(s) - 1
+    While i > 0 And (p[i] And &HC0) = &H80
+        i = i - 1
+    Wend
+    LxDlg_DropLast$ = Left$(s, i)
+End Function
+
+' == 一覧（ファイルのダイアログ） ==
+
+' 名前の小さい順に差し込む（フォルダーが先）
+Sub LxDlg_AddSorted(name As String, ByVal isDir As Long)
+    Dim k As Long, j As Long
+    If g_lxdN >= LXD_MAX Then Exit Sub
+    k = g_lxdN
+    While k > 0
+        If g_lxdIsDir(k - 1) < isDir Then Exit While
+        If g_lxdIsDir(k - 1) = isDir And g_lxdItem(k - 1) <= name Then Exit While
+        k = k - 1
+    Wend
+    For j = g_lxdN To k + 1 Step -1
+        g_lxdItem(j) = g_lxdItem(j - 1)
+        g_lxdIsDir(j) = g_lxdIsDir(j - 1)
+    Next
+    g_lxdItem(k) = name
+    g_lxdIsDir(k) = isDir
+    g_lxdN = g_lxdN + 1
+End Sub
+
+' g_lxdDir の中身を読む（. で始まるものは見せない。先頭は ..）
+Sub LxDlg_ReadDir()
+    Dim buf(32767) As Byte
+    Dim path(4095) As Byte
+    Dim fd As VoidPtr, n As VoidPtr
+    Dim off As Long, reclen As Long, typ As Long, k As Long
+    Dim name As String
+    Dim p As *Byte
+    g_lxdN = 0
+    g_lxdSel = -1
+    g_lxdTop = 0
+    If g_lxdDir <> "/" Then LxDlg_AddSorted("..", 0)
+    fd = Lx_Syscall(LX_SYS_OPEN, LxPath(StrPtr(g_lxdDir), VarPtr(path(0))), LXS_O_DIRECTORY, 0, 0, 0, 0)
+    If LxOk(fd) = 0 Then Exit Sub
+    Do
+        n = Lx_Syscall(LXS_SYS_GETDENTS64, fd, VarPtr(buf(0)), 32768, 0, 0, 0)
+        If LxOk(n) = 0 Or (n As Long) = 0 Then Exit Do
+        off = 0
+        While off < (n As Long)
+            reclen = buf(off + 16) + buf(off + 17) * 256
+            typ = buf(off + 18)
+            p = VarPtr(buf(off + 19))
+            name = Enc_DupCStr$(p, lstrlen(p))
+            If Len(name) > 0 And Left$(name, 1) <> "." Then
+                If typ = 0 Or typ = 10 Then
+                    typ = 8
+                    If (GetFileAttributes(StrPtr(g_lxdDir + name)) And FILE_ATTRIBUTE_DIRECTORY) <> 0 And GetFileAttributes(StrPtr(g_lxdDir + name)) <> -1 Then typ = 4
+                End If
+                If typ = 4 Then
+                    LxDlg_AddSorted(name, 1)
+                Else
+                    LxDlg_AddSorted(name, 2)
+                End If
+            End If
+            If reclen <= 0 Then Exit While
+            off = off + reclen
+        Wend
+    Loop
+    Lx_Syscall(LX_SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+    ' .. はフォルダーの扱い
+    If g_lxdN > 0 And g_lxdItem(0) = ".." Then g_lxdIsDir(0) = 1
+End Sub
+
+' フォルダー（末尾に / を付ける）
+Function LxDlg_DirOf$(path As String) As String
+    Dim cur(4095) As Byte
+    Dim n As Long
+    LxDlg_DirOf$ = ProjDirOf$(path)
+    If Len(LxDlg_DirOf$) = 0 Then
+        n = GetCurrentDirectory(4096, VarPtr(cur(0)))
+        LxDlg_DirOf$ = "/"
+        If n > 0 Then LxDlg_DirOf$ = Enc_DupCStr$(VarPtr(cur(0)), n)
+    End If
+    If Right$(LxDlg_DirOf$, 1) <> "/" Then LxDlg_DirOf$ = LxDlg_DirOf$ + "/"
+End Function
+
+' 一つ上のフォルダー
+Function LxDlg_Up$(dir As String) As String
+    Dim i As Long
+    LxDlg_Up$ = "/"
+    i = Len(dir) - 1
+    While i > 0
+        If Mid$(dir, i, 1) = "/" Then
+            LxDlg_Up$ = Left$(dir, i)
+            Exit Function
+        End If
+        i = i - 1
+    Wend
+End Function
+
+Sub LxDlg_ChangeDir(dir As String)
+    g_lxdDir = dir
+    If Right$(g_lxdDir, 1) <> "/" Then g_lxdDir = g_lxdDir + "/"
+    LxDlg_ReadDir()
+    g_uxDirty = 1
+End Sub
+
+' 入力欄のパス（相対なら今のフォルダーから）
+Function LxDlg_FieldPath$() As String
+    LxDlg_FieldPath$ = g_lxdField
+    If Left$(g_lxdField, 1) <> "/" Then LxDlg_FieldPath$ = g_lxdDir + g_lxdField
+End Function
+
+Function LxDlg_IsDir(path As String) As Long
+    Dim a As Long
+    LxDlg_IsDir = 0
+    a = GetFileAttributes(StrPtr(path))
+    If a = -1 Then Exit Function
+    If (a And FILE_ATTRIBUTE_DIRECTORY) <> 0 Then LxDlg_IsDir = 1
+End Function
+
+' == 決める ==
+
+' 一覧の k 番目を開く（フォルダーなら入る、ファイルなら決める）
+Sub LxDlg_Activate(ByVal k As Long)
+    If k < 0 Or k >= g_lxdN Then Exit Sub
+    If g_lxdKind = LXD_CHOICE Then
+        g_lxdSel = k
+        g_lxsModalRet = 1
+        Exit Sub
+    End If
+    If g_lxdItem(k) = ".." Then
+        LxDlg_ChangeDir(LxDlg_Up$(g_lxdDir))
+    ElseIf g_lxdIsDir(k) = 1 Then
+        LxDlg_ChangeDir(g_lxdDir + g_lxdItem(k))
+    Else
+        g_lxdField = g_lxdItem(k)
+        LxDlg_Ok()
+    End If
+End Sub
+
+Sub LxDlg_Ok()
+    Dim path As String
+    If g_lxdKind = LXD_CHOICE Then
+        If g_lxdSel >= 0 Then g_lxsModalRet = 1
+        Exit Sub
+    End If
+    If g_lxdKind = LXD_INPUT Then
+        g_lxsModalRet = 1
+        Exit Sub
+    End If
+    If Len(g_lxdField) = 0 Then
+        If g_lxdSel >= 0 Then LxDlg_Activate(g_lxdSel)
+        Exit Sub
+    End If
+    path = LxDlg_FieldPath$()
+    If LxDlg_IsDir(path) <> 0 Then
+        g_lxdField = ""
+        LxDlg_ChangeDir(path)
+        Exit Sub
+    End If
+    g_lxsModalRet = 1
+End Sub
+
+' == 描く ==
+
+Sub LxDlg_Draw()
+    Dim k As Long, y As Long, fg As DWord, label As String, rows As Long
+    Ux_TargetWindow()
+    g_lxdW = 520
+    If g_lxdKind = LXD_INPUT Then g_lxdW = 420
+    rows = LXD_ROWS
+    If g_lxdKind = LXD_INPUT Then rows = 0
+    If g_lxdKind = LXD_CHOICE Then rows = g_lxdN
+    g_lxdH = 26 + 10 + 40
+    If g_lxdKind <> LXD_CHOICE Then g_lxdH = g_lxdH + 30
+    If rows > 0 Then g_lxdH = g_lxdH + rows * LXD_ROW_H + 8
+    If g_lxdW > g_uxW - 8 Then g_lxdW = g_uxW - 8
+    g_lxdX = (g_uxW - g_lxdW) \ 2
+    g_lxdY = (g_uxH - g_lxdH) \ 3
+    If g_lxdY < 4 Then g_lxdY = 4
+    Ux_FillAbs(g_lxdX + 4, g_lxdY + 4, g_lxdX + g_lxdW + 4, g_lxdY + g_lxdH + 4, &HA0A0A0)
+    Ux_FillAbs(g_lxdX, g_lxdY, g_lxdX + g_lxdW, g_lxdY + g_lxdH, &HFFFFFF)
+    Ux_FillAbs(g_lxdX, g_lxdY, g_lxdX + g_lxdW, g_lxdY + 26, &HE4E4E8)
+    Ux_FrameAbs(g_lxdX, g_lxdY, g_lxdX + g_lxdW, g_lxdY + g_lxdH, &H808080)
+    label = g_lxdTitle
+    If g_lxdKind = LXD_FILE Then label = label + " - " + g_lxdDir
+    g_uxClipR = g_lxdX + g_lxdW - 8
+    Ux_TextRun(UX_FONT_GUI, label, g_lxdX + 10, g_lxdY + 6, &H202020, 1)
+    g_uxClipR = g_uxW
+    y = g_lxdY + 36
+    If g_lxdKind <> LXD_CHOICE Then
+        Ux_FrameAbs(g_lxdX + 10, y, g_lxdX + g_lxdW - 10, y + 24, &H0078D7)
+        k = Ux_TextRun(UX_FONT_GUI, g_lxdField, g_lxdX + 16, y + 5, 0, 1)
+        Ux_FillAbs(g_lxdX + 16 + k, y + 4, g_lxdX + 18 + k, y + 20, 0)
+        y = y + 30
+    End If
+    g_lxdListT = y
+    If rows > 0 Then
+        Ux_FrameAbs(g_lxdX + 10, y, g_lxdX + g_lxdW - 10, y + rows * LXD_ROW_H + 4, &HB4B4B4)
+        For k = 0 To rows - 1
+            If g_lxdTop + k >= g_lxdN Then Exit For
+            fg = 0
+            If g_lxdTop + k = g_lxdSel Then
+                Ux_FillAbs(g_lxdX + 11, y + 2 + k * LXD_ROW_H, g_lxdX + g_lxdW - 11, y + 2 + (k + 1) * LXD_ROW_H, &H0078D7)
+                fg = &HFFFFFF
+            End If
+            label = g_lxdItem(g_lxdTop + k)
+            If g_lxdKind = LXD_FILE And g_lxdIsDir(g_lxdTop + k) = 1 And label <> ".." Then label = label + "/"
+            Ux_TextRun(UX_FONT_GUI, label, g_lxdX + 18, y + 4 + k * LXD_ROW_H, fg, 1)
+        Next
+        y = y + rows * LXD_ROW_H + 8
+    End If
+    g_lxdBtnT = g_lxdY + g_lxdH - 36
+    g_lxdCanR = g_lxdX + g_lxdW - 12
+    g_lxdCanL = g_lxdCanR - 84
+    g_lxdOkR = g_lxdCanL - 8
+    g_lxdOkL = g_lxdOkR - 84
+    Ux_FillAbs(g_lxdOkL, g_lxdBtnT, g_lxdOkR, g_lxdBtnT + 26, &HE6E6E6)
+    Ux_FrameAbs(g_lxdOkL, g_lxdBtnT, g_lxdOkR, g_lxdBtnT + 26, &H0078D7)
+    Ux_FillAbs(g_lxdCanL, g_lxdBtnT, g_lxdCanR, g_lxdBtnT + 26, &HE6E6E6)
+    Ux_FrameAbs(g_lxdCanL, g_lxdBtnT, g_lxdCanR, g_lxdBtnT + 26, &HA0A0A0)
+    LxDlg_BtnText("OK", g_lxdOkL)
+    LxDlg_BtnText(UiText$(UI_BTN_CANCEL), g_lxdCanL)
+End Sub
+
+Sub LxDlg_BtnText(s As String, ByVal l As Long)
+    Dim w As Long
+    w = Ux_TextRun(UX_FONT_GUI, s, 0, 0, 0, 0)
+    Ux_TextRun(UX_FONT_GUI, s, l + (84 - w) \ 2, g_lxdBtnT + 6, 0, 1)
+End Sub
+
+' == イベント（LxFrame から） ==
+
+Function LxDlg_Rows() As Long
+    LxDlg_Rows = LXD_ROWS
+    If g_lxdKind = LXD_CHOICE Then LxDlg_Rows = g_lxdN
+    If g_lxdKind = LXD_INPUT Then LxDlg_Rows = 0
+End Function
+
+Sub LxDlg_Show(ByVal k As Long)
+    If k < 0 Or k >= g_lxdN Then Exit Sub
+    g_lxdSel = k
+    If k < g_lxdTop Then g_lxdTop = k
+    If k >= g_lxdTop + LxDlg_Rows() Then g_lxdTop = k - LxDlg_Rows() + 1
+    If g_lxdKind = LXD_FILE And g_lxdIsDir(k) = 2 Then g_lxdField = g_lxdItem(k)
+End Sub
+
+Sub LxDlg_Key(ByVal vk As Long, ByVal cp As Long)
+    If vk = VK_ESCAPE Then
+        g_lxsModalRet = -1
+    ElseIf vk = VK_RETURN Then
+        If g_lxdKind = LXD_FILE And Len(g_lxdField) = 0 And g_lxdSel >= 0 Then
+            LxDlg_Activate(g_lxdSel)
+        Else
+            LxDlg_Ok()
+        End If
+    ElseIf vk = VK_DOWN Then
+        LxDlg_Show(g_lxdSel + 1)
+    ElseIf vk = VK_UP Then
+        If g_lxdSel > 0 Then LxDlg_Show(g_lxdSel - 1)
+    ElseIf vk = VK_NEXT Then
+        LxDlg_Show(g_lxdSel + LxDlg_Rows())
+    ElseIf vk = VK_PRIOR Then
+        If g_lxdSel > LxDlg_Rows() Then
+            LxDlg_Show(g_lxdSel - LxDlg_Rows())
+        Else
+            LxDlg_Show(0)
+        End If
+    ElseIf g_lxdKind = LXD_CHOICE Then
+    ElseIf vk = VK_BACK Then
+        g_lxdField = LxDlg_DropLast$(g_lxdField)
+    ElseIf g_uxCtrl <> 0 And vk = &H56 Then
+        If LxClip_Fetch() <> 0 Then g_lxdField = g_lxdField + g_lxClip
+    ElseIf g_uxCtrl <> 0 And vk = &H55 Then
+        g_lxdField = ""
+    ElseIf g_uxCtrl = 0 And cp >= &H20 Then
+        g_lxdField = g_lxdField + LxShell_Utf8$(cp)
+    End If
+    g_uxDirty = 1
+End Sub
+
+Sub LxDlg_Click(ByVal x As Long, ByVal y As Long, ByVal dbl As Long)
+    Dim k As Long
+    If y >= g_lxdBtnT And y < g_lxdBtnT + 26 Then
+        If x >= g_lxdOkL And x < g_lxdOkR Then LxDlg_Ok()
+        If x >= g_lxdCanL And x < g_lxdCanR Then g_lxsModalRet = -1
+        Exit Sub
+    End If
+    If LxDlg_Rows() = 0 Then Exit Sub
+    If x < g_lxdX + 10 Or x >= g_lxdX + g_lxdW - 10 Then Exit Sub
+    k = (y - g_lxdListT - 2) \ LXD_ROW_H
+    If y < g_lxdListT + 2 Or k >= LxDlg_Rows() Then Exit Sub
+    k = k + g_lxdTop
+    If k >= g_lxdN Then Exit Sub
+    LxDlg_Show(k)
+    If dbl <> 0 Or g_lxdKind = LXD_CHOICE Then LxDlg_Activate(k)
+    g_uxDirty = 1
+End Sub
+
+Sub LxDlg_Wheel(ByVal up As Long)
+    Dim mx As Long
+    If up <> 0 Then
+        g_lxdTop = g_lxdTop - 3
+    Else
+        g_lxdTop = g_lxdTop + 3
+    End If
+    mx = g_lxdN - LxDlg_Rows()
+    If g_lxdTop > mx Then g_lxdTop = mx
+    If g_lxdTop < 0 Then g_lxdTop = 0
+    g_uxDirty = 1
+End Sub
+
+' 開いてイベントを回す。OK なら 1
+Function LxDlg_Run() As Long
+    LxDlg_Run = 0
+    If g_uxDpy = 0 Or g_lxsModal <> 0 Then Exit Function
+    g_lxsModal = LXS_MODAL_DLG
+    g_lxsModalRet = 0
+    g_uxDirty = 1
+    While g_lxsModalRet = 0 And g_lxQuit = 0
+        LxShell_PumpOne()
+    Wend
+    g_lxsModal = 0
+    g_uxDirty = 1
+    If g_lxsModalRet = 1 Then LxDlg_Run = 1
+End Function
+
+' == 使う側 ==
+
+' 1 行の入力。やめたら 0
+Function LxDlg_Input(title As String, ByRef text As String) As Long
+    g_lxdKind = LXD_INPUT
+    g_lxdTitle = title
+    g_lxdField = text
+    g_lxdN = 0
+    LxDlg_Input = LxDlg_Run()
+    If LxDlg_Input <> 0 Then text = g_lxdField
+End Function
+
+' 一覧から 1 つ。選んだ位置（やめたら -1）
+Function LxDlg_Choice(title As String, ByVal sel As Long) As Long
+    g_lxdKind = LXD_CHOICE
+    g_lxdTitle = title
+    g_lxdSel = sel
+    g_lxdTop = 0
+    LxDlg_Choice = -1
+    If LxDlg_Run() <> 0 Then LxDlg_Choice = g_lxdSel
+End Function
+
+' ファイルを選ぶ。start はフォルダーと名前の初め（空ならカレント）。選んだ絶対パス（やめたら ""）
+Function LxDlg_File$(title As String, start As String, ByVal save As Long, defExt As String) As String
+    Dim path As String, name As String
+    LxDlg_File$ = ""
+    g_lxdKind = LXD_FILE
+    g_lxdTitle = title
+    g_lxdSave = save
+    g_lxdField = ""
+    If save <> 0 And Len(start) > 0 Then g_lxdField = Mid$(start, Len(ProjDirOf$(start)) + 1)
+    g_lxdDir = LxDlg_DirOf$(start)
+    LxDlg_ReadDir()
+    Do
+        If LxDlg_Run() = 0 Then Exit Function
+        path = LxDlg_FieldPath$()
+        name = Mid$(path, Len(ProjDirOf$(path)) + 1)
+        If save <> 0 And Len(defExt) > 0 And InStr(1, name, ".") = 0 Then path = path + "." + defExt
+        If save = 0 Then
+            If GetFileAttributes(StrPtr(path)) <> -1 Then Exit Do
+            Ux_Beep()
+        Else
+            If GetFileAttributes(StrPtr(path)) = -1 Then Exit Do
+            If LxShell_MsgBox(path + Chr$(10) + "Overwrite?", g_lxdTitle, MB_YESNO) = IDYES Then Exit Do
+        End If
+    Loop
+    LxDlg_File$ = path
+End Function
+
+' GetOpenFileNameA / GetSaveFileNameA の代わり（lpstrFile に入れて 1）
+Function LxDlg_Ofn(ofn As *OPENFILENAME, ByVal save As Long) As Long
+    Dim start As String, defExt As String, path As String, title As String
+    Dim dst As *Byte, src As *Byte
+    Dim i As Long
+    LxDlg_Ofn = 0
+    dst = ofn->lpstrFile As *Byte
+    If dst = 0 Then Exit Function
+    start = Enc_DupCStr$(dst, lstrlen(dst))
+    If save = 0 Then start = ProjDirOf$(g_docPath)
+    defExt = ""
+    If ofn->lpstrDefExt <> 0 Then defExt = Enc_DupCStr$(ofn->lpstrDefExt As *Byte, lstrlen(ofn->lpstrDefExt As *Byte))
+    title = UiText$(UI_MENU_OPEN)
+    If save <> 0 Then title = UiText$(UI_MENU_SAVEAS)
+    title = LxM_Label$(title)
+    path = LxDlg_File$(title, start, save, defExt)
+    If Len(path) = 0 Or Len(path) >= (ofn->nMaxFile As Long) Then Exit Function
+    src = StrPtr(path)
+    For i = 0 To Len(path) - 1
+        dst[i] = src[i]
+    Next
+    dst[Len(path)] = 0
+    LxDlg_Ofn = 1
+End Function
+
+Function Lx_GetOpenFileNameA(ByVal ofn As *OPENFILENAME) As Long
+    Lx_GetOpenFileNameA = LxDlg_Ofn(ofn, 0)
+End Function
+
+Function Lx_GetSaveFileNameA(ByVal ofn As *OPENFILENAME) As Long
+    Lx_GetSaveFileNameA = LxDlg_Ofn(ofn, 1)
+End Function
+
+' == 検索（EditorFind_Show の代わり）==
+
+Sub EditorFind_Show()
+    Dim t As String
+    If g_activeChild = 0 Then Exit Sub
+    t = g_findNeedle
+    If LxDlg_Input(UiText$(UI_FIND_TITLE), t) = 0 Then Exit Sub
+    If Len(t) = 0 Then Exit Sub
+    g_findNeedle = t
+    EditorFind_Apply(t, 1)
+    LxShell_FocusDoc()
+End Sub
+
+' == 設定（言語。設定ダイアログの代わり） ==
+
+Sub MainWnd_IDM_SETTING_MenuClick()
+    Dim sel As Long, code As String, cur As String
+    g_lxdN = 2
+    g_lxdItem(0) = UiText$(UI_LANG_EN)
+    g_lxdItem(1) = UiText$(UI_LANG_JA)
+    cur = g_uiLangCode
+    If Len(cur) = 0 Then cur = "en"
+    sel = 0
+    If UiLang_TrimCode$(cur) = "ja" Then sel = 1
+    sel = LxDlg_Choice(UiText$(UI_SETTING_TITLE) + " - " + UiText$(UI_SETTING_LANG), sel)
+    If sel < 0 Then Exit Sub
+    code = "en"
+    If sel = 1 Then code = "ja"
+    If code = UiLang_TrimCode$(cur) Then Exit Sub
+    If UiLang_WriteCode(code) = 0 Then
+        UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED), UiText$(UI_SETTING_TITLE))
+        Exit Sub
+    End If
+    g_uiLangCode = code
+    If UiMsgBoxYesNo(hMainWnd, UiText$(UI_SETTING_RESTART), UiText$(UI_SETTING_RESTART_TITLE)) = 0 Then Exit Sub
+    If EditorTemp_AskQuit() = 0 Then Exit Sub
+    If ShellExecute(hMainWnd, "open", StrPtr(LxDlg_SelfPath$()), "", "", SW_SHOWNORMAL) <= 32 Then Exit Sub
+    MainWnd_Destroy()
+End Sub
+
+Function LxDlg_SelfPath$() As String
+    Dim buf(4095) As Byte
+    Dim n As Long
+    LxDlg_SelfPath$ = ""
+    n = ExeModuleFile(VarPtr(buf(0)), 4096)
+    If n > 0 Then LxDlg_SelfPath$ = Enc_DupCStr$(VarPtr(buf(0)), n)
+End Function
+
+#endif
