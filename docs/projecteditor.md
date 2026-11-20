@@ -266,7 +266,7 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 
 番号は、載せた部品にもフィールドの宣言にも無い一番小さい数です。書き足すのは次の 2 か所で、1 回の編集として元に戻せます。
 
-- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `OpenFileDialog`）の次に足します。無ければ最後の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行の次、`Class` の行の次です。字下げは前の行に合わせます
+- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `OpenFileDialog`）の次に足します。無ければ、最初のメソッド（`Sub` / `Function`）より前の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行（無ければ `Class` の行）の次に `Private` の行ごと足します。フィールドはメソッドより後ろに置くとコンパイルできないので、新しいフォームの雛形（`Public` の `WndProc` の後ろに `Private`）でも `Inherits` の次に `Private` を足します。字下げは前の行に合わせます
 - `InitializeComponent`: 空行と、`名前.Left` / `.Top` / `.Width` / `.Height`（Image 以外は `.Caption = "名前"`）と `AddControl(名前)` の行を、最後の `AddControl` の行の次に足します。`AddControl` が無ければ `End Sub` の直前（字下げは `End Sub` + 4）です
 
 パネルの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。

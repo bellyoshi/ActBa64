@@ -1,6 +1,6 @@
 ' フォームデザイナのツールボックス（RAD 第三段階）の文字列処理。
 ' ツール（Button / Image / Panel）で窓を押すと、部品を 1 つ足す:
-'   1. クラスのフィールドに「名前 As 型」の行（最後の部品の宣言の次。無ければ Private、Inherits の次）
+'   1. クラスのフィールドに「名前 As 型」の行（メソッドより前。最後の部品の宣言の次、無ければ Private の領域）
 '   2. InitializeComponent に「名前.Left / .Top / .Width / .Height (/ .Caption)」と「AddControl(名前)」
 '      （最後の AddControl の次。無ければ End Sub の直前）
 ' 部品の種類は、フィールドの「名前 As 型」の型で見分ける（FormDesign_CtlType$）。
@@ -91,38 +91,50 @@ Function FormDesign_CtlType$(text As String, name As String) As String
     Wend
 End Function
 
-' 宣言の行を足す所（行の始まり）と字下げ。最後の部品の宣言の次、無ければ最後の Private の次、
-' それも無ければ Inherits の次、Class の次。Class の行が無ければ 0
-Function FormDesign_DeclPos(text As String, ByRef ind As String) As Long
-    Dim p As Long, b As Long, pos As Long, rank As Long, r As Long
+' 宣言の行を足す所（行の始まり）と字下げ。フィールドはメソッドより前に置く（後ろだとコンパイルできない）:
+'   最後の部品の宣言の次。無ければ、最初のメソッドより前の Private の次（字下げは Private + 4）。
+'   それも無ければ Inherits の次（Inherits が無ければ Class の次）に「Private」の行ごと足す（pre に「Private」と改行）。
+' Class の行が無ければ 0
+Function FormDesign_DeclPos(text As String, ByRef ind As String, ByRef pre As String) As Long
+    Dim p As Long, b As Long, ln As String, nm As String
+    Dim ctl As Long, ctlInd As String, prv As Long, prvInd As String, inh As Long, inhInd As String, meth As Long
     FormDesign_DeclPos = 0
+    pre = ""
     b = FormDesign_BodyStart(text)
     p = FormDesign_ClassLine(text)
     If p = 0 Then Exit Function
-    FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p) & "    ", pos, ind)
+    FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p) & "    ", inh, inhInd)
     p = FormDesign_LineEnd(text, p) + 1
     While p < b
-        r = FormDesign_DeclRank(FormDesign_Line$(text, p))
-        If r >= rank And r > 0 Then FormDesign_DeclAfter(text, p, FormDesign_DeclIndent$(text, p, r), pos, ind)
-        If r >= rank And r > 0 Then rank = r
+        ln = FormDesign_Line$(text, p)
+        If FormDesign_IsCtlType(FormDesign_DeclOf$(ln, nm)) <> 0 Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p), ctl, ctlInd)
+        If FormDesign_IsMethodLn(ln) <> 0 Then meth = 1
+        If meth = 0 And FormDesign_EqCI(ln, "private") <> 0 Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p) & "    ", prv, prvInd)
+        If meth = 0 And StartsWithCI(ln, "inherits ") <> 0 Then FormDesign_DeclAfter(text, p, FormDesign_Indent$(text, p), inh, inhInd)
         p = FormDesign_LineEnd(text, p) + 1
     Wend
-    FormDesign_DeclPos = pos
+    If ctl > 0 Then
+        FormDesign_DeclPos = ctl
+        ind = ctlInd
+    ElseIf prv > 0 Then
+        FormDesign_DeclPos = prv
+        ind = prvInd
+    Else
+        FormDesign_DeclPos = inh
+        ind = inhInd
+        pre = FormDesign_Indent$(text, FormDesign_ClassLine(text)) & "Private" & FormDesign_Nl$(text)
+    End If
 End Function
 
-' 宣言を足す目印の強さ。1: Inherits、2: Private、3: 部品の宣言、0: 目印でない
-Function FormDesign_DeclRank(ln As String) As Long
-    Dim nm As String
-    FormDesign_DeclRank = 0
-    If StartsWithCI(ln, "inherits ") <> 0 Then FormDesign_DeclRank = 1
-    If FormDesign_EqCI(ln, "private") <> 0 Then FormDesign_DeclRank = 2
-    If FormDesign_IsCtlType(FormDesign_DeclOf$(ln, nm)) <> 0 Then FormDesign_DeclRank = 3
-End Function
-
-' 目印の行 p の次に足す宣言の字下げ（Private の次は Private の字下げ + 4、ほかはその行と同じ）
-Function FormDesign_DeclIndent$(text As String, ByVal p As Long, ByVal r As Long) As String
-    FormDesign_DeclIndent$ = FormDesign_Indent$(text, p)
-    If r = 2 Then FormDesign_DeclIndent$ = FormDesign_DeclIndent$ & "    "
+' メソッド（Sub / Function）の始まりの行か
+Function FormDesign_IsMethodLn(ln As String) As Long
+    Dim s As String
+    s = ln
+    If StartsWithCI(s, "override ") <> 0 Then s = Trim$(Mid$(s, 10))
+    If StartsWithCI(s, "virtual ") <> 0 Then s = Trim$(Mid$(s, 9))
+    If StartsWithCI(s, "static ") <> 0 Then s = Trim$(Mid$(s, 8))
+    FormDesign_IsMethodLn = 0
+    If StartsWithCI(s, "sub ") <> 0 Or StartsWithCI(s, "function ") <> 0 Then FormDesign_IsMethodLn = 1
 End Function
 
 ' p の行の次の行の始まりと、字下げ i を pos, ind に
@@ -192,7 +204,7 @@ End Function
 ' ツール tool の部品を x, y（窓のクライアント座標）に足した本文。足した部品の名前を name に。
 ' デザインできない文書はそのまま（name は ""）
 Function FormDesign_AddCtl$(text As String, ByVal tool As Long, ByVal x As Long, ByVal y As Long, ByRef name As String) As String
-    Dim p As Long, ind As String, nl As String, u As String
+    Dim p As Long, ind As String, nl As String, u As String, pre As String
     FormDesign_AddCtl$ = text
     name = ""
     p = FormDesign_CtlPos(text, ind)
@@ -200,7 +212,7 @@ Function FormDesign_AddCtl$(text As String, ByVal tool As Long, ByVal x As Long,
     name = FormDesign_NewName$(text, tool)
     nl = FormDesign_Nl$(text)
     u = FormDesign_Insert$(text, p, FormDesign_CtlLines$(name, tool, x, y, ind, nl))
-    p = FormDesign_DeclPos(u, ind)
-    If p > 0 Then u = FormDesign_Insert$(u, p, ind & name & " As " & FormDesign_ToolType$(tool) & nl)
+    p = FormDesign_DeclPos(u, ind, pre)
+    If p > 0 Then u = FormDesign_Insert$(u, p, pre & ind & name & " As " & FormDesign_ToolType$(tool) & nl)
     FormDesign_AddCtl$ = u
 End Function
