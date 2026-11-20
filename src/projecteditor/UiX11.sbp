@@ -1,0 +1,828 @@
+' UiX11 - Linux 版の Ui_ 関数（UiDraw.sbp の Windows 版と同じ名前・同じ引数）。
+' X の窓は 1 枚。その中の四角を「ビュー」と呼び、HWND はビューの番号（UX_HWND_BASE + i）。
+' HDC はそのビューの HWND と同じ値で、描く位置の原点と切り抜きはビューの四角。
+' 描くのは自前の 32bpp の画素バッファ（0x00RRGGBB）。Ux_Present で XPutImage する。
+' 文字は FreeType（libfreetype.so.6）で fonts/UDEVGothic-Regular.ttf を読み、グリフは表に覚えておく。
+' XEvent や FreeType の構造体はバイト列から読む（オフセットは x86-64 の Xlib / FreeType 2）。
+
+#ifdef _LINUX
+
+Declare Function Ux_XOpenDisplay Lib "libX11.so.6" Alias "XOpenDisplay" (name As VoidPtr) As VoidPtr
+Declare Function Ux_XDefaultScreen Lib "libX11.so.6" Alias "XDefaultScreen" (d As VoidPtr) As Long
+Declare Function Ux_XRootWindow Lib "libX11.so.6" Alias "XRootWindow" (d As VoidPtr, scr As Long) As VoidPtr
+Declare Function Ux_XDefaultVisual Lib "libX11.so.6" Alias "XDefaultVisual" (d As VoidPtr, scr As Long) As VoidPtr
+Declare Function Ux_XDefaultDepth Lib "libX11.so.6" Alias "XDefaultDepth" (d As VoidPtr, scr As Long) As Long
+Declare Function Ux_XCreateSimpleWindow Lib "libX11.so.6" Alias "XCreateSimpleWindow" (d As VoidPtr, parent As VoidPtr, x As Long, y As Long, w As Long, h As Long, bw As Long, border As VoidPtr, back As VoidPtr) As VoidPtr
+Declare Function Ux_XStoreName Lib "libX11.so.6" Alias "XStoreName" (d As VoidPtr, w As VoidPtr, name As BytePtr) As Long
+Declare Function Ux_XInternAtom Lib "libX11.so.6" Alias "XInternAtom" (d As VoidPtr, name As BytePtr, onlyIfExists As Long) As VoidPtr
+Declare Function Ux_XChangeProperty Lib "libX11.so.6" Alias "XChangeProperty" (d As VoidPtr, w As VoidPtr, prop As VoidPtr, typ As VoidPtr, fmt As Long, mode As Long, data As BytePtr, n As Long) As Long
+Declare Function Ux_XSetWMProtocols Lib "libX11.so.6" Alias "XSetWMProtocols" (d As VoidPtr, w As VoidPtr, atoms As VoidPtr, n As Long) As Long
+Declare Function Ux_XSelectInput Lib "libX11.so.6" Alias "XSelectInput" (d As VoidPtr, w As VoidPtr, mask As VoidPtr) As Long
+Declare Function Ux_XMapWindow Lib "libX11.so.6" Alias "XMapWindow" (d As VoidPtr, w As VoidPtr) As Long
+Declare Function Ux_XCreateGC Lib "libX11.so.6" Alias "XCreateGC" (d As VoidPtr, dr As VoidPtr, mask As VoidPtr, values As VoidPtr) As VoidPtr
+Declare Function Ux_XCreateImage Lib "libX11.so.6" Alias "XCreateImage" (d As VoidPtr, visual As VoidPtr, depth As Long, format As Long, offset As Long, data As VoidPtr, w As Long, h As Long, pad As Long, bpl As Long) As VoidPtr
+Declare Function Ux_XPutImage Lib "libX11.so.6" Alias "XPutImage" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, img As VoidPtr, sx As Long, sy As Long, dx As Long, dy As Long, w As Long, h As Long) As Long
+Declare Function Ux_XFlush Lib "libX11.so.6" Alias "XFlush" (d As VoidPtr) As Long
+Declare Function Ux_XPending Lib "libX11.so.6" Alias "XPending" (d As VoidPtr) As Long
+Declare Function Ux_XNextEvent Lib "libX11.so.6" Alias "XNextEvent" (d As VoidPtr, ev As VoidPtr) As Long
+Declare Function Ux_XLookupString Lib "libX11.so.6" Alias "XLookupString" (ev As VoidPtr, buf As VoidPtr, n As Long, keysym As VoidPtr, status As VoidPtr) As Long
+Declare Function Ux_XDefineCursor Lib "libX11.so.6" Alias "XDefineCursor" (d As VoidPtr, w As VoidPtr, c As VoidPtr) As Long
+Declare Function Ux_XCreateFontCursor Lib "libX11.so.6" Alias "XCreateFontCursor" (d As VoidPtr, shape As Long) As VoidPtr
+Declare Function Ux_XBell Lib "libX11.so.6" Alias "XBell" (d As VoidPtr, pct As Long) As Long
+
+Declare Function Ux_FT_Init_FreeType Lib "libfreetype.so.6" Alias "FT_Init_FreeType" (lib As VoidPtr) As Long
+Declare Function Ux_FT_New_Face Lib "libfreetype.so.6" Alias "FT_New_Face" (lib As VoidPtr, path As BytePtr, index As Long, face As VoidPtr) As Long
+Declare Function Ux_FT_Set_Pixel_Sizes Lib "libfreetype.so.6" Alias "FT_Set_Pixel_Sizes" (face As VoidPtr, w As Long, h As Long) As Long
+Declare Function Ux_FT_Load_Char Lib "libfreetype.so.6" Alias "FT_Load_Char" (face As VoidPtr, code As VoidPtr, flags As Long) As Long
+
+Const UX_HWND_BASE = &H1000
+Const UX_VIEW_MAX = 24
+Const UX_FONT_MAX = 3
+Const UX_GC_N = 4096                ' フォント 1 つのグリフ表の大きさ（2 のべき）
+Const UX_POOL_SIZE = &H400000       ' グリフの画素を置く所
+Const UX_SB_W = 14                  ' スクロールバーの幅
+Const UX_FONT_FILE = "fonts/UDEVGothic-Regular.ttf"
+Const UX_FONT_MONO = 1              ' HFONT の値。EditorFont_Create(-16)
+Const UX_FONT_GUI = 2               ' Ui_GuiFont()
+Const UX_X_MASK = &H2807F           ' KeyPress|KeyRelease|ButtonPress|ButtonRelease|PointerMotion|Exposure|StructureNotify
+
+Dim g_uxDpy As VoidPtr
+Dim g_uxScr As Long
+Dim g_uxWin As VoidPtr
+Dim g_uxGc As VoidPtr
+Dim g_uxImg As VoidPtr
+Dim g_uxBuf As VoidPtr
+Dim g_uxStride As Long
+Dim g_uxW As Long, g_uxH As Long
+Dim g_uxAtom(15) As Byte            ' 0: WM_DELETE_WINDOW, 8: WM_PROTOCOLS
+Dim g_uxDirty As Long               ' 描き直しが要る
+
+' 切り抜き（窓の座標。right / bottom は含まない）と原点
+Dim g_uxClipL As Long, g_uxClipT As Long, g_uxClipR As Long, g_uxClipB As Long
+Dim g_uxOrgX As Long, g_uxOrgY As Long
+
+' ビュー
+Dim g_uxVUsed(23) As Long
+Dim g_uxVX(23) As Long, g_uxVY(23) As Long, g_uxVW(23) As Long, g_uxVH(23) As Long
+Dim g_uxVShow(23) As Long
+Dim g_uxVFont(23) As Long
+Dim g_uxVColor(23) As DWord
+Dim g_uxVSb(23) As Long             ' 縦のスクロールバーを持つ
+Dim g_uxVSbMin(23) As Long, g_uxVSbMax(23) As Long, g_uxVSbPage(23) As Long, g_uxVSbPos(23) As Long
+Dim g_uxVTrack(23) As Long
+
+' フォント
+Dim g_uxFtLib As VoidPtr
+Dim g_uxFaceQ(23) As Byte           ' フォント i の FT_Face（8 バイトずつ）
+Dim g_uxFontPx(2) As Long
+Dim g_uxFontAsc(2) As Long
+Dim g_uxFontH(2) As Long
+Dim g_uxFontOk(2) As Long
+Dim g_uxFontTried As Long
+
+' グリフ表（フォント i の j 番目は i * UX_GC_N + j）。cp は符号点 + 1（0 は空き）
+Dim g_uxGcCp(12287) As Long
+Dim g_uxGcAdv(12287) As Long
+Dim g_uxGcL(12287) As Long
+Dim g_uxGcT(12287) As Long
+Dim g_uxGcW(12287) As Long
+Dim g_uxGcH(12287) As Long
+Dim g_uxGcOff(12287) As Long
+Dim g_uxGcCount(2) As Long
+Dim g_uxPool As VoidPtr
+Dim g_uxPoolUsed As Long
+
+' キャレット（1 つだけ）
+Dim g_uxCaretView As Long           ' HWND。0 は無い
+Dim g_uxCaretX As Long, g_uxCaretY As Long, g_uxCaretW As Long, g_uxCaretH As Long
+Dim g_uxCaretHide As Long
+
+' キーの押し下げ（KeyPress / KeyRelease の state から）
+Dim g_uxShift As Long, g_uxCtrl As Long, g_uxAlt As Long
+Dim g_uxCapture As Long             ' マウスを追っているビュー
+
+' == バイト列 ==
+
+Function Ux_L(buf As VoidPtr, off As Long) As Long
+    Dim p As *Long
+    Dim a As VoidPtr
+    a = buf
+    a = a + off
+    p = a As *Long
+    Ux_L = p[0]
+End Function
+
+Sub Ux_SetL(buf As VoidPtr, off As Long, v As Long)
+    Dim p As *Long
+    Dim a As VoidPtr
+    a = buf
+    a = a + off
+    p = a As *Long
+    p[0] = v
+End Sub
+
+Function Ux_B(buf As VoidPtr, off As Long) As Long
+    Dim p As *Byte
+    Dim a As VoidPtr
+    a = buf
+    a = a + off
+    p = a As *Byte
+    Ux_B = p[0]
+End Function
+
+' COLORREF（0x00BBGGRR）→ 画素（0x00RRGGBB）
+Function Ux_Pixel(ByVal c As DWord) As DWord
+    Ux_Pixel = ((c And &HFF) << 16) Or (c And &HFF00) Or ((c >> 16) And &HFF)
+End Function
+
+' == ビュー ==
+
+Function Ux_Index(h As HWND) As Long
+    Dim i As Long
+    i = (h As Long) - UX_HWND_BASE
+    Ux_Index = -1
+    If i < 0 Or i >= UX_VIEW_MAX Then Exit Function
+    If g_uxVUsed(i) = 0 Then Exit Function
+    Ux_Index = i
+End Function
+
+' 新しいビュー。sb = 1 なら右に縦のスクロールバー
+Function Ux_ViewNew(ByVal sb As Long) As HWND
+    Dim i As Long
+    Ux_ViewNew = 0
+    For i = 0 To UX_VIEW_MAX - 1
+        If g_uxVUsed(i) = 0 Then
+            g_uxVUsed(i) = 1
+            g_uxVX(i) = 0 : g_uxVY(i) = 0 : g_uxVW(i) = 0 : g_uxVH(i) = 0
+            g_uxVShow(i) = 0
+            g_uxVFont(i) = UX_FONT_GUI
+            g_uxVColor(i) = 0
+            g_uxVSb(i) = sb
+            g_uxVSbMin(i) = 1 : g_uxVSbMax(i) = 1 : g_uxVSbPage(i) = 1 : g_uxVSbPos(i) = 1
+            g_uxVTrack(i) = 0
+            Ux_ViewNew = (UX_HWND_BASE + i) As HWND
+            Exit Function
+        End If
+    Next
+End Function
+
+Sub Ux_ViewFree(h As HWND)
+    Dim i As Long
+    i = Ux_Index(h)
+    If i < 0 Then Exit Sub
+    g_uxVUsed(i) = 0
+    If g_uxCaretView = (h As Long) Then g_uxCaretView = 0
+    If g_uxCapture = (h As Long) Then g_uxCapture = 0
+End Sub
+
+' 窓の中の位置と大きさ（スクロールバーの分も含む）
+Sub Ux_ViewPlace(h As HWND, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal hh As Long, ByVal show As Long)
+    Dim i As Long
+    i = Ux_Index(h)
+    If i < 0 Then Exit Sub
+    If w < 0 Then w = 0
+    If hh < 0 Then hh = 0
+    g_uxVX(i) = x : g_uxVY(i) = y : g_uxVW(i) = w : g_uxVH(i) = hh
+    g_uxVShow(i) = show
+    g_uxDirty = 1
+End Sub
+
+Function Ux_ViewShown(h As HWND) As Long
+    Dim i As Long
+    Ux_ViewShown = 0
+    i = Ux_Index(h)
+    If i < 0 Then Exit Function
+    Ux_ViewShown = g_uxVShow(i)
+End Function
+
+' 窓の座標 (x, y) がビューの中（スクロールバーは含まない）なら 1
+Function Ux_ViewHit(h As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim i As Long, w As Long
+    Ux_ViewHit = 0
+    i = Ux_Index(h)
+    If i < 0 Then Exit Function
+    If g_uxVShow(i) = 0 Then Exit Function
+    w = g_uxVW(i)
+    If g_uxVSb(i) <> 0 Then w = w - UX_SB_W
+    If x < g_uxVX(i) Or y < g_uxVY(i) Then Exit Function
+    If x >= g_uxVX(i) + w Or y >= g_uxVY(i) + g_uxVH(i) Then Exit Function
+    Ux_ViewHit = 1
+End Function
+
+' 窓の座標 (x, y) がビューのスクロールバーの上なら 1
+Function Ux_SbHit(h As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim i As Long
+    Ux_SbHit = 0
+    i = Ux_Index(h)
+    If i < 0 Then Exit Function
+    If g_uxVShow(i) = 0 Or g_uxVSb(i) = 0 Then Exit Function
+    If x < g_uxVX(i) + g_uxVW(i) - UX_SB_W Or x >= g_uxVX(i) + g_uxVW(i) Then Exit Function
+    If y < g_uxVY(i) Or y >= g_uxVY(i) + g_uxVH(i) Then Exit Function
+    Ux_SbHit = 1
+End Function
+
+Function Ux_ViewX(h As HWND) As Long
+    Dim i As Long
+    Ux_ViewX = 0
+    i = Ux_Index(h)
+    If i >= 0 Then Ux_ViewX = g_uxVX(i)
+End Function
+
+Function Ux_ViewY(h As HWND) As Long
+    Dim i As Long
+    Ux_ViewY = 0
+    i = Ux_Index(h)
+    If i >= 0 Then Ux_ViewY = g_uxVY(i)
+End Function
+
+' 描く先をビュー h にする（原点と切り抜き）。無いビューなら何も描かない
+Sub Ux_Target(h As HDC)
+    Dim i As Long, w As Long
+    i = Ux_Index(h As HWND)
+    g_uxClipL = 0 : g_uxClipT = 0 : g_uxClipR = 0 : g_uxClipB = 0
+    g_uxOrgX = 0 : g_uxOrgY = 0
+    If i < 0 Then Exit Sub
+    w = g_uxVW(i)
+    If g_uxVSb(i) <> 0 Then w = w - UX_SB_W
+    g_uxOrgX = g_uxVX(i)
+    g_uxOrgY = g_uxVY(i)
+    g_uxClipL = g_uxVX(i)
+    g_uxClipT = g_uxVY(i)
+    g_uxClipR = g_uxVX(i) + w
+    g_uxClipB = g_uxVY(i) + g_uxVH(i)
+    If g_uxClipR > g_uxW Then g_uxClipR = g_uxW
+    If g_uxClipB > g_uxH Then g_uxClipB = g_uxH
+    If g_uxClipL < 0 Then g_uxClipL = 0
+    If g_uxClipT < 0 Then g_uxClipT = 0
+End Sub
+
+' 窓全体へ描く（ビューの外の飾り）
+Sub Ux_TargetWindow()
+    g_uxOrgX = 0 : g_uxOrgY = 0
+    g_uxClipL = 0 : g_uxClipT = 0 : g_uxClipR = g_uxW : g_uxClipB = g_uxH
+End Sub
+
+' == 画素バッファ ==
+
+' 窓の座標で塗る（切り抜き付き）
+Sub Ux_FillAbs(ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal px As DWord)
+    Dim x As Long, y As Long
+    Dim row As *DWord
+    Dim a As VoidPtr
+    Dim off As Long
+    If g_uxBuf = 0 Then Exit Sub
+    If l < g_uxClipL Then l = g_uxClipL
+    If t < g_uxClipT Then t = g_uxClipT
+    If r > g_uxClipR Then r = g_uxClipR
+    If b > g_uxClipB Then b = g_uxClipB
+    If l >= r Or t >= b Then Exit Sub
+    For y = t To b - 1
+        off = y * g_uxStride
+        a = g_uxBuf
+        a = a + off
+        row = a As *DWord
+        For x = l To r - 1
+            row[x] = px
+        Next
+    Next
+End Sub
+
+' 1 画素の枠（窓の座標）
+Sub Ux_FrameAbs(ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal px As DWord)
+    Ux_FillAbs(l, t, r, t + 1, px)
+    Ux_FillAbs(l, b - 1, r, b, px)
+    Ux_FillAbs(l, t, l + 1, b, px)
+    Ux_FillAbs(r - 1, t, r, b, px)
+End Sub
+
+' 窓の大きさに合わせてバッファと XImage を作り直す
+Sub Ux_Resize(ByVal w As Long, ByVal h As Long)
+    Dim old As VoidPtr
+    If w < 1 Then w = 1
+    If h < 1 Then h = 1
+    If w = g_uxW And h = g_uxH And g_uxBuf <> 0 Then Exit Sub
+    old = g_uxBuf
+    g_uxW = w
+    g_uxH = h
+    g_uxBuf = malloc(w * h * 4)
+    If g_uxBuf <> 0 Then FillMemory(g_uxBuf, w * h * 4, &HF0)
+    ' 古い XImage は壊さない（XDestroyImage は libc の free で data を解放するため）
+    g_uxImg = Ux_XCreateImage(g_uxDpy, Ux_XDefaultVisual(g_uxDpy, g_uxScr), Ux_XDefaultDepth(g_uxDpy, g_uxScr), 2, 0, g_uxBuf, w, h, 32, 0)
+    g_uxStride = w * 4
+    If g_uxImg <> 0 Then g_uxStride = Ux_L(g_uxImg, 44)
+    If old <> 0 Then free(old)
+    g_uxDirty = 1
+End Sub
+
+' == 窓 ==
+
+Function Ux_Atom(i As Long) As VoidPtr
+    Ux_Atom = LxGetQ(VarPtr(g_uxAtom(0)), i * 8)
+End Function
+
+' X の窓を開く。つながらなければ 0
+Function Ux_Open(title As String, ByVal w As Long, ByVal h As Long) As Long
+    Dim nm As String
+    Ux_Open = 0
+    g_uxDpy = Ux_XOpenDisplay(0)
+    If g_uxDpy = 0 Then Exit Function
+    g_uxScr = Ux_XDefaultScreen(g_uxDpy)
+    g_uxWin = Ux_XCreateSimpleWindow(g_uxDpy, Ux_XRootWindow(g_uxDpy, g_uxScr), 0, 0, w, h, 0, 0, &HF0F0F0)
+    nm = "WM_DELETE_WINDOW"
+    LxSetQ(VarPtr(g_uxAtom(0)), 0, Ux_XInternAtom(g_uxDpy, StrPtr(nm), 0))
+    nm = "WM_PROTOCOLS"
+    LxSetQ(VarPtr(g_uxAtom(0)), 8, Ux_XInternAtom(g_uxDpy, StrPtr(nm), 0))
+    Ux_XSetWMProtocols(g_uxDpy, g_uxWin, VarPtr(g_uxAtom(0)), 1)
+    Ux_XSelectInput(g_uxDpy, g_uxWin, UX_X_MASK)
+    g_uxGc = Ux_XCreateGC(g_uxDpy, g_uxWin, 0, 0)
+    Ux_XDefineCursor(g_uxDpy, g_uxWin, Ux_XCreateFontCursor(g_uxDpy, 152))   ' XC_xterm
+    Ux_SetTitle(title)
+    Ux_Resize(w, h)
+    Ux_XMapWindow(g_uxDpy, g_uxWin)
+    Ux_XFlush(g_uxDpy)
+    Ux_Open = 1
+End Function
+
+' 見出し（_NET_WM_NAME は UTF-8、WM_NAME は古い WM 向け）
+Sub Ux_SetTitle(title As String)
+    Dim a As String, b As String
+    If g_uxDpy = 0 Then Exit Sub
+    a = "_NET_WM_NAME"
+    b = "UTF8_STRING"
+    Ux_XStoreName(g_uxDpy, g_uxWin, StrPtr(title))
+    Ux_XChangeProperty(g_uxDpy, g_uxWin, Ux_XInternAtom(g_uxDpy, StrPtr(a), 0), Ux_XInternAtom(g_uxDpy, StrPtr(b), 0), 8, 0, StrPtr(title), Len(title))
+End Sub
+
+' キャレットを重ねて窓へ写す
+Sub Ux_Present()
+    If g_uxDpy = 0 Or g_uxImg = 0 Then Exit Sub
+    Ux_DrawCaret()
+    Ux_XPutImage(g_uxDpy, g_uxWin, g_uxGc, g_uxImg, 0, 0, 0, 0, g_uxW, g_uxH)
+    Ux_XFlush(g_uxDpy)
+End Sub
+
+Sub Ux_Beep()
+    If g_uxDpy <> 0 Then Ux_XBell(g_uxDpy, 0)
+End Sub
+
+' == フォント ==
+
+Function Ux_FacePtr(f As Long) As VoidPtr
+    Ux_FacePtr = LxGetQ(VarPtr(g_uxFaceQ(0)), f * 8)
+End Function
+
+' フォント f（0 始まり）を px で開く
+Sub Ux_FontLoad(f As Long, px As Long, path As String)
+    Dim face As VoidPtr
+    Dim size As VoidPtr
+    Dim em As Long, asc As Long
+    g_uxFontPx(f) = px
+    g_uxFontAsc(f) = px
+    g_uxFontH(f) = px + 3
+    g_uxFontOk(f) = 0
+    If g_uxFtLib = 0 Then Exit Sub
+    face = 0
+    If Ux_FT_New_Face(g_uxFtLib, StrPtr(path), 0, VarPtr(face)) <> 0 Then Exit Sub
+    If face = 0 Then Exit Sub
+    Ux_FT_Set_Pixel_Sizes(face, 0, px)
+    LxSetQ(VarPtr(g_uxFaceQ(0)), f * 8, face)
+    ' FT_FaceRec: units_per_EM +136、ascender +138（short）、size +160。FT_Size_Metrics.height +64（26.6）
+    em = Ux_B(face, 136) + Ux_B(face, 137) * 256
+    asc = Ux_B(face, 138) + Ux_B(face, 139) * 256
+    If asc >= 32768 Then asc = asc - 65536
+    If em > 0 Then g_uxFontAsc(f) = (asc * px + em \ 2) \ em
+    size = LxGetQ(face, 160)
+    If size <> 0 Then g_uxFontH(f) = (Ux_L(size, 64) + 32) \ 64
+    g_uxFontOk(f) = 1
+End Sub
+
+Sub Ux_FontInit()
+    Dim path As String
+    Dim lib As VoidPtr
+    If g_uxFontTried <> 0 Then Exit Sub
+    g_uxFontTried = 1
+    path = EditorBuild_ExeDir$() + UX_FONT_FILE
+    lib = 0
+    If Ux_FT_Init_FreeType(VarPtr(lib)) = 0 Then g_uxFtLib = lib
+    g_uxPool = malloc(UX_POOL_SIZE)
+    Ux_FontLoad(UX_FONT_MONO - 1, 16, path)
+    Ux_FontLoad(UX_FONT_GUI - 1, 13, path)
+End Sub
+
+' HFONT（1 始まり）→ フォントの添字。知らない値は GUI
+Function Ux_FontIdx(hf As Long) As Long
+    Ux_FontIdx = UX_FONT_GUI - 1
+    If hf >= 1 And hf <= UX_FONT_MAX Then Ux_FontIdx = hf - 1
+End Function
+
+Function Ux_FontHeight(hf As Long) As Long
+    Ux_FontInit()
+    Ux_FontHeight = g_uxFontH(Ux_FontIdx(hf))
+End Function
+
+Sub Ux_CacheReset()
+    Dim i As Long
+    For i = 0 To UX_GC_N * UX_FONT_MAX - 1
+        g_uxGcCp(i) = 0
+    Next
+    For i = 0 To UX_FONT_MAX - 1
+        g_uxGcCount(i) = 0
+    Next
+    g_uxPoolUsed = 0
+End Sub
+
+' FreeType で描いて表に入れる。戻り値は表の添字（-1 は失敗）
+Function Ux_GlyphMake(f As Long, cp As Long, slot As Long) As Long
+    Dim face As VoidPtr, g As VoidPtr, src As VoidPtr, dst As VoidPtr
+    Dim w As Long, h As Long, pitch As Long, r As Long, c As Long, n As Long
+    Dim sp As *Byte, dp As *Byte
+    Dim off As Long
+    Ux_GlyphMake = -1
+    face = Ux_FacePtr(f)
+    If face = 0 Then Exit Function
+    If Ux_FT_Load_Char(face, cp, 4) <> 0 Then Exit Function      ' FT_LOAD_RENDER
+    ' FT_GlyphSlotRec: advance.x +128、bitmap.rows +152、width +156、pitch +160、buffer +168、
+    ' pixel_mode +178、bitmap_left +192、bitmap_top +196
+    g = LxGetQ(face, 152)
+    w = Ux_L(g, 156)
+    h = Ux_L(g, 152)
+    pitch = Ux_L(g, 160)
+    n = w * h
+    If g_uxPoolUsed + n > UX_POOL_SIZE Then Exit Function
+    src = LxGetQ(g, 168)
+    If Ux_B(g, 178) <> 2 Then n = 0                              ' 灰色の段階でなければ形は出さない
+    For r = 0 To h - 1
+        If n = 0 Then Exit For
+        off = r * pitch
+        dst = src
+        dst = dst + off
+        sp = dst As *Byte
+        off = g_uxPoolUsed + r * w
+        dst = g_uxPool
+        dst = dst + off
+        dp = dst As *Byte
+        For c = 0 To w - 1
+            dp[c] = sp[c]
+        Next
+    Next
+    If n = 0 Then
+        w = 0
+        h = 0
+    End If
+    g_uxGcCp(slot) = cp + 1
+    g_uxGcAdv(slot) = (Ux_L(g, 128) + 32) \ 64
+    g_uxGcL(slot) = Ux_L(g, 192)
+    g_uxGcT(slot) = Ux_L(g, 196)
+    g_uxGcW(slot) = w
+    g_uxGcH(slot) = h
+    g_uxGcOff(slot) = g_uxPoolUsed
+    g_uxPoolUsed = g_uxPoolUsed + w * h
+    g_uxGcCount(f) = g_uxGcCount(f) + 1
+    Ux_GlyphMake = slot
+End Function
+
+' 符号点 cp のグリフの添字（-1 は無い）
+Function Ux_Glyph(f As Long, cp As Long) As Long
+    Dim j As Long, k As Long, base As Long
+    Ux_Glyph = -1
+    If g_uxFontOk(f) = 0 Then Exit Function
+    If g_uxGcCount(f) > UX_GC_N * 3 \ 4 Or g_uxPoolUsed > UX_POOL_SIZE - 65536 Then Ux_CacheReset()
+    base = f * UX_GC_N
+    j = (cp * 31) And (UX_GC_N - 1)
+    For k = 0 To UX_GC_N - 1
+        If g_uxGcCp(base + j) = cp + 1 Then
+            Ux_Glyph = base + j
+            Exit Function
+        End If
+        If g_uxGcCp(base + j) = 0 Then
+            Ux_Glyph = Ux_GlyphMake(f, cp, base + j)
+            Exit Function
+        End If
+        j = (j + 1) And (UX_GC_N - 1)
+    Next
+End Function
+
+' UTF-8 の 1 文字。戻り値はバイト数（壊れていれば 1 で U+FFFD）
+Function Ux_NextCp(p As *Byte, i As Long, n As Long, ByRef cp As Long) As Long
+    Dim b As Long, k As Long, j As Long, c As Long
+    b = p[i]
+    Ux_NextCp = 1
+    cp = b
+    If b < &H80 Then Exit Function
+    k = 0
+    c = 0
+    If (b And &HE0) = &HC0 Then
+        k = 1
+        c = b And &H1F
+    ElseIf (b And &HF0) = &HE0 Then
+        k = 2
+        c = b And &HF
+    ElseIf (b And &HF8) = &HF0 Then
+        k = 3
+        c = b And 7
+    End If
+    cp = &HFFFD
+    If k = 0 Or i + k >= n + 1 Then Exit Function
+    For j = 1 To k
+        If i + j >= n Then Exit Function
+        If (p[i + j] And &HC0) <> &H80 Then Exit Function
+        c = (c << 6) Or (p[i + j] And &H3F)
+    Next
+    cp = c
+    Ux_NextCp = k + 1
+End Function
+
+' グリフ gi を窓の座標 (x, y)（左上）に色 px で重ねる
+Sub Ux_Blit(gi As Long, ByVal x As Long, ByVal y As Long, ByVal px As DWord)
+    Dim w As Long, h As Long, r As Long, c As Long, xx As Long, yy As Long
+    Dim a As Long, d As DWord
+    Dim sr As Long, sg As Long, sb As Long, dr As Long, dg As Long, db As Long
+    Dim src As *Byte, row As *DWord
+    Dim p As VoidPtr
+    Dim off As Long
+    w = g_uxGcW(gi)
+    h = g_uxGcH(gi)
+    If w = 0 Or h = 0 Then Exit Sub
+    sr = (px >> 16) And 255
+    sg = (px >> 8) And 255
+    sb = px And 255
+    For r = 0 To h - 1
+        yy = y + r
+        If yy >= g_uxClipT And yy < g_uxClipB Then
+            off = g_uxGcOff(gi) + r * w
+            p = g_uxPool
+            p = p + off
+            src = p As *Byte
+            off = yy * g_uxStride
+            p = g_uxBuf
+            p = p + off
+            row = p As *DWord
+            For c = 0 To w - 1
+                xx = x + c
+                a = src[c]
+                If a <> 0 And xx >= g_uxClipL And xx < g_uxClipR Then
+                    If a = 255 Then
+                        row[xx] = px
+                    Else
+                        d = row[xx]
+                        dr = (d >> 16) And 255
+                        dg = (d >> 8) And 255
+                        db = d And 255
+                        dr = dr + ((sr - dr) * a) \ 255
+                        dg = dg + ((sg - dg) * a) \ 255
+                        db = db + ((sb - db) * a) \ 255
+                        row[xx] = (dr << 16) Or (dg << 8) Or db
+                    End If
+                End If
+            Next
+        End If
+    Next
+End Sub
+
+' 文字列の幅（描くなら draw = 1 で (x, y) は窓の座標の左上）
+Function Ux_TextRun(ByVal hf As Long, s As String, ByVal x As Long, ByVal y As Long, ByVal px As DWord, ByVal draw As Long) As Long
+    Dim p As *Byte
+    Dim n As Long, i As Long, cp As Long, gi As Long, f As Long, w As Long
+    Ux_FontInit()
+    f = Ux_FontIdx(hf)
+    n = Len(s)
+    w = 0
+    Ux_TextRun = 0
+    If n = 0 Then Exit Function
+    p = StrPtr(s)
+    i = 0
+    While i < n
+        i = i + Ux_NextCp(p, i, n, cp)
+        gi = Ux_Glyph(f, cp)
+        If gi < 0 Then
+            w = w + g_uxFontPx(f) \ 2
+        Else
+            If draw <> 0 Then Ux_Blit(gi, x + w + g_uxGcL(gi), y + g_uxFontAsc(f) - g_uxGcT(gi), px)
+            w = w + g_uxGcAdv(gi)
+        End If
+    Wend
+    Ux_TextRun = w
+End Function
+
+' == キャレット ==
+
+Sub Ux_DrawCaret()
+    Dim i As Long
+    If g_uxCaretView = 0 Or g_uxCaretHide > 0 Then Exit Sub
+    i = Ux_Index(g_uxCaretView As HWND)
+    If i < 0 Then Exit Sub
+    If g_uxVShow(i) = 0 Then Exit Sub
+    Ux_Target(g_uxCaretView As HDC)
+    Ux_FillAbs(g_uxOrgX + g_uxCaretX, g_uxOrgY + g_uxCaretY, g_uxOrgX + g_uxCaretX + g_uxCaretW, g_uxOrgY + g_uxCaretY + g_uxCaretH, 0)
+End Sub
+
+' == スクロールバー（シェルが描く） ==
+
+' つまみの上端と高さ（ビューの中の y）。動かせなければ高さ 0
+Sub Ux_SbThumb(i As Long, ByRef top As Long, ByRef hh As Long)
+    Dim span As Long, h As Long
+    top = 0
+    hh = 0
+    h = g_uxVH(i)
+    span = g_uxVSbMax(i) - g_uxVSbMin(i) + 1
+    If span <= g_uxVSbPage(i) Or span <= 0 Then Exit Sub
+    hh = h * g_uxVSbPage(i) \ span
+    If hh < 20 Then hh = 20
+    If hh > h Then hh = h
+    top = (h - hh) * (g_uxVSbPos(i) - g_uxVSbMin(i)) \ (span - g_uxVSbPage(i))
+    If top < 0 Then top = 0
+    If top > h - hh Then top = h - hh
+End Sub
+
+Sub Ux_DrawSb(h As HWND)
+    Dim i As Long, l As Long, t As Long, tt As Long, th As Long
+    i = Ux_Index(h)
+    If i < 0 Then Exit Sub
+    If g_uxVShow(i) = 0 Or g_uxVSb(i) = 0 Then Exit Sub
+    Ux_TargetWindow()
+    l = g_uxVX(i) + g_uxVW(i) - UX_SB_W
+    t = g_uxVY(i)
+    Ux_FillAbs(l, t, l + UX_SB_W, t + g_uxVH(i), &HF0F0F0)
+    Ux_FillAbs(l, t, l + 1, t + g_uxVH(i), &HDCDCDC)
+    Ux_SbThumb(i, tt, th)
+    If th > 0 Then Ux_FillAbs(l + 3, t + tt + 2, l + UX_SB_W - 3, t + tt + th - 2, &HB4B4B4)
+End Sub
+
+' スクロールバーの y（ビューの中）をつまみの中ほどに合わせたときの位置
+Function Ux_SbPosAt(h As HWND, ByVal y As Long) As Long
+    Dim i As Long, tt As Long, th As Long, span As Long, room As Long
+    i = Ux_Index(h)
+    Ux_SbPosAt = 1
+    If i < 0 Then Exit Function
+    Ux_SbThumb(i, tt, th)
+    Ux_SbPosAt = g_uxVSbPos(i)
+    If th = 0 Then Exit Function
+    span = g_uxVSbMax(i) - g_uxVSbMin(i) + 1 - g_uxVSbPage(i)
+    room = g_uxVH(i) - th
+    If room <= 0 Then Exit Function
+    Ux_SbPosAt = g_uxVSbMin(i) + ((y - th \ 2) * span + room \ 2) \ room
+    If Ux_SbPosAt < g_uxVSbMin(i) Then Ux_SbPosAt = g_uxVSbMin(i)
+    If Ux_SbPosAt > g_uxVSbMin(i) + span Then Ux_SbPosAt = g_uxVSbMin(i) + span
+End Function
+
+Sub Ux_SbTrack(h As HWND, ByVal pos As Long)
+    Dim i As Long
+    i = Ux_Index(h)
+    If i >= 0 Then g_uxVTrack(i) = pos
+End Sub
+
+' == Ui_ 関数（UiDraw.sbp の Windows 版と同じ顔） ==
+
+Sub Ui_FillRc(hDC As HDC, ByRef rc As RECT, ByVal color As DWord)
+    Ux_Target(hDC)
+    Ux_FillAbs(g_uxOrgX + rc.left, g_uxOrgY + rc.top, g_uxOrgX + rc.right, g_uxOrgY + rc.bottom, Ux_Pixel(color))
+End Sub
+
+Sub Ui_Fill(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal color As DWord)
+    Ux_Target(hDC)
+    Ux_FillAbs(g_uxOrgX + l, g_uxOrgY + t, g_uxOrgX + r, g_uxOrgY + b, Ux_Pixel(color))
+End Sub
+
+Sub Ui_Frame(hDC As HDC, ByRef rc As RECT, ByVal color As DWord)
+    Ux_Target(hDC)
+    Ux_FrameAbs(g_uxOrgX + rc.left, g_uxOrgY + rc.top, g_uxOrgX + rc.right, g_uxOrgY + rc.bottom, Ux_Pixel(color))
+End Sub
+
+Function Ui_SysColor(ByVal index As Long) As DWord
+    Ui_SysColor = RGB(240, 240, 240)
+    If index = COLOR_WINDOW Or index = COLOR_HIGHLIGHTTEXT Or index = COLOR_3DHILIGHT Then Ui_SysColor = RGB(255, 255, 255)
+    If index = COLOR_WINDOWTEXT Or index = COLOR_BTNTEXT Then Ui_SysColor = RGB(0, 0, 0)
+    If index = COLOR_GRAYTEXT Then Ui_SysColor = RGB(128, 128, 128)
+    If index = COLOR_HIGHLIGHT Then Ui_SysColor = RGB(0, 120, 215)
+    If index = COLOR_3DSHADOW Then Ui_SysColor = RGB(160, 160, 160)
+End Function
+
+Function Ui_SelectFont(hDC As HDC, hFont As HFONT) As HFONT
+    Dim i As Long
+    Ui_SelectFont = UX_FONT_GUI As HFONT
+    i = Ux_Index(hDC As HWND)
+    If i < 0 Then Exit Function
+    Ui_SelectFont = g_uxVFont(i) As HFONT
+    g_uxVFont(i) = hFont As Long
+End Function
+
+Function Ui_GuiFont() As HFONT
+    Ui_GuiFont = UX_FONT_GUI As HFONT
+End Function
+
+Sub Ui_TextColor(hDC As HDC, ByVal color As DWord)
+    Dim i As Long
+    i = Ux_Index(hDC As HWND)
+    If i >= 0 Then g_uxVColor(i) = color
+End Sub
+
+Sub Ui_Transparent(hDC As HDC)
+End Sub
+
+Function Ux_DcFont(hDC As HDC) As Long
+    Dim i As Long
+    Ux_DcFont = UX_FONT_GUI
+    i = Ux_Index(hDC As HWND)
+    If i >= 0 Then Ux_DcFont = g_uxVFont(i)
+End Function
+
+Function Ux_DcColor(hDC As HDC) As DWord
+    Dim i As Long
+    Ux_DcColor = 0
+    i = Ux_Index(hDC As HWND)
+    If i >= 0 Then Ux_DcColor = g_uxVColor(i)
+End Function
+
+Sub Ui_Text(hDC As HDC, ByVal x As Long, ByVal y As Long, s As String)
+    Ux_Target(hDC)
+    Ux_TextRun(Ux_DcFont(hDC), s, g_uxOrgX + x, g_uxOrgY + y, Ux_Pixel(Ux_DcColor(hDC)), 1)
+End Sub
+
+Function Ui_TextSize(hDC As HDC, s As String, ByRef sz As SIZE) As Long
+    Dim f As Long
+    f = Ux_DcFont(hDC)
+    sz.cx = Ux_TextRun(f, s, 0, 0, 0, 0)
+    sz.cy = Ux_FontHeight(f)
+    Ui_TextSize = 1
+End Function
+
+Sub Ui_TextCenter(hDC As HDC, ByRef rc As RECT, s As String)
+    Dim sz As SIZE
+    Ui_TextSize(hDC, s, sz)
+    Ui_Text(hDC, rc.left + (rc.right - rc.left - sz.cx) \ 2, rc.top + (rc.bottom - rc.top - sz.cy) \ 2, s)
+End Sub
+
+Sub Ui_ClientRect(hWnd As HWND, ByRef rc As RECT)
+    Dim i As Long
+    rc.left = 0
+    rc.top = 0
+    rc.right = 0
+    rc.bottom = 0
+    i = Ux_Index(hWnd)
+    If i < 0 Then Exit Sub
+    rc.right = g_uxVW(i)
+    If g_uxVSb(i) <> 0 Then rc.right = rc.right - UX_SB_W
+    rc.bottom = g_uxVH(i)
+End Sub
+
+Sub Ui_Invalidate(hWnd As HWND)
+    g_uxDirty = 1
+End Sub
+
+Function Ui_GetDC(hWnd As HWND) As HDC
+    Ui_GetDC = hWnd As HDC
+End Function
+
+Sub Ui_ReleaseDC(hWnd As HWND, hDC As HDC)
+End Sub
+
+Sub Ui_Capture(hWnd As HWND)
+    g_uxCapture = hWnd As Long
+End Sub
+
+Sub Ui_ReleaseCapture()
+    g_uxCapture = 0
+End Sub
+
+Sub Ui_CaretCreate(hWnd As HWND, ByVal w As Long, ByVal h As Long)
+    g_uxCaretView = hWnd As Long
+    g_uxCaretW = w
+    g_uxCaretH = h
+    g_uxCaretHide = 1
+End Sub
+
+Sub Ui_CaretDestroy()
+    g_uxCaretView = 0
+End Sub
+
+Sub Ui_CaretPos(ByVal x As Long, ByVal y As Long)
+    g_uxCaretX = x
+    g_uxCaretY = y
+End Sub
+
+Sub Ui_CaretShow(hWnd As HWND)
+    If g_uxCaretHide > 0 Then g_uxCaretHide = g_uxCaretHide - 1
+End Sub
+
+Sub Ui_CaretHide(hWnd As HWND)
+    g_uxCaretHide = g_uxCaretHide + 1
+End Sub
+
+Sub Ui_VScrollSet(hWnd As HWND, ByVal nMin As Long, ByVal nMax As Long, ByVal page As Long, ByVal pos As Long)
+    Dim i As Long
+    i = Ux_Index(hWnd)
+    If i < 0 Then Exit Sub
+    g_uxVSbMin(i) = nMin
+    g_uxVSbMax(i) = nMax
+    g_uxVSbPage(i) = page
+    g_uxVSbPos(i) = pos
+End Sub
+
+Function Ui_VScrollTrack(hWnd As HWND) As Long
+    Dim i As Long
+    Ui_VScrollTrack = 0
+    i = Ux_Index(hWnd)
+    If i >= 0 Then Ui_VScrollTrack = g_uxVTrack(i)
+End Function
+
+#endif

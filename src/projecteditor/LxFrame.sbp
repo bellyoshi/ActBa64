@@ -1,0 +1,844 @@
+' LxFrame - Linux 版のエディタの枠（-linux のときだけ）。
+' X の窓 1 枚に、上からメニューの帯・文書のタブ・文書（MDI の子の代わり）・メッセージ欄を並べる。
+' 文書は Mdi.sbp のスロットのまま。子窓の代わりに UiX11 のビューを 1 つずつ持ち、前面の 1 つだけ見せる。
+' X のイベントを WM_* にして MainWndProc（文書）へ渡すので、キー・マウス・描画の処理は Windows 版と同じ。
+' メッセージボックスと右クリックのメニューは、この窓の上に自前で描く（終わるまでイベントを回す）。
+
+#ifdef _LINUX
+
+Const LXS_MENU_H = 22               ' メニューの帯
+Const LXS_TAB_H = 24                ' 文書のタブの帯
+Const LXS_MSG_H = 160               ' メッセージ欄（見出しを含む）
+Const LXS_MSGHDR_H = 20             ' メッセージ欄の見出し
+Const LXS_MSG_LINE = 17             ' メッセージ欄の 1 行
+Const LXS_TABX_W = 18               ' タブの「×」の幅
+Const LXS_DBL_MS = 400              ' ダブルクリックとみなす間隔
+
+Dim g_lxsEv(191) As Byte            ' XNextEvent で受ける XEvent
+Dim g_lxsKey(31) As Byte            ' XLookupString の文字
+Dim g_lxsSym(7) As Byte             ' KeySym
+Dim g_lxsMouseX As Long, g_lxsMouseY As Long   ' 窓の座標
+Dim g_lxsRootDX As Long, g_lxsRootDY As Long   ' 画面の座標 - 窓の座標
+Dim g_lxsLastClick As Long          ' 前の左クリックの時刻（ms、下位 32 ビット）
+Dim g_lxsClickX As Long, g_lxsClickY As Long
+Dim g_lxsSbDrag As Long             ' スクロールバーのつまみを引いているビュー
+
+' タブ（描いたときの位置。押したときに使う）
+Dim g_lxsTabN As Long
+Dim g_lxsTabSlot(7) As Long
+Dim g_lxsTabL(7) As Long
+Dim g_lxsTabR(7) As Long
+
+' メッセージ欄
+Dim g_lxsMsgShow As Long
+Dim g_lxsMsgText As String
+Dim g_lxsMsgTop As Long             ' 先頭に見せる行（0 始まり）
+Dim g_lxsMsgSel As Long             ' 選んだ行（-1 は無い）
+
+' 自前の窓（メッセージボックス・メニュー）。0 は無い
+Const LXS_MODAL_MSGBOX = 1
+Const LXS_MODAL_MENU = 2
+Dim g_lxsModal As Long
+Dim g_lxsModalRet As Long           ' 0 の間は開いている
+Dim g_lxsBoxText As String
+Dim g_lxsBoxCap As String
+Dim g_lxsBoxBtnN As Long
+Dim g_lxsBoxBtnId(2) As Long
+Dim g_lxsBoxBtnL(2) As Long, g_lxsBoxBtnT As Long, g_lxsBoxBtnR(2) As Long, g_lxsBoxBtnB As Long
+Dim g_lxsBoxFocus As Long
+
+' == 枠の並び ==
+
+Function LxShell_DocTop() As Long
+    LxShell_DocTop = LXS_MENU_H + LXS_TAB_H
+End Function
+
+Function LxShell_DocBottom() As Long
+    LxShell_DocBottom = g_uxH
+    If g_lxsMsgShow <> 0 Then LxShell_DocBottom = g_uxH - LXS_MSG_H
+End Function
+
+Sub LxShell_Layout()
+    Dim s As Long, show As Long, top As Long
+    top = LxShell_DocTop()
+    For s = 0 To 7
+        If g_docUsed(s) <> 0 And g_docHwnd(s) <> 0 Then
+            show = 0
+            If g_docHwnd(s) = g_activeChild Then show = 1
+            Ux_ViewPlace(g_docHwnd(s), 0, top, g_uxW, LxShell_DocBottom() - top, show)
+        End If
+    Next
+    If hMessageWnd <> 0 Then
+        Ux_ViewPlace(hMessageWnd, 0, g_uxH - LXS_MSG_H + LXS_MSGHDR_H, g_uxW, LXS_MSG_H - LXS_MSGHDR_H, g_lxsMsgShow)
+    End If
+    If g_activeChild <> 0 Then VirtualScroll_Clamp(g_activeChild)
+    g_uxDirty = 1
+End Sub
+
+' == 文書（Mdi.sbp の窓の部分の代わり） ==
+
+Function MdiCreateChild(s As Long) As HWND
+    Dim v As HWND
+    MdiCreateChild = 0
+    v = Ux_ViewNew(1)
+    If v = 0 Then Exit Function
+    g_docHwnd(s) = v
+    MdiCreateChild = v
+    LxShell_Layout()
+    LxShell_Activate(v)
+End Function
+
+' 文書 v を前面にしてキーを渡す
+Sub LxShell_Activate(v As HWND)
+    If Ux_Index(v) < 0 Then Exit Sub
+    If MdiSlotOf(v) < 0 Then Exit Sub
+    If v <> g_activeChild Then
+        If g_activeChild <> 0 And (g_lxFocus = (g_activeChild As Long)) Then MainWndProc(g_activeChild, WM_KILLFOCUS, 0, 0)
+        MdiOnActivate(v, 0, v As LPARAM)
+    End If
+    LxShell_Layout()
+    LxShell_FocusDoc()
+End Sub
+
+Sub LxShell_FocusDoc()
+    If g_activeChild = 0 Then Exit Sub
+    If g_lxFocus <> (g_activeChild As Long) Or g_uxCaretView = 0 Then
+        g_lxFocus = g_activeChild As Long
+        MainWndProc(g_activeChild, WM_SETFOCUS, 0, 0)
+    End If
+    g_uxDirty = 1
+End Sub
+
+' 文書を閉じる（保存の確認の後）。ほかの文書があれば前面にする
+Sub LxShell_DestroyDoc(v As HWND)
+    Dim s As Long, t As Long
+    If Ux_Index(v) < 0 Then Exit Sub
+    If v = g_activeChild Then MainWndProc(v, WM_KILLFOCUS, 0, 0)
+    MainWndProc(v, WM_DESTROY, 0, 0)
+    Ux_ViewFree(v)
+    If g_lxFocus = (v As Long) Then g_lxFocus = 0
+    t = -1
+    For s = 7 To 0 Step -1
+        If g_docUsed(s) <> 0 And g_docHwnd(s) <> 0 Then t = s
+    Next
+    If t >= 0 Then LxShell_Activate(g_docHwnd(t))
+    If t < 0 Then EditorDoc_UpdateFrameTitle()
+    LxShell_Layout()
+End Sub
+
+' タブの文字（ファイル名だけ。変更があれば *）
+Function LxShell_TabLabel$(s As Long) As String
+    Dim path As String, dirty As Long, i As Long
+    path = g_docPathSlot(s)
+    dirty = g_docDirtySlot(s)
+    If g_docHwnd(s) = g_activeChild Then
+        path = g_docPath
+        dirty = g_docDirty
+    End If
+    If Len(path) = 0 Then
+        LxShell_TabLabel$ = "untitled"
+    Else
+        i = Len(path)
+        While i > 0
+            If Mid$(path, i, 1) = "/" Or Mid$(path, i, 1) = "\" Then Exit While
+            i = i - 1
+        Wend
+        LxShell_TabLabel$ = Mid$(path, i + 1)
+    End If
+    If dirty <> 0 Then LxShell_TabLabel$ = LxShell_TabLabel$ + " *"
+End Function
+
+Sub LxShell_DrawTabs()
+    Dim s As Long, x As Long, w As Long, top As Long, bot As Long
+    Dim label As String, bg As DWord, fg As DWord
+    Ux_TargetWindow()
+    top = LXS_MENU_H
+    bot = LXS_MENU_H + LXS_TAB_H
+    Ux_FillAbs(0, top, g_uxW, bot, &HE4E4E8)
+    Ux_FillAbs(0, bot - 1, g_uxW, bot, &HB4B4BE)
+    g_lxsTabN = 0
+    x = 4
+    For s = 0 To 7
+        If g_docUsed(s) <> 0 And g_docHwnd(s) <> 0 Then
+            label = LxShell_TabLabel$(s)
+            w = Ux_TextRun(UX_FONT_GUI, label, 0, 0, 0, 0) + 16 + LXS_TABX_W
+            bg = &HD7D7DC
+            fg = &H404040
+            If g_docHwnd(s) = g_activeChild Then
+                bg = &HFFFFFF
+                fg = 0
+            End If
+            Ux_FillAbs(x, top + 3, x + w, bot, bg)
+            Ux_FrameAbs(x, top + 3, x + w, bot + 1, &HB4B4BE)
+            If g_docHwnd(s) = g_activeChild Then Ux_FillAbs(x + 1, bot - 1, x + w - 1, bot, bg)
+            Ux_TextRun(UX_FONT_GUI, label, x + 8, top + 6, fg, 1)
+            Ux_TextRun(UX_FONT_GUI, "×", x + w - LXS_TABX_W + 2, top + 6, &H808080, 1)
+            g_lxsTabSlot(g_lxsTabN) = s
+            g_lxsTabL(g_lxsTabN) = x
+            g_lxsTabR(g_lxsTabN) = x + w
+            g_lxsTabN = g_lxsTabN + 1
+            x = x + w + 2
+        End If
+    Next
+End Sub
+
+' タブの帯を押した。閉じるなら WM_CLOSE（保存の確認から）
+Sub LxShell_TabClick(ByVal x As Long, ByVal button As Long)
+    Dim i As Long, v As HWND
+    For i = 0 To g_lxsTabN - 1
+        If x >= g_lxsTabL(i) And x < g_lxsTabR(i) Then
+            v = g_docHwnd(g_lxsTabSlot(i))
+            If button = 2 Or x >= g_lxsTabR(i) - LXS_TABX_W Then
+                MainWndProc(v, WM_CLOSE, 0, 0)
+            Else
+                LxShell_Activate(v)
+            End If
+            Exit Sub
+        End If
+    Next
+End Sub
+
+' == メッセージ欄（MessageWnd.sbp の代わり） ==
+
+Function MessageWnd_IsAlive() As Long
+    MessageWnd_IsAlive = 0
+    If hMessageWnd <> 0 And g_lxsMsgShow <> 0 Then MessageWnd_IsAlive = 1
+End Function
+
+Sub MessageWnd_Open(hOwner As HWND)
+    If hMessageWnd = 0 Then hMessageWnd = Ux_ViewNew(1)
+    g_lxsMsgShow = 1
+    g_lxsMsgSel = -1
+    LxShell_Layout()
+End Sub
+
+Sub LxShell_MsgClose()
+    g_lxsMsgShow = 0
+    LxShell_Layout()
+    LxShell_FocusDoc()
+End Sub
+
+Function LxShell_MsgLineCount() As Long
+    Dim p As *Byte, i As Long, n As Long
+    n = 1
+    p = StrPtr(g_lxsMsgText)
+    For i = 0 To Len(g_lxsMsgText) - 1
+        If p[i] = 10 And i < Len(g_lxsMsgText) - 1 Then n = n + 1
+    Next
+    LxShell_MsgLineCount = n
+End Function
+
+' k 行目（0 始まり。CR は取る）
+Function LxShell_MsgLine$(k As Long) As String
+    Dim p As *Byte, i As Long, n As Long, st As Long
+    LxShell_MsgLine$ = ""
+    p = StrPtr(g_lxsMsgText)
+    n = 0
+    st = 0
+    For i = 0 To Len(g_lxsMsgText)
+        If i = Len(g_lxsMsgText) Or p[i] = 10 Then
+            If n = k Then
+                If i > st Then
+                    LxShell_MsgLine$ = Mid$(g_lxsMsgText, st + 1, i - st)
+                    If Right$(LxShell_MsgLine$, 1) = Chr$(13) Then LxShell_MsgLine$ = Left$(LxShell_MsgLine$, Len(LxShell_MsgLine$) - 1)
+                End If
+                Exit Function
+            End If
+            n = n + 1
+            st = i + 1
+        End If
+    Next
+End Function
+
+Function LxShell_MsgRows() As Long
+    LxShell_MsgRows = (LXS_MSG_H - LXS_MSGHDR_H - 4) \ LXS_MSG_LINE
+    If LxShell_MsgRows < 1 Then LxShell_MsgRows = 1
+End Function
+
+Sub LxShell_MsgClamp()
+    Dim mx As Long
+    mx = LxShell_MsgLineCount() - LxShell_MsgRows()
+    If mx < 0 Then mx = 0
+    If g_lxsMsgTop > mx Then g_lxsMsgTop = mx
+    If g_lxsMsgTop < 0 Then g_lxsMsgTop = 0
+    If hMessageWnd <> 0 Then Ui_VScrollSet(hMessageWnd, 0, LxShell_MsgLineCount() - 1, LxShell_MsgRows(), g_lxsMsgTop)
+End Sub
+
+Sub MessageWnd_SetText(text As String)
+    If MessageWnd_IsAlive() = 0 Then Exit Sub
+    g_lxsMsgText = text
+    g_lxsMsgSel = -1
+    g_lxsMsgTop = LxShell_MsgLineCount()
+    LxShell_MsgClamp()
+    g_uxDirty = 1
+End Sub
+
+Sub MessageWnd_Append(text As String)
+    If MessageWnd_IsAlive() = 0 Then Exit Sub
+    MessageWnd_SetText(g_lxsMsgText + text)
+End Sub
+
+Sub LxShell_DrawMsg()
+    Dim top As Long, k As Long, y As Long, rows As Long, h As HDC
+    If g_lxsMsgShow = 0 Or hMessageWnd = 0 Then Exit Sub
+    Ux_TargetWindow()
+    top = g_uxH - LXS_MSG_H
+    Ux_FillAbs(0, top, g_uxW, top + LXS_MSGHDR_H, &HE4E4E8)
+    Ux_FillAbs(0, top, g_uxW, top + 1, &HB4B4BE)
+    Ux_TextRun(UX_FONT_GUI, UiText$(UI_MSG_TITLE), 8, top + 3, &H303030, 1)
+    Ux_TextRun(UX_FONT_GUI, "×", g_uxW - LXS_TABX_W, top + 3, &H808080, 1)
+    LxShell_MsgClamp()
+    h = hMessageWnd As HDC
+    Ui_Fill(h, 0, 0, g_uxW, LXS_MSG_H, RGB(255, 255, 255))
+    Ui_SelectFont(h, UX_FONT_GUI As HFONT)
+    Ui_TextColor(h, RGB(0, 0, 0))
+    rows = LxShell_MsgRows()
+    For k = 0 To rows
+        y = 2 + k * LXS_MSG_LINE
+        If g_lxsMsgTop + k = g_lxsMsgSel Then Ui_Fill(h, 0, y, g_uxW, y + LXS_MSG_LINE, RGB(204, 228, 247))
+        Ui_Text(h, 6, y + 1, LxShell_MsgLine$(g_lxsMsgTop + k))
+    Next
+    Ux_DrawSb(hMessageWnd)
+End Sub
+
+' メッセージ欄の見出しかその中を押した。ダブルクリック（または 1 回でも）で診断の行へ飛ぶ
+Sub LxShell_MsgClick(ByVal x As Long, ByVal y As Long, ByVal dbl As Long)
+    Dim top As Long, k As Long
+    top = g_uxH - LXS_MSG_H
+    If y < top + LXS_MSGHDR_H Then
+        If x >= g_uxW - LXS_TABX_W - 4 Then LxShell_MsgClose()
+        Exit Sub
+    End If
+    k = g_lxsMsgTop + (y - top - LXS_MSGHDR_H - 2) \ LXS_MSG_LINE
+    If k < 0 Or k >= LxShell_MsgLineCount() Then Exit Sub
+    g_lxsMsgSel = k
+    g_uxDirty = 1
+    MsgJump_Apply(LxShell_MsgLine$(k))
+    LxShell_FocusDoc()
+End Sub
+
+' == フォント（EditorFont.sbp の代わり。fonts/ の TTF は UiX11 が読む） ==
+
+Function EditorFont_Create(ByVal height As Long) As HFONT
+    EditorFont_Create = UX_FONT_MONO As HFONT
+End Function
+
+Sub EditorFont_Init()
+    Ux_FontInit()
+End Sub
+
+Sub EditorFont_Shutdown()
+End Sub
+
+' == 描く ==
+
+Sub LxShell_DrawEmpty()
+    Dim top As Long
+    top = LxShell_DocTop()
+    Ux_TargetWindow()
+    Ux_FillAbs(0, top, g_uxW, LxShell_DocBottom(), &HC8C8CD)
+    Ux_TextRun(UX_FONT_GUI, "Ctrl+N / Ctrl+O", 16, top + 16, &H505050, 1)
+End Sub
+
+Sub LxShell_Paint()
+    g_uxDirty = 0
+    Ux_TargetWindow()
+    Ux_FillAbs(0, 0, g_uxW, g_uxH, &HF0F0F0)
+    LxMenu_DrawBar()
+    LxShell_DrawTabs()
+    If g_activeChild <> 0 And Ux_ViewShown(g_activeChild) <> 0 Then
+        MainWndProc(g_activeChild, WM_PAINT, 0, 0)
+        Ux_DrawSb(g_activeChild)
+    Else
+        LxShell_DrawEmpty()
+    End If
+    LxShell_DrawMsg()
+    If g_lxsModal = LXS_MODAL_MSGBOX Then LxShell_DrawBox()
+    If g_lxsModal = LXS_MODAL_MENU Then LxMenu_DrawOpen()
+    Ux_Present()
+End Sub
+
+' == イベント ==
+
+Function LxShell_XY(ByVal x As Long, ByVal y As Long) As LPARAM
+    LxShell_XY = (((y And &HFFFF) << 16) Or (x And &HFFFF)) As LPARAM
+End Function
+
+' X の state → MK_*（MK_LBUTTON 1、MK_SHIFT 4、MK_CONTROL 8）
+Function LxShell_Mk(ByVal st As Long) As Long
+    LxShell_Mk = 0
+    If (st And &H100) <> 0 Then LxShell_Mk = LxShell_Mk Or 1
+    If (st And 1) <> 0 Then LxShell_Mk = LxShell_Mk Or 4
+    If (st And 4) <> 0 Then LxShell_Mk = LxShell_Mk Or 8
+End Function
+
+Sub LxShell_Mods(ByVal st As Long)
+    g_uxShift = 0
+    g_uxCtrl = 0
+    g_uxAlt = 0
+    If (st And 1) <> 0 Then g_uxShift = 1
+    If (st And 4) <> 0 Then g_uxCtrl = 1
+    If (st And 8) <> 0 Then g_uxAlt = 1
+End Sub
+
+' KeySym → 仮想キー。0 は送らない
+Function LxShell_Vk(ByVal ks As Long) As Long
+    LxShell_Vk = 0
+    If ks >= &H61 And ks <= &H7A Then LxShell_Vk = ks - &H20
+    If ks >= &H41 And ks <= &H5A Then LxShell_Vk = ks
+    If ks >= &H30 And ks <= &H39 Then LxShell_Vk = ks
+    If ks = &H20 Then LxShell_Vk = VK_SPACE
+    If ks = &HFF08 Then LxShell_Vk = VK_BACK
+    If ks = &HFF09 Or ks = &HFE20 Then LxShell_Vk = VK_TAB
+    If ks = &HFF0D Or ks = &HFF8D Then LxShell_Vk = VK_RETURN
+    If ks = &HFF1B Then LxShell_Vk = VK_ESCAPE
+    If ks = &HFFFF Or ks = &HFF9F Then LxShell_Vk = VK_DELETE
+    If ks = &HFF50 Or ks = &HFF95 Then LxShell_Vk = VK_HOME
+    If ks = &HFF57 Or ks = &HFF9C Then LxShell_Vk = VK_END
+    If ks >= &HFF51 And ks <= &HFF54 Then LxShell_Vk = ks - &HFF51 + VK_LEFT
+    If ks >= &HFF96 And ks <= &HFF99 Then LxShell_Vk = ks - &HFF96 + VK_LEFT
+    If ks = &HFF55 Or ks = &HFF9A Then LxShell_Vk = VK_PRIOR
+    If ks = &HFF56 Or ks = &HFF9B Then LxShell_Vk = VK_NEXT
+    If ks = &HFF63 Then LxShell_Vk = VK_INSERT
+    If ks >= &HFFBE And ks <= &HFFC9 Then LxShell_Vk = ks - &HFFBE + VK_F1
+End Function
+
+' KeySym → Unicode（文字でなければ 0）
+Function LxShell_KeyCp(ByVal ks As Long) As Long
+    LxShell_KeyCp = 0
+    If ks >= &H20 And ks <= &H7E Then LxShell_KeyCp = ks
+    If ks >= &HA0 And ks <= &HFF Then LxShell_KeyCp = ks
+    If ks >= &H1000100 And ks <= &H110FFFF Then LxShell_KeyCp = ks - &H1000000
+End Function
+
+Function LxShell_Utf8$(ByVal cp As Long) As String
+    If cp < &H80 Then
+        LxShell_Utf8$ = Chr$(cp)
+    ElseIf cp < &H800 Then
+        LxShell_Utf8$ = Chr$(&HC0 Or (cp >> 6)) + Chr$(&H80 Or (cp And &H3F))
+    ElseIf cp < &H10000 Then
+        LxShell_Utf8$ = Chr$(&HE0 Or (cp >> 12)) + Chr$(&H80 Or ((cp >> 6) And &H3F)) + Chr$(&H80 Or (cp And &H3F))
+    Else
+        LxShell_Utf8$ = Chr$(&HF0 Or (cp >> 18)) + Chr$(&H80 Or ((cp >> 12) And &H3F)) + Chr$(&H80 Or ((cp >> 6) And &H3F)) + Chr$(&H80 Or (cp And &H3F))
+    End If
+End Function
+
+Sub LxShell_KeyPress(e As VoidPtr)
+    Dim n As Long, ks As Long, vk As Long, cp As Long
+    LxShell_Mods(Ux_L(e, 80))
+    n = Ux_XLookupString(e, VarPtr(g_lxsKey(0)), 31, VarPtr(g_lxsSym(0)), 0)
+    ks = Ux_L(VarPtr(g_lxsSym(0)), 0)
+    vk = LxShell_Vk(ks)
+    If g_lxsModal = LXS_MODAL_MSGBOX Then
+        LxShell_BoxKey(vk, ks)
+        Exit Sub
+    End If
+    If g_lxsModal = LXS_MODAL_MENU Then
+        LxMenu_Key(vk, ks)
+        Exit Sub
+    End If
+    If g_uxAlt <> 0 Then
+        LxMenu_AltKey(ks)
+        Exit Sub
+    End If
+    If ks = &HFFE9 Or ks = &HFFEA Then Exit Sub
+    If g_lxFocus = (hMessageWnd As Long) And hMessageWnd <> 0 Then
+        If vk = VK_ESCAPE Then LxShell_MsgClose()
+        Exit Sub
+    End If
+    If g_activeChild = 0 Then
+        LxShell_FrameKey(vk)
+        Exit Sub
+    End If
+    If vk <> 0 Then MainWndProc(g_activeChild, WM_KEYDOWN, vk, 0)
+    If g_activeChild = 0 Then Exit Sub
+    cp = LxShell_KeyCp(ks)
+    If n >= 1 And g_lxsKey(0) < &H80 Then
+        MainWndProc(g_activeChild, WM_CHAR, g_lxsKey(0), 0)
+    ElseIf cp >= &H80 And g_uxCtrl = 0 Then
+        TextBuf_Append(LxShell_Utf8$(cp))
+        EditorInvalidate(g_activeChild)
+    End If
+End Sub
+
+' 文書が無いときのキー（Ctrl+N / Ctrl+O / Ctrl+Q）
+Sub LxShell_FrameKey(ByVal vk As Long)
+    If g_uxCtrl = 0 Then Exit Sub
+    If vk = &H4E Then MdiNewDoc()
+    If vk = &H4F Then MdiOpenDoc()
+End Sub
+
+Sub LxShell_SendMouse(v As HWND, msg As DWord, ByVal wp As Long, ByVal x As Long, ByVal y As Long)
+    MainWndProc(v, msg, wp, LxShell_XY(x - Ux_ViewX(v), y - Ux_ViewY(v)))
+End Sub
+
+Sub LxShell_SbPress(v As HWND, ByVal y As Long)
+    Dim i As Long, tt As Long, th As Long, vy As Long
+    i = Ux_Index(v)
+    If i < 0 Then Exit Sub
+    vy = y - Ux_ViewY(v)
+    Ux_SbThumb(i, tt, th)
+    If th = 0 Then Exit Sub
+    If v = hMessageWnd Then
+        g_lxsSbDrag = v As Long
+        g_lxsMsgTop = Ux_SbPosAt(v, vy)
+        g_uxDirty = 1
+        Exit Sub
+    End If
+    If vy < tt Then
+        MainWndProc(v, WM_VSCROLL, SB_PAGEUP, 0)
+    ElseIf vy >= tt + th Then
+        MainWndProc(v, WM_VSCROLL, SB_PAGEDOWN, 0)
+    Else
+        g_lxsSbDrag = v As Long
+    End If
+End Sub
+
+Sub LxShell_SbMove(ByVal y As Long)
+    Dim v As HWND
+    v = g_lxsSbDrag As HWND
+    If v = hMessageWnd Then
+        g_lxsMsgTop = Ux_SbPosAt(v, y - Ux_ViewY(v))
+        g_uxDirty = 1
+        Exit Sub
+    End If
+    Ux_SbTrack(v, Ux_SbPosAt(v, y - Ux_ViewY(v)))
+    MainWndProc(v, WM_VSCROLL, SB_THUMBTRACK, 0)
+End Sub
+
+Sub LxShell_Wheel(ByVal up As Long, ByVal st As Long)
+    Dim d As Long
+    d = -120
+    If up <> 0 Then d = 120
+    If hMessageWnd <> 0 And g_lxsMsgShow <> 0 And g_lxsMouseY >= g_uxH - LXS_MSG_H Then
+        g_lxsMsgTop = g_lxsMsgTop - d \ 40
+        g_uxDirty = 1
+        Exit Sub
+    End If
+    If g_activeChild = 0 Then Exit Sub
+    MainWndProc(g_activeChild, WM_MOUSEWHEEL, ((d And &HFFFF) << 16) Or LxShell_Mk(st), LxShell_XY(g_lxsMouseX, g_lxsMouseY))
+End Sub
+
+Sub LxShell_ButtonPress(e As VoidPtr)
+    Dim x As Long, y As Long, b As Long, st As Long, t As Long, dbl As Long
+    x = Ux_L(e, 64)
+    y = Ux_L(e, 68)
+    st = Ux_L(e, 80)
+    b = Ux_L(e, 84)
+    t = Ux_L(e, 56)
+    g_lxsMouseX = x
+    g_lxsMouseY = y
+    g_lxsRootDX = Ux_L(e, 72) - x
+    g_lxsRootDY = Ux_L(e, 76) - y
+    LxShell_Mods(st)
+    If g_lxsModal = LXS_MODAL_MSGBOX Then
+        If b = 1 Then LxShell_BoxClick(x, y)
+        Exit Sub
+    End If
+    If g_lxsModal = LXS_MODAL_MENU Then
+        LxMenu_Click(x, y)
+        Exit Sub
+    End If
+    If b = 4 Or b = 5 Then
+        LxShell_Wheel(b = 4, st)
+        Exit Sub
+    End If
+    dbl = 0
+    If b = 1 Then
+        If t - g_lxsLastClick < LXS_DBL_MS And Abs(x - g_lxsClickX) < 4 And Abs(y - g_lxsClickY) < 4 Then dbl = 1
+        g_lxsLastClick = t
+        g_lxsClickX = x
+        g_lxsClickY = y
+        If dbl <> 0 Then g_lxsLastClick = 0
+    End If
+    If y < LXS_MENU_H Then
+        If b = 1 Then LxMenu_BarClick(x)
+        Exit Sub
+    End If
+    If y < LXS_MENU_H + LXS_TAB_H Then
+        LxShell_TabClick(x, b)
+        Exit Sub
+    End If
+    If g_lxsMsgShow <> 0 And y >= g_uxH - LXS_MSG_H Then
+        If Ux_SbHit(hMessageWnd, x, y) <> 0 Then
+            LxShell_SbPress(hMessageWnd, y)
+            Exit Sub
+        End If
+        g_lxFocus = hMessageWnd As Long
+        If b = 1 Then LxShell_MsgClick(x, y, dbl)
+        Exit Sub
+    End If
+    If g_activeChild = 0 Then Exit Sub
+    If Ux_SbHit(g_activeChild, x, y) <> 0 Then
+        LxShell_SbPress(g_activeChild, y)
+        Exit Sub
+    End If
+    LxShell_FocusDoc()
+    If b = 1 And dbl <> 0 Then
+        LxShell_SendMouse(g_activeChild, WM_LBUTTONDBLCLK, LxShell_Mk(st) Or 1, x, y)
+    ElseIf b = 1 Then
+        LxShell_SendMouse(g_activeChild, WM_LBUTTONDOWN, LxShell_Mk(st) Or 1, x, y)
+    ElseIf b = 3 Then
+        LxShell_SendMouse(g_activeChild, WM_RBUTTONDOWN, LxShell_Mk(st) Or 2, x, y)
+        MainWndProc(g_activeChild, WM_CONTEXTMENU, g_activeChild As WPARAM, LxShell_XY(x + g_lxsRootDX, y + g_lxsRootDY))
+    End If
+End Sub
+
+Sub LxShell_ButtonRelease(e As VoidPtr)
+    Dim x As Long, y As Long, b As Long, v As HWND
+    x = Ux_L(e, 64)
+    y = Ux_L(e, 68)
+    b = Ux_L(e, 84)
+    g_lxsMouseX = x
+    g_lxsMouseY = y
+    If g_lxsModal <> 0 Then Exit Sub
+    If b <> 1 Then Exit Sub
+    g_lxsSbDrag = 0
+    v = g_uxCapture As HWND
+    If v = 0 Then v = g_activeChild
+    If v = 0 Then Exit Sub
+    If MdiSlotOf(v) < 0 Then Exit Sub
+    LxShell_SendMouse(v, WM_LBUTTONUP, LxShell_Mk(Ux_L(e, 80)) And (Not 1), x, y)
+End Sub
+
+Sub LxShell_Motion(e As VoidPtr)
+    Dim x As Long, y As Long, st As Long, v As HWND
+    x = Ux_L(e, 64)
+    y = Ux_L(e, 68)
+    st = Ux_L(e, 80)
+    g_lxsMouseX = x
+    g_lxsMouseY = y
+    If g_lxsModal = LXS_MODAL_MENU Then
+        LxMenu_Hover(x, y)
+        Exit Sub
+    End If
+    If g_lxsModal <> 0 Then Exit Sub
+    If g_lxsSbDrag <> 0 Then
+        LxShell_SbMove(y)
+        Exit Sub
+    End If
+    v = g_uxCapture As HWND
+    If v = 0 Then Exit Sub
+    If MdiSlotOf(v) < 0 Then Exit Sub
+    LxShell_SendMouse(v, WM_MOUSEMOVE, LxShell_Mk(st), x, y)
+End Sub
+
+' 閉じるボタン。一時フォルダーのプロジェクトと保存していない文書を尋ねてから終わる
+Sub LxShell_Close()
+    If g_lxsModal <> 0 Then Exit Sub
+    If EditorTemp_AskQuit() = 0 Then Exit Sub
+    MainWnd_Destroy()
+End Sub
+
+Sub LxShell_Event()
+    Dim e As VoidPtr, t As Long
+    e = VarPtr(g_lxsEv(0))
+    t = Ux_L(e, 0)
+    Select Case t
+        Case 2
+            LxShell_KeyPress(e)
+        Case 3
+            LxShell_Mods(Ux_L(e, 80))
+        Case 4
+            LxShell_ButtonPress(e)
+        Case 5
+            LxShell_ButtonRelease(e)
+        Case 6
+            LxShell_Motion(e)
+        Case 12
+            g_uxDirty = 1
+        Case 22
+            If Ux_L(e, 56) <> g_uxW Or Ux_L(e, 60) <> g_uxH Then
+                Ux_Resize(Ux_L(e, 56), Ux_L(e, 60))
+                LxShell_Layout()
+            End If
+        Case 33
+            If LxGetQ(e, 56) = Ux_Atom(0) Then LxShell_Close()
+    End Select
+End Sub
+
+' イベントを 1 つ待って扱う（待つ前に、描き直しが要れば描く）
+Sub LxShell_PumpOne()
+    If Ux_XPending(g_uxDpy) = 0 Then
+        If g_uxDirty <> 0 Then LxShell_Paint()
+    End If
+    Ux_XNextEvent(g_uxDpy, VarPtr(g_lxsEv(0)))
+    LxShell_Event()
+End Sub
+
+' == メッセージボックス ==
+
+Function LxShell_BoxLines() As Long
+    Dim p As *Byte, i As Long
+    LxShell_BoxLines = 1
+    p = StrPtr(g_lxsBoxText)
+    For i = 0 To Len(g_lxsBoxText) - 1
+        If p[i] = 10 Then LxShell_BoxLines = LxShell_BoxLines + 1
+    Next
+End Function
+
+Function LxShell_BoxLine$(k As Long) As String
+    Dim save As String
+    save = g_lxsMsgText
+    g_lxsMsgText = g_lxsBoxText
+    LxShell_BoxLine$ = LxShell_MsgLine$(k)
+    g_lxsMsgText = save
+End Function
+
+Function LxShell_BtnText$(id As Long) As String
+    LxShell_BtnText$ = "OK"
+    If id = IDCANCEL Then LxShell_BtnText$ = UiText$(UI_BTN_CANCEL)
+    If id = IDYES Then LxShell_BtnText$ = UiText$(UI_BTN_YES)
+    If id = IDNO Then LxShell_BtnText$ = UiText$(UI_BTN_NO)
+End Function
+
+Sub LxShell_DrawBox()
+    Dim n As Long, k As Long, w As Long, h As Long, x0 As Long, y0 As Long, tw As Long, bx As Long
+    n = LxShell_BoxLines()
+    w = Ux_TextRun(UX_FONT_GUI, g_lxsBoxCap, 0, 0, 0, 0) + 40
+    For k = 0 To n - 1
+        tw = Ux_TextRun(UX_FONT_GUI, LxShell_BoxLine$(k), 0, 0, 0, 0) + 40
+        If tw > w Then w = tw
+    Next
+    If w < 300 Then w = 300
+    If w > g_uxW - 20 Then w = g_uxW - 20
+    h = 34 + n * 18 + 50
+    x0 = (g_uxW - w) \ 2
+    y0 = (g_uxH - h) \ 3
+    If y0 < 4 Then y0 = 4
+    Ux_TargetWindow()
+    Ux_FillAbs(x0 + 4, y0 + 4, x0 + w + 4, y0 + h + 4, &HA0A0A0)
+    Ux_FillAbs(x0, y0, x0 + w, y0 + h, &HFFFFFF)
+    Ux_FillAbs(x0, y0, x0 + w, y0 + 26, &HE4E4E8)
+    Ux_FrameAbs(x0, y0, x0 + w, y0 + h, &H808080)
+    Ux_TextRun(UX_FONT_GUI, g_lxsBoxCap, x0 + 10, y0 + 6, &H202020, 1)
+    For k = 0 To n - 1
+        Ux_TextRun(UX_FONT_GUI, LxShell_BoxLine$(k), x0 + 20, y0 + 38 + k * 18, 0, 1)
+    Next
+    g_lxsBoxBtnT = y0 + h - 38
+    g_lxsBoxBtnB = y0 + h - 12
+    bx = x0 + w - 16
+    For k = g_lxsBoxBtnN - 1 To 0 Step -1
+        g_lxsBoxBtnR(k) = bx
+        g_lxsBoxBtnL(k) = bx - 84
+        bx = bx - 92
+        Ux_FillAbs(g_lxsBoxBtnL(k), g_lxsBoxBtnT, g_lxsBoxBtnR(k), g_lxsBoxBtnB, &HE6E6E6)
+        If k = g_lxsBoxFocus Then
+            Ux_FrameAbs(g_lxsBoxBtnL(k), g_lxsBoxBtnT, g_lxsBoxBtnR(k), g_lxsBoxBtnB, &H0078D7)
+        Else
+            Ux_FrameAbs(g_lxsBoxBtnL(k), g_lxsBoxBtnT, g_lxsBoxBtnR(k), g_lxsBoxBtnB, &HA0A0A0)
+        End If
+        tw = Ux_TextRun(UX_FONT_GUI, LxShell_BtnText$(g_lxsBoxBtnId(k)), 0, 0, 0, 0)
+        Ux_TextRun(UX_FONT_GUI, LxShell_BtnText$(g_lxsBoxBtnId(k)), g_lxsBoxBtnL(k) + (84 - tw) \ 2, g_lxsBoxBtnT + 6, 0, 1)
+    Next
+End Sub
+
+Sub LxShell_BoxClick(ByVal x As Long, ByVal y As Long)
+    Dim k As Long
+    If y < g_lxsBoxBtnT Or y >= g_lxsBoxBtnB Then Exit Sub
+    For k = 0 To g_lxsBoxBtnN - 1
+        If x >= g_lxsBoxBtnL(k) And x < g_lxsBoxBtnR(k) Then g_lxsModalRet = g_lxsBoxBtnId(k)
+    Next
+End Sub
+
+' やめる（Esc・閉じる）ときの答え: キャンセルがあればそれ、無ければ最後のボタン
+Function LxShell_BoxCancel() As Long
+    Dim k As Long
+    LxShell_BoxCancel = g_lxsBoxBtnId(g_lxsBoxBtnN - 1)
+    For k = 0 To g_lxsBoxBtnN - 1
+        If g_lxsBoxBtnId(k) = IDCANCEL Then LxShell_BoxCancel = IDCANCEL
+    Next
+End Function
+
+Sub LxShell_BoxKey(ByVal vk As Long, ByVal ks As Long)
+    Dim k As Long
+    If vk = VK_RETURN Or vk = VK_SPACE Then g_lxsModalRet = g_lxsBoxBtnId(g_lxsBoxFocus)
+    If vk = VK_ESCAPE Then g_lxsModalRet = LxShell_BoxCancel()
+    If vk = VK_TAB Or vk = VK_RIGHT Then g_lxsBoxFocus = (g_lxsBoxFocus + 1) Mod g_lxsBoxBtnN
+    If vk = VK_LEFT Then g_lxsBoxFocus = (g_lxsBoxFocus + g_lxsBoxBtnN - 1) Mod g_lxsBoxBtnN
+    For k = 0 To g_lxsBoxBtnN - 1
+        If vk = &H59 And g_lxsBoxBtnId(k) = IDYES Then g_lxsModalRet = IDYES
+        If vk = &H4E And g_lxsBoxBtnId(k) = IDNO Then g_lxsModalRet = IDNO
+    Next
+    g_uxDirty = 1
+End Sub
+
+' MessageBox と同じ答え（IDOK / IDCANCEL / IDYES / IDNO）。X が無ければ最初のボタン
+Function LxShell_MsgBox(text As String, cap As String, ByVal typ As DWord) As Long
+    Dim k As Long
+    k = (typ And &HF) As Long
+    g_lxsBoxBtnN = 1
+    g_lxsBoxBtnId(0) = IDOK
+    If k = 1 Then
+        g_lxsBoxBtnN = 2
+        g_lxsBoxBtnId(1) = IDCANCEL
+    ElseIf k = 3 Then
+        g_lxsBoxBtnN = 3
+        g_lxsBoxBtnId(0) = IDYES
+        g_lxsBoxBtnId(1) = IDNO
+        g_lxsBoxBtnId(2) = IDCANCEL
+    ElseIf k = 4 Then
+        g_lxsBoxBtnN = 2
+        g_lxsBoxBtnId(0) = IDYES
+        g_lxsBoxBtnId(1) = IDNO
+    End If
+    LxShell_MsgBox = g_lxsBoxBtnId(0)
+    If g_uxDpy = 0 Or g_lxsModal <> 0 Then Exit Function
+    g_lxsBoxText = text
+    g_lxsBoxCap = cap
+    g_lxsBoxFocus = 0
+    g_lxsModal = LXS_MODAL_MSGBOX
+    g_lxsModalRet = 0
+    g_uxDirty = 1
+    While g_lxsModalRet = 0 And g_lxQuit = 0
+        LxShell_PumpOne()
+    Wend
+    g_lxsModal = 0
+    g_uxDirty = 1
+    If g_lxsModalRet <> 0 Then LxShell_MsgBox = g_lxsModalRet
+End Function
+
+' == 入口（ProjectEditor.abp から） ==
+
+' MainWnd_Create の Linux 版
+Sub LxShell_Start()
+    UiLang_Init()
+    LxCallback_BuildMenus()
+    Lx_SetMenu(hMainWnd, hMenu_M_MAIN)
+    g_hClient = hMainWnd
+    EditorMenu_ApplyLang()
+    EditorBuild_Init(hMainWnd)
+    MdiOpenStartup()
+End Sub
+
+Sub LxShell_Run()
+    If Ux_Open("editor", 880, 640) = 0 Then
+        Print "ProjectEditor: cannot open the X display (set DISPLAY)"
+        ExitProcess(1)
+    End If
+    Ux_FontInit()
+    hMainWnd = Ux_ViewNew(0)
+    LxShell_Start()
+    LxShell_Layout()
+    While g_lxQuit = 0
+        LxShell_PumpOne()
+    Wend
+End Sub
+
+#endif
+
+#ifdef _LINUX
+' == まだ Linux 版の無い画面（L5 で入れる） ==
+
+Sub ProjShow()
+    g_uxDirty = 1
+End Sub
+
+Sub EditorFind_Show()
+    Ux_Beep()
+End Sub
+
+Sub MainWnd_IDM_SETTING_MenuClick()
+    Ux_Beep()
+End Sub
+#endif
