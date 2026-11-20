@@ -909,13 +909,15 @@ Application.Run(mainForm)
 | `Show()` | 窓が無ければ作って表示する |
 | `SetCaption(s)`（Form） | 見出しを変える。窓がもうあれば窓の見出しも変える。先に `InitComponents()` を呼ぶので、`Show` の前に呼んでも `InitializeComponent` に上書きされない |
 | `Close()` | `WM_CLOSE` を窓へ送る（既定の `WndProc` が窓を壊す）。`Class` の中では `This.Close()` と書く（裸の `Close` はファイルの `Close` 文になる） |
-| `AddControl(c)` | 部品（`Control` の子。`Button` / `Label` / `PictureBox` / `Panel`）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
+| `AddControl(c)` | 部品（`Control` の子。`Button` / `Label` / `PictureBox` / `Panel` / `CheckBox`）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
 | `Button` | `Left` / `Top` / `Width` / `Height` / `Caption` / `Handle`。押されると、フォームの `WndProc` に `WM_COMMAND`（`HIWORD(wParam) = BN_CLICKED`、`lParam` = ボタンの `Handle`）が届く。文字は `DEFAULT_GUI_FONT` |
 | `Label` | 文字だけの部品（`STATIC`）。メンバーは `Button` と同じ。押しても何も届かない |
 | `SetCaption(s)` | 部品の `Caption` を `s` にし、窓がもうあれば窓の文字も変える。窓ができたあとで `Caption` に入れるだけでは窓は変わらない（プロパティが無いため） |
 | `Enabled` / `SetEnabled(b)` | 部品が使えるか。初めは `True`（`Control` の ctor）。`InitializeComponent` で `Enabled = False` と書けば使えない子窓で作る。窓ができたあとは `SetEnabled(b)`（`EnableWindow`） |
 | `SetBounds(x, y, w, h)` | 部品の位置と大きさを変える。窓がもうあれば `MoveWindow` で窓も動かす |
 | `Panel` | 板（`STATIC`、縁がへこみ `Caption` を真ん中に出す。Lazarus の `TPanel`）。メンバーは `Button` と同じ。中に部品を載せることはまだできない |
+| `CheckBox` | チェックボックス（`BUTTON` の `BS_AUTOCHECKBOX`。Lazarus の `TCheckBox`）。メンバーは `Button` と同じに `Checked`（窓ができる前の初めの値）。押すと印が切り替わり、`Button` と同じ `WM_COMMAND`（`BN_CLICKED`）が届く |
+| `GetChecked()` / `SetChecked(b)` | 印が付いているか（`True` / `False`）と、印を付ける・外す。窓ができたあとはこちらを使う（押して変わった印は `Checked` に入らない）。-linux ではまだ子窓が無いので `Checked` を読み書きするだけ |
 | `PictureBox` | 絵を出す部品（`STATIC` の `SS_BITMAP`。Lazarus の `TImage`）。絵は左上に元の大きさで出る（`SS_BITMAP` の `STATIC` は絵の大きさに縮むので、`SetBounds` で広げても次の `SetBitmap` でまた絵の大きさになる） |
 | `SetBitmap(hbmp)` | 絵を出す。`hbmp` の持ち主になり、前の絵は `DeleteObject` する（Lazarus の `Picture.Assign(Bitmap)` と `Bitmap.Free` を合わせたもの）。`0` で絵を消す。窓ができる前に渡せば、窓ができたときに出す。今の絵は `Bitmap` |
 | `OpenFileDialog` | ファイルを開くダイアログ（`GetOpenFileName`）。窓を持たないので `AddControl` しない。`Filter`（`"説明\|*.pdf\|説明\|*.*"`、Lazarus と同じ `\|` 区切り）、`FileName`（UTF-8 のパス。初めの値はダイアログの初めのファイル名）、`Title` |
