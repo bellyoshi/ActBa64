@@ -1,16 +1,20 @@
 ' フォームデザイナの画面（RAD 第一段階）。F12 でソースとデザインを切り替える。
 ' InitializeComponent の Width x Height の窓を FD_ORG_X, FD_ORG_Y に描く。
 ' 右辺・下辺・右下を引くと大きさが変わり、離したときに Width / Height の行を書き換える。
+' 窓の中の部品（AddControl したもの）は FormDesignCtlView.sbp。
 ' 書き換えは 1 回の編集として「元に戻す」が効く。デザイン中は文字を打てない。
 
 Const FD_GUI_FONT = 17             ' DEFAULT_GUI_FONT
 
 Dim g_fdOn As Long                  ' 前面の文書がデザイン中か
 Dim g_fdSlot(7) As Long             ' 文書（Mdi のスロット）ごとのデザイン中
-Dim g_fdDrag As Long                ' 引いている所（FormDesign_Hit）。0 は引いていない
+Dim g_fdDrag As Long                ' 引いている所（FormDesign_Hit / FormDesign_CtlHit）。0 は引いていない
 Dim g_fdX0 As Long, g_fdY0 As Long  ' 押した位置
 Dim g_fdW0 As Long, g_fdH0 As Long  ' 押したときの大きさ
 Dim g_fdW As Long, g_fdH As Long    ' 引いている間の大きさ
+Dim g_fdSel As String               ' 選んでいる部品の名前。"" は選んでいない
+Dim g_fdCX0 As Long, g_fdCY0 As Long, g_fdCW0 As Long, g_fdCH0 As Long ' 押したときの部品
+Dim g_fdCX As Long, g_fdCY As Long, g_fdCW As Long, g_fdCH As Long     ' 引いている間の部品
 
 ' hWnd の文書がデザイン中か（前面は g_fdOn、ほかはスロット）
 Function FormDesign_IsOn(hWnd As HWND) As Long
@@ -44,6 +48,8 @@ End Sub
 
 Function FormDesign_HitAt(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
     Dim w As Long, h As Long
+    FormDesign_HitAt = FormDesign_CtlHitAt(hWnd, x, y)
+    If FormDesign_HitAt <> 0 Then Exit Function
     FormDesign_Size(hWnd, FormDesign_Text$(hWnd), w, h)
     FormDesign_HitAt = FormDesign_Hit(x, y, w, h)
 End Function
@@ -69,6 +75,7 @@ End Sub
 
 Sub FormDesign_Leave(hWnd As HWND)
     g_fdOn = 0
+    g_fdSel = ""
     If g_fdDrag <> 0 Then ReleaseCapture()
     g_fdDrag = 0
     If GetFocus() = hWnd Then EditorCaret_Create(hWnd)
@@ -132,22 +139,22 @@ Sub FormDesign_DrawGrips(hDC As HDC, ByVal w As Long, ByVal h As Long)
 End Sub
 
 ' 左下に大きさと切り替えキー
-Sub FormDesign_DrawInfo(hDC As HDC, ByRef rc As RECT, ByVal w As Long, ByVal h As Long)
+Sub FormDesign_DrawInfo(hDC As HDC, ByRef rc As RECT, t As String, ByVal w As Long, ByVal h As Long)
     Dim s As String
-    s = "Width " & FormDesign_Num$(w) & " x Height " & FormDesign_Num$(h) & "    (F12: source)"
+    s = FormDesign_InfoText$(t, w, h) & "    (F12: source)"
     SetTextColor(hDC, RGB(255, 255, 255))
     Enc_TextOutUtf8(hDC, FD_ORG_X, rc.bottom - 20, s)
 End Sub
 
 Sub FormDesign_DrawAll(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
-    Dim t As String
-    Dim w As Long, h As Long
+    Dim t As String, w As Long, h As Long
     t = FormDesign_Text$(hWnd)
     FormDesign_Size(hWnd, t, w, h)
     FormDesign_Fill(hDC, 0, 0, rc.right, rc.bottom, GetSysColor(COLOR_APPWORKSPACE))
     FormDesign_DrawWindow(hDC, w, h, FormDesign_GetStr$(t, "Caption"))
+    FormDesign_DrawCtls(hDC, t, w, h)
     FormDesign_DrawGrips(hDC, w, h)
-    FormDesign_DrawInfo(hDC, rc, w, h)
+    FormDesign_DrawInfo(hDC, rc, t, w, h)
 End Sub
 
 Sub FormDesign_Draw(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
@@ -189,6 +196,8 @@ End Sub
 
 Function FormDesign_CursorId(ByVal kind As Long) As Long
     FormDesign_CursorId = IDC_ARROW
+    If kind = FD_KIND_MOVE Then FormDesign_CursorId = IDC_SIZEALL
+    If kind > FD_KIND_MOVE Then kind = kind - FD_KIND_MOVE
     If kind = 1 Then FormDesign_CursorId = IDC_SIZEWE
     If kind = 2 Then FormDesign_CursorId = IDC_SIZENS
     If kind = 3 Then FormDesign_CursorId = IDC_SIZENWSE
@@ -224,13 +233,16 @@ Sub FormDesign_Begin(hWnd As HWND, ByVal x As Long, ByVal y As Long)
     SetCapture(hWnd)
 End Sub
 
+' 部品の上なら部品を選んで掴む。そうでなければ選びを外し、窓の辺を見る
 Sub FormDesign_Down(hWnd As HWND, ByVal lParam As LPARAM)
     Dim x As Long, y As Long
     SetFocus(hWnd)
     EditorSelect_XY(lParam, x, y)
     FormDesign_Size(hWnd, FormDesign_Text$(hWnd), g_fdW0, g_fdH0)
-    g_fdDrag = FormDesign_Hit(x, y, g_fdW0, g_fdH0)
+    g_fdDrag = FormDesign_CtlDown(hWnd, x, y)
+    If g_fdDrag = 0 Then g_fdDrag = FormDesign_Hit(x, y, g_fdW0, g_fdH0)
     If g_fdDrag <> 0 Then FormDesign_Begin(hWnd, x, y)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
 
 Sub FormDesign_Move(hWnd As HWND, ByVal lParam As LPARAM)
@@ -238,8 +250,17 @@ Sub FormDesign_Move(hWnd As HWND, ByVal lParam As LPARAM)
     If g_fdDrag = 0 Then Exit Sub
     EditorSelect_XY(lParam, x, y)
     FormDesign_SetCursor(g_fdDrag)
-    FormDesign_DragSize(g_fdDrag, g_fdW0, g_fdH0, x - g_fdX0, y - g_fdY0, g_fdW, g_fdH)
+    FormDesign_DragTo(x - g_fdX0, y - g_fdY0)
     InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 押した位置から dx, dy 引いた。部品なら部品を、そうでなければ窓の大きさを変える
+Sub FormDesign_DragTo(ByVal dx As Long, ByVal dy As Long)
+    If g_fdDrag >= FD_KIND_MOVE Then
+        FormDesign_CtlMove(dx, dy)
+    Else
+        FormDesign_DragSize(g_fdDrag, g_fdW0, g_fdH0, dx, dy, g_fdW, g_fdH)
+    End If
 End Sub
 
 ' 本文を u に置き換える（1 回の編集として元に戻せる）
@@ -254,15 +275,24 @@ Sub FormDesign_Replace(u As String)
     EditorDoc_MarkDirty()
 End Sub
 
-' 変わった方だけ書き換える
+' 変わった値だけ書き換える
 Sub FormDesign_Commit()
     Dim t As String, u As String
     t = TextBuf_GetConfirmed$()
-    u = t
-    If g_fdW <> g_fdW0 Then u = FormDesign_SetNum$(u, "Width", g_fdW)
-    If g_fdH <> g_fdH0 Then u = FormDesign_SetNum$(u, "Height", g_fdH)
+    u = FormDesign_Changed$(t)
     If u <> t Then FormDesign_Replace(u)
 End Sub
+
+' 引いた部品の位置と大きさ、または窓の大きさを書いた本文
+Function FormDesign_Changed$(t As String) As String
+    FormDesign_Changed$ = t
+    If g_fdDrag >= FD_KIND_MOVE Then
+        FormDesign_Changed$ = FormDesign_CtlCommit$(t)
+        Exit Function
+    End If
+    If g_fdW <> g_fdW0 Then FormDesign_Changed$ = FormDesign_SetNum$(FormDesign_Changed$, "Width", g_fdW)
+    If g_fdH <> g_fdH0 Then FormDesign_Changed$ = FormDesign_SetNum$(FormDesign_Changed$, "Height", g_fdH)
+End Function
 
 Sub FormDesign_Up(hWnd As HWND)
     If g_fdDrag = 0 Then Exit Sub
