@@ -1,0 +1,73 @@
+' Target: actba64
+' Env: TMPDIR=/tmp/lx_pipe_shell
+' Env: LXT_VAR=abc
+' CreatePipe + CreateProcess の STARTF_USESTDHANDLES（子の標準出力・エラーをパイプへ）、
+' GetEnvironmentVariable、GetTempPath（$TMPDIR に / を付ける）、ShellExecute（待たずに起動、lpDirectory で作業フォルダー）
+#console
+Function ReadAll(h As HANDLE) As String
+    Dim chunk(255) As Byte
+    Dim n As DWord
+    ReadAll = ""
+    While ReadFile(h, VarPtr(chunk(0)), 256, VarPtr(n), 0) <> 0
+        If n = 0 Then Exit While
+        ReadAll = ReadAll + Left$(MakeStr(VarPtr(chunk(0)), n), n)
+    Wend
+End Function
+
+Function MakeStr(p As *Byte, n As Long) As String
+    Dim i As Long
+    MakeStr = ""
+    For i = 0 To n - 1
+        MakeStr = MakeStr + Chr$(p[i])
+    Next
+End Function
+
+Dim sa As SECURITY_ATTRIBUTES
+Dim hr As HANDLE, hw As HANDLE
+Dim si As STARTUPINFO
+Dim pi As PROCESS_INFORMATION
+Dim code As DWord
+Dim cmd As String
+If CreatePipe(hr, hw, sa, 0) = 0 Then Print "pipe failed"
+SetHandleInformation(hw, 1, 1)
+si.cb = SizeOf(STARTUPINFO)
+si.dwFlags = STARTF_USESTDHANDLES
+si.hStdOutput = hw
+si.hStdError = hw
+cmd = "/bin/sh -c " + Chr$(34) + "echo out; echo err 1>&2; exit 3" + Chr$(34)
+Print CreateProcess(0, StrPtr(cmd), 0, 0, 1, 0, 0, 0, si, pi)
+CloseHandle(hw)
+Print ReadAll(hr);
+CloseHandle(hr)
+WaitForSingleObject(pi.hProcess, INFINITE)
+GetExitCodeProcess(pi.hProcess, code)
+Print code
+
+Dim buf(63) As Byte
+Print GetEnvironmentVariable("LXT_VAR", VarPtr(buf(0)), 64)
+Print MakeStr(VarPtr(buf(0)), 3)
+Print GetEnvironmentVariable("LXT_VAR", VarPtr(buf(0)), 2)
+Print GetEnvironmentVariable("LXT_NONE", VarPtr(buf(0)), 64)
+Dim n As Long
+n = GetTempPath(64, VarPtr(buf(0)))
+Print n
+Print MakeStr(VarPtr(buf(0)), n)
+
+Dim dir As String, outFile As String
+Dim i As Long
+dir = MakeStr(VarPtr(buf(0)), n)
+CreateDirectoryA(StrPtr(dir), 0)
+outFile = dir + "pwd.txt"
+DeleteFile(StrPtr(outFile))
+If ShellExecute(0, "open", "/bin/sh", "-c " + Chr$(34) + "pwd > pwd.txt" + Chr$(34), dir, 1) > 32 Then Print "started"
+For i = 1 To 100
+    If GetFileAttributes(StrPtr(outFile)) <> -1 Then Exit For
+    Sleep(20)
+Next
+Sleep(50)
+Dim f As HANDLE
+f = CreateFile(StrPtr(outFile), GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0)
+Print ReadAll(f);
+CloseHandle(f)
+DeleteFile(StrPtr(outFile))
+Print ShellExecute(0, "open", "/nonexistent/prog", "", "", 1)
