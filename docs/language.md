@@ -18,7 +18,8 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 
 | 拡張子 | 意味 |
 |---|---|
-| `.abp` | ソース 1 ファイル |
+| `.abp` | Active Basic Program。メインのコード（ソース 1 ファイル） |
+| `.sbp` | Sub Basic Program。`#include` で読むファイル |
 | `.pj` | プロジェクト（複数 `.abp` を結合） |
 
 ### 1.2 字句
