@@ -1,0 +1,679 @@
+' n88x11 - -linux の N88BASIC の X11 の窓（libX11.so.6。ELF は動的リンク）
+'   n88tty の N88_EnsureWindow が最初に XOpenDisplay を試す。つながれば g_n88X = 1 で、
+'   文字も図形もこの窓（640x480）へ描く。つながらなければ（DISPLAY が無いなど）段階1 の端末のまま。
+'
+'   描くのは窓と同じ大きさの Pixmap。Pixmap を窓の背景にするので、隠れた所の描き直しは X サーバーがする
+'   （Windows の UI スレッドの代わり。プログラムが計算で回っていても窓は消えない）。
+'   描いたら 16ms に 1 回まで窓へ写す（XClearWindow）。INKEY$ / INPUT / SLEEP / 終わりでは必ず写す。
+'   キーと閉じるボタンは、写すとき・INKEY$・INPUT・SLEEP の間に受ける。閉じるボタンでプログラムを終える。
+'   文字は X のコアフォント（8x16、無ければ fixed）。ASCII だけで、それ以外の文字は ? にする。
+'   名前は Forms.sbp の Declare とぶつからないよう N88X_ に Alias を付ける。
+
+#ifdef _LINUX
+
+Declare Function N88X_OpenDisplay Lib "libX11.so.6" Alias "XOpenDisplay" (name As VoidPtr) As VoidPtr
+Declare Function N88X_DefaultScreen Lib "libX11.so.6" Alias "XDefaultScreen" (d As VoidPtr) As Long
+Declare Function N88X_DefaultDepth Lib "libX11.so.6" Alias "XDefaultDepth" (d As VoidPtr, scr As Long) As Long
+Declare Function N88X_RootWindow Lib "libX11.so.6" Alias "XRootWindow" (d As VoidPtr, scr As Long) As VoidPtr
+Declare Function N88X_ConnectionNumber Lib "libX11.so.6" Alias "XConnectionNumber" (d As VoidPtr) As Long
+Declare Function N88X_CreateSimpleWindow Lib "libX11.so.6" Alias "XCreateSimpleWindow" (d As VoidPtr, parent As VoidPtr, x As Long, y As Long, w As Long, h As Long, bw As Long, border As VoidPtr, back As VoidPtr) As VoidPtr
+Declare Function N88X_StoreName Lib "libX11.so.6" Alias "XStoreName" (d As VoidPtr, w As VoidPtr, name As BytePtr) As Long
+Declare Function N88X_InternAtom Lib "libX11.so.6" Alias "XInternAtom" (d As VoidPtr, name As BytePtr, onlyIfExists As Long) As VoidPtr
+Declare Function N88X_SetWMProtocols Lib "libX11.so.6" Alias "XSetWMProtocols" (d As VoidPtr, w As VoidPtr, atoms As VoidPtr, n As Long) As Long
+Declare Function N88X_SetWMNormalHints Lib "libX11.so.6" Alias "XSetWMNormalHints" (d As VoidPtr, w As VoidPtr, hints As VoidPtr) As Long
+Declare Function N88X_SelectInput Lib "libX11.so.6" Alias "XSelectInput" (d As VoidPtr, w As VoidPtr, mask As VoidPtr) As Long
+Declare Function N88X_MapWindow Lib "libX11.so.6" Alias "XMapWindow" (d As VoidPtr, w As VoidPtr) As Long
+Declare Function N88X_CreatePixmap Lib "libX11.so.6" Alias "XCreatePixmap" (d As VoidPtr, dr As VoidPtr, w As Long, h As Long, depth As Long) As VoidPtr
+Declare Function N88X_SetWindowBackgroundPixmap Lib "libX11.so.6" Alias "XSetWindowBackgroundPixmap" (d As VoidPtr, w As VoidPtr, pm As VoidPtr) As Long
+Declare Function N88X_ClearWindow Lib "libX11.so.6" Alias "XClearWindow" (d As VoidPtr, w As VoidPtr) As Long
+Declare Function N88X_CreateGC Lib "libX11.so.6" Alias "XCreateGC" (d As VoidPtr, dr As VoidPtr, mask As VoidPtr, values As VoidPtr) As VoidPtr
+Declare Function N88X_SetForeground Lib "libX11.so.6" Alias "XSetForeground" (d As VoidPtr, gc As VoidPtr, pixel As VoidPtr) As Long
+Declare Function N88X_SetFunction Lib "libX11.so.6" Alias "XSetFunction" (d As VoidPtr, gc As VoidPtr, op As Long) As Long
+Declare Function N88X_SetLineAttributes Lib "libX11.so.6" Alias "XSetLineAttributes" (d As VoidPtr, gc As VoidPtr, width As Long, style As Long, cap As Long, join As Long) As Long
+Declare Function N88X_LoadQueryFont Lib "libX11.so.6" Alias "XLoadQueryFont" (d As VoidPtr, name As BytePtr) As VoidPtr
+Declare Function N88X_SetFont Lib "libX11.so.6" Alias "XSetFont" (d As VoidPtr, gc As VoidPtr, font As VoidPtr) As Long
+Declare Function N88X_FillRectangle Lib "libX11.so.6" Alias "XFillRectangle" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, x As Long, y As Long, w As Long, h As Long) As Long
+Declare Function N88X_DrawRectangle Lib "libX11.so.6" Alias "XDrawRectangle" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, x As Long, y As Long, w As Long, h As Long) As Long
+Declare Function N88X_DrawLine Lib "libX11.so.6" Alias "XDrawLine" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, x1 As Long, y1 As Long, x2 As Long, y2 As Long) As Long
+Declare Function N88X_DrawArc Lib "libX11.so.6" Alias "XDrawArc" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, x As Long, y As Long, w As Long, h As Long, a1 As Long, a2 As Long) As Long
+Declare Function N88X_FillArc Lib "libX11.so.6" Alias "XFillArc" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, x As Long, y As Long, w As Long, h As Long, a1 As Long, a2 As Long) As Long
+Declare Function N88X_DrawPoint Lib "libX11.so.6" Alias "XDrawPoint" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, x As Long, y As Long) As Long
+Declare Function N88X_DrawString Lib "libX11.so.6" Alias "XDrawString" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, x As Long, y As Long, s As BytePtr, n As Long) As Long
+Declare Function N88X_GetImage Lib "libX11.so.6" Alias "XGetImage" (d As VoidPtr, dr As VoidPtr, x As Long, y As Long, w As Long, h As Long, planes As VoidPtr, format As Long) As VoidPtr
+Declare Function N88X_PutImage Lib "libX11.so.6" Alias "XPutImage" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, img As VoidPtr, sx As Long, sy As Long, dx As Long, dy As Long, w As Long, h As Long) As Long
+Declare Function N88X_Flush Lib "libX11.so.6" Alias "XFlush" (d As VoidPtr) As Long
+Declare Function N88X_Pending Lib "libX11.so.6" Alias "XPending" (d As VoidPtr) As Long
+Declare Function N88X_NextEvent Lib "libX11.so.6" Alias "XNextEvent" (d As VoidPtr, ev As VoidPtr) As Long
+Declare Function N88X_LookupString Lib "libX11.so.6" Alias "XLookupString" (ev As VoidPtr, buf As VoidPtr, n As Long, keysym As VoidPtr, status As VoidPtr) As Long
+Declare Function N88X_Free Lib "libX11.so.6" Alias "XFree" (p As VoidPtr) As Long
+
+Const N88X_KEY_PRESS = 2
+Const N88X_CLIENT_MESSAGE = 33
+Const N88X_KEY_MASK = 1
+Const N88X_GX_COPY = 3
+Const N88X_GX_XOR = 6
+Const N88X_ZPIXMAP = 2
+Const N88X_PLANES = &HFFFFFF
+Const N88X_FULL_ARC = 23040
+Const N88X_SHOW_MS = 16
+Const N88X_KEYQ = 64
+
+Dim g_n88X As Long
+Dim g_n88XDpy As VoidPtr
+Dim g_n88XWin As VoidPtr
+Dim g_n88XPm As VoidPtr
+Dim g_n88XGc As VoidPtr
+Dim g_n88XDel As VoidPtr
+Dim g_n88XFont As VoidPtr
+Dim g_n88XAsc As Long
+Dim g_n88XDesc As Long
+Dim g_n88XFontW As Long
+Dim g_n88XDirty As Long
+Dim g_n88XLast As DWord
+Dim g_n88XCaret As Long
+Dim g_n88XEv(191) As Byte
+Dim g_n88XAtoms(7) As Byte
+Dim g_n88XHints(79) As Byte
+Dim g_n88XKeyQ(63) As Byte
+Dim g_n88XKeyHead As Long
+Dim g_n88XKeyCount As Long
+Dim g_n88XImgData As VoidPtr
+Dim g_n88XImgBpl As Long
+
+' ---- 小物 ----
+
+Function N88X_L(p As VoidPtr, off As Long) As Long
+    Dim q As *Long
+    q = p + off
+    N88X_L = q[0]
+End Function
+
+Sub N88X_SetL(p As VoidPtr, off As Long, v As Long)
+    Dim q As *Long
+    q = p + off
+    q[0] = v
+End Sub
+
+' 16bit（符号付き）
+Function N88X_W(p As VoidPtr, off As Long) As Long
+    Dim q As *Byte
+    q = p + off
+    N88X_W = q[0] + q[1] * 256
+    If N88X_W >= 32768 Then N88X_W = N88X_W - 65536
+End Function
+
+' COLORREF（&H00BBGGRR）→ TrueColor の画素（&HRRGGBB）
+Function N88X_Pixel(rgb As Long) As Long
+    Dim r As Long
+    Dim g As Long
+    Dim b As Long
+    r = rgb And 255
+    g = (rgb >> 8) And 255
+    b = (rgb >> 16) And 255
+    N88X_Pixel = r * 65536 + g * 256 + b
+End Function
+
+Sub N88X_Fg(pix As Long)
+    N88X_SetForeground(g_n88XDpy, g_n88XGc, pix)
+End Sub
+
+Sub N88X_Color(code As Long)
+    N88X_Fg(N88X_Pixel(ColorCode(code)))
+End Sub
+
+' ---- 開く ----
+
+Function N88X_TryFont(name As BytePtr) As VoidPtr
+    N88X_TryFont = N88X_LoadQueryFont(g_n88XDpy, name)
+End Function
+
+' XFontStruct: fid +8、max_bounds.width +72、ascent +88、descent +92
+Sub N88X_LoadFont()
+    g_n88XFont = N88X_TryFont("8x16")
+    If g_n88XFont = 0 Then g_n88XFont = N88X_TryFont("-misc-fixed-medium-r-normal--16-*")
+    If g_n88XFont = 0 Then g_n88XFont = N88X_TryFont("fixed")
+    If g_n88XFont = 0 Then Exit Sub
+    N88X_SetFont(g_n88XDpy, g_n88XGc, LxGetQ(g_n88XFont, 8))
+    g_n88XFontW = N88X_W(g_n88XFont, 72)
+    g_n88XAsc = N88X_L(g_n88XFont, 88)
+    g_n88XDesc = N88X_L(g_n88XFont, 92)
+End Sub
+
+' 題名、閉じるボタン（WM_DELETE_WINDOW）、大きさは 640x480 のまま（XSizeHints の PMinSize | PMaxSize）
+Sub N88X_SetupWm()
+    Dim hints As VoidPtr
+    N88X_StoreName(g_n88XDpy, g_n88XWin, "N88BASIC")
+    g_n88XDel = N88X_InternAtom(g_n88XDpy, "WM_DELETE_WINDOW", 0)
+    LxSetQ(VarPtr(g_n88XAtoms(0)), 0, g_n88XDel)
+    N88X_SetWMProtocols(g_n88XDpy, g_n88XWin, VarPtr(g_n88XAtoms(0)), 1)
+    hints = VarPtr(g_n88XHints(0))
+    FillMemory(hints, 80, 0)
+    N88X_SetL(hints, 0, 48)
+    N88X_SetL(hints, 24, N88_WIDTH)
+    N88X_SetL(hints, 28, N88_HEIGHT)
+    N88X_SetL(hints, 32, N88_WIDTH)
+    N88X_SetL(hints, 36, N88_HEIGHT)
+    N88X_SetWMNormalHints(g_n88XDpy, g_n88XWin, hints)
+End Sub
+
+Sub N88X_MakeSurfaces()
+    Dim scr As Long
+    Dim root As VoidPtr
+    scr = N88X_DefaultScreen(g_n88XDpy)
+    root = N88X_RootWindow(g_n88XDpy, scr)
+    g_n88XWin = N88X_CreateSimpleWindow(g_n88XDpy, root, 100, 100, N88_WIDTH, N88_HEIGHT, 0, 0, 0)
+    g_n88XPm = N88X_CreatePixmap(g_n88XDpy, g_n88XWin, N88_WIDTH, N88_HEIGHT, N88X_DefaultDepth(g_n88XDpy, scr))
+    g_n88XGc = N88X_CreateGC(g_n88XDpy, g_n88XPm, 0, 0)
+    ' Windows のペンと同じ太さ 2（LineSolid / CapButt / JoinMiter）
+    N88X_SetLineAttributes(g_n88XDpy, g_n88XGc, 2, 0, 1, 0)
+    N88X_Fg(0)
+    N88X_FillRectangle(g_n88XDpy, g_n88XPm, g_n88XGc, 0, 0, N88_WIDTH, N88_HEIGHT)
+    N88X_SetWindowBackgroundPixmap(g_n88XDpy, g_n88XWin, g_n88XPm)
+End Sub
+
+' つながれば 1
+Function N88X_Open() As Long
+    N88X_Open = 0
+    g_n88XDpy = N88X_OpenDisplay(0)
+    If g_n88XDpy = 0 Then Exit Function
+    N88X_MakeSurfaces()
+    N88X_LoadFont()
+    N88X_SetupWm()
+    N88X_SelectInput(g_n88XDpy, g_n88XWin, N88X_KEY_MASK)
+    N88X_MapWindow(g_n88XDpy, g_n88XWin)
+    N88X_Flush(g_n88XDpy)
+    g_n88XLast = GetTickCount()
+    g_lxMsgWait = AddressOf(N88X_SleepWait)
+    g_n88X = 1
+    N88X_Open = 1
+End Function
+
+' ---- 窓へ写す・イベント ----
+
+Sub N88X_KeyPush(code As Long)
+    Dim i As Long
+    If g_n88XKeyCount >= N88X_KEYQ Then Exit Sub
+    i = (g_n88XKeyHead + g_n88XKeyCount) Mod N88X_KEYQ
+    g_n88XKeyQ(i) = code
+    g_n88XKeyCount = g_n88XKeyCount + 1
+End Sub
+
+' 無ければ -1
+Function N88X_KeyPop() As Long
+    N88X_KeyPop = -1
+    If g_n88XKeyCount = 0 Then Exit Function
+    N88X_KeyPop = g_n88XKeyQ(g_n88XKeyHead)
+    g_n88XKeyHead = (g_n88XKeyHead + 1) Mod N88X_KEYQ
+    g_n88XKeyCount = g_n88XKeyCount - 1
+End Function
+
+' 矢印は N88 のコード（→ 28 ← 29 ↑ 30 ↓ 31）。ほかは XLookupString の 1 文字（Enter は 13）
+Function N88X_ArrowCode(sym As Long) As Long
+    N88X_ArrowCode = 0
+    If sym = &HFF51 Then N88X_ArrowCode = 29
+    If sym = &HFF52 Then N88X_ArrowCode = 30
+    If sym = &HFF53 Then N88X_ArrowCode = 28
+    If sym = &HFF54 Then N88X_ArrowCode = 31
+End Function
+
+Sub N88X_OnKey()
+    Dim buf(15) As Byte
+    Dim sym(7) As Byte
+    Dim n As Long
+    Dim code As Long
+    FillMemory(VarPtr(sym), 8, 0)
+    n = N88X_LookupString(VarPtr(g_n88XEv(0)), VarPtr(buf), 15, VarPtr(sym), 0)
+    code = N88X_ArrowCode(N88X_L(VarPtr(sym), 0))
+    If code = 0 And n = 1 Then code = buf[0]
+    If code = 0 Then Exit Sub
+    N88X_KeyPush(code)
+End Sub
+
+' 閉じるボタン。Windows と同じくプログラムを終える
+Sub N88X_OnClient()
+    If LxGetQ(VarPtr(g_n88XEv(0)), 56) <> g_n88XDel Then Exit Sub
+    ExitProcess(0)
+End Sub
+
+Sub N88X_OnEvent()
+    Dim t As Long
+    t = N88X_L(VarPtr(g_n88XEv(0)), 0)
+    If t = N88X_KEY_PRESS Then N88X_OnKey()
+    If t = N88X_CLIENT_MESSAGE Then N88X_OnClient()
+End Sub
+
+Sub N88X_NextOne()
+    N88X_NextEvent(g_n88XDpy, VarPtr(g_n88XEv(0)))
+    N88X_OnEvent()
+End Sub
+
+' 来ているイベントを全部受ける（待たない）
+Sub N88X_Pump()
+    While N88X_Pending(g_n88XDpy) > 0
+        N88X_NextOne()
+    Wend
+End Sub
+
+' 描いた所を窓へ写す
+Sub N88X_Show()
+    If g_n88XDirty <> 0 Then N88X_ClearWindow(g_n88XDpy, g_n88XWin)
+    g_n88XDirty = 0
+    g_n88XLast = GetTickCount()
+    N88X_Pump()
+End Sub
+
+' 描いた後。16ms に 1 回まで写す
+Sub N88X_Mark()
+    Dim now As DWord
+    Dim d As Long
+    g_n88XDirty = 1
+    now = GetTickCount()
+    d = now - g_n88XLast
+    If d >= 0 And d < N88X_SHOW_MS Then Exit Sub
+    N88X_Show()
+End Sub
+
+' キーが来るまで待つ
+Function N88X_WaitKey() As Long
+    N88X_Show()
+    N88X_WaitKey = N88X_KeyPop()
+    While N88X_WaitKey < 0
+        N88X_NextOne()
+        N88X_WaitKey = N88X_KeyPop()
+    Wend
+End Function
+
+' SLEEP の待ち（LxTime の g_lxMsgWait）。写してから、X のイベントか ms まで待つ
+Function N88X_SleepWait(ms As DWord) As Long
+    Dim pfd(7) As Byte
+    N88X_Show()
+    FillMemory(VarPtr(pfd), 8, 0)
+    N88X_SetL(VarPtr(pfd), 0, N88X_ConnectionNumber(g_n88XDpy))
+    pfd[4] = 1
+    Lx_Syscall(7, VarPtr(pfd), 1, ms, 0, 0, 0)
+    N88X_Pump()
+    N88X_SleepWait = 0
+End Function
+
+' 終わり。閉じるボタンまで待つ（N88X_OnClient が終える）
+Sub N88X_WaitClose()
+    N88X_Show()
+    Do
+        N88X_NextOne()
+    Loop
+End Sub
+
+' ---- 文字 ----
+
+' 1 文字分の背景（COLOR の背景。透明なら塗らない。wipe なら透明でも黒で消す）
+Sub N88X_CellBack(x As Long, y As Long, cells As Long, wipe As Long)
+    N88_InitColor()
+    If g_n88BackCol >= 0 Then
+        N88X_Color(g_n88BackCol)
+    ElseIf wipe <> 0 Then
+        N88X_Fg(0)
+    Else
+        Exit Sub
+    End If
+    N88X_FillRectangle(g_n88XDpy, g_n88XPm, g_n88XGc, x * N88_CHAR_W, y * N88_CHAR_H, cells * N88_CHAR_W, N88_CHAR_H)
+End Sub
+
+Sub N88X_Glyph(x As Long, y As Long, ch As Long, cells As Long)
+    Dim b(1) As Byte
+    Dim gx As Long
+    Dim gy As Long
+    N88X_CellBack(x, y, cells, 0)
+    If g_n88XFont = 0 Then Exit Sub
+    N88X_Color(g_n88TextCol)
+    gx = x * N88_CHAR_W + (cells * N88_CHAR_W - g_n88XFontW) \ 2
+    gy = y * N88_CHAR_H + (N88_CHAR_H - g_n88XAsc - g_n88XDesc) \ 2 + g_n88XAsc
+    b[0] = ch
+    N88X_DrawString(g_n88XDpy, g_n88XPm, g_n88XGc, gx, gy, VarPtr(b), 1)
+End Sub
+
+' 今の位置（g_n88CurX / g_n88CurY）から書く。位置は動かさない（Windows の N88_PutText と同じ）
+Sub N88X_Text(s As *Byte)
+    Dim i As Long
+    Dim cx As Long
+    Dim cells As Long
+    Dim ch As Long
+    If s = 0 Then Exit Sub
+    N88_InitColor()
+    i = 0
+    cx = g_n88CurX
+    While s[i] <> 0
+        cells = N88_CellAt(VarPtr(s[i]))
+        ch = s[i]
+        If cells <> 1 Then ch = 63
+        N88X_Glyph(cx, g_n88CurY, ch, cells)
+        cx = cx + cells
+        i = i + N88_SkipAt(VarPtr(s[i]))
+    Wend
+    N88X_Mark()
+End Sub
+
+Sub N88X_Cls()
+    N88X_Fg(0)
+    N88X_FillRectangle(g_n88XDpy, g_n88XPm, g_n88XGc, 0, 0, N88_WIDTH, N88_HEIGHT)
+    N88X_Mark()
+End Sub
+
+' ---- INPUT / INKEY$ / INPUT$ ----
+
+' 入力位置の下 2 ドットを反転する（2 度で消える）
+Sub N88X_CaretFlip()
+    N88X_SetFunction(g_n88XDpy, g_n88XGc, N88X_GX_XOR)
+    N88X_Fg(&HFFFFFF)
+    N88X_FillRectangle(g_n88XDpy, g_n88XPm, g_n88XGc, g_n88CurX * N88_CHAR_W, g_n88CurY * N88_CHAR_H + N88_CHAR_H - 2, N88_CHAR_W, 2)
+    N88X_SetFunction(g_n88XDpy, g_n88XGc, N88X_GX_COPY)
+    g_n88XCaret = 1 - g_n88XCaret
+    N88X_Mark()
+End Sub
+
+Sub N88X_CaretOn()
+    If g_n88XCaret = 0 Then N88X_CaretFlip()
+End Sub
+
+Sub N88X_CaretOff()
+    If g_n88XCaret <> 0 Then N88X_CaretFlip()
+End Sub
+
+Sub N88X_EchoChar(ch As Long)
+    Dim b(1) As Byte
+    b[0] = ch
+    b[1] = 0
+    N88X_Text(VarPtr(b))
+    g_n88CurX = g_n88CurX + 1
+End Sub
+
+Sub N88X_EchoBack()
+    g_n88CurX = g_n88CurX - 1
+    If g_n88CurX < 0 Then g_n88CurX = 0
+    N88X_CellBack(g_n88CurX, g_n88CurY, 1, 1)
+    N88X_Mark()
+End Sub
+
+Sub N88X_LineKey(ch As Long)
+    Dim ok As Long
+    If ch = N88_CH_BS Then
+        If N88_LineBack() = 0 Then Exit Sub
+        N88X_CaretOff()
+        N88X_EchoBack()
+        N88X_CaretOn()
+        Exit Sub
+    End If
+    If ch < 32 Or ch >= 127 Then Exit Sub
+    If N88_LineAdd(ch) = 0 Then Exit Sub
+    N88X_CaretOff()
+    N88X_EchoChar(ch)
+    N88X_CaretOn()
+End Sub
+
+Function N88X_ReadLine() As String
+    Dim ch As Long
+    Dim ok As Long
+    N88_LineReset()
+    N88X_CaretOn()
+    Do
+        ch = N88X_WaitKey()
+        If ch = N88_CH_CR Or ch = N88_CH_LF Then Exit Do
+        N88X_LineKey(ch)
+    Loop
+    N88X_CaretOff()
+    ok = N88_LineEnter()
+    g_n88CurX = 0
+    g_n88CurY = g_n88CurY + 1
+    N88X_Show()
+    N88X_ReadLine = N88_LineText$()
+End Function
+
+Function N88X_Inkey$() As String
+    Dim ch As Long
+    N88X_Show()
+    ch = N88X_KeyPop()
+    If ch < 0 Then Exit Function
+    N88X_Inkey$ = Chr$(ch)
+End Function
+
+Function N88X_InputN$(length As Long) As String
+    Dim s As String
+    Dim i As Long
+    s = ""
+    For i = 1 To length
+        s = s + Chr$(N88X_WaitKey())
+    Next
+    N88X_InputN$ = s
+End Function
+
+' ---- 図形 ----
+
+Sub N88X_Box(sx As Long, sy As Long, ex As Long, ey As Long, fill As Long)
+    Dim l As Long
+    Dim t As Long
+    Dim r As Long
+    Dim b As Long
+    l = sx
+    r = ex
+    If l > r Then
+        l = ex
+        r = sx
+    End If
+    t = sy
+    b = ey
+    If t > b Then
+        t = ey
+        b = sy
+    End If
+    If fill <> 0 Then
+        N88X_FillRectangle(g_n88XDpy, g_n88XPm, g_n88XGc, l, t, r - l + 1, b - t + 1)
+    Else
+        N88X_DrawRectangle(g_n88XDpy, g_n88XPm, g_n88XGc, l, t, r - l, b - t)
+    End If
+End Sub
+
+' LINE（n88graph の Line から）
+Sub N88X_Line(sx As Long, sy As Long, ex As Long, ey As Long, color As Long, mode As Long)
+    Dim fill As Long
+    N88X_Color(color)
+    fill = 0
+    If mode = N88_MODE_BOXFILL Then fill = 1
+    If mode = N88_MODE_LINE Then
+        N88X_DrawLine(g_n88XDpy, g_n88XPm, g_n88XGc, sx, sy, ex, ey)
+    Else
+        N88X_Box(sx, sy, ex, ey, fill)
+    End If
+    N88X_Mark()
+End Sub
+
+' ラジアン → X の角度（1/64 度。3 時から反時計回り）
+Function N88X_Deg64(ang As Double) As Long
+    Dim t As Double
+    t = ang * 11520
+    t = t / MathPi()
+    N88X_Deg64 = t
+End Function
+
+' start から end へ反時計回りの量（0 より大きく 1 周まで）
+Function N88X_Extent(startAng As Double, endAng As Double) As Long
+    Dim e As Long
+    e = N88X_Deg64(endAng) - N88X_Deg64(startAng)
+    While e <= 0
+        e = e + N88X_FULL_ARC
+    Wend
+    While e > N88X_FULL_ARC
+        e = e - N88X_FULL_ARC
+    Wend
+    N88X_Extent = e
+End Function
+
+Sub N88X_Radius(cx As Long, cy As Long, rx As Long, ry As Long, ang As Double)
+    Dim x As Long
+    Dim y As Long
+    N88_AngPoint(cx, cy, rx, ry, ang, x, y)
+    N88X_DrawLine(g_n88XDpy, g_n88XPm, g_n88XGc, cx, cy, x, y)
+End Sub
+
+Sub N88X_ArcShape(cx As Long, cy As Long, rx As Long, ry As Long, a1 As Long, a2 As Long, fill As Long, fillColor As Long, color As Long)
+    If fill <> 0 Then
+        N88X_Color(fillColor)
+        N88X_FillArc(g_n88XDpy, g_n88XPm, g_n88XGc, cx - rx, cy - ry, rx + rx, ry + ry, a1, a2)
+    End If
+    N88X_Color(color)
+    N88X_DrawArc(g_n88XDpy, g_n88XPm, g_n88XGc, cx - rx, cy - ry, rx + rx, ry + ry, a1, a2)
+End Sub
+
+' CIRCLE（n88graph の Circle から）。全周でなければ弧。F なら扇形（Windows の Pie と同じく半径も描く）
+Sub N88X_Circle(cx As Long, cy As Long, r As Long, color As Long, startAng As Double, endAng As Double, aspect As Double, flags As Long, fillColor As Long)
+    Dim rx As Long
+    Dim ry As Long
+    Dim fill As Long
+    fill = flags And 1
+    N88_AspectRadii(r, aspect, rx, ry)
+    If N88_IsFullEllipse(startAng, endAng) <> 0 Then
+        N88X_ArcShape(cx, cy, rx, ry, 0, N88X_FULL_ARC, fill, fillColor, color)
+    Else
+        N88X_ArcShape(cx, cy, rx, ry, N88X_Deg64(startAng), N88X_Extent(startAng, endAng), fill, fillColor, color)
+        If fill <> 0 Or (flags And 2) <> 0 Then N88X_Radius(cx, cy, rx, ry, startAng)
+        If fill <> 0 Or (flags And 4) <> 0 Then N88X_Radius(cx, cy, rx, ry, endAng)
+    End If
+    N88X_Mark()
+End Sub
+
+Sub N88X_PSet(x As Long, y As Long, color As Long)
+    N88X_Color(color)
+    N88X_DrawPoint(g_n88XDpy, g_n88XPm, g_n88XGc, x, y)
+    N88X_Mark()
+End Sub
+
+' ---- PAINT（Pixmap を XGetImage で読み、塗って XPutImage で戻す） ----
+
+Function N88X_At(x As Long, y As Long) As *Long
+    Dim a As VoidPtr
+    a = g_n88XImgData
+    a = a + y * g_n88XImgBpl
+    a = a + x * 4
+    N88X_At = a
+End Function
+
+Function N88X_Fillable(x As Long, y As Long, fill As Long, border As Long) As Long
+    Dim p As *Long
+    Dim v As Long
+    p = N88X_At(x, y)
+    v = p[0] And &HFFFFFF
+    N88X_Fillable = 0
+    If v <> fill And v <> border Then N88X_Fillable = 1
+End Function
+
+Sub N88X_Put(x As Long, y As Long, fill As Long)
+    Dim p As *Long
+    p = N88X_At(x, y)
+    p[0] = fill
+End Sub
+
+' 種の山。y * 幅 + x を積む
+Dim g_n88XSeed As *Long
+Dim g_n88XSeedN As Long
+Dim g_n88XSeedCap As Long
+
+Sub N88X_SeedPush(x As Long, y As Long)
+    If g_n88XSeedN >= g_n88XSeedCap Then Exit Sub
+    g_n88XSeed[g_n88XSeedN] = y * N88_WIDTH + x
+    g_n88XSeedN = g_n88XSeedN + 1
+End Sub
+
+' 上か下の行の xl..xr で、塗れる区間ごとに 1 つ種を積む
+Sub N88X_SeedRow(xl As Long, xr As Long, y As Long, fill As Long, border As Long)
+    Dim i As Long
+    Dim inRun As Long
+    If y < 0 Or y >= N88_HEIGHT Then Exit Sub
+    inRun = 0
+    For i = xl To xr
+        If N88X_Fillable(i, y, fill, border) <> 0 Then
+            If inRun = 0 Then N88X_SeedPush(i, y)
+            inRun = 1
+        Else
+            inRun = 0
+        End If
+    Next
+End Sub
+
+Sub N88X_FillSpan(x As Long, y As Long, fill As Long, border As Long)
+    Dim xl As Long
+    Dim xr As Long
+    Dim i As Long
+    If N88X_Fillable(x, y, fill, border) = 0 Then Exit Sub
+    xl = x
+    While xl > 0 And N88X_Fillable(xl - 1, y, fill, border) <> 0
+        xl = xl - 1
+    Wend
+    xr = x
+    While xr < N88_WIDTH - 1 And N88X_Fillable(xr + 1, y, fill, border) <> 0
+        xr = xr + 1
+    Wend
+    For i = xl To xr
+        N88X_Put(i, y, fill)
+    Next
+    N88X_SeedRow(xl, xr, y - 1, fill, border)
+    N88X_SeedRow(xl, xr, y + 1, fill, border)
+End Sub
+
+Sub N88X_FloodImage(x As Long, y As Long, fill As Long, border As Long)
+    Dim v As Long
+    g_n88XSeedCap = N88_WIDTH * N88_HEIGHT * 2
+    g_n88XSeed = malloc(g_n88XSeedCap * 4)
+    If g_n88XSeed = 0 Then Exit Sub
+    g_n88XSeedN = 0
+    N88X_SeedPush(x, y)
+    While g_n88XSeedN > 0
+        g_n88XSeedN = g_n88XSeedN - 1
+        v = g_n88XSeed[g_n88XSeedN]
+        N88X_FillSpan(v Mod N88_WIDTH, v \ N88_WIDTH, fill, border)
+    Wend
+    free(g_n88XSeed)
+    g_n88XSeed = 0
+End Sub
+
+' XImage: data +16、bytes_per_line +44、bits_per_pixel +48。32bpp だけ扱う
+Function N88X_ImageOk(img As VoidPtr) As Long
+    N88X_ImageOk = 0
+    If img = 0 Then Exit Function
+    If N88X_L(img, 48) <> 32 Then Exit Function
+    g_n88XImgData = LxGetQ(img, 16)
+    g_n88XImgBpl = N88X_L(img, 44)
+    N88X_ImageOk = 1
+End Function
+
+Sub N88X_FreeImage(img As VoidPtr)
+    If img = 0 Then Exit Sub
+    N88X_Free(LxGetQ(img, 16))
+    N88X_Free(img)
+End Sub
+
+Sub N88X_Paint(x As Long, y As Long, fr As Long, br As Long)
+    Dim img As VoidPtr
+    If x < 0 Or y < 0 Or x >= N88_WIDTH Or y >= N88_HEIGHT Then Exit Sub
+    img = N88X_GetImage(g_n88XDpy, g_n88XPm, 0, 0, N88_WIDTH, N88_HEIGHT, N88X_PLANES, N88X_ZPIXMAP)
+    If N88X_ImageOk(img) <> 0 Then
+        N88X_FloodImage(x, y, N88X_Pixel(fr), N88X_Pixel(br))
+        N88X_PutImage(g_n88XDpy, g_n88XPm, g_n88XGc, img, 0, 0, 0, 0, N88_WIDTH, N88_HEIGHT)
+        N88X_Mark()
+    End If
+    N88X_FreeImage(img)
+End Sub
+
+' (x, y) の画素（&HRRGGBB）。窓が無い・外なら -1（テスト用。POINT の下ごしらえ）
+Function N88_XPixel(x As Long, y As Long) As Long
+    Dim img As VoidPtr
+    Dim p As *Long
+    N88_XPixel = -1
+    If g_n88X = 0 Then Exit Function
+    If x < 0 Or y < 0 Or x >= N88_WIDTH Or y >= N88_HEIGHT Then Exit Function
+    img = N88X_GetImage(g_n88XDpy, g_n88XPm, x, y, 1, 1, N88X_PLANES, N88X_ZPIXMAP)
+    If N88X_ImageOk(img) <> 0 Then
+        p = g_n88XImgData
+        N88_XPixel = p[0] And &HFFFFFF
+    End If
+    N88X_FreeImage(img)
+End Function
+
+#endif
