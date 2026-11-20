@@ -896,17 +896,22 @@ Application.Run(mainForm)
 | `Virtual Function WndProc(msg, wParam, lParam) As LRESULT` | 窓のメッセージ。子が `Override` し、扱わないものは `Super.WndProc(msg, wParam, lParam)` へ。既定は `WM_DESTROY` で `PostQuitMessage(0)` し、`DefWindowProc` を返す |
 | `Show()` | 窓が無ければ作って表示する |
 | `Close()` | `WM_CLOSE` を窓へ送る（既定の `WndProc` が窓を壊す）。`Class` の中では `This.Close()` と書く（裸の `Close` はファイルの `Close` 文になる） |
+| `AddControl(c)` | 部品（`Control` の子。今は `Button` だけ）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
+| `Button` | `Left` / `Top` / `Width` / `Height` / `Caption` / `Handle`。押されると、フォームの `WndProc` に `WM_COMMAND`（`HIWORD(wParam) = BN_CLICKED`、`lParam` = ボタンの `Handle`）が届く。文字は `DEFAULT_GUI_FONT` |
 | `Application.Initialize()` | 今は何もしない |
 | `Application.Run(form)` | `form.Show()` のあと、窓が閉じるまでメッセージループを回す |
 
 - 窓クラスは 1 つ（`ActBa64Form`）。`CreateWindowEx` の中の最初のメッセージで、作っている `Form` を窓（`GWL_USERDATA`）に結びつけ、以後は `Form` の `WndProc` を vtable で呼ぶ。`WM_CREATE` なども `Override` した `WndProc` に届く
 - 窓は Unicode。`Caption` は UTF-8 のまま入れてよい
 - 今は 1 つのフォームを前提にしている（どのフォームが閉じてもメッセージループが終わる）
+- 部品のメンバー（`Button1 As Button`）は、それを使うメソッドより前に書く（後ろに書くと、そのメソッドから見えない）
+- 部品は `NextControl` でつないで持つ（数の上限は無い）。`Control` を継承して `Override Sub CreateHandle(parent As HWND)` で子窓を作れば、自分の部品も載せられる
 - **`-linux`** では X11 の窓になる（`libX11.so.6` を `Declare` で呼ぶので、ELF は動的リンク。X サーバーが要る。WSL なら WSLg）。同じソースがそのまま通る
   - `WndProc` に届くのは `WM_CREATE` / `WM_PAINT`（Expose）/ `WM_SIZE` / `WM_KEYDOWN`（英数字・Enter・Esc・BS・Tab・矢印は仮想キー、ほかは KeySym）/ `WM_CHAR` / `WM_LBUTTONDOWN` などのボタン / `WM_MOUSEMOVE` / `WM_CLOSE`（閉じるボタン）/ `WM_DESTROY`。マウスの `lParam` は `MAKELPARAM(x, y)`
   - 既定の `WndProc` は `WM_CLOSE` で窓を壊し（その前に `WM_DESTROY`）、`WM_DESTROY` でループを終わらせて `0` を返す（`DefWindowProc` / `PostQuitMessage` は無い）
   - 見出しは `_NET_WM_NAME`（UTF-8）にも入れる。位置と大きさは `XSizeHints` の `USPosition` / `USSize` で WM に渡す。背景は `&HF0F0F0`
   - 描画（GDI）はまだ無い。`Handle` は X の Window（`HWND` に入れている）
+  - `Button` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）
 
 ## 8. WinAPI / IAT
 
