@@ -272,22 +272,25 @@ Function CgTryEmitA1(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) 
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
-Function CgTryEmitA2(cb As *CodeBuffer, op As *IrOp) As boolean
+' 整数演算（加減乗除・論理・シフト）
+Function CgTryEmitA2Alu(cb As *CodeBuffer, op As *IrOp) As boolean
     Dim opv As Long
-    CgTryEmitA2 = false
+    CgTryEmitA2Alu = false
     opv = op->op
-    If opv = OP_LEA_LOCAL Then
-        EmitLeaLocal(cb, op->arg1)
-    ElseIf opv = OP_ADD_RAX_RCX Then
+    If opv = OP_ADD_RAX_RCX Then
         EmitAddRaxRcx(cb)
+    ElseIf opv = OP_ADD_RAX_IMM Then
+        EmitAddRaxImm(cb, op->arg1)
     ElseIf opv = OP_SUB_RAX_RCX Then
         EmitSubRaxRcx(cb)
-    ElseIf opv = OP_MOVSXD_RCX_ECX Then
-        EmitMovsxdRcxEcx(cb)
-    ElseIf opv = OP_MOVSXD_RAX_EAX Then
-        EmitMovsxdRaxEax(cb)
     ElseIf opv = OP_IMUL_RAX_RCX Then
         EmitImulRaxRcx(cb)
+    ElseIf opv = OP_IDIV_RCX Then
+        EmitCqoIdivRcx(cb)
+    ElseIf opv = OP_DIV_RCX Then
+        EmitDivRcx(cb)
+    ElseIf opv = OP_MOV_RAX_RDX Then
+        EmitMovRaxRdx(cb)
     ElseIf opv = OP_AND_RAX_RCX Then
         EmitAndRaxRcx(cb)
     ElseIf opv = OP_OR_RAX_RCX Then
@@ -302,14 +305,24 @@ Function CgTryEmitA2(cb As *CodeBuffer, op As *IrOp) As boolean
         EmitShlRaxCl(cb)
     ElseIf opv = OP_SAR_RAX_CL Then
         EmitSarRaxCl(cb)
-    ElseIf opv = OP_IDIV_RCX Then
-        EmitCqoIdivRcx(cb)
-    ElseIf opv = OP_MOV_RAX_RDX Then
-        EmitMovRaxRdx(cb)
-    ElseIf opv = OP_DIV_RCX Then
-        EmitDivRcx(cb)
     ElseIf opv = OP_SHR_RAX_CL Then
         EmitShrRaxCl(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitA2Alu = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+' 型変換・レジスタ間転送・呼び出し規約の変換
+Function CgTryEmitA2Cvt(cb As *CodeBuffer, op As *IrOp) As boolean
+    Dim opv As Long
+    CgTryEmitA2Cvt = false
+    opv = op->op
+    If opv = OP_MOVSXD_RCX_ECX Then
+        EmitMovsxdRcxEcx(cb)
+    ElseIf opv = OP_MOVSXD_RAX_EAX Then
+        EmitMovsxdRaxEax(cb)
     ElseIf opv = OP_CVT_U64_TO_SD Then
         EmitCvtU64ToSd(cb)
     ElseIf opv = OP_CVT_SD_TO_U64 Then
@@ -320,12 +333,24 @@ Function CgTryEmitA2(cb As *CodeBuffer, op As *IrOp) As boolean
         EmitMovdEaxXmm0(cb)
     ElseIf opv = OP_SYSV_TO_WIN64 Then
         EmitSysvToWin64(cb)
+    Else
+        Exit Function
+    End If
+    CgTryEmitA2Cvt = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+' メモリの読み書き（ローカル変数のアドレス、[rax] の load / store）
+Function CgTryEmitA2Mem(cb As *CodeBuffer, op As *IrOp) As boolean
+    Dim opv As Long
+    CgTryEmitA2Mem = false
+    opv = op->op
+    If opv = OP_LEA_LOCAL Then
+        EmitLeaLocal(cb, op->arg1)
     ElseIf opv = OP_LOADZX_BYTE_RAX Then
         EmitLoadzxByteRax(cb)
     ElseIf opv = OP_STORE_BYTE_RAX_CL Then
         EmitStoreByteRaxCl(cb)
-    ElseIf opv = OP_ADD_RAX_IMM Then
-        EmitAddRaxImm(cb, op->arg1)
     ElseIf opv = OP_LOADZX_WORD_RAX Then
         EmitLoadzxWordRax(cb)
     ElseIf opv = OP_STORE_WORD_RAX_CX Then
@@ -334,28 +359,22 @@ Function CgTryEmitA2(cb As *CodeBuffer, op As *IrOp) As boolean
         EmitLoadDwordRax(cb)
     ElseIf opv = OP_STORE_DWORD_RAX_ECX Then
         EmitStoreDwordRaxEcx(cb)
-    ElseIf opv = OP_LOAD_QWORD_RAX Then
+    ElseIf opv = OP_LOAD_QWORD_RAX Or opv = OP_LOAD_PTR Then
         EmitLoadQwordRax(cb)
-    ElseIf opv = OP_LOAD_PTR Then
-        EmitLoadQwordRax(cb)
-    ElseIf opv = OP_STORE_QWORD_RAX_RCX Then
-        EmitStoreQwordRaxRcx(cb)
-    ElseIf opv = OP_STORE_PTR Then
+    ElseIf opv = OP_STORE_QWORD_RAX_RCX Or opv = OP_STORE_PTR Then
         EmitStoreQwordRaxRcx(cb)
     Else
         Exit Function
     End If
-    CgTryEmitA2 = true
+    CgTryEmitA2Mem = true
 End Function
 
 ' 戻り値 true : 正常終了  false : エラーあり
 Function CgTryEmitA(cb As *CodeBuffer, op As *IrOp, builder As *ImportBuilder) As boolean
+    CgTryEmitA = true
+    If CgTryEmitA1(cb, op, builder) Then Exit Function
+    If CgTryEmitA2Alu(cb, op) Then Exit Function
+    If CgTryEmitA2Cvt(cb, op) Then Exit Function
+    If CgTryEmitA2Mem(cb, op) Then Exit Function
     CgTryEmitA = false
-    If CgTryEmitA1(cb, op, builder) Then
-        CgTryEmitA = true
-        Exit Function
-    End If
-    If CgTryEmitA2(cb, op) Then
-        CgTryEmitA = true
-    End If
 End Function
