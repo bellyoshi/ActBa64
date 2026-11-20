@@ -1,0 +1,46 @@
+' Expect: 1111
+' Target: actba64
+' Forms.sbp の ExtractFileName、OpenFileDialog の Filter の変換（| → NUL）、Form.SetCaption。
+' ダイアログそのものは人が選ぶので、ここでは出さない
+
+#include <Forms.sbp>
+
+Dim g_title(63) As Byte
+Dim g_f(63) As Byte
+
+Class Form1
+    Inherits Form
+Private
+    Override Sub InitializeComponent()
+        Width = 200
+        Height = 100
+        Caption = "テスト"
+    End Sub
+End Class
+
+Dim mainForm As Form1
+Dim r As Long
+
+' ExtractFileName: \ と / と : のあと。日本語の名前も切れない
+If ExtractFileName("C:\本\テスト.pdf") = "テスト.pdf" And ExtractFileName("a/b.txt") = "b.txt" Then
+    If ExtractFileName("C:x.pdf") = "x.pdf" And ExtractFileName("only.pdf") = "only.pdf" And ExtractFileName("dir\") = "" Then r = r + 1000
+End If
+
+' Filter: "a|*.p|すべて|*.*" → a NUL *.p NUL すべて NUL *.* NUL NUL
+FormsFilter("a|*.p|すべて|*.*", VarPtr(g_f(0)), 64)
+If g_f(0) = &H61 And g_f(1) = 0 And g_f(2) = &H2A And g_f(5) = 0 Then
+    If lstrcmp(VarPtr(g_f(6)), "すべて") = 0 And lstrcmp(VarPtr(g_f(16)), "*.*") = 0 And g_f(19) = 0 And g_f(20) = 0 Then r = r + 100
+End If
+
+' SetCaption: 窓ができる前は Caption だけ、できたあとは窓の見出しも
+mainForm.SetCaption("前")
+mainForm.Show()
+GetWindowText(mainForm.Handle, VarPtr(g_title), 64)
+If lstrcmp(VarPtr(g_title), "前") = 0 Then r = r + 10
+mainForm.SetCaption("PDF Viewer - テスト.pdf")
+GetWindowText(mainForm.Handle, VarPtr(g_title), 64)
+If lstrcmp(VarPtr(g_title), "PDF Viewer - テスト.pdf") = 0 And mainForm.Caption = "PDF Viewer - テスト.pdf" Then r = r + 1
+
+PostMessage(mainForm.Handle, WM_CLOSE, 0, 0)
+Application.Run(mainForm)
+ExitProcess(r)
