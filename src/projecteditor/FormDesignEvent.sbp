@@ -1,0 +1,176 @@
+' フォームデザイナで Button をダブルクリックしたときの、クリックの処理の雛形（文字列処理）。
+' 部品 name に対して、無いものだけを足す:
+'   1. 「Sub nameClick()」と空の 1 行と「End Sub」（InitializeComponent の直前。その上のコメント行の前）
+'   2. WndProc で nameClick を呼ぶ行（「名前.Handle」の行がもうあれば足さない）
+'      - BN_CLICKED の行がブロック（Then で終わる）なら、その中に「If lParam = name.Handle Then nameClick()」
+'      - BN_CLICKED の行が 1 行の If なら、その次に同じ形の 1 行
+'      - BN_CLICKED が無ければ、「WndProc = Super.WndProc」の前（無ければ End Function の前）に
+'        If msg = WM_COMMAND / If HIWORD(wParam) = BN_CLICKED のブロック
+'      - WndProc が無ければ、1 の Sub の前に「Public」、WndProc、「Private」を足す
+' 位置は 1 始まり。名前は大文字小文字を区別しない。
+
+' pos の前の行の始まり。pos が 1 行目なら 0
+Function FormDesign_PrevLine(text As String, ByVal pos As Long) As Long
+    Dim i As Long
+    FormDesign_PrevLine = 0
+    If pos <= 1 Then Exit Function
+    i = pos - 2
+    While i >= 1
+        If Mid$(text, i, 1) = Chr$(10) Then Exit While
+        i = i - 1
+    Wend
+    FormDesign_PrevLine = i + 1
+End Function
+
+' 「Sub name」の行（name の次は ( か空白か行末）の始まり。無ければ 0
+Function FormDesign_SubLine(text As String, name As String) As Long
+    Dim p As Long, ln As String, c As String
+    FormDesign_SubLine = 0
+    p = 1
+    While p <= Len(text) And FormDesign_SubLine = 0
+        ln = FormDesign_Line$(text, p)
+        c = Mid$(ln, Len(name) + 5, 1)
+        If StartsWithCI(ln, "sub " & name) <> 0 And (c = "" Or c = "(" Or c = " ") Then FormDesign_SubLine = p
+        p = FormDesign_LineEnd(text, p) + 1
+    Wend
+End Function
+
+' クリックの Sub を足す所: InitializeComponent の行の上のコメント行の前
+Function FormDesign_HandlerPos(text As String) As Long
+    Dim p As Long, q As Long
+    p = FormDesign_FindLine(text, 1, 1, "")
+    FormDesign_HandlerPos = p
+    If p = 0 Then Exit Function
+    q = FormDesign_PrevLine(text, p)
+    While q > 0 And Left$(FormDesign_Line$(text, q), 1) = "'"
+        FormDesign_HandlerPos = q
+        q = FormDesign_PrevLine(text, q)
+    Wend
+End Function
+
+Function FormDesign_HandlerText$(h As String, ind As String, nl As String) As String
+    FormDesign_HandlerText$ = ind & "Sub " & h & "()" & nl & ind & "    " & nl & ind & "End Sub" & nl & nl
+End Function
+
+' ---- WndProc ----
+
+' Class の行から下で、「Function WndProc」の行の始まり。無ければ 0
+Function FormDesign_WndProcLine(text As String) As Long
+    Dim p As Long, ln As String
+    FormDesign_WndProcLine = 0
+    p = FormDesign_ClassLine(text)
+    If p = 0 Then Exit Function
+    While p <= Len(text) And FormDesign_WndProcLine = 0
+        ln = FormDesign_Line$(text, p)
+        If Left$(ln, 1) <> "'" And InStrCI(ln, "function wndproc") > 0 Then FormDesign_WndProcLine = p
+        p = FormDesign_LineEnd(text, p) + 1
+    Wend
+End Function
+
+' p の行から下で、最初の「End Function」の行の始まり。無ければ Len + 1
+Function FormDesign_EndFunc(text As String, ByVal p As Long) As Long
+    FormDesign_EndFunc = Len(text) + 1
+    While p <= Len(text)
+        If StartsWithCI(FormDesign_Line$(text, p), "end function") <> 0 Then FormDesign_EndFunc = p
+        If FormDesign_EndFunc = p Then Exit Function
+        p = FormDesign_LineEnd(text, p) + 1
+    Wend
+End Function
+
+' a の行から e の手前までで、s を含む（コメントでない）最後の行の始まり。無ければ 0
+Function FormDesign_LastWith(text As String, ByVal a As Long, ByVal e As Long, s As String) As Long
+    Dim ln As String
+    FormDesign_LastWith = 0
+    While a < e
+        ln = FormDesign_Line$(text, a)
+        If Left$(ln, 1) <> "'" And InStrCI(ln, s) > 0 Then FormDesign_LastWith = a
+        a = FormDesign_LineEnd(text, a) + 1
+    Wend
+End Function
+
+' 行が Then で終わる（ブロックの If）か
+Function FormDesign_EndsThen(ln As String) As Long
+    FormDesign_EndsThen = 0
+    If Len(ln) < 5 Then Exit Function
+    If StartsWithCI(Mid$(ln, Len(ln) - 4), " then") <> 0 Then FormDesign_EndsThen = 1
+End Function
+
+' 「If lParam = name.Handle Then h()」
+Function FormDesign_CallLn$(name As String, h As String) As String
+    FormDesign_CallLn$ = "If lParam = " & name & ".Handle Then " & h & "()"
+End Function
+
+' BN_CLICKED の行 b の次に、呼ぶ行を足す
+Function FormDesign_AddCallAt$(text As String, ByVal b As Long, name As String, h As String) As String
+    Dim ind As String, ln As String, s As String
+    ind = FormDesign_Indent$(text, b)
+    ln = FormDesign_Line$(text, b)
+    s = ind & "If HIWORD(wParam) = BN_CLICKED And lParam = " & name & ".Handle Then " & h & "()"
+    If FormDesign_EndsThen(ln) <> 0 Then s = ind & "    " & FormDesign_CallLn$(name, h)
+    FormDesign_AddCallAt$ = FormDesign_Insert$(text, FormDesign_LineEnd(text, b) + 1, s & FormDesign_Nl$(text))
+End Function
+
+' WM_COMMAND / BN_CLICKED のブロック（字下げ ind）
+Function FormDesign_CmdBlock$(name As String, h As String, ind As String, nl As String) As String
+    Dim s As String
+    s = ind & "If msg = WM_COMMAND Then" & nl & ind & "    If HIWORD(wParam) = BN_CLICKED Then" & nl
+    s = s & ind & "        " & FormDesign_CallLn$(name, h) & nl
+    FormDesign_CmdBlock$ = s & ind & "    End If" & nl & ind & "End If" & nl
+End Function
+
+' BN_CLICKED の無い WndProc（行 w から End Function の行 e）に、ブロックを足す
+Function FormDesign_AddCmd$(text As String, ByVal w As Long, ByVal e As Long, name As String, h As String) As String
+    Dim p As Long, ind As String
+    p = FormDesign_LastWith(text, w, e, "super.wndproc")
+    If p <> 0 Then ind = FormDesign_Indent$(text, p)
+    If p = 0 Then ind = FormDesign_Indent$(text, e) & "    "
+    If p = 0 Then p = e
+    FormDesign_AddCmd$ = FormDesign_Insert$(text, p, FormDesign_CmdBlock$(name, h, ind, FormDesign_Nl$(text)))
+End Function
+
+' WndProc が無いとき、Sub h の前に足す「Public」、WndProc、「Private」
+Function FormDesign_NewWndProc$(text As String, name As String, h As String) As String
+    Dim p As Long, ind As String, clsInd As String, nl As String, s As String
+    p = FormDesign_SubLine(text, h)
+    ind = FormDesign_Indent$(text, p)
+    clsInd = FormDesign_Indent$(text, FormDesign_ClassLine(text))
+    nl = FormDesign_Nl$(text)
+    s = clsInd & "Public" & nl & ind & "Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT" & nl
+    s = s & FormDesign_CmdBlock$(name, h, ind & "    ", nl) & ind & "    WndProc = Super.WndProc(msg, wParam, lParam)" & nl
+    FormDesign_NewWndProc$ = FormDesign_Insert$(text, p, s & ind & "End Function" & nl & clsInd & "Private" & nl)
+End Function
+
+' WndProc で h を呼ぶようにする（もう name.Handle の行があればそのまま）
+Function FormDesign_AddDispatch$(text As String, name As String, h As String) As String
+    Dim w As Long, e As Long, b As Long
+    FormDesign_AddDispatch$ = text
+    w = FormDesign_WndProcLine(text)
+    If w = 0 Then
+        FormDesign_AddDispatch$ = FormDesign_NewWndProc$(text, name, h)
+        Exit Function
+    End If
+    e = FormDesign_EndFunc(text, w)
+    If FormDesign_LastWith(text, w, e, name & ".handle") <> 0 Then Exit Function
+    b = FormDesign_LastWith(text, w, e, "bn_clicked")
+    If b <> 0 Then FormDesign_AddDispatch$ = FormDesign_AddCallAt$(text, b, name, h)
+    If b = 0 Then FormDesign_AddDispatch$ = FormDesign_AddCmd$(text, w, e, name, h)
+End Function
+
+' ---- まとめ ----
+
+' 部品 name のクリックの処理を書けるようにした本文。caret には Sub の中の最初の行の終わり（1 始まり）。
+' デザインできない文書はそのまま（caret は 0）
+Function FormDesign_AddClick$(text As String, name As String, ByRef caret As Long) As String
+    Dim h As String, u As String, p As Long
+    FormDesign_AddClick$ = text
+    caret = 0
+    p = FormDesign_HandlerPos(text)
+    If p = 0 Or FormDesign_IsForm(text) = 0 Then Exit Function
+    h = name & "Click"
+    u = text
+    If FormDesign_SubLine(u, h) = 0 Then u = FormDesign_Insert$(u, p, FormDesign_HandlerText$(h, FormDesign_Indent$(text, FormDesign_FindLine(text, 1, 1, "")), FormDesign_Nl$(text)))
+    u = FormDesign_AddDispatch$(u, name, h)
+    FormDesign_AddClick$ = u
+    caret = FormDesign_LineEnd(u, FormDesign_LineEnd(u, FormDesign_SubLine(u, h)) + 1)
+    If Mid$(u, caret - 1, 1) = Chr$(13) Then caret = caret - 1
+End Function
