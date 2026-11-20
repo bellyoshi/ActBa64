@@ -1,0 +1,88 @@
+' LxEnv - 環境変数（GetEnvironmentVariableA）と一時フォルダー（GetTempPathA）
+'  環境は起動時の envp（LxProc の LxEnvp）。書き換え（SetEnvironmentVariable）は無い
+
+' envp[i]（NAME=値）。終わりは 0
+Function LxEnvAt(i As Long) As *Byte
+    LxEnvAt = LxGetQ(LxEnvp(), i * 8)
+End Function
+
+' e が「name=」で始まれば値の先頭、違えば 0
+Function LxEnvMatch(e As *Byte, name As *Byte) As *Byte
+    Dim i As Long
+    LxEnvMatch = 0
+    i = 0
+    While name[i] <> 0
+        If e[i] <> name[i] Then Exit Function
+        i = i + 1
+    Wend
+    If e[i] <> &H3D Then Exit Function
+    LxEnvMatch = VarPtr(e[i + 1])
+End Function
+
+' name の値。無ければ 0
+Function LxGetEnv(name As *Byte) As *Byte
+    Dim i As Long
+    Dim e As *Byte
+    LxGetEnv = 0
+    If name = 0 Then Exit Function
+    i = 0
+    e = LxEnvAt(0)
+    While e <> 0
+        LxGetEnv = LxEnvMatch(e, name)
+        If LxGetEnv <> 0 Then Exit Function
+        i = i + 1
+        e = LxEnvAt(i)
+    Wend
+End Function
+
+' s を buf へ（NUL まで）。入らなければ何も書かず、要るバイト数（NUL 込み）を返す。入れば書いた長さ
+Function LxCopyOut(s As *Byte, buf As *Byte, n As DWord) As DWord
+    Dim k As Long
+    Dim i As Long
+    k = Lx_lstrlenA(s)
+    LxCopyOut = k + 1
+    If buf = 0 Or k + 1 > (n As Long) Then Exit Function
+    For i = 0 To k
+        buf[i] = s[i]
+    Next
+    LxCopyOut = k
+End Function
+
+' 無ければ 0（Win32 の ERROR_ENVVAR_NOT_FOUND は付けない）
+Function Lx_GetEnvironmentVariableA(ByVal name As *Byte, ByVal buf As *Byte, ByVal n As DWord) As DWord
+    Dim v As *Byte
+    Lx_GetEnvironmentVariableA = 0
+    v = LxGetEnv(name)
+    If v = 0 Then Exit Function
+    Lx_GetEnvironmentVariableA = LxCopyOut(v, buf, n)
+End Function
+
+' $TMPDIR（空なら /tmp）に / を 1 つ付けたもの（Win32 と同じく末尾は区切り）
+Function Lx_GetTempPathA(ByVal n As DWord, ByVal buf As *Byte) As DWord
+    Dim d(LX_PATH_MAX - 1) As Byte
+    Dim nm As String
+    Dim dflt As String
+    Dim v As *Byte
+    Dim k As Long
+    nm = "TMPDIR"
+    dflt = "/tmp"
+    v = LxGetEnv(StrPtr(nm))
+    If v <> 0 Then
+        If v[0] = 0 Then v = 0
+    End If
+    If v = 0 Then v = StrPtr(dflt)
+    k = 0
+    While v[k] <> 0 And k < LX_PATH_MAX - 2
+        d(k) = v[k]
+        k = k + 1
+    Wend
+    If k = 0 Then
+        d(0) = &H2F
+        k = 1
+    ElseIf d(k - 1) <> &H2F Then
+        d(k) = &H2F
+        k = k + 1
+    End If
+    d(k) = 0
+    Lx_GetTempPathA = LxCopyOut(VarPtr(d(0)), buf, n)
+End Function

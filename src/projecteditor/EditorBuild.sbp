@@ -46,8 +46,13 @@ Function EditorBuild_TargetLabel$() As String
     If EditorBuild_IsStrip() <> 0 Then EditorBuild_TargetLabel$ = EditorBuild_TargetLabel$ + ", -X"
 End Function
 
+' Linux 版のエディタは隣の Linux 版コンパイラ（拡張子なし）を呼ぶ
 Function EditorBuild_CompilerName$() As String
+#ifdef _LINUX
+    EditorBuild_CompilerName$ = "actba64"
+#else
     EditorBuild_CompilerName$ = "actba64.exe"
+#endif
 End Function
 
 Function EditorBuild_TargetOpt$() As String
@@ -398,12 +403,48 @@ Function EditorBuild_Shell(hWnd As HWND, target As String, params As String, run
     If ShellExecute(hWnd, "open", target, params, runDir, SW_SHOWNORMAL) > 32 Then EditorBuild_Shell = 1
 End Function
 
+' コンソールのプログラムを端末の窓で動かす（終わっても窓は残す）。
+' Windows は cmd.exe /k。Linux は一時フォルダーに書いたスクリプトが端末を選んで（$TERMINAL、
+' x-terminal-emulator、gnome-terminal、konsole、xfce4-terminal、xterm の順）その中で動かし、Enter を待つ
+#ifdef _LINUX
+Function EditorBuild_ConsoleScript$() As String
+    Dim dir As String, s As String, lf As String
+    EditorBuild_ConsoleScript$ = ""
+    dir = EditorBuild_TempDir$()
+    If Len(dir) = 0 Then Exit Function
+    dir = dir + "ActBa64Temp/"
+    EditorBuild_MakeDir(dir)
+    lf = Chr$(10)
+    s = "t=" + Chr$(34) + "$TERMINAL" + Chr$(34) + lf
+    s = s + "if [ -z " + Chr$(34) + "$t" + Chr$(34) + " ]; then for c in x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm; do"
+    s = s + " if command -v $c >/dev/null 2>&1; then t=$c; break; fi; done; fi" + lf
+    s = s + "[ -z " + Chr$(34) + "$t" + Chr$(34) + " ] && exit 127" + lf
+    s = s + "r='" + Chr$(34) + "$0" + Chr$(34) + "; s=$?; echo; echo " + Chr$(34) + "[exit $s]" + Chr$(34) + "; read x'" + lf
+    s = s + "case " + Chr$(34) + "$t" + Chr$(34) + " in *gnome-terminal*) set -- --;; *) set -- -e;; esac" + lf
+    s = s + "exec " + Chr$(34) + "$t" + Chr$(34) + " " + Chr$(34) + "$1" + Chr$(34) + " /bin/sh -c " + Chr$(34) + "$r" + Chr$(34) + " " + Chr$(34) + "$EXE" + Chr$(34) + lf
+    EditorBuild_ConsoleScript$ = dir + "run_console.sh"
+    If WriteAll(StrPtr(EditorBuild_ConsoleScript$), StrPtr(s), Len(s)) = 0 Then EditorBuild_ConsoleScript$ = ""
+End Function
+#endif
+
+Function EditorBuild_ShellConsole(hWnd As HWND, exePath As String, runDir As String) As Long
+#ifdef _LINUX
+    Dim script As String
+    EditorBuild_ShellConsole = 0
+    script = EditorBuild_ConsoleScript$()
+    If Len(script) = 0 Then Exit Function
+    EditorBuild_ShellConsole = EditorBuild_Shell(hWnd, "/usr/bin/env", "EXE=" + Chr$(34) + exePath + Chr$(34) + " /bin/sh " + Chr$(34) + script + Chr$(34), runDir)
+#else
+    EditorBuild_ShellConsole = EditorBuild_Shell(hWnd, "cmd.exe", "/k " + Chr$(34) + exePath + Chr$(34), runDir)
+#endif
+End Function
+
 ' 作業ディレクトリは exe のあるフォルダ。相対パスのデータファイルを AB 4.20 と同じく exe の隣で開く。
 Function EditorBuild_LaunchExe(hWnd As HWND, exePath As String) As Long
     Dim runDir As String
     runDir = RunDir_Of$(exePath)
     If EditorBuild_WantConsole(exePath) <> 0 Then
-        EditorBuild_LaunchExe = EditorBuild_Shell(hWnd, "cmd.exe", "/k " + Chr$(34) + exePath + Chr$(34), runDir)
+        EditorBuild_LaunchExe = EditorBuild_ShellConsole(hWnd, exePath, runDir)
     Else
         EditorBuild_LaunchExe = EditorBuild_Shell(hWnd, exePath, "", runDir)
     End If

@@ -3,11 +3,19 @@
 '  argv[0] の \ を / にし、実行できるか access で確かめてから fork + execve（環境は起動時の envp）。
 '  hProcess = pid + LX_PROC_BIAS（CloseHandle は何もしない）。終了コードは wait4 の status から
 '  （シグナルで終わったら 128 + 番号）
+'  STARTUPINFO の STARTF_USESTDHANDLES は子で dup2（hStdInput/Output/Error を 0/1/2 へ）、
+'  lpCurrentDirectory は子で chdir。CreatePipe = pipe（fd は fork で子へ渡る。SetHandleInformation は何もしない）
 
 Const LX_ARG_MAX = 64
 Const LX_ARG_BUF = 4096
+Const LX_SYS_PIPE = 22
+Const LX_SYS_DUP2 = 33
+Const LX_STARTF_STDHANDLES = &H100
 Dim g_lxWaitPid As Long
 Dim g_lxWaitCode As DWord
+' 次の fork の子で使う STARTUPINFO と作業フォルダー（LxSpawn の前に入れる。0 なら何もしない）
+Dim g_lxSpawnSi As VoidPtr
+Dim g_lxSpawnDir As VoidPtr
 
 Function LxSkipSp(cmd As *Byte, i As Long) As Long
     Dim k As Long
@@ -73,8 +81,34 @@ Function LxEnvp() As VoidPtr
     LxEnvp = base + off
 End Function
 
-' 子: execve。戻ってきたら（失敗）終了コード 127
+' 子: HANDLE h（fd + LX_FD_BIAS）を fd へ。0 / INVALID_HANDLE_VALUE は触らない
+Sub LxDupStd(h As VoidPtr, fd As Long)
+    If h = 0 Or h = -1 Then Exit Sub
+    Lx_Syscall(LX_SYS_DUP2, LxFdOf(h), fd, 0, 0, 0, 0)
+End Sub
+
+' 子: STARTUPINFO の dwFlags +60、hStdInput +80、hStdOutput +88、hStdError +96
+Sub LxChildStd(si As VoidPtr)
+    Dim f As *DWord
+    If si = 0 Then Exit Sub
+    f = si + 60
+    If (f[0] And LX_STARTF_STDHANDLES) = 0 Then Exit Sub
+    LxDupStd(LxGetQ(si, 80), 0)
+    LxDupStd(LxGetQ(si, 88), 1)
+    LxDupStd(LxGetQ(si, 96), 2)
+End Sub
+
+Sub LxChildDir(dir As *Byte)
+    Dim p(LX_PATH_MAX - 1) As Byte
+    If dir = 0 Then Exit Sub
+    If dir[0] = 0 Then Exit Sub
+    Lx_Syscall(LX_SYS_CHDIR, LxPath(dir, VarPtr(p(0))), 0, 0, 0, 0, 0)
+End Sub
+
+' 子: 標準ハンドルと作業フォルダーを整えて execve。戻ってきたら（失敗）終了コード 127
 Sub LxExecChild(path As *Byte, argv As *Byte)
+    LxChildStd(g_lxSpawnSi)
+    LxChildDir(g_lxSpawnDir)
     Lx_Syscall(LX_SYS_EXECVE, path, argv, LxEnvp(), 0, 0, 0)
     Lx_Syscall(LX_SYS_EXIT_GROUP, 127, 0, 0, 0, 0, 0)
 End Sub
@@ -106,7 +140,11 @@ Function Lx_CreateProcessA(ByVal app As VoidPtr, ByVal cmd As *Byte, ByVal pa As
     Lx_CreateProcessA = 0
     If LxSplitArgs(cmd, VarPtr(buf(0)), VarPtr(argv(0))) = 0 Then Exit Function
     LxSlashInPlace(VarPtr(buf(0)))
+    g_lxSpawnSi = si
+    g_lxSpawnDir = dir
     pid = LxSpawn(VarPtr(buf(0)), VarPtr(argv(0)))
+    g_lxSpawnSi = 0
+    g_lxSpawnDir = 0
     If LxOk(pid) = 0 Then Exit Function
     LxFillPi(pi, pid)
     Lx_CreateProcessA = 1
@@ -137,4 +175,19 @@ Function Lx_GetExitCodeProcess(ByVal h As VoidPtr, ByVal code As *DWord) As Long
     code[0] = 259
     If (h As Long) - LX_PROC_BIAS = g_lxWaitPid Then code[0] = g_lxWaitCode
     Lx_GetExitCodeProcess = 1
+End Function
+
+' pipe(2): fds[0] が読む側、fds[1] が書く側。HANDLE は fd + LX_FD_BIAS（sa と size は見ない）
+Function Lx_CreatePipe(ByVal hRead As VoidPtr, ByVal hWrite As VoidPtr, ByVal sa As VoidPtr, ByVal size As DWord) As Long
+    Dim fds(1) As Long
+    Lx_CreatePipe = 0
+    If LxOk(Lx_Syscall(LX_SYS_PIPE, VarPtr(fds(0)), 0, 0, 0, 0, 0)) = 0 Then Exit Function
+    LxSetQ(hRead, 0, fds(0) + LX_FD_BIAS)
+    LxSetQ(hWrite, 0, fds(1) + LX_FD_BIAS)
+    Lx_CreatePipe = 1
+End Function
+
+' fd はいつも子へ渡るので、継ぐ・継がないの切り替えは何もしない
+Function Lx_SetHandleInformation(ByVal h As VoidPtr, ByVal mask As DWord, ByVal flags As DWord) As Long
+    Lx_SetHandleInformation = 1
 End Function
