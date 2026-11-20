@@ -1,5 +1,6 @@
 ' フォームデザイナの部品の画面（RAD 第二段階）。
-' AddControl した部品を、窓のクライアント領域（見出しの帯の下）に押しボタンとして描く。
+' AddControl した部品を、窓のクライアント領域（見出しの帯の下）に、フィールドの型で描き分ける
+' （Button: 押しボタン、PictureBox: へこんだ枠と名前、Panel: 出っ張った板と見出し、Label: 文字。ほかは押しボタン）。
 ' 部品を押すと選ばれ、引くと動き、選んだ部品の右辺・下辺・右下を引くと大きさが変わる。
 ' 離したときに「名前.Left / .Top / .Width / .Height」の数を書き換える（FormDesign_Commit）。
 
@@ -44,12 +45,52 @@ Sub FormDesign_DrawTextC(hDC As HDC, ByRef rc As RECT, s As String)
     free(wide)
 End Sub
 
-Sub FormDesign_DrawCtl(hDC As HDC, text As String, name As String)
-    Dim rc As RECT
-    FormDesign_CtlScreen(text, name, rc)
+' 絵の部品。中身は無いので、白地にへこんだ枠と名前（灰色）
+Sub FormDesign_DrawImage(hDC As HDC, ByRef rc As RECT, name As String)
+    FormDesign_Fill(hDC, rc.left, rc.top, rc.right, rc.bottom, RGB(255, 255, 255))
+    DrawEdge(hDC, rc, BDR_SUNKENOUTER, BF_RECT)
+    SetTextColor(hDC, GetSysColor(COLOR_GRAYTEXT))
+    FormDesign_DrawTextC(hDC, rc, name)
+End Sub
+
+' 板の部品。出っ張った枠と見出し
+Sub FormDesign_DrawPanel(hDC As HDC, ByRef rc As RECT, cap As String)
+    FormDesign_Fill(hDC, rc.left, rc.top, rc.right, rc.bottom, GetSysColor(COLOR_BTNFACE))
+    DrawEdge(hDC, rc, BDR_RAISEDINNER, BF_RECT)
+    SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT))
+    FormDesign_DrawTextC(hDC, rc, cap)
+End Sub
+
+' 文字の部品。左寄せの 1 行
+Sub FormDesign_DrawLabel(hDC As HDC, ByRef rc As RECT, cap As String)
+    Dim wide As *Byte, n As Long
+    SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT))
+    wide = Enc_Utf8ToWide(cap, n)
+    If wide = 0 Then Exit Sub
+    DrawTextW(hDC, wide, n, rc, DT_LEFT Or DT_SINGLELINE)
+    free(wide)
+End Sub
+
+Sub FormDesign_DrawButton(hDC As HDC, ByRef rc As RECT, cap As String)
     DrawFrameControl(hDC, rc, DFC_BUTTON, DFCS_BUTTONPUSH)
     SetTextColor(hDC, GetSysColor(COLOR_BTNTEXT))
-    FormDesign_DrawTextC(hDC, rc, FormDesign_GetStr$(text, name & ".Caption"))
+    FormDesign_DrawTextC(hDC, rc, cap)
+End Sub
+
+Sub FormDesign_DrawCtl(hDC As HDC, text As String, name As String)
+    Dim rc As RECT, t As String, cap As String
+    FormDesign_CtlScreen(text, name, rc)
+    t = FormDesign_CtlType$(text, name)
+    cap = FormDesign_GetStr$(text, name & ".Caption")
+    If FormDesign_EqCI(t, "PictureBox") <> 0 Then
+        FormDesign_DrawImage(hDC, rc, name)
+    ElseIf FormDesign_EqCI(t, "Panel") <> 0 Then
+        FormDesign_DrawPanel(hDC, rc, cap)
+    ElseIf FormDesign_EqCI(t, "Label") <> 0 Then
+        FormDesign_DrawLabel(hDC, rc, cap)
+    Else
+        FormDesign_DrawButton(hDC, rc, cap)
+    End If
 End Sub
 
 Sub FormDesign_DrawCtlList(hDC As HDC, text As String)
@@ -84,6 +125,8 @@ End Sub
 Function FormDesign_InfoText$(text As String, ByVal w As Long, ByVal h As Long) As String
     Dim x As Long, y As Long, cw As Long, ch As Long
     FormDesign_InfoText$ = "Width " & FormDesign_Num$(w) & " x Height " & FormDesign_Num$(h)
+    If g_fdTool <> 0 Then FormDesign_InfoText$ = FormDesign_ToolInfo$()
+    If g_fdTool <> 0 Then Exit Function
     If FormDesign_CtlHas(text, g_fdSel) = 0 Then Exit Function
     FormDesign_CtlNow(text, g_fdSel, x, y, cw, ch)
     FormDesign_InfoText$ = g_fdSel & ": Left " & FormDesign_Num$(x) & ", Top " & FormDesign_Num$(y)

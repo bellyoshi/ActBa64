@@ -1,7 +1,7 @@
 ' フォームデザイナの画面（RAD 第一段階）。F12 でソースとデザインを切り替える。
 ' InitializeComponent の Width x Height の窓を FD_ORG_X, FD_ORG_Y に描く。
 ' 右辺・下辺・右下を引くと大きさが変わり、離したときに Width / Height の行を書き換える。
-' 窓の中の部品（AddControl したもの）は FormDesignCtlView.sbp。
+' 窓の中の部品（AddControl したもの）は FormDesignCtlView.sbp、左のツールボックスは FormDesignToolView.sbp。
 ' 書き換えは 1 回の編集として「元に戻す」が効く。デザイン中は文字を打てない。
 
 Const FD_GUI_FONT = 17             ' DEFAULT_GUI_FONT
@@ -48,9 +48,11 @@ End Sub
 
 Function FormDesign_HitAt(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
     Dim w As Long, h As Long
+    FormDesign_Size(hWnd, FormDesign_Text$(hWnd), w, h)
+    FormDesign_HitAt = FormDesign_ToolHitAt(x, y, w, h)
+    If FormDesign_HitAt <> 0 Then Exit Function
     FormDesign_HitAt = FormDesign_CtlHitAt(hWnd, x, y)
     If FormDesign_HitAt <> 0 Then Exit Function
-    FormDesign_Size(hWnd, FormDesign_Text$(hWnd), w, h)
     FormDesign_HitAt = FormDesign_Hit(x, y, w, h)
 End Function
 
@@ -76,6 +78,7 @@ End Sub
 Sub FormDesign_Leave(hWnd As HWND)
     g_fdOn = 0
     g_fdSel = ""
+    g_fdTool = 0
     If g_fdDrag <> 0 Then ReleaseCapture()
     g_fdDrag = 0
     If GetFocus() = hWnd Then EditorCaret_Create(hWnd)
@@ -151,6 +154,7 @@ Sub FormDesign_DrawAll(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     t = FormDesign_Text$(hWnd)
     FormDesign_Size(hWnd, t, w, h)
     FormDesign_Fill(hDC, 0, 0, rc.right, rc.bottom, GetSysColor(COLOR_APPWORKSPACE))
+    FormDesign_DrawToolbox(hDC, rc)
     FormDesign_DrawWindow(hDC, w, h, FormDesign_GetStr$(t, "Caption"))
     FormDesign_DrawCtls(hDC, t, w, h)
     FormDesign_DrawGrips(hDC, w, h)
@@ -196,6 +200,10 @@ End Sub
 
 Function FormDesign_CursorId(ByVal kind As Long) As Long
     FormDesign_CursorId = IDC_ARROW
+    If kind = FD_KIND_TOOL Then
+        FormDesign_CursorId = IDC_CROSS
+        Exit Function
+    End If
     If kind = FD_KIND_MOVE Then FormDesign_CursorId = IDC_SIZEALL
     If kind > FD_KIND_MOVE Then kind = kind - FD_KIND_MOVE
     If kind = 1 Then FormDesign_CursorId = IDC_SIZEWE
@@ -233,16 +241,17 @@ Sub FormDesign_Begin(hWnd As HWND, ByVal x As Long, ByVal y As Long)
     SetCapture(hWnd)
 End Sub
 
-' 部品の上なら部品を選んで掴む。そうでなければ選びを外し、窓の辺を見る
+' ツールボックスとツールの置き場所が先。部品の上なら部品を選んで掴む。そうでなければ選びを外し、窓の辺を見る
 Sub FormDesign_Down(hWnd As HWND, ByVal lParam As LPARAM)
     Dim x As Long, y As Long
     SetFocus(hWnd)
     EditorSelect_XY(lParam, x, y)
     FormDesign_Size(hWnd, FormDesign_Text$(hWnd), g_fdW0, g_fdH0)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+    If FormDesign_ToolDown(x, y, g_fdW0, g_fdH0) <> 0 Then Exit Sub
     g_fdDrag = FormDesign_CtlDown(hWnd, x, y)
     If g_fdDrag = 0 Then g_fdDrag = FormDesign_Hit(x, y, g_fdW0, g_fdH0)
     If g_fdDrag <> 0 Then FormDesign_Begin(hWnd, x, y)
-    InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
 
 Sub FormDesign_Move(hWnd As HWND, ByVal lParam As LPARAM)
@@ -326,9 +335,11 @@ End Function
 
 ' ---- キーとそのほか ----
 
-' デザイン中に効くキー: F12（ソースへ）、Ctrl+S、Ctrl+Z / Ctrl+Y
+' デザイン中に効くキー: F12（ソースへ）、Esc（ツールをやめる）、Ctrl+S、Ctrl+Z / Ctrl+Y
 Sub FormDesign_Key(hWnd As HWND, ByVal vk As Long)
     If vk = VK_F12 Then FormDesign_Toggle(hWnd)
+    If vk = VK_ESCAPE Then g_fdTool = 0
+    If vk = VK_ESCAPE Then InvalidateRect(hWnd, ByVal 0, FALSE)
     If EditorKeys_Ctrl() = 0 Then Exit Sub
     If EditorKeys_Save(vk) <> 0 Then Exit Sub
     If EditorKeys_Hist(vk) <> 0 Then InvalidateRect(hWnd, ByVal 0, FALSE)
