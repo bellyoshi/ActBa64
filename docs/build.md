@@ -139,6 +139,15 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 
 異常系の例: `test/t_err_then.abp`（`Then` 欠落）、`t_err_end_if.abp`、`t_err_undef.abp`、`t_err_multi_*.abp`。
 
+### メッセージの言語
+
+コンパイラのメッセージは英語が既定。`actba64.exe` と同じフォルダに `actba_lang_ja.csv` があれば、そこに載るメッセージを日本語で出す（正本は [`src/actba64/actba_lang_ja.csv`](../src/actba64/actba_lang_ja.csv)）。`error: ` / `warning: ` の頭と `<file>(<line>)` は訳さない（ProjectEditor のエラー行ジャンプが読む）。
+
+- メッセージは **ID** で管理する。ソースでは `Tr$(id, "英語")`、置き換えのあるものは `Tr1$(id, "bad array index count '{0}'", name)`（`Tr4$` まで。`{0}` は [`common/StringFormat.abp`](../src/common/StringFormat.abp) の `StringFormat`）。英語の文は呼び出し側に書いたものがそのまま既定
+- CSV は ProjectEditor の言語パックと同じ `id,text`（UTF-8、BOM 可）。`,` や `"` を含む文は `"` で囲み、中の `"` は `""`。`#` の行と、ID が数でない行（見出しの `id,text`）は読み飛ばす。訳が空の ID は英語のまま
+- 新しいメッセージは次の空き ID を使い、同じ文を何か所かで出すなら同じ ID にする。`python tools/check_msg_ids.py` が、同じ ID に違う英語の文が付いていないか、ID の無い `Tr$`、CSV の未使用 ID・`{0}` の食い違い・訳の無い ID を調べ、次の空き ID を出す
+- テスト（`run_test2.ps1`）は CSV を `bin\stage*` に置かないので英語で照合する。`.err.txt` も英語で書く
+
 **GUI の自動判定**（`' Gui: 1` が無くても GUI 扱い → 既定 SKIP）:
 
 - `#USEWINDOW=1`
@@ -222,6 +231,7 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 | `release\actba64.exe` | コンパイラ（既定 64bit、`-actba32` で 32bit） |
 | `release\Include\` | `src\Include` のコピー |
 | `release\help\` | エディタ向け HTML ヘルプ |
+| `release\actba_lang_ja.csv` | コンパイラのメッセージの日本語訳（消せば英語。[§メッセージの言語](#メッセージの言語)） |
 | `release\ProjectEditor_lang_*.csv` | UI 言語パック（既定は英語組み込み） |
 | `release\keywords.txt` | エディタのハイライト予約語（1 行 1 語） |
 | `release\setting.ini` | `Language=ja` 等（ファイル無し / `en` なら英語） |

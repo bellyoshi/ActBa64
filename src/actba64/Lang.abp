@@ -1,0 +1,189 @@
+' ===================================================
+'  Lang - コンパイラのメッセージの訳（メッセージ ID で引く）
+' ===================================================
+' メッセージは英語が既定で、英語の文は呼び出し側に ID と並べて書く（Tr1$(1005, "bad array index count '{0}'", name)）。
+' exe と同じ場所に actba_lang_ja.csv があれば、そこに ID が載る文は日本語で出す。
+'
+' CSV（UTF-8、BOM 可）は 1 行に ID,文。ProjectEditor_lang_*.csv と同じ形。
+'   - 文は " で囲める。囲んだ文の中の "" は "。, を含む文は囲む
+'   - # で始まる行、ID が数でない行（見出しの id,text など）、文が空の行は読み飛ばす。3 つ目からの欄は捨てる
+'   - 同じ ID が何度もあれば先の行を使う
+' ID の一覧と英語の文の食い違いは tools\check_msg_ids.py で調べる
+
+Const LANG_MAX = 2048
+Const LANG_FILE = "actba_lang_ja.csv"
+
+Dim g_langBuf As *Byte
+Dim g_langN As Long
+Dim g_langId As *Long
+Dim g_langJa As *Long
+Dim g_langPos As Long
+Dim g_langOut As Long
+Dim g_langSep As Long
+
+Sub LangPut(c As Long)
+    g_langBuf[g_langOut] = c
+    g_langOut = g_langOut + 1
+End Sub
+
+' 欄の後ろを , か行末まで飛ばす。止まった文字（, / LF / 0）を g_langSep に
+Sub LangSep()
+    Dim c As Long
+    Do
+        c = g_langBuf[g_langPos]
+        If c = 0 Then Exit Do
+        g_langPos = g_langPos + 1
+        If c = &H2C Or c = &H0A Then Exit Do
+    Loop
+    g_langSep = c
+End Sub
+
+' " で囲んだ欄の中身（g_langPos は開きの " の上）。閉じの " の次で止まる
+Sub LangQuoted()
+    Dim c As Long
+    g_langPos = g_langPos + 1
+    c = LangQChar()
+    While c <> 0
+        LangPut(c)
+        c = LangQChar()
+    Wend
+End Sub
+
+' 囲んだ欄の次の 1 文字。"" は 1 つの "。閉じの " と、ファイルの終わりは 0
+Function LangQChar() As Long
+    Dim c As Long
+    c = g_langBuf[g_langPos]
+    LangQChar = c
+    If c = 0 Then Exit Function
+    g_langPos = g_langPos + 1
+    If c <> &H22 Then Exit Function
+    LangQChar = LangQEsc()
+End Function
+
+' " を読んだ直後。次も " なら飛ばして " を、そうでなければ閉じとして 0 を返す
+Function LangQEsc() As Long
+    LangQEsc = 0
+    If g_langBuf[g_langPos] <> &H22 Then Exit Function
+    g_langPos = g_langPos + 1
+    LangQEsc = &H22
+End Function
+
+' 囲まない欄の中身。, / CR / LF / 0 の手前で止まる
+Sub LangBare()
+    Dim c As Long
+    c = g_langBuf[g_langPos]
+    While c <> 0 And c <> &H2C And c <> &H0D And c <> &H0A
+        LangPut(c)
+        g_langPos = g_langPos + 1
+        c = g_langBuf[g_langPos]
+    Wend
+End Sub
+
+' 欄を 1 つ読み、同じバッファの前の方へ詰めて NUL で終える。欄の先頭の位置を返す
+Function LangField() As Long
+    LangField = g_langOut
+    If g_langBuf[g_langPos] = &H22 Then LangQuoted() Else LangBare()
+    LangSep()
+    LangPut(0)
+End Function
+
+' 欄 off が 10 進の数（9 桁まで）だけなら値、ほかは -1
+Function LangNum(off As Long) As Long
+    Dim i As Long
+    LangNum = 0
+    i = off
+    While g_langBuf[i] >= &H30 And g_langBuf[i] <= &H39 And i < off + 9
+        LangNum = LangNum * 10 + (g_langBuf[i] - &H30)
+        i = i + 1
+    Wend
+    If i = off Or g_langBuf[i] <> 0 Then LangNum = -1
+End Function
+
+Sub LangAdd(idOff As Long, ja As Long)
+    Dim id As Long
+    id = LangNum(idOff)
+    If g_langN >= LANG_MAX Or id < 0 Or g_langBuf[ja] = 0 Then Exit Sub
+    g_langId[g_langN] = id
+    g_langJa[g_langN] = ja
+    g_langN = g_langN + 1
+End Sub
+
+' # の行を飛ばす
+Sub LangSkipLine()
+    Dim c As Long
+    Do
+        c = g_langBuf[g_langPos]
+        If c = 0 Then Exit Sub
+        g_langPos = g_langPos + 1
+        If c = &H0A Then Exit Sub
+    Loop
+End Sub
+
+' ID,文 の行
+Sub LangPair()
+    Dim id As Long, ja As Long
+    id = LangField()
+    If g_langSep <> &H2C Then Exit Sub
+    ja = LangField()
+    While g_langSep = &H2C
+        LangField()
+    Wend
+    LangAdd(id, ja)
+End Sub
+
+' 1 行を読む。g_langPos は次の行の先頭へ進む
+Sub LangLine()
+    If g_langBuf[g_langPos] = &H23 Then
+        LangSkipLine()
+    Else
+        LangPair()
+    End If
+End Sub
+
+' NUL 終端の CSV の中身を表にする。buf は表が持つ（free しない）
+Sub LangLoadText(buf As *Byte)
+    If g_langId = NULL Then g_langId = calloc(BytesN(LANG_MAX, SizeOf(Long)))
+    If g_langJa = NULL Then g_langJa = calloc(BytesN(LANG_MAX, SizeOf(Long)))
+    g_langBuf = buf : g_langN = 0 : g_langPos = 0 : g_langOut = 0
+    If buf[0] = &HEF And buf[1] = &HBB And buf[2] = &HBF Then g_langPos = 3
+    While g_langBuf[g_langPos] <> 0
+        LangLine()
+    Wend
+End Sub
+
+' ID の訳の番号。無ければ -1
+Function LangFind(id As Long) As Long
+    Dim i As Long
+    LangFind = -1
+    For i = 0 To g_langN - 1
+        If g_langId[i] = id Then
+            LangFind = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' メッセージ id の文。訳が無ければ英語の en のまま
+Function Tr$(id As Long, en As String) As String
+    Dim i As Long
+    Tr$ = en
+    i = LangFind(id)
+    If i >= 0 Then Tr$ = MakeStr(VarPtr(g_langBuf[g_langJa[i]]))
+End Function
+
+' 訳してから {0} 〜 を置き換える
+Function Tr1$(id As Long, en As String, a0 As String) As String
+    Tr1$ = StringFormat(Tr$(id, en), a0)
+End Function
+
+Function Tr2$(id As Long, en As String, a0 As String, a1 As String) As String
+    Tr2$ = StringFormat(Tr$(id, en), a0, a1)
+End Function
+
+Function Tr3$(id As Long, en As String, a0 As String, a1 As String, a2 As String) As String
+    Tr3$ = StringFormat(Tr$(id, en), a0, a1, a2)
+End Function
+
+Function Tr4$(id As Long, en As String, a0 As String, a1 As String, a2 As String, a3 As String) As String
+    Tr4$ = StringFormat(Tr$(id, en), a0, a1, a2, a3)
+End Function

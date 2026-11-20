@@ -2,6 +2,11 @@
 
 ## 未リリース（v0.1.0 からの変更点）
 
+### コンパイラ
+
+- コンパイラのメッセージを英語に揃えました（これまで「無効な識別子です。」など一部が日本語）。`actba64.exe` と同じフォルダに `actba_lang_ja.csv` があると日本語で出します（リリース一式には入っているので、英語にしたいときは消してください）。メッセージは ID で管理し、CSV は ProjectEditor の言語パックと同じ `id,text` です。詳しくは [build.md](./build.md#メッセージの言語) を見てください。
+- `src/common/StringFormat.abp` に `StringFormat("{0} message {1}", a, b)` を足しました（引数は String を 5 個まで）。
+
 ### ProjectEditor
 
 - フォームデザイナ（RAD の第一段階）を足しました。`InitializeComponent` のある文書で F12 を押すとデザイン画面になり、窓の右辺・下辺・右下を引くと `Width` / `Height` の行を書き換えます。もう一度 F12 でソースに戻ります。詳しくは [projecteditor.md](./projecteditor.md#12-フォームデザイナ) を見てください。
