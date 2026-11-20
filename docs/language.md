@@ -913,6 +913,9 @@ Application.Run(mainForm)
 | `Label` | 文字だけの部品（`STATIC`）。メンバーは `Button` と同じ。押しても何も届かない |
 | `SetCaption(s)` | 部品の `Caption` を `s` にし、窓がもうあれば窓の文字も変える。窓ができたあとで `Caption` に入れるだけでは窓は変わらない（プロパティが無いため） |
 | `Enabled` / `SetEnabled(b)` | 部品が使えるか。初めは `True`（`Control` の ctor）。`InitializeComponent` で `Enabled = False` と書けば使えない子窓で作る。窓ができたあとは `SetEnabled(b)`（`EnableWindow`） |
+| `SetBounds(x, y, w, h)` | 部品の位置と大きさを変える。窓がもうあれば `MoveWindow` で窓も動かす |
+| `PictureBox` | 絵を出す部品（`STATIC` の `SS_BITMAP`。Lazarus の `TImage`）。絵は左上に元の大きさで出る（`SS_BITMAP` の `STATIC` は絵の大きさに縮むので、`SetBounds` で広げても次の `SetBitmap` でまた絵の大きさになる） |
+| `SetBitmap(hbmp)` | 絵を出す。`hbmp` の持ち主になり、前の絵は `DeleteObject` する（Lazarus の `Picture.Assign(Bitmap)` と `Bitmap.Free` を合わせたもの）。`0` で絵を消す。窓ができる前に渡せば、窓ができたときに出す。今の絵は `Bitmap` |
 | `OpenFileDialog` | ファイルを開くダイアログ（`GetOpenFileName`）。窓を持たないので `AddControl` しない。`Filter`（`"説明\|*.pdf\|説明\|*.*"`、Lazarus と同じ `\|` 区切り）、`FileName`（UTF-8 のパス。初めの値はダイアログの初めのファイル名）、`Title` |
 | `Execute(hOwner)` | ダイアログを出す。`hOwner` は持ち主の窓（フォームの中なら `Handle`）。選んだら `True` で `FileName` に入る。やめたら `False` |
 | `ExtractFileName(path)` | パスからファイル名だけ（`\` / `/` / `:` のあと）。Lazarus の `ExtractFileName` |
@@ -929,7 +932,7 @@ Application.Run(mainForm)
   - 既定の `WndProc` は `WM_CLOSE` で窓を壊し（その前に `WM_DESTROY`）、`WM_DESTROY` でループを終わらせて `0` を返す（`DefWindowProc` / `PostQuitMessage` は無い）
   - 見出しは `_NET_WM_NAME`（UTF-8）にも入れる。位置と大きさは `XSizeHints` の `USPosition` / `USSize` で WM に渡す。背景は `&HF0F0F0`
   - 描画（GDI）はまだ無い。`Handle` は X の Window（`HWND` に入れている）
-  - `Button` / `Label` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` / `SetEnabled` は `Caption` / `Enabled` を変えるだけ（フォームの `SetCaption` は窓の見出しも変える）。`OpenFileDialog.Execute` はいつも `False`
+  - `Button` / `Label` / `PictureBox` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` / `SetEnabled` / `SetBounds` / `SetBitmap` は値を変えるだけ（フォームの `SetCaption` は窓の見出しも変える）。`OpenFileDialog.Execute` はいつも `False`
 
 ## 8. WinAPI / IAT
 

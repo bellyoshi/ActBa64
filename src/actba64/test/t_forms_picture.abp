@@ -1,0 +1,86 @@
+' Expect: 11111
+' Target: actba64
+' Forms.sbp の PictureBox と SetBounds:
+' SetBounds で子窓が動く → SetBitmap で STATIC に絵が入る → 次の SetBitmap で前の絵が消される
+' → 窓ができる前に渡した絵も、窓ができたときに入る
+
+#include <Forms.sbp>
+
+Class Form1
+    Inherits Form
+Public
+    Image1 As PictureBox
+    Image2 As PictureBox
+
+Private
+    Override Sub InitializeComponent()
+        Width = 300
+        Height = 200
+        Caption = "テスト"
+        Image1.Left = 0
+        Image1.Top = 0
+        Image1.Width = 10
+        Image1.Height = 10
+        AddControl(Image1)
+        Image2.Left = 100
+        Image2.Top = 0
+        Image2.Width = 10
+        Image2.Height = 10
+        Image2.SetBitmap(MakeBmp(7, 5))     ' 窓ができる前
+        AddControl(Image2)
+    End Sub
+End Class
+
+Function MakeBmp(w As Long, h As Long) As HBITMAP
+    Dim dc As HDC
+    dc = GetDC(0)
+    MakeBmp = CreateCompatibleBitmap(dc, w, h)
+    ReleaseDC(0, dc)
+End Function
+
+' 子窓の四角を親のクライアントの座標で（左上と大きさ）
+Function ChildRect(f As HWND, c As HWND, ByRef rc As RECT) As Long
+    Dim pt As POINTAPI
+    GetWindowRect(c, rc)
+    pt.x = rc.left
+    pt.y = rc.top
+    ScreenToClient(f, pt)
+    rc.right = rc.right - rc.left + pt.x
+    rc.left = pt.x
+    rc.top = pt.y
+    ChildRect = 1
+End Function
+
+Dim mainForm As Form1
+Dim r As Long
+Dim rc As RECT
+Dim b1 As HBITMAP, b2 As HBITMAP
+Dim bm As BITMAP
+
+mainForm.Show()
+
+' SetBounds: 子窓がクライアントの (20, 30) へ動き、大きさが 50 x 40 になる
+mainForm.Image1.SetBounds(20, 30, 50, 40)
+ChildRect(mainForm.Handle, mainForm.Image1.Handle, rc)
+If rc.left = 20 And rc.top = 30 And rc.right - rc.left = 50 And mainForm.Image1.Width = 50 Then r = r + 10000
+
+' SetBitmap: STATIC に入り、Bitmap がそれを持つ
+b1 = MakeBmp(16, 8)
+mainForm.Image1.SetBitmap(b1)
+If SendMessage(mainForm.Image1.Handle, STM_GETIMAGE, IMAGE_BITMAP, 0) = b1 And mainForm.Image1.Bitmap = b1 Then r = r + 1000
+
+' 次の SetBitmap で前の絵は消される（GetObject が失敗する）
+b2 = MakeBmp(4, 4)
+mainForm.Image1.SetBitmap(b2)
+If GetObject(b1, SizeOf(BITMAP), VarPtr(bm)) = 0 And SendMessage(mainForm.Image1.Handle, STM_GETIMAGE, IMAGE_BITMAP, 0) = b2 Then r = r + 100
+
+' 窓ができる前に渡した絵も入っている
+If SendMessage(mainForm.Image2.Handle, STM_GETIMAGE, IMAGE_BITMAP, 0) = mainForm.Image2.Bitmap And mainForm.Image2.Bitmap <> 0 Then r = r + 10
+
+' SetBitmap(0) で絵を消し、持っていた絵も消す
+mainForm.Image1.SetBitmap(0)
+If GetObject(b2, SizeOf(BITMAP), VarPtr(bm)) = 0 And mainForm.Image1.Bitmap = 0 Then r = r + 1
+
+PostMessage(mainForm.Handle, WM_CLOSE, 0, 0)
+Application.Run(mainForm)
+ExitProcess(r)
