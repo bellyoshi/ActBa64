@@ -521,7 +521,7 @@ Write [#番号,] [式 [, ...]] [;]  ' カンマ区切り。番号省略は標準
 Sleep(ミリ秒)       ' 待ち中もウインドウメッセージを処理
 Beep
 Cls [n]             ' コンソールをクリア。省略時 n は 1。負なら何もしない
-MsgBox hWnd, text$ [, title$ [, type [, ans]]]
+MsgBox [hWnd,] text$ [, title$ [, type [, ans]]]
 DelWnd hWnd
 Window hWnd, hOwner, x, y, w, h, title$, style [, class$ [, id [, proc [, exStyle]]]]
 ChDir path$
@@ -565,7 +565,7 @@ ExitProcess(式)
 命令の引数は同じ行のカンマ区切りで、次の文キーワードは引数にしない。
 
 - `Cls` の `n` は受け取るが、グラフィック画面は無いので常にコンソールをクリアする
-- `MsgBox` は `hWnd` と `text$` が必須。`title$` の省略は空、`type` の省略は 0。第 5 引数があるときだけ `MessageBoxA` の戻り値をその変数へ代入する
+- `MsgBox` は `text$` が必須（引数が 1 つなら `hWnd` は 0）。`title$` の省略は空、`type` の省略は 0。第 5 引数があるときだけ `MessageBoxA` の戻り値をその変数へ代入する
 - `Window` の `hWnd` は `ByRef HWND`。`class$` を省略すると `ActBa64Wnd` を一度だけ登録する（ウィンドウ手続きは `DefWindowProc`）。引数の空欄（`, ,`）と、`id` 以降の省略は 0。メッセージループは作らない。`proc` は `CreateWindowEx` の `lpParam` に渡す
 - `Exec` の `cmd$` を省略すると空文字にする
 - `Date$()` / `Time$()` は文ではなく関数（`BasicCmd.abp`）。それぞれ `yyyy/mm/dd` と `hh:mm:ss` で、月日と時刻は 2 桁

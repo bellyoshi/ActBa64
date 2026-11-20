@@ -181,6 +181,7 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 - **警告**（`LinuxCheck`）: 残った呼び出しのうち Linux 版の無い API は `warning: file(行): 'MessageBeep' has no Linux version; …` を出す。行は呼んだ文（`OP_CALL_API` の `arg2`）。実行時ルーチンの中なら `warning: (runtime): …`
 - 実際には通らないが静的には届く Windows 専用の呼び出し（`BasicPath` の W 版、`Sleep` のメッセージ処理など）は `#ifndef _LINUX` で外す
 - **N88BASIC**（`Include\N88BASIC`）: 窓・GDI・UI スレッドの部分（`n88graph` の描く所、`n88thread` / `n88input` / `n88key` / `n88caret` 全体など）は `#ifndef _LINUX` で外し、`n88tty.abp` が同じ名前の関数（`N88_EnsureWindow` / `N88_PutText` / `N88_Print` / `N88_ReadLine` / `N88_DrawOnBoth` ほか）を持つ。`N88_EnsureWindow` が `n88x11.abp` の `N88X_Open`（XOpenDisplay）を試し、つながれば `g_n88X` で X の版（`N88X_*`。Pixmap に描いて窓の背景にする。PAINT は XGetImage → 自前の塗りつぶし → XPutImage）へ、つながらなければ端末へ。`SLEEP` の待ちは `Include\linux\LxTime` の `g_lxMsgWait` で X の版に差し替える。`LINE` などの本体（座標・`STEP`・LP）は共通のまま。`-pN88` の前置き（`PpN88HeadChunks`）にも `Include\linux` を入れる
+- `MessageBoxA`（`LxConsole`、`MsgBox`）: 窓は出さず「見出し: 本文」を stderr へ 1 行。戻り値は最初のボタン（`IDOK` / `IDABORT` / `IDYES` / `IDRETRY`）
 - `MultiByteToWideChar` / `WideCharToMultiByte`（`LxUnicode`）: コードページは何でも UTF-8 として扱う（Linux に CP932 は無い）
 - ELF のファイルでは `.idata` を `.text` の直後のページに置く（`.data` の 0 はファイルに持たない）
 - **共有ライブラリ**（`ElfDyn` / `LinuxDyn` / `LinuxThunk`）: `Declare Function strlen Lib "libc.so.6" (s As BytePtr) As Long` のように Lib が `xxx.so` / `xxx.so.N` なら、その ELF は動的リンクになる（`PT_INTERP` = `/lib64/ld-linux-x86-64.so.2`、`PT_DYNAMIC`、`DT_NEEDED`、`R_X86_64_GLOB_DAT`）。ブロブは `.idata` の後ろのページ、GOT はその DLL の ILT（Linux では使わない）。`.so` が無ければ今までどおり静的
