@@ -197,12 +197,15 @@ actba64 a.abp -pN88 -o a.exe
 - 命令の途中の引数は省略できる（`CONSOLE ,,,1`）。省いた引数には `-2` を渡す。`-2` を省略として扱うのは `COLOR` と `CONSOLE` だけ
 - 1 行の `IF 条件 THEN 文[:文...] [ELSE 文...]`。`THEN` / `ELSE` の後ろが行番号なら `GOTO`。`IF 条件 GOTO 行番号` も書ける
 - 未対応: `WHILE` などのほかの制御文、配列の暗黙宣言
-- **`-linux`**（`-pN88` / `#N88BASIC` とも）では窓の代わりに端末へ出す（`Include\N88BASIC\n88tty.abp`）。今は文字だけ
-  - `PRINT` / `INPUT` / `INKEY$` / `INPUT$` / `LOCATE` / `COLOR` / `CLS` が使える。標準出力が端末なら、始めに画面を消し、`LOCATE` / `CLS` / `COLOR` を ANSI エスケープで出す。端末でなければ文字だけを書く（`LOCATE` は位置を覚えるだけ）
-  - `INKEY$` / `INPUT$` の間は端末のカノニカルモードとエコーを切る（Enter は `CHR$(13)`、矢印キーなどはエスケープの 1 バイトずつ）。`INPUT` とプログラムの終わりで元に戻す。`EXITPROCESS` で直に終えると戻らない
-  - 標準入力が端末でないときは、`INPUT` で読んだ行を画面と同じように書き出す
-  - `LINE` / `CIRCLE` / `PSET` / `PAINT` は描かない（最初の 1 回だけ標準エラーに知らせる）。`LP`（最後の点）は動く
-  - 終わりで窓が閉じるのを待たない
+- **`-linux`**（`-pN88` / `#N88BASIC` とも）では X11 の窓（640x480）に出す（`Include\N88BASIC\n88x11.abp`。`libX11.so.6` を呼ぶので ELF は動的リンク）。X につながらなければ（`DISPLAY` が無いなど）端末へ出す（`n88tty.abp`）
+  - 窓: 文字も `LINE` / `CIRCLE` / `PSET` / `PAINT` も Windows と同じ窓に描く。描いた絵は窓と同じ大きさの Pixmap に持つので、隠れても X サーバーが描き直す
+  - 窓: 窓へは 16ms に 1 回まで写す。`INKEY$` / `INPUT` / `INPUT$` / `SLEEP` / 終わりでは必ず写す。閉じるボタンもこのときに受けて、プログラムを終える。終わり（`END` / 最後の行）では閉じるまで待つ
+  - 窓: 文字は X のコアフォント（`8x16`、無ければ `fixed`）で、ASCII だけ。それ以外の文字は `?` になる（日本語は未対応）
+  - 窓: `INKEY$` の矢印キーは N88 のコード（→ 28、← 29、↑ 30、↓ 31）。Enter は 13
+  - 端末: `PRINT` / `INPUT` / `INKEY$` / `INPUT$` / `LOCATE` / `COLOR` / `CLS` が使える。標準出力が端末なら、始めに画面を消し、`LOCATE` / `CLS` / `COLOR` を ANSI エスケープで出す。端末でなければ文字だけを書く（`LOCATE` は位置を覚えるだけ）
+  - 端末: `INKEY$` / `INPUT$` の間は端末のカノニカルモードとエコーを切る（Enter は `CHR$(13)`、矢印キーなどはエスケープの 1 バイトずつ）。`INPUT` とプログラムの終わりで元に戻す。`EXITPROCESS` で直に終えると戻らない
+  - 端末: 標準入力が端末でないときは、`INPUT` で読んだ行を画面と同じように書き出す
+  - 端末: `LINE` / `CIRCLE` / `PSET` / `PAINT` は描かない（最初の 1 回だけ標準エラーに知らせる）。`LP`（最後の点）は動く。終わりで待たない
 
 ```text
 10 REM 赤い円
@@ -903,12 +906,16 @@ Application.Run(mainForm)
 | `InitComponents()` | まだなら `InitializeComponent()` を呼ぶ。窓を出す前に値を読みたいとき |
 | `Virtual Function WndProc(msg, wParam, lParam) As LRESULT` | 窓のメッセージ。子が `Override` し、扱わないものは `Super.WndProc(msg, wParam, lParam)` へ。既定は `WM_DESTROY` で `PostQuitMessage(0)` し、`DefWindowProc` を返す |
 | `Show()` | 窓が無ければ作って表示する |
+| `SetCaption(s)`（Form） | 見出しを変える。窓がもうあれば窓の見出しも変える。先に `InitComponents()` を呼ぶので、`Show` の前に呼んでも `InitializeComponent` に上書きされない |
 | `Close()` | `WM_CLOSE` を窓へ送る（既定の `WndProc` が窓を壊す）。`Class` の中では `This.Close()` と書く（裸の `Close` はファイルの `Close` 文になる） |
 | `AddControl(c)` | 部品（`Control` の子。今は `Button` と `Label`）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
 | `Button` | `Left` / `Top` / `Width` / `Height` / `Caption` / `Handle`。押されると、フォームの `WndProc` に `WM_COMMAND`（`HIWORD(wParam) = BN_CLICKED`、`lParam` = ボタンの `Handle`）が届く。文字は `DEFAULT_GUI_FONT` |
 | `Label` | 文字だけの部品（`STATIC`）。メンバーは `Button` と同じ。押しても何も届かない |
 | `SetCaption(s)` | 部品の `Caption` を `s` にし、窓がもうあれば窓の文字も変える。窓ができたあとで `Caption` に入れるだけでは窓は変わらない（プロパティが無いため） |
 | `Enabled` / `SetEnabled(b)` | 部品が使えるか。初めは `True`（`Control` の ctor）。`InitializeComponent` で `Enabled = False` と書けば使えない子窓で作る。窓ができたあとは `SetEnabled(b)`（`EnableWindow`） |
+| `OpenFileDialog` | ファイルを開くダイアログ（`GetOpenFileName`）。窓を持たないので `AddControl` しない。`Filter`（`"説明\|*.pdf\|説明\|*.*"`、Lazarus と同じ `\|` 区切り）、`FileName`（UTF-8 のパス。初めの値はダイアログの初めのファイル名）、`Title` |
+| `Execute(hOwner)` | ダイアログを出す。`hOwner` は持ち主の窓（フォームの中なら `Handle`）。選んだら `True` で `FileName` に入る。やめたら `False` |
+| `ExtractFileName(path)` | パスからファイル名だけ（`\` / `/` / `:` のあと）。Lazarus の `ExtractFileName` |
 | `Application.Initialize()` | 今は何もしない |
 | `Application.Run(form)` | `form.Show()` のあと、窓が閉じるまでメッセージループを回す |
 
@@ -922,7 +929,7 @@ Application.Run(mainForm)
   - 既定の `WndProc` は `WM_CLOSE` で窓を壊し（その前に `WM_DESTROY`）、`WM_DESTROY` でループを終わらせて `0` を返す（`DefWindowProc` / `PostQuitMessage` は無い）
   - 見出しは `_NET_WM_NAME`（UTF-8）にも入れる。位置と大きさは `XSizeHints` の `USPosition` / `USSize` で WM に渡す。背景は `&HF0F0F0`
   - 描画（GDI）はまだ無い。`Handle` は X の Window（`HWND` に入れている）
-  - `Button` / `Label` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` / `SetEnabled` は `Caption` / `Enabled` を変えるだけ
+  - `Button` / `Label` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` / `SetEnabled` は `Caption` / `Enabled` を変えるだけ（フォームの `SetCaption` は窓の見出しも変える）。`OpenFileDialog.Execute` はいつも `False`
 
 ## 8. WinAPI / IAT
 

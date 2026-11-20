@@ -25,6 +25,11 @@
 ' 窓ができたあとで文字を変えるときは SetCaption(s)、使える・使えないは SetEnabled(b) を使う
 ' （Caption / Enabled に入れるだけでは窓は変わらない）。Enabled の初めの値は True。
 '
+' ファイルを開くダイアログは OpenFileDialog（窓を持たないので AddControl しない）:
+'   OpenDialog1.Filter = "PDFファイル|*.pdf|すべてのファイル|*.*"
+'   If OpenDialog1.Execute(Handle) Then Label1.SetCaption(ExtractFileName(OpenDialog1.FileName))
+' フォームの見出しを窓ができたあとで変えるのは、部品と同じ SetCaption(s)。
+'
 ' InitializeComponent は ctor ではなく最初の Show で呼ぶ。メンバーの部品の ctor は
 ' Form の ctor のあとに走るので、ctor の中で値を入れると部品の ctor に上書きされるため。
 ' 子窓はフォームの窓ができたとき（WM_CREATE の前）に作られる。
@@ -56,6 +61,24 @@
 ' WM_CREATE / WM_PAINT / WM_SIZE / WM_KEYDOWN / WM_CHAR / WM_?BUTTONDOWN・UP /
 ' WM_MOUSEMOVE / WM_CLOSE / WM_DESTROY。Super.WndProc は WM_CLOSE で窓を壊し、
 ' WM_DESTROY でメッセージループを終わらせる。
+
+Const FORMS_PATH_MAX = 780          ' OpenFileDialog の FileName のバイト数の上限（MAX_PATH の UTF-8）
+
+' パスの区切り（\ / :）か。UTF-8 では 2 バイト目以降に &H5C は来ない
+Function FormsIsSep(c As String) As Long
+    FormsIsSep = 0
+    If c = "\" Or c = "/" Or c = ":" Then FormsIsSep = 1
+End Function
+
+' パスからファイル名だけ（Lazarus の ExtractFileName）。区切りが無ければそのまま
+Function ExtractFileName(path As String) As String
+    Dim i As Long
+    i = Len(path)
+    While i > 0 And FormsIsSep(Mid$(path, i, 1)) = 0
+        i = i - 1
+    Wend
+    ExtractFileName = Mid$(path, i + 1, Len(path) - i)
+End Function
 
 #ifdef _LINUX
 ' ---- X11 版 ----
@@ -209,6 +232,26 @@ Public
     Sub Close()
         If Handle <> 0 Then FormsPostClose(Handle)
     End Sub
+
+    ' 見出しを変える。窓がもうあれば窓の見出しも変える。
+    ' 先に InitializeComponent を済ませる（あとで呼ばれて Caption を上書きしないように）
+    Sub SetCaption(s As String)
+        InitComponents()
+        Caption = s
+        If Handle <> 0 Then FormsTitle(Handle As VoidPtr, Caption)
+    End Sub
+End Class
+
+' ファイルを開くダイアログ。X11 版はまだ無いので、Execute はいつも False
+Class OpenFileDialog
+Public
+    Filter As String
+    FileName As String
+    Title As String
+
+    Function Execute(hOwner As HWND) As Long
+        Execute = False
+    End Function
 End Class
 
 ' 8 バイト・4 バイトの読み書き（VoidPtr 配列は使わない）
@@ -297,10 +340,7 @@ Sub FormsCreate(p As VoidPtr)
     f->Handle = w As HWND
     FormsBind(w, p)
 
-    ' 見出し。_NET_WM_NAME は UTF-8（日本語も出る）、WM_NAME は古い WM 向け
-    n = FormsStrLen(StrPtr(f->Caption))
-    XStoreName(g_formsDpy, w, StrPtr(f->Caption))
-    XChangeProperty(g_formsDpy, w, XInternAtom(g_formsDpy, "_NET_WM_NAME", 0), XInternAtom(g_formsDpy, "UTF8_STRING", 0), 8, 0, StrPtr(f->Caption), n)
+    FormsTitle(w, f->Caption)
 
     ' 位置と大きさ（WM が従うように USPosition / USSize）
     RtlFillMemory(VarPtr(g_formsHint(0)), 80, 0)
@@ -315,6 +355,13 @@ Sub FormsCreate(p As VoidPtr)
     XSelectInput(g_formsDpy, w, FORMS_X_MASK)
     f->CreateControls()
     f->WndProc(WM_CREATE, 0, 0)
+End Sub
+
+' 見出し。_NET_WM_NAME は UTF-8（日本語も出る）、WM_NAME は古い WM 向け
+Sub FormsTitle(w As VoidPtr, cap As String)
+    XStoreName(g_formsDpy, w, StrPtr(cap))
+    XChangeProperty(g_formsDpy, w, XInternAtom(g_formsDpy, "_NET_WM_NAME", 0), XInternAtom(g_formsDpy, "UTF8_STRING", 0), 8, 0, StrPtr(cap), FormsStrLen(StrPtr(cap)))
+    XFlush(g_formsDpy)
 End Sub
 
 ' WM_DESTROY を送ってから窓を壊す（Windows の DestroyWindow と同じ順）
@@ -511,6 +558,66 @@ Public
     End Sub
 End Class
 
+' ファイルを開くダイアログ（GetOpenFileName）。窓を持たないので AddControl しない
+Class OpenFileDialog
+Public
+    Filter As String            ' "説明|*.pdf|説明|*.*"（Lazarus と同じ | 区切り）
+    FileName As String          ' 選んだファイルのパス（UTF-8）。初めの値はダイアログの初めのファイル名
+    Title As String             ' ダイアログの見出し。"" なら Windows の既定
+
+    ' ダイアログを出す（hOwner は持ち主の窓。フォームの中なら Handle）。選んだら True で FileName に入る
+    Function Execute(hOwner As HWND) As Long
+        Dim ofn As OPENFILENAME
+        Dim filt(1023) As Byte
+        Dim buf(FORMS_PATH_MAX) As Byte
+        FormsFilter(Filter, VarPtr(filt(0)), 1024)
+        FormsCopyZ(FileName, VarPtr(buf(0)), FORMS_PATH_MAX)
+        FormsFillOfn(ofn, hOwner, VarPtr(filt(0)), VarPtr(buf(0)), Title)
+        Execute = False
+        If GetOpenFileName(ofn) = 0 Then Exit Function
+        FileName = MakeStr(VarPtr(buf(0)))
+        Execute = True
+    End Function
+End Class
+
+' "a|b|c" を GetOpenFileName の "a NUL b NUL c NUL NUL" にして dst（n バイト）へ
+Sub FormsFilter(s As String, dst As *Byte, n As Long)
+    Dim i As Long, p As *Byte
+    p = StrPtr(s)
+    i = 0
+    While i < Len(s) And i < n - 2
+        dst[i] = p[i]
+        If p[i] = &H7C Then dst[i] = 0
+        i = i + 1
+    Wend
+    dst[i] = 0
+    dst[i + 1] = 0
+End Sub
+
+' s を dst（n バイト）へ、末尾の 0 込みで（長すぎれば切る）
+Sub FormsCopyZ(s As String, dst As *Byte, n As Long)
+    Dim i As Long, p As *Byte
+    p = StrPtr(s)
+    i = 0
+    While i < Len(s) And i < n - 1
+        dst[i] = p[i]
+        i = i + 1
+    Wend
+    dst[i] = 0
+End Sub
+
+Sub FormsFillOfn(ByRef ofn As OPENFILENAME, hOwner As HWND, filt As *Byte, buf As *Byte, title As String)
+    RtlFillMemory(VarPtr(ofn), SizeOf(OPENFILENAME), 0)
+    ofn.lStructSize = SizeOf(OPENFILENAME)
+    ofn.hwndOwner = hOwner
+    ofn.lpstrFilter = filt
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = buf
+    ofn.nMaxFile = FORMS_PATH_MAX
+    If title <> "" Then ofn.lpstrTitle = StrPtr(title)
+    ofn.Flags = OFN_FILEMUSTEXIST Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER
+End Sub
+
 ' 子窓の文字を、システムの文字（DEFAULT_GUI_FONT）にする
 Sub FormsSetFont(h As HWND)
     SendMessage(h, WM_SETFONT, GetStockObject(DEFAULT_GUI_FONT) As WPARAM, 0)
@@ -589,6 +696,14 @@ Public
     ' 窓を閉じる（WM_CLOSE を送る。既定の WndProc が窓を壊す）
     Sub Close()
         If Handle <> 0 Then PostMessage(Handle, WM_CLOSE, 0, 0)
+    End Sub
+
+    ' 見出しを変える。窓がもうあれば窓の見出しも変える。
+    ' 先に InitializeComponent を済ませる（あとで呼ばれて Caption を上書きしないように）
+    Sub SetCaption(s As String)
+        InitComponents()
+        Caption = s
+        If Handle <> 0 Then SetWindowText(Handle, StrPtr(Caption))
     End Sub
 
 Private
