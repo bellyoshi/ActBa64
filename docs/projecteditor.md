@@ -267,10 +267,21 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 - フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `OpenFileDialog`）の次に足します。無ければ最後の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行の次、`Class` の行の次です。字下げは前の行に合わせます
 - `InitializeComponent`: 空行と、`名前.Left` / `.Top` / `.Width` / `.Height`（Image 以外は `.Caption = "名前"`）と `AddControl(名前)` の行を、最後の `AddControl` の行の次に足します。`AddControl` が無ければ `End Sub` の直前（字下げは `End Sub` + 4）です
 
-パネルの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。ボタンを押したときの `WndProc` の行は書きません。
+パネルの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。
+
+型が `Button` の部品を **ダブルクリック** すると、押したときの処理を書けるようにしてコードの画面に切り替え、`Sub 名前Click()` の中の空の行にキャレットを置きます。無いものだけを書き足すので、2 回目からは書かずにその `Sub` へ飛びます。
+
+- `Sub 名前Click()` / 空の行 / `End Sub`: `InitializeComponent` の行の直前（そのすぐ上のコメント行があれば、その前）。字下げは `InitializeComponent` の行と同じ
+- `WndProc` で呼ぶ行（`名前.Handle` を含む行がもうあれば書かない）
+  - `BN_CLICKED` の行が `Then` で終わるブロックなら、その中の先頭に `If lParam = 名前.Handle Then 名前Click()`
+  - `BN_CLICKED` の行が 1 行の `If` なら、その次に `If HIWORD(wParam) = BN_CLICKED And lParam = 名前.Handle Then 名前Click()`
+  - `BN_CLICKED` が無ければ、`WndProc = Super.WndProc(...)` の行（無ければ `End Function`）の前に `If msg = WM_COMMAND Then` / `If HIWORD(wParam) = BN_CLICKED Then` のブロック
+  - `WndProc` が無ければ、`Sub 名前Click()` の前に `Public`、`Override Function WndProc(...)`、`Private` を足す
+
+書き足しは 1 回の編集で元に戻せます。`Button` 以外の部品のダブルクリックは、ふつうに押したのと同じです。
 
 デザイン中に効くキーは F12、Esc（ツールの選びを外す）、Ctrl+S、Ctrl+Z / Ctrl+Y です。文字入力、ホイール、右クリックメニューは効きません。
 
 ## 13. このエディタがしないこと
 
-置換、折り返し、符号の手選び、プロジェクトの新規作成ウィザード、デバッガは持っていません。フォームデザイナは、窓の大きさと部品の位置と大きさを変え、ツールボックスから部品を足すだけです。部品の削除、名前や `Caption` の書き換え、イベントの行の生成はできません。Ctrl+N や Ctrl+O もありません。RAD 用の `Callback.wbp` / `MakeWindow.wbp` は、このエディタ自身を組むためのファイルです。
+置換、折り返し、符号の手選び、プロジェクトの新規作成ウィザード、デバッガは持っていません。フォームデザイナは、窓の大きさと部品の位置と大きさを変え、ツールボックスから部品を足すだけです。部品の削除、名前や `Caption` の書き換え、Button 以外のイベントの行の生成はできません。Ctrl+N や Ctrl+O もありません。RAD 用の `Callback.wbp` / `MakeWindow.wbp` は、このエディタ自身を組むためのファイルです。

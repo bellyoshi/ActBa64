@@ -1,0 +1,56 @@
+' FormDesign_AddClick$（フォームデザイナで Button をダブルクリックしたときのクリックの処理の雛形）。
+
+Dim feNl As String
+Dim feSrc As String
+Dim feOut As String
+Dim feCaret As Long
+Dim feHead As String
+Dim feInit As String
+feNl = Chr$(10)
+feHead = "Class Form1" & feNl & "    Inherits Form" & feNl & "Public" & feNl
+feInit = "Private" & feNl & "    ' デザイナが生成する部分" & feNl & "    Override Sub InitializeComponent()" & feNl
+feInit = feInit & "        AddControl(Button1)" & feNl & "    End Sub" & feNl & "End Class" & feNl
+
+Assert(-1, FormDesign_EndsThen("If a Then") = 1, "fe then")
+Assert(-1, FormDesign_EndsThen("If a Then b()") = 0, "fe then one line")
+Assert(-1, FormDesign_SubLine("x" & feNl & "    Sub Button1Click()" & feNl, "button1click") = 3, "fe subline")
+Assert(0, FormDesign_SubLine("    Sub Button1Clicked()" & feNl, "Button1Click"), "fe subline longer")
+
+' WndProc に Super の行だけ: その前に WM_COMMAND のブロック。Sub はコメント行の前
+feSrc = feHead & "    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT" & feNl
+feSrc = feSrc & "        WndProc = Super.WndProc(msg, wParam, lParam)" & feNl & "    End Function" & feNl & feInit
+feOut = FormDesign_AddClick$(feSrc, "Button1", feCaret)
+Assert(-1, InStr(1, feOut, "LRESULT" & feNl & "        If msg = WM_COMMAND Then" & feNl & "            If HIWORD(wParam) = BN_CLICKED Then" & feNl & "                If lParam = Button1.Handle Then Button1Click()" & feNl & "            End If" & feNl & "        End If" & feNl & "        WndProc = Super") > 0, "fe add cmd")
+Assert(-1, InStr(1, feOut, "Private" & feNl & "    Sub Button1Click()" & feNl & "        " & feNl & "    End Sub" & feNl & feNl & "    ' デザイナ") > 0, "fe add sub")
+Assert(-1, Mid$(feOut, feCaret - 8, 9) = "        " & feNl, "fe caret")
+' 2 回目は何も足さない
+Assert(-1, FormDesign_AddClick$(feOut, "Button1", feCaret) = feOut, "fe again same")
+Assert(-1, feCaret > 0, "fe again caret")
+
+' BN_CLICKED のブロックがあれば、その中に 1 行
+feSrc = feHead & "    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT" & feNl
+feSrc = feSrc & "        If HIWORD(wParam) = BN_CLICKED Then" & feNl & "            If lParam = Button1.Handle Then Button1Click()" & feNl
+feSrc = feSrc & "        End If" & feNl & "        WndProc = Super.WndProc(msg, wParam, lParam)" & feNl & "    End Function" & feNl & feInit
+feOut = FormDesign_AddClick$(feSrc, "Button2", feCaret)
+Assert(-1, InStr(1, feOut, "BN_CLICKED Then" & feNl & "            If lParam = Button2.Handle Then Button2Click()" & feNl & "            If lParam = Button1") > 0, "fe add in block")
+' 1 行の BN_CLICKED なら、その次に同じ形
+feOut = "        If HIWORD(wParam) = BN_CLICKED And lParam = Button1.Handle Then Button1Click()"
+feSrc = feHead & "    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT" & feNl & feOut & feNl
+feSrc = feSrc & "        WndProc = Super.WndProc(msg, wParam, lParam)" & feNl & "    End Function" & feNl & feInit
+feOut = FormDesign_AddClick$(feSrc, "Button2", feCaret)
+Assert(-1, InStr(1, feOut, "Button1Click()" & feNl & "        If HIWORD(wParam) = BN_CLICKED And lParam = Button2.Handle Then Button2Click()" & feNl) > 0, "fe add one line")
+
+' WndProc が無ければ、Sub の前に Public / WndProc / Private
+feSrc = "Class F" & feNl & "    Inherits Form" & feNl & "    Override Sub InitializeComponent()" & feNl & "    End Sub" & feNl & "End Class" & feNl
+feOut = FormDesign_AddClick$(feSrc, "B", feCaret)
+Assert(-1, InStr(1, feOut, "Inherits Form" & feNl & "Public" & feNl & "    Override Function WndProc(") > 0, "fe new wndproc")
+Assert(-1, InStr(1, feOut, "        WndProc = Super.WndProc(msg, wParam, lParam)" & feNl & "    End Function" & feNl & "Private" & feNl & "    Sub BClick()") > 0, "fe new wndproc end")
+
+' CRLF の文書のキャレットは CR の前
+feSrc = "Class F" & Chr$(13) & feNl & "    Override Sub InitializeComponent()" & Chr$(13) & feNl & "    End Sub" & Chr$(13) & feNl
+feOut = FormDesign_AddClick$(feSrc, "B", feCaret)
+Assert(-1, Mid$(feOut, feCaret, 2) = Chr$(13) & feNl, "fe caret crlf")
+
+' デザインできない文書はそのまま
+Assert(-1, FormDesign_AddClick$("Dim a", "B", feCaret) = "Dim a", "fe not form")
+Assert(0, feCaret, "fe not form caret")
