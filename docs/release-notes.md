@@ -14,6 +14,7 @@
 - 名前を付けて保存の既定の拡張子を `.sbp` から `.abp` にしました。`.abp`（Active Basic Program）はメインのコード、`.sbp`（Sub Basic Program）は `#include` で読むファイルです。ファイルダイアログのフィルタも `*.abp` を先にしました。
 - フォームデザイナの左にツールボックス（Button / Image / Panel）を足しました。ツールを選んで窓を押すと、フィールドの `名前 As 型` と `InitializeComponent` の位置・大きさ・`AddControl` の行を書き足します。部品はフィールドの型で描き分けます（[projecteditor.md](./projecteditor.md#12-フォームデザイナ)）。
 - ファイルメニューに「新しいフォーム」を足しました。プロジェクトを開いていなければ保存先を尋ねて `project1.pj`・`project1.abp`（メイン）・`Form1.abp` を書き、開いていれば `FormN.abp` を書いて `#SOURCE` に足します。書いたフォームはそのままフォームデザイナで開きます。N88BASIC構文・ActiveBasic2構文のときは灰色です。
+- ソースの子ウィンドウの上に「コード」「デザイナー」のタブを足しました。押すとソースとフォームデザイナが切り替わります（F12 と同じ）。
 
 ### -linux
 
