@@ -129,3 +129,7 @@ The documentation is written in Japanese and is also published at [docs.actba64.
 ## Status
 
 ActBa64 is under active development. Notable gaps today: DirectX 9, `On Error` / `Resume`, `Int64` / `QWord` types, scientific notation literals, general `Single` arithmetic, and `MENU` resources. Under `-linux`, only APIs that have a Linux implementation in `Include\linux` work; the compiler warns about the others.
+
+## License
+
+MIT License. Programs you build with ActBa64 (EXE / DLL) belong to you, and you may distribute them freely, including for commercial use. See [LICENSE](LICENSE) ([日本語訳](LICENSE.ja.md)).
