@@ -132,4 +132,4 @@ ActBa64 is under active development. Notable gaps today: DirectX 9, `On Error` /
 
 ## License
 
-MIT License. Programs you build with ActBa64 (EXE / DLL) belong to you, and you may distribute them freely, including for commercial use. See [LICENSE](LICENSE) ([日本語訳](LICENSE.ja.md)).
+MIT License. Programs you build with ActBa64 (EXE / DLL) belong to you, and you may distribute them freely, including for commercial use. See [LICENSE](LICENSE) ([日本語訳](docs/license.ja.md)) and [Distribution terms for programs you create](docs/distribution.md).
