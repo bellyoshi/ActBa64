@@ -132,4 +132,4 @@ cd src\actba64
 
 ## ライセンス
 
-MIT ライセンスです。ActBa64 で作ったプログラム（EXE / DLL）の著作権は作った人にあり、商用も含めて自由に配布できます。詳しくは [LICENSE.ja.md](LICENSE.ja.md)（原文: [LICENSE](LICENSE)）を見てください。
+MIT ライセンスです。ActBa64 で作ったプログラム（EXE / DLL）の著作権は作った人にあり、商用も含めて自由に配布できます。詳しくは [LICENSE の日本語訳](docs/license.ja.md)（原文: [LICENSE](LICENSE)）と [自作プログラムの配布条件](docs/distribution.md) を見てください。
