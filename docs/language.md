@@ -952,6 +952,7 @@ Application.Run(mainForm)
   - `EditBox` は押すとキャレットが入り、英数字・記号・BackSpace・Delete・← →・Home・End が効く。文字が変わると `WM_COMMAND`（`EN_CHANGE`）。日本語の入力（IME）はまだ無い
   - 部品の上の左ボタンと、部品が受けているキーは部品へ行き、フォームの `WndProc` には届かない（使えない部品の上は届く。Windows 版と同じ）
   - `SetCaption` / `SetEnabled` / `SetBounds` は描き直す。`PictureBox` の絵はまだ描かない（`SetBitmap` は値を覚えるだけ）。`OpenFileDialog.Execute` はいつも `False`
+  - `MsgBox` / `MessageBox` は X の窓になる（`Forms\MsgBox.sbp`。`Forms.sbp` を使うプログラムだけ。使わなければ標準エラーへ 1 行）。閉じるまでほかのフォームの入力を止める。ボタンは `MB_OK` / `MB_OKCANCEL` / `MB_ABORTRETRYIGNORE` / `MB_YESNOCANCEL` / `MB_YESNO` / `MB_RETRYCANCEL`（文字は英語）、`MB_DEFBUTTON2` / `3` も効く。Enter は今のボタン、Esc と閉じるボタンは Cancel（`MB_OK` は OK。Cancel の無い組では効かない）、Tab・← → でボタンを移る。アイコン（`MB_ICON*`）はまだ出さない。X につながらなければ標準エラーへ書く
 
 ## 8. WinAPI / IAT
 
