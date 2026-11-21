@@ -197,6 +197,7 @@ actba64 a.abp -pN88 -o a.exe
 - 実行は当時の機種よりずっと速い。`FOR J=1 TO 1000:NEXT` のような待ちのループはほぼ一瞬で終わる
 - 命令の途中の引数は省略できる（`CONSOLE ,,,1`）。省いた引数には `-2` を渡す。`-2` を省略として扱うのは `COLOR` と `CONSOLE` だけ
 - 1 行の `IF 条件 THEN 文[:文...] [ELSE 文...]`。`THEN` / `ELSE` の後ろが行番号なら `GOTO`。`IF 条件 GOTO 行番号` も書ける
+- `DATA 項目, ...` / `READ 変数, ...`。`DATA` は書いた場所にかかわらず、プログラムの先頭で読んだものとして扱い、`READ` は順に読む（`-pAB2` と同じ。値は exe の中に持つ）。`READ` の変数は `$` 付きなら文字列、ほかは数値。項目が尽きたら `0` / `""`。項目は式（数値・`&H..`・`"文字列"`）で、引用符の無い文字列は未対応。`RESTORE` は未対応。実行時の関数は `Include\Data`（`-pN88` / `-pAB2` のときだけ読む）
 - 未対応: `WHILE` などのほかの制御文、配列の暗黙宣言
 - **`-linux`**（`-pN88` / `#N88BASIC` とも）では X11 の窓（640x480）に出す（`Include\N88BASIC\n88x11.abp`。`libX11.so.6` を呼ぶので ELF は動的リンク）。X につながらなければ（`DISPLAY` が無いなど）端末へ出す（`n88tty.abp`）
   - 窓: 文字も `LINE` / `CIRCLE` / `PSET` / `PAINT` も Windows と同じ窓に描く。描いた絵は窓と同じ大きさの Pixmap に持つので、隠れても X サーバーが描き直す
@@ -224,6 +225,8 @@ actba64 a.abp -pN88 -o a.exe
 ```text
 actba64 old.bas -pAB2 -o old.exe
 ```
+
+- 最初の文の行（空行と `'` の行を除く）が行番号で始まるソースは、AB2 の `#N88BASIC` のプログラム（行番号付き・宣言なし）とみなし、`-pN88` と同じく読む（[§1.7](#pn88)。`Include\AB2` は読まない）
 
 - `Window` 文のクラス `"NORMAL"`（または空）は AB2 の窓。窓の手続きは `WM_COMMAND` / `WM_CLOSE` / `WM_SIZE` などを待ち行列に積み、`WM_CLOSE` では閉じない（プログラムが `DelWnd` で閉じる）。位置が `-1` なら画面の中央、幅か高さが `-1` なら Windows の既定
 - `GetWndMsg hWnd, Message, wParam, lParam` は待ち行列のメッセージ、無ければ受け取って配ったメッセージを返す
