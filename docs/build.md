@@ -227,6 +227,21 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 - Linux 版が `actba64.pj -linux` で出す ELF = Linux 版そのもの（不動点）、`rc.pj -linux` の ELF = Linux 版の rc
 - Linux 版が出す `actba64.exe` と `#resource` のテスト（`t_resource` / `t_iconres` / `t_bmpres`）の PE = Windows の同じコンパイラが出すもの
 - `check.ps1 integration` は `run_test_linux.ps1` の後にこれも回す（WSL が無ければ SKIP）
+- Linux 版のコンパイラは出した ELF を実行できるようにする（`ElfFlush` → `Include\linux\LxFile` の `LxMakeExec`。`chmod` で rwxr-xr-x から umask を引く）。Windows 版が出す ELF は Linux へ写してから `chmod +x` が要る（`/mnt/c` の上はいつも実行できるように見える）
+
+#### Linux でのリリース
+
+Linux の上で `release_build.sh` を動かすと、`release-linux/` に `actba64` / `rc` / `ProjectEditor` と `Include` / `help` などを揃える（`release_build.ps1` の Linux 版）。
+
+```sh
+./release_build.sh                     # ブートストラップ → stage1 → stage2 → stage3（stage2 = stage3）→ rc → ProjectEditor
+./release_build.sh -b path/to/actba64  # ブートストラップ（Linux 版の actba64）を指定
+./release_build.sh --skip-selfhost     # 既存の stage2 で rc と ProjectEditor だけ
+./release_build.sh --tar               # actba64-linux-x86_64.tar.gz も作る
+```
+
+- ブートストラップは `-b`、環境変数 `ACTBA64`、`src/actba64/bin/linux/actba64`（`run_selfhost_linux.ps1` が作る）、PATH の `actba64` の順に探す
+- 作業場所は `src/actba64/bin/lx/stage0..3`。ブートストラップは stage0 へ写し、今の `src/Include` を隣に置く（古い Include で stage1 を作らないため）
 
 ---
 
