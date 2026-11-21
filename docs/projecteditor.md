@@ -251,13 +251,16 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 | `Panel` | 出っ張った板と、真ん中に `名前.Caption` |
 | `Label` | `名前.Caption` を左寄せの 1 行 |
 | `CheckBox` | 左に印の四角、その右に `名前.Caption` を左寄せの 1 行 |
+| `RadioButton` | 左に印の丸、その右に `名前.Caption` を左寄せの 1 行 |
+| `EditBox` | 白地にへこんだ枠と、`名前.Caption` を左寄せの 1 行 |
+| `GroupBox` | 彫った線の枠と、左上に `名前.Caption`（中は塗らない） |
 | それ以外・宣言が無い | `Button` と同じ |
 
 書かれていない値は 0, 0, 75 x 25 です。`Panel1.AddControl(...)` のような、ほかの部品に載せる行は見ません。
 
 部品を押すと選ばれ、右辺・下辺・右下に白い四角が出ます。左下には選んだ部品の名前・位置・大きさが出ます。部品を引くと動き（左上は 0 より前に出ません）、選んだ部品の白い四角を引くと大きさが変わります（最小 8 x 8）。重なっていれば、後に `AddControl` した方を掴みます。離したときに、変わった値の `名前.Left = 数` などの数だけを書き換えます。行が無ければ `End Sub` の直前に足します。部品の外を押すと選びが外れます。部品の削除はまだありません。
 
-**ツールボックス** はデザイン画面の左の帯で、見出し「Toolbox」と組「General」の下に **Pointer** / **Button** / **Image** / **Panel** / **CheckBox** をアイコン付きで 1 行ずつ並べます。選んでいる行は水色の帯と青い枠で、ツールを選んでいないときは Pointer です。ツールを押すと選ばれ（もう一度押すか、Pointer を押すか、Esc でやめる）、窓のクライアント領域の上ではカーソルが十字になります。そこを押すと、押した位置を左上にして部品を 1 つ足し、選びます。足したらツールの選びは外れます。クライアント領域の外を押すとツールの選びだけ外れます。
+**ツールボックス** はデザイン画面の左の帯で、見出し「Toolbox」と組「General」の下に **Pointer** / **Button** / **Image** / **Panel** / **CheckBox** / **RadioButton** / **EditBox** / **Label** / **GroupBox** をアイコン付きで 1 行ずつ並べます。選んでいる行は水色の帯と青い枠で、ツールを選んでいないときは Pointer です。ツールを押すと選ばれ（もう一度押すか、Pointer を押すか、Esc でやめる）、窓のクライアント領域の上ではカーソルが十字になります。そこを押すと、押した位置を左上にして部品を 1 つ足し、選びます。足したらツールの選びは外れます。クライアント領域の外を押すとツールの選びだけ外れます。
 
 | ツール | 名前 | 型 | 大きさ | `Caption` |
 |---|---|---|---|---|
@@ -265,13 +268,17 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 | Image | `Image1` … | `PictureBox` | 100 x 100 | 書かない |
 | Panel | `Panel1` … | `Panel` | 200 x 100 | 名前 |
 | CheckBox | `CheckBox1` … | `CheckBox` | 100 x 20 | 名前 |
+| RadioButton | `RadioButton1` … | `RadioButton` | 100 x 20 | 名前 |
+| EditBox | `EditBox1` … | `EditBox` | 120 x 24 | 名前 |
+| Label | `Label1` … | `Label` | 100 x 20 | 名前 |
+| GroupBox | `GroupBox1` … | `GroupBox` | 200 x 100 | 名前 |
 
 番号は、載せた部品にもフィールドの宣言にも無い一番小さい数です。書き足すのは次の 2 か所で、1 回の編集として元に戻せます。
 
-- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `CheckBox` / `OpenFileDialog`）の次に足します。無ければ、最初のメソッド（`Sub` / `Function`）より前の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行（無ければ `Class` の行）の次に `Private` の行ごと足します。フィールドはメソッドより後ろに置くとコンパイルできないので、新しいフォームの雛形（`Public` の `WndProc` の後ろに `Private`）でも `Inherits` の次に `Private` を足します。字下げは前の行に合わせます
+- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `CheckBox` / `RadioButton` / `EditBox` / `GroupBox` / `OpenFileDialog`）の次に足します。無ければ、最初のメソッド（`Sub` / `Function`）より前の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行（無ければ `Class` の行）の次に `Private` の行ごと足します。フィールドはメソッドより後ろに置くとコンパイルできないので、新しいフォームの雛形（`Public` の `WndProc` の後ろに `Private`）でも `Inherits` の次に `Private` を足します。字下げは前の行に合わせます
 - `InitializeComponent`: 空行と、`名前.Left` / `.Top` / `.Width` / `.Height`（Image 以外は `.Caption = "名前"`）と `AddControl(名前)` の行を、最後の `AddControl` の行の次に足します。`AddControl` が無ければ `End Sub` の直前（字下げは `End Sub` + 4）です
 
-パネルの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。
+パネルやグループボックスの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。重なった所を押すと後に `AddControl` した方を掴むので、枠の中の部品は枠より後に置いてください。
 
 型が `Button` の部品を **ダブルクリック** すると、押したときの処理を書けるようにしてコードの画面に切り替え、`Sub 名前Click()` の中の空の行にキャレットを置きます。無いものだけを書き足すので、2 回目からは書かずにその `Sub` へ飛びます。
 

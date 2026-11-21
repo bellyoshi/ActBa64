@@ -1,0 +1,69 @@
+' Forms/RadioButton.sbp - ラジオボタン RadioButton。
+' Forms.sbp が #include する（単独では include しない）。
+
+#ifdef _LINUX
+
+' ラジオボタン。X11 版は Checked を覚えるだけ（ほかのラジオボタンの印は外さない）
+Class RadioButton
+    Inherits Control
+Public
+    Checked As Long
+
+    Function GetChecked() As Long
+        GetChecked = Checked
+    End Function
+
+    Sub SetChecked(b As Long)
+        Checked = b
+    End Sub
+End Class
+
+#else
+
+' ラジオボタン（BUTTON の BS_AUTORADIOBUTTON。Lazarus の TRadioButton）。押すと印が付き、
+' 同じフォームのほかのラジオボタンの印が外れる（フォームのラジオボタンはすべて 1 つの組）。
+' 親の WndProc に WM_COMMAND（BN_CLICKED）が届く。Checked は窓ができる前の初めの値。
+' 窓ができたあとの印は GetChecked / SetChecked で読み書きする（押して変わった印は Checked に入らない）
+Class RadioButton
+    Inherits Control
+Public
+    Checked As Long
+
+    Override Sub CreateHandle(parent As HWND)
+        Handle = CreateWindowEx(0, "BUTTON", StrPtr(Caption), WS_CHILD Or WS_VISIBLE Or WS_TABSTOP Or BS_AUTORADIOBUTTON, Left, Top, Width, Height, parent, 0, GetModuleHandle(0), 0)
+        AfterCreate()
+        If Checked <> False Then SendMessage(Handle, BM_SETCHECK, BST_CHECKED, 0)
+    End Sub
+
+    ' 印が付いているか（True / False）
+    Function GetChecked() As Long
+        GetChecked = Checked
+        If Handle = 0 Then Exit Function
+        GetChecked = False
+        If SendMessage(Handle, BM_GETCHECK, 0, 0) = BST_CHECKED Then GetChecked = True
+    End Function
+
+    ' 印を付ける・外す。付けるときは、窓がもうあれば同じ親のほかのラジオボタンの印を外す
+    Sub SetChecked(b As Long)
+        Checked = b
+        If Handle = 0 Then Exit Sub
+        If b <> False Then
+            FormsRadioClear(Handle)
+            SendMessage(Handle, BM_SETCHECK, BST_CHECKED, 0)
+        Else
+            SendMessage(Handle, BM_SETCHECK, BST_UNCHECKED, 0)
+        End If
+    End Sub
+End Class
+
+' h と同じ親の、h のほかのラジオボタン（BS_AUTORADIOBUTTON）の印を外す
+Sub FormsRadioClear(h As HWND)
+    Dim c As HWND
+    c = GetWindow(GetParent(h), GW_CHILD)
+    While c <> 0
+        If c <> h And (GetWindowLong(c, GWL_STYLE) And &HF) = BS_AUTORADIOBUTTON Then SendMessage(c, BM_SETCHECK, BST_UNCHECKED, 0)
+        c = GetWindow(c, GW_HWNDNEXT)
+    Wend
+End Sub
+
+#endif

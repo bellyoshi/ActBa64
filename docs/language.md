@@ -119,13 +119,14 @@ DLL（`#MODULETYPE=1`）の入口は `DllMain` です（[§8.4](#84-dll-を出�
 N88 `LINE`（actba64 サブセット）:
 
 ```text
-LINE [(x1,y1)]-[STEP](x2,y2)[,color][,B|BF]
-LINE -[STEP](x2,y2)[,color][,B|BF]    ' 始点は LP（最終参照点）。無ければ (0,0)
+LINE [(x1,y1)]-[STEP](x2,y2)[,color][,B|BF[,color2]]
+LINE -[STEP](x2,y2)[,color][,B|BF[,color2]]    ' 始点は LP（最終参照点）。無ければ (0,0)
 ```
 
 - 省略時の `color` は 7（白）
 - `STEP` のとき `(x2,y2)` は始点からの相対。`LINE (50,50)-STEP(30,30)` は `(80,80)` まで
 - `B` = 四角形の枠、`BF` = 塗りつぶし四角
+- `BF` の後ろの `color2` は中の色で、枠は `color`（`LINE (0,0)-(9,9),1,BF,5` は青い枠の水色の四角）。省けば中も `color`。`B` の後ろの線種と、`BF` の後ろのタイル（文字列）は読み飛ばす
 - 実行後 LP は絶対座標の終点へ移動
 
 N88 `CIRCLE`（actba64 サブセット）:
@@ -160,18 +161,21 @@ PSET (x, y) [, color]       ' 1 ドット。color 省略は 7（白）
 - 変数が複数の `Input` は、その 1 行をカンマで分ける。項目が足りなければ次の行を読む
 - `Inkey$()` は窓の `WM_KEYDOWN` を 1 文字取り、無ければ `""`。`Input$(n)` は同じキーを `n` 文字そろうまで待つ。`#n88basic` / `#prompt` のときだけ使える
 
-色番号（0..7、N88 8 色）:
+色番号はパレット番号（0..15）。既定は N88-BASIC(86) の 4096 色中 16 色モードと同じ（`&Hgrb`: 緑・赤・青 各 0〜F）:
 
-| 値 | 色 |
-|---|---|
-| 0 | 黒 |
-| 1 | 青 |
-| 2 | 赤 |
-| 3 | マゼンタ |
-| 4 | 緑 |
-| 5 | シアン |
-| 6 | 黄 |
-| 7 | 白（省略時） |
+| 値 | 色 | 値 | 色 |
+|---|---|---|---|
+| 0 | 黒 `&H000` | 8 | 灰 `&H777` |
+| 1 | 青 `&H00F` | 9 | 少し暗い青 `&H00A` |
+| 2 | 赤 `&H0F0` | 10 | 少し暗い赤 `&H0A0` |
+| 3 | マゼンタ `&H0FF` | 11 | 少し暗いマゼンタ `&H0AA` |
+| 4 | 緑 `&HF00` | 12 | 少し暗い緑 `&HA00` |
+| 5 | シアン `&HF0F` | 13 | 少し暗いシアン `&HA0A` |
+| 6 | 黄 `&HFF0` | 14 | 少し暗い黄 `&HAA0` |
+| 7 | 白（省略時） `&HFFF` | 15 | 少し暗い白 `&HAAA` |
+
+- `COLOR = (パレット番号, &Hgrb)` でパレットの色を変える（`COLOR = (10,&H8A0)`。`#N88BASIC` / `-pN88` / `-pAB2` の N88 のソース）。変えた後に描くものから効く（描いてある絵の色は変わらない）
+- 16 以上の色番号は下 4 ビット（`And 15`）
 
 サンプル: `src/actba64/samples/n88_shapes.abp`
 
@@ -881,7 +885,7 @@ dx_SetCullMode(CullMode)
 
 ### 7.8 フォーム（`Forms.sbp`）
 
-`#include <Forms.sbp>`（[`src/Include/Forms.sbp`](../src/Include/Forms.sbp)）で、窓を Class として書ける。サンプルは [`src/actba64/samples/forms/`](../src/actba64/samples/forms/)。
+`#include <Forms.sbp>`（[`src/Include/Forms.sbp`](../src/Include/Forms.sbp)）で、窓を Class として書ける。中身はクラスごとに [`src/Include/Forms/`](../src/Include/Forms/) の下のファイル（`Control.sbp` / `Button.sbp` / … / `Form.sbp` / `Application.sbp`）にあり、`Forms.sbp` がすべてを `#include` する。サンプルは [`src/actba64/samples/forms/`](../src/actba64/samples/forms/)。
 
 ```
 #include <Forms.sbp>
@@ -912,7 +916,7 @@ Application.Run(mainForm)
 | `Show()` | 窓が無ければ作って表示する |
 | `SetCaption(s)`（Form） | 見出しを変える。窓がもうあれば窓の見出しも変える。先に `InitComponents()` を呼ぶので、`Show` の前に呼んでも `InitializeComponent` に上書きされない |
 | `Close()` | `WM_CLOSE` を窓へ送る（既定の `WndProc` が窓を壊す）。`Class` の中では `This.Close()` と書く（裸の `Close` はファイルの `Close` 文になる） |
-| `AddControl(c)` | 部品（`Control` の子。`Button` / `Label` / `PictureBox` / `Panel` / `CheckBox`）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
+| `AddControl(c)` | 部品（`Control` の子。`Button` / `Label` / `PictureBox` / `Panel` / `CheckBox` / `RadioButton` / `EditBox` / `GroupBox`）を載せる。`InitializeComponent` で呼ぶと、窓ができたとき（`WM_CREATE` が `WndProc` に届く前）に子窓が作られる。窓がもうあれば、すぐ作る |
 | `Button` | `Left` / `Top` / `Width` / `Height` / `Caption` / `Handle`。押されると、フォームの `WndProc` に `WM_COMMAND`（`HIWORD(wParam) = BN_CLICKED`、`lParam` = ボタンの `Handle`）が届く。文字は `DEFAULT_GUI_FONT` |
 | `Label` | 文字だけの部品（`STATIC`）。メンバーは `Button` と同じ。押しても何も届かない |
 | `SetCaption(s)` | 部品の `Caption` を `s` にし、窓がもうあれば窓の文字も変える。窓ができたあとで `Caption` に入れるだけでは窓は変わらない（プロパティが無いため） |
@@ -921,6 +925,10 @@ Application.Run(mainForm)
 | `Panel` | 板（`STATIC`、縁がへこみ `Caption` を真ん中に出す。Lazarus の `TPanel`）。メンバーは `Button` と同じ。中に部品を載せることはまだできない |
 | `CheckBox` | チェックボックス（`BUTTON` の `BS_AUTOCHECKBOX`。Lazarus の `TCheckBox`）。メンバーは `Button` と同じに `Checked`（窓ができる前の初めの値）。押すと印が切り替わり、`Button` と同じ `WM_COMMAND`（`BN_CLICKED`）が届く |
 | `GetChecked()` / `SetChecked(b)` | 印が付いているか（`True` / `False`）と、印を付ける・外す。窓ができたあとはこちらを使う（押して変わった印は `Checked` に入らない）。-linux ではまだ子窓が無いので `Checked` を読み書きするだけ |
+| `RadioButton` | ラジオボタン（`BUTTON` の `BS_AUTORADIOBUTTON`。Lazarus の `TRadioButton`）。メンバーは `CheckBox` と同じ（`Checked` / `GetChecked()` / `SetChecked(b)`）。押すと印が付き、同じフォームのほかのラジオボタンの印が外れる（フォームのラジオボタンはすべて 1 つの組。組を分けることはまだできない）。`SetChecked(True)` もほかの印を外す。-linux では `Checked` を読み書きするだけで、ほかの印は外さない |
+| `EditBox` | 1 行の文字を打ち込む部品（`EDIT`。縁がへこみ、長い文字は横に流れる。Lazarus の `TEdit`）。初めの文字は `Caption`。文字が変わると、フォームの `WndProc` に `WM_COMMAND`（`HIWORD(wParam) = EN_CHANGE`、`lParam` = `Handle`）が届く |
+| `GetText()` / `SetText(s)` | `EditBox` の今の文字（UTF-8）と、文字を変える（`SetCaption` と同じ）。打ち込んで変わった文字は `Caption` に入らないので、窓ができたあとは `GetText()` で読む。-linux では `Caption` を読み書きするだけ |
+| `GroupBox` | 囲みの枠（`BUTTON` の `BS_GROUPBOX`。Lazarus の `TGroupBox`）。彫った線の枠と、左上に `Caption`。メンバーは `Label` と同じで、押しても何も届かない。中に部品を載せること・ラジオボタンの組を分けることはまだできない（枠の上に置いた部品もフォームに載る） |
 | `PictureBox` | 絵を出す部品（`STATIC` の `SS_BITMAP`。Lazarus の `TImage`）。絵は左上に元の大きさで出る（`SS_BITMAP` の `STATIC` は絵の大きさに縮むので、`SetBounds` で広げても次の `SetBitmap` でまた絵の大きさになる） |
 | `SetBitmap(hbmp)` | 絵を出す。`hbmp` の持ち主になり、前の絵は `DeleteObject` する（Lazarus の `Picture.Assign(Bitmap)` と `Bitmap.Free` を合わせたもの）。`0` で絵を消す。窓ができる前に渡せば、窓ができたときに出す。今の絵は `Bitmap` |
 | `OpenFileDialog` | ファイルを開くダイアログ（`GetOpenFileName`）。窓を持たないので `AddControl` しない。`Filter`（`"説明\|*.pdf\|説明\|*.*"`、Lazarus と同じ `\|` 区切り）、`FileName`（UTF-8 のパス。初めの値はダイアログの初めのファイル名）、`Title` |

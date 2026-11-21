@@ -1,0 +1,50 @@
+' Forms/PictureBox.sbp - 絵を出す部品 PictureBox。
+' Forms.sbp が #include する（単独では include しない）。
+
+#ifdef _LINUX
+
+' 絵を出す部品。X11 版は Bitmap を覚えるだけで、描かず、前の絵も消さない
+Class PictureBox
+    Inherits Control
+Public
+    Bitmap As HBITMAP
+
+    Sub SetBitmap(h As HBITMAP)
+        Bitmap = h
+    End Sub
+End Class
+
+#else
+
+' 絵を出す部品（STATIC の SS_BITMAP。Lazarus の TImage）。絵は左上に、元の大きさで出る
+' （SS_BITMAP の STATIC は絵の大きさに縮む。SetBounds で広げても、次の SetBitmap でまた絵の大きさになる）
+Class PictureBox
+    Inherits Control
+Public
+    Bitmap As HBITMAP           ' 出している絵。SetBitmap で渡したものの持ち主
+
+    Override Sub CreateHandle(parent As HWND)
+        Handle = CreateWindowEx(0, "STATIC", 0, WS_CHILD Or WS_VISIBLE Or SS_BITMAP, Left, Top, Width, Height, parent, 0, GetModuleHandle(0), 0)
+        AfterCreate()
+        If Bitmap <> 0 Then FormsSetImage(Handle, Bitmap, 0)
+    End Sub
+
+    ' 絵を出す。h の持ち主になり、前の絵は DeleteObject する（0 なら絵を消す）
+    Sub SetBitmap(h As HBITMAP)
+        Dim prev As HBITMAP
+        prev = Bitmap
+        Bitmap = h
+        If Handle <> 0 Then FormsSetImage(Handle, h, prev)
+        If prev <> 0 And prev <> h Then DeleteObject(prev)
+    End Sub
+End Class
+
+' STATIC に絵 h を渡す（prev は前に渡した絵）。戻ってきた前の絵が prev でなければ、
+' コントロールが作った写し（コモンコントロール 6 は 32bit の絵を写す）なので、ここで消す
+Sub FormsSetImage(hWnd As HWND, h As HBITMAP, prev As HBITMAP)
+    Dim got As HBITMAP
+    got = SendMessage(hWnd, STM_SETIMAGE, IMAGE_BITMAP, h As LPARAM) As HBITMAP
+    If got <> 0 And got <> prev Then DeleteObject(got)
+End Sub
+
+#endif
