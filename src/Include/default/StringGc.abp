@@ -16,8 +16,10 @@ Const STRGC_HDR_COUNT = 0
 Const STRGC_HDR_CAP = 8
 Const STRGC_HDR_BLOCKS = 16
 Const STRGC_HDR_MARKS = 24
-Const STRGC_HDR_PRECISE_COUNT = 32
-Const STRGC_HDR_PRECISE_ROOTS = 40
+Const STRGC_HDR_LO = 32
+Const STRGC_HDR_HI = 40
+Const STRGC_HDR_PRECISE_COUNT = 48
+Const STRGC_HDR_PRECISE_ROOTS = 56
 
 Type StrGcSlot
     p As VoidPtr
@@ -134,6 +136,16 @@ Function StrGcGetPrecRoot(i As Long) As Long
     StrGcGetPrecRoot = pr[i]
 End Function
 
+' 登録した塊の範囲 [lo, hi] を広げる（縮めない）。比べるのは符号なし（StrGcInRange）
+Sub StrGcWiden(base As VoidPtr, nbytes As Long)
+    Dim lo As VoidPtr, hi As VoidPtr, b As BytePtr
+    lo = StrGcHdrPtr(STRGC_HDR_LO)
+    hi = StrGcHdrPtr(STRGC_HDR_HI)
+    b = base
+    If lo = 0 Or StrGcInRange(base, 0, lo) <> 0 Then StrGcSetHdrPtr(STRGC_HDR_LO, base)
+    If StrGcInRange(VarPtr(b[nbytes]), 0, hi) = 0 Then StrGcSetHdrPtr(STRGC_HDR_HI, VarPtr(b[nbytes]))
+End Sub
+
 Function StrHeapAlloc(nbytes As Long) As VoidPtr
     Dim heap As HANDLE
     Dim base As VoidPtr
@@ -148,6 +160,7 @@ Function StrHeapAlloc(nbytes As Long) As VoidPtr
     If n < StrGcHdrLong(STRGC_HDR_CAP) Then
         StrGcSetBlock(n, base)
         StrGcSetCount(n + 1)
+        StrGcWiden(base, nbytes)
     End If
     StrHeapAlloc = base
 End Function
@@ -164,6 +177,7 @@ Sub StrGcMarkOne(ptr As VoidPtr)
     Dim ub As BytePtr
 
     If ptr = 0 Then Exit Sub
+    If StrGcInRange(ptr, StrGcHdrPtr(STRGC_HDR_LO), StrGcHdrPtr(STRGC_HDR_HI)) = 0 Then Exit Sub
     n = StrGcGetCount()
     i = 0
     While i < n

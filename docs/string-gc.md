@@ -119,7 +119,7 @@ GC は **String ヒープだけ** を見る。`malloc` したバッファは対�
 
 ```
 g_gcBaseOff = g_globDataSize
-g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 2088
+g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 2104
 ```
 
 オフセットは `AstLower.abp` 先頭の定数（Include は `StringGc.abp` の `STRGC_HDR_*`）。見出しの枠と塊ポインタ枠は **32/64 どちらも 8 バイト刻み**（`SHL_ECX_3`）。32bit では下位 4 バイトだけ使う。
@@ -130,13 +130,17 @@ g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 2088
 | 8 | `GC_HDR_CAP` | `blocks[]` / `marks[]` の容量（最初は 0） |
 | 16 | `GC_HDR_BLOCKS` | `blocks[]` の先頭（ヒープ）。各要素は `HeapAlloc` の **base** |
 | 24 | `GC_HDR_MARKS` | `marks[]` の先頭（ヒープ）。1 バイト/塊 |
-| 32 | `GC_HDR_PRECISE_COUNT` | グローバル precise ルート数 |
-| 40 | `GC_HDR_PRECISE_ROOTS` | ルートの BSS オフセット（各 4 バイト、最大 512） |
-| 2088 | `GC_REGION_SIZE` | 領域全体 |
+| 32 | `GC_HDR_LO` | 登録した塊の最小の base（最初は 0） |
+| 40 | `GC_HDR_HI` | 登録した塊の最大の終わり（base + 確保バイト数） |
+| 48 | `GC_HDR_PRECISE_COUNT` | グローバル precise ルート数 |
+| 56 | `GC_HDR_PRECISE_ROOTS` | ルートの BSS オフセット（各 4 バイト、最大 512） |
+| 2104 | `GC_REGION_SIZE` | 領域全体 |
 
 `blocks[i]` が指すのはユーザポインタではなく **ヘッダ先頭**。マーク時に `user = base+4`、`end = user+len` を計算する。
 
-`blocks[]` と `marks[]` はヒープに置く。IR（マーク・回収）は見出しからポインタを読み（`LEA` のあと `LOAD_PTR`）、そこに添字を足す。数に上限は無く、満ちたら `StrHeapAlloc` が `StrGcGrow` で倍にする（最初は 1024）。以前は BSS に `blocks[4096]` を置き、4096 個を超えた塊は表に載らず二度と解放されなかった（回帰: `t_strgc_many.abp`）。
+`blocks[]` と `marks[]` はヒープに置く。IR（マーク・回収）は見出しからポインタを読み（`LEA` のあと `LOAD_PTR`）、そこに添字を足す。数に上限は無く、満ちたら `StrHeapAlloc` が `StrGcGrow` で倍にする（最初は 1024）。
+
+`StrHeapAlloc` は表に載せるたびに `[lo, hi]` を広げる（縮めない）。マーク（IR と `StrGcMarkOne`）はポインタがこの範囲の外なら表を探さずに抜ける。スタックやコードのアドレスはほとんどここで落ちるので、conservative 走査の多くが表の線形探索をしない。以前は BSS に `blocks[4096]` を置き、4096 個を超えた塊は表に載らず二度と解放されなかった（回帰: `t_strgc_many.abp`）。
 
 ---
 
@@ -307,13 +311,19 @@ StrGcRegion / Globals / UserBssSize / InRange / GcMarkUserBss / GcMarkStack
    `MakeStr` は複製する。元バッファは GC 対象外。`free` は手動。
 
 6. **4096 塊を超える確保（修正済）**  
-   以前は表が 4096 個で満ち、超えた分はリークした。いまは表を倍にする。生きている塊が多いと、マーク（塊ごとの線形探索）が遅くなる。
+   以前は表が 4096 個で満ち、超えた分はリークした。いまは表を倍にする。範囲 `[lo, hi]` の中のポインタは塊ごとの線形探索になるので、生きている塊が多いとマークが遅くなる。
 
 7. **関数ラベル ID と戻り型の衝突（修正済）**  
    `AST_FUNC.extra` をラベルで上書きすると `TY_STRING` と衝突し、戻りが precise から外れた。extra は Parser の戻り型のまま。
 
 8. **塊の先頭のヘッダを書かない確保（`Str$`、修正済）**  
    `StrGcMarkOne` は `blocks[i]`（base）のヘッダで範囲を出し、**最初に当たった塊に印を付けて抜ける**。`Str$` は 20 バイトの塊の後ろに数字を右詰めで置き、長さは `start-4` に書くだけで、base の 4 バイトは HeapAlloc の未初期化のままだった。そこに古い文字列のゴミ（例: 0x5A5A5A5A）が残ると巨大な範囲になり、あとから確保した生きた String のポインタの印をこの塊が横取りし、本物の塊が掃き出された。いまは base にも `0x8000000F`（base+4〜base+19）を書く。StrHeapAlloc で取った塊は、中身をどこに置くにしても **base に塊全体を覆うヘッダを書く**こと（回帰: `t_gc_str_hdr.abp`）。
+
+9. **IR のマークのループが最初の比較で抜けていた（修正済）**  
+   `StrGcMarkPrecise` / `StrGcMarkCons` の IR 本体は `rcx = 数`、`eax = i` で `cmp ecx, eax` / `jge` としていたので、i = 0 で抜け、どの塊にも印を付けなかった。そのため `GcMarkUserBss` / `GcMarkStack` の conservative 走査は何もせず、生き残るのは precise ルート（大域は 512 個まで）だけだった。`Dim keep(1000) As String` の `keep(492)` 以降が MAIN のループの回収で解放されていた。いまは `rcx = i`、`eax = 数` で比べる（回帰: `t_strgc_globals.abp`）。回収の IR 本体（Include が無いとき）の precise と印の消去のループも同じ誤りを直した。
+
+10. **大文字小文字だけ違う Const がローカルを置き換えた（修正済）**  
+   Const の引き当ては綴りが合わないと大文字小文字を無視して探す。式の名前は変数より先に Const を見るので、ユーザの `Const N = 4` が `StringGc.abp` の `n` を 4 にし、空の表で `StrGcClearMarks` が `marks[0..3]` に書いて落ちた。いまは大文字小文字だけ違う Const は、同じ名前の変数（ローカル・引数・大域）に負ける（`LowFindConstVal`、回帰: `t_const_case_local.abp`）。
 
 これらが重なると、解放済みポインタを `TextOut` / `lstrlenA` に渡し、画面のゴミ・白画面・アクセス違反になりうる。x64 では故障アドレスがヒープの下位 32bit だけに見えることがある（昔の符号付き 32bit 比較の名残、または既に unmap された下位アドレス）。
 
