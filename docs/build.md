@@ -133,6 +133,18 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-pN88] [-pAB2] [-o <out>]
 | `' Skip32: 1` | `-Actba32` 時はスキップ（ポインタ幅依存など） |
 | `' Prebuild: file.pj` | 本体の前にその `.pj` をコンパイルし、成果物をテスト exe と同じディレクトリへ置く（DLL 名は `.pj` のベース名 + `.dll`） |
 
+### CI（GitHub Actions）
+
+`.github/workflows/ci.yml` が、`main` への push と pull request のたびに Windows で回す。中身はリポジトリ根の `ci.ps1` で、手元でも同じ手順を回せる。
+
+1. stage0 に、リリース（`BOOTSTRAP_TAG`、いまは v0.1.1）の `actba64.exe` を置く。ActiveBasic 4.20 は CI に置けないため
+2. `build.ps1 -SkipCompare` で stage1・stage2 を作る。stage0 がソースより古いと stage1 と stage2 は一致しないことがあるので比べない
+3. stage2 で自分をビルドした stage3 が stage2 とバイト単位で一致すること（自己ホストの固定点）
+4. stage2 で `rc.exe` と ProjectEditor を作り `release\` に揃える（`release_build.ps1 -SkipSelfHost`。ProjectEditor を起動するテストがある）
+5. ユニットテストと、stage2 での統合テスト（64bit と `-Actba32`。CI の機械は遅いので 1 本 20 秒まで）
+
+`-linux` の出力の実行（WSL）は CI では回さない。手元の `.\check.ps1 integration` で確かめる。GC の領域の配置など、コンパイラが出すコードとリリースのコンパイラの食い違いでブートストラップが通らなくなったら、`BOOTSTRAP_TAG` を新しいリリースに上げる。
+
 ### コンパイル診断（複数エラー）
 
 形式: `error: <file>(<line>): <message>` / `warning: <file>(<line>): <message>`（英語）。パースは文単位で続行し、意味解析も可能な限り複数報告する。エラー時は末尾 `error: N error(s)`。警告のみならコンパイル成功しつつ `warning: N warning(s)`。パースで 1 件でも失敗したらコード生成は行わない。`#strict` は変数同士の代入型不一致を warning（`As` で抑制）。
