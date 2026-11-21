@@ -32,7 +32,7 @@ ActBa64 は非公式のプロジェクトであり、ActiveBasic の開発元で
 | `rc.exe` | リソースコンパイラ。`actba64.exe` に起動されます。 |
 | `Include\` | 標準ヘッダ。`actba64.exe` と同一フォルダに置きます |
 | `help\` | F1 で開く HTML リファレンス |
-| `fonts\`、`ProjectEditor_lang_*.csv`、`keywords.txt`、`setting.ini` | エディタのフォント、表示言語、色分けするキーワード、設定 |
+| `ProjectEditor_lang_*.csv`、`keywords.txt`、`setting.ini` | 表示言語、色分けするキーワード、設定 |
 
 ## はじめかた
 

@@ -32,7 +32,7 @@ Get the latest build from [GitHub Releases](https://github.com/bellyoshi/ActBa64
 | `rc.exe` | Resource compiler. Started by `actba64.exe`. |
 | `Include\` | Standard headers. Must be in the same folder as `actba64.exe` |
 | `help\` | HTML reference opened with F1 |
-| `fonts\`, `ProjectEditor_lang_*.csv`, `keywords.txt`, `setting.ini` | Editor font, UI languages, highlight keywords, settings |
+| `ProjectEditor_lang_*.csv`, `keywords.txt`, `setting.ini` | UI languages, highlight keywords, settings |
 
 ## Quick start
 
