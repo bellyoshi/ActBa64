@@ -6,6 +6,8 @@ ActBa64 is a compiler for a large subset of the ActiveBasic language (versions 4
 
 The goal is to let existing ActiveBasic programs compile and run **without editing the source**. However, it does not behave exactly like ActiveBasic; see [Differences from ActiveBasic](docs/different.md).
 
+ActBa64 is an unofficial project and is not affiliated with Discoversoft, the developer of ActiveBasic.
+
 ## Features
 
 - **One compiler, three targets.** `actba64.exe` writes a 64-bit Windows PE (PE32+) by default, a 32-bit PE (PE32) with `-actba32`, and an x86-64 Linux ELF with `-linux`. The lexer, parser, AST and IR are shared; only code generation and the file format differ.
