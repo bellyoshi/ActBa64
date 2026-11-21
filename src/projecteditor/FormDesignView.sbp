@@ -4,8 +4,6 @@
 ' 窓の中の部品（AddControl したもの）は FormDesignCtlView.sbp、左のツールボックスは FormDesignToolView.sbp。
 ' 書き換えは 1 回の編集として「元に戻す」が効く。デザイン中は文字を打てない。
 
-Const FD_GUI_FONT = 17             ' DEFAULT_GUI_FONT
-
 Dim g_fdOn As Long                  ' 前面の文書がデザイン中か
 Dim g_fdSlot(7) As Long             ' 文書（Mdi のスロット）ごとのデザイン中
 Dim g_fdDrag As Long                ' 引いている所（FormDesign_Hit / FormDesign_CtlHit）。0 は引いていない
@@ -65,10 +63,6 @@ End Sub
 
 ' InitializeComponent が無い文書はデザインにしない（音だけ鳴らす）
 Sub FormDesign_Enter(hWnd As HWND)
-#ifdef _LINUX
-    ' Linux 版にはまだデザイナーが無い（タブを押しても音だけ）
-    MessageBeep(0)
-#else
     EditorUndo_EndCoalesce()
     If FormDesign_IsForm(TextBuf_GetConfirmed$()) = 0 Then
         MessageBeep(0)
@@ -77,7 +71,6 @@ Sub FormDesign_Enter(hWnd As HWND)
     g_fdOn = 1
     EditorCaret_Destroy()
     FormDesign_Refresh(hWnd)
-#endif
 End Sub
 
 Sub FormDesign_Leave(hWnd As HWND)
@@ -115,18 +108,18 @@ End Sub
 ' 見出しの帯と文字
 Sub FormDesign_DrawCaption(hDC As HDC, ByVal w As Long, cap As String)
     Dim ch As Long
-    ch = GetSystemMetrics(SM_CYCAPTION)
-    FormDesign_Fill(hDC, FD_ORG_X + 4, FD_ORG_Y + 4, FD_ORG_X + w - 4, FD_ORG_Y + 4 + ch, GetSysColor(COLOR_ACTIVECAPTION))
-    SetTextColor(hDC, GetSysColor(COLOR_CAPTIONTEXT))
-    Enc_TextOutUtf8(hDC, FD_ORG_X + 10, FD_ORG_Y + 4 + (ch - 14) \ 2, cap)
+    ch = Ui_CaptionH()
+    FormDesign_Fill(hDC, FD_ORG_X + 4, FD_ORG_Y + 4, FD_ORG_X + w - 4, FD_ORG_Y + 4 + ch, Ui_SysColor(COLOR_ACTIVECAPTION))
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_CAPTIONTEXT))
+    Ui_Text(hDC, FD_ORG_X + 10, FD_ORG_Y + 4 + (ch - 14) \ 2, cap)
 End Sub
 
 ' 窓の外枠（Width / Height は枠を含む大きさ）
 Sub FormDesign_DrawWindow(hDC As HDC, ByVal w As Long, ByVal h As Long, cap As String)
     Dim rc As RECT
-    FormDesign_Fill(hDC, FD_ORG_X, FD_ORG_Y, FD_ORG_X + w, FD_ORG_Y + h, GetSysColor(COLOR_BTNFACE))
+    FormDesign_Fill(hDC, FD_ORG_X, FD_ORG_Y, FD_ORG_X + w, FD_ORG_Y + h, Ui_SysColor(COLOR_BTNFACE))
     FormDesign_Rect(rc, FD_ORG_X, FD_ORG_Y, FD_ORG_X + w, FD_ORG_Y + h)
-    DrawEdge(hDC, rc, EDGE_RAISED, BF_RECT)
+    Ui_Edge(hDC, rc, EDGE_RAISED, BF_RECT)
     FormDesign_DrawCaption(hDC, w, cap)
 End Sub
 
@@ -145,15 +138,15 @@ End Sub
 Sub FormDesign_DrawInfo(hDC As HDC, ByRef rc As RECT, t As String, ByVal w As Long, ByVal h As Long)
     Dim s As String
     s = FormDesign_InfoText$(t, w, h) & "    (F12: source)"
-    SetTextColor(hDC, RGB(255, 255, 255))
-    Enc_TextOutUtf8(hDC, FD_ORG_X, rc.bottom - 20, s)
+    Ui_TextColor(hDC, RGB(255, 255, 255))
+    Ui_Text(hDC, FD_ORG_X, rc.bottom - 20, s)
 End Sub
 
 Sub FormDesign_DrawAll(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     Dim t As String, w As Long, h As Long
     t = FormDesign_Text$(hWnd)
     FormDesign_Size(hWnd, t, w, h)
-    FormDesign_Fill(hDC, 0, 0, rc.right, rc.bottom, GetSysColor(COLOR_APPWORKSPACE))
+    FormDesign_Fill(hDC, 0, 0, rc.right, rc.bottom, Ui_SysColor(COLOR_APPWORKSPACE))
     FormDesign_DrawToolbox(hDC, rc)
     FormDesign_DrawWindow(hDC, w, h, FormDesign_GetStr$(t, "Caption"))
     FormDesign_DrawCtls(hDC, t, w, h)
@@ -164,29 +157,19 @@ End Sub
 
 Sub FormDesign_Draw(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     Dim old As HFONT
-    SetBkMode(hDC, TRANSPARENT)
-    old = SelectObject(hDC, GetStockObject(FD_GUI_FONT))
+    Ui_Transparent(hDC)
+    old = Ui_SelectFont(hDC, Ui_GuiFont())
     FormDesign_DrawAll(hDC, hWnd, rc)
-    SelectObject(hDC, old)
+    Ui_SelectFont(hDC, old)
 End Sub
 
 ' 裏の画像に描いてから一度に写す（引いている間ちらつかない）
 Sub FormDesign_PaintBuf(hDC As HDC, hWnd As HWND)
     Dim rc As RECT, mem As HDC
-    Dim bmp As HBITMAP, old As HBITMAP
-    GetClientRect(hWnd, rc)
-    mem = CreateCompatibleDC(hDC)
-    bmp = CreateCompatibleBitmap(hDC, rc.right + 1, rc.bottom + 1)
-    old = SelectObject(mem, bmp)
+    Ui_ClientRect(hWnd, rc)
+    mem = Ui_BufBegin(hDC, rc)
     FormDesign_Draw(mem, hWnd, rc)
-    FormDesign_Flush(hDC, mem, bmp, old, rc)
-End Sub
-
-Sub FormDesign_Flush(hDC As HDC, mem As HDC, bmp As HBITMAP, old As HBITMAP, ByRef rc As RECT)
-    BitBlt(hDC, 0, 0, rc.right, rc.bottom, mem, 0, 0, &H00CC0020)
-    SelectObject(mem, old)
-    DeleteObject(bmp)
-    DeleteDC(mem)
+    Ui_BufEnd(hDC, mem, rc)
 End Sub
 
 Sub FormDesign_Paint(hWnd As HWND)
@@ -213,7 +196,7 @@ Function FormDesign_CursorId(ByVal kind As Long) As Long
 End Function
 
 Sub FormDesign_SetCursor(ByVal kind As Long)
-    SetCursor(LoadCursor(NULL, MAKEINTRESOURCE(FormDesign_CursorId(kind))))
+    Ui_Cursor(FormDesign_CursorId(kind))
 End Sub
 
 ' 辺の上では大きさを変える矢印にする。クライアントの外は既定どおり
@@ -229,8 +212,7 @@ End Function
 ' マウスの今の位置で掴める所
 Function FormDesign_HitCursor(hWnd As HWND) As Long
     Dim pt As POINT
-    GetCursorPos(pt)
-    ScreenToClient(hWnd, pt)
+    Ui_MousePos(hWnd, pt)
     FormDesign_HitCursor = FormDesign_HitAt(hWnd, pt.x, pt.y)
 End Function
 
@@ -366,14 +348,9 @@ End Function
 
 ' デザイン中の子のメッセージ。扱ったら 1（戻り値は g_childRet）
 Function FormDesign_Handle(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
-#ifdef _LINUX
-    ' Linux 版にはまだデザイナーが無い
-    FormDesign_Handle = 0
-#else
     FormDesign_Handle = 0
     If FormDesign_IsOn(hWnd) = 0 Then Exit Function
     FormDesign_Handle = FormDesign_Mouse(hWnd, dwMsg, wParam, lParam)
     If FormDesign_Handle <> 0 Then Exit Function
     FormDesign_Handle = FormDesign_Other(hWnd, dwMsg, wParam)
-#endif
 End Function

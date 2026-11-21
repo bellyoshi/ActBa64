@@ -100,6 +100,8 @@ Dim g_uxCaretHide As Long
 ' キーの押し下げ（KeyPress / KeyRelease の state から）
 Dim g_uxShift As Long, g_uxCtrl As Long, g_uxAlt As Long
 Dim g_uxCapture As Long             ' マウスを追っているビュー
+Dim g_uxUClip As Long               ' Ui_ClipTo の切り抜きがある
+Dim g_uxUClipL As Long, g_uxUClipT As Long, g_uxUClipR As Long, g_uxUClipB As Long ' ビューの座標
 
 ' == バイト列 ==
 
@@ -254,6 +256,12 @@ Sub Ux_Target(h As HDC)
     If g_uxClipB > g_uxH Then g_uxClipB = g_uxH
     If g_uxClipL < 0 Then g_uxClipL = 0
     If g_uxClipT < 0 Then g_uxClipT = 0
+    If g_uxUClip = 0 Then Exit Sub
+    ' Ui_ClipTo の四角（ビューの座標）と重ねる
+    If g_uxClipL < g_uxOrgX + g_uxUClipL Then g_uxClipL = g_uxOrgX + g_uxUClipL
+    If g_uxClipT < g_uxOrgY + g_uxUClipT Then g_uxClipT = g_uxOrgY + g_uxUClipT
+    If g_uxClipR > g_uxOrgX + g_uxUClipR Then g_uxClipR = g_uxOrgX + g_uxUClipR
+    If g_uxClipB > g_uxOrgY + g_uxUClipB Then g_uxClipB = g_uxOrgY + g_uxUClipB
 End Sub
 
 ' 窓全体へ描く（ビューの外の飾り）
@@ -714,6 +722,12 @@ Function Ui_SysColor(ByVal index As Long) As DWord
     If index = COLOR_GRAYTEXT Then Ui_SysColor = RGB(128, 128, 128)
     If index = COLOR_HIGHLIGHT Then Ui_SysColor = RGB(0, 120, 215)
     If index = COLOR_3DSHADOW Then Ui_SysColor = RGB(160, 160, 160)
+    ' フォームデザイナ（Windows 10 の既定の色）
+    If index = COLOR_3DDKSHADOW Then Ui_SysColor = RGB(105, 105, 105)
+    If index = COLOR_3DLIGHT Then Ui_SysColor = RGB(227, 227, 227)
+    If index = COLOR_ACTIVECAPTION Then Ui_SysColor = RGB(153, 180, 209)
+    If index = COLOR_CAPTIONTEXT Then Ui_SysColor = RGB(0, 0, 0)
+    If index = COLOR_APPWORKSPACE Then Ui_SysColor = RGB(171, 171, 171)
 End Function
 
 Function Ui_SelectFont(hDC As HDC, hFont As HFONT) As HFONT
@@ -801,6 +815,126 @@ End Sub
 
 Sub Ui_ReleaseCapture()
     g_uxCapture = 0
+End Sub
+
+' 最後のマウスの位置（ビューの座標。LxFrame が覚えている）
+Sub Ui_MousePos(hWnd As HWND, ByRef pt As POINT)
+    pt.x = g_lxsMouseX - Ux_ViewX(hWnd)
+    pt.y = g_lxsMouseY - Ux_ViewY(hWnd)
+End Sub
+
+' カーソルの形はまだ変えない（いつも矢印）
+Sub Ui_Cursor(ByVal id As Long)
+End Sub
+
+' ---- フォームデザイナの絵 ----
+
+Function Ui_CaptionH() As Long
+    Ui_CaptionH = 23
+End Function
+
+' 1 画素の線で、左と上を tl、右と下を br で描く
+Sub Ux_Bevel(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal tl As DWord, ByVal br As DWord)
+    Ui_Fill(hDC, l, t, r - 1, t + 1, tl)
+    Ui_Fill(hDC, l, t, l + 1, b - 1, tl)
+    Ui_Fill(hDC, l, b - 1, r, b, br)
+    Ui_Fill(hDC, r - 1, t, r, b, br)
+End Sub
+
+' DrawEdge と同じ色の組み（外の線、その内側に内の線）。flags は BF_RECT だけ見る
+Sub Ui_Edge(hDC As HDC, ByRef rc As RECT, ByVal edge As DWord, ByVal flags As DWord)
+    Dim l As Long, t As Long, r As Long, b As Long
+    l = rc.left : t = rc.top : r = rc.right : b = rc.bottom
+    If (edge And BDR_RAISEDOUTER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DLIGHT), Ui_SysColor(COLOR_3DDKSHADOW))
+    If (edge And BDR_SUNKENOUTER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DSHADOW), Ui_SysColor(COLOR_3DHILIGHT))
+    If (edge And BDR_OUTER) <> 0 Then
+        l = l + 1 : t = t + 1 : r = r - 1 : b = b - 1
+    End If
+    If (edge And BDR_RAISEDINNER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DHILIGHT), Ui_SysColor(COLOR_3DSHADOW))
+    If (edge And BDR_SUNKENINNER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DDKSHADOW), Ui_SysColor(COLOR_3DLIGHT))
+End Sub
+
+' 直径 13 の丸の、上から i 行目（0 から 12）の半分の幅
+Function Ux_RoundW(ByVal i As Long) As Long
+    Ux_RoundW = 6
+    If i = 0 Or i = 12 Then Ux_RoundW = 2
+    If i = 1 Or i = 11 Then Ux_RoundW = 4
+    If i = 2 Or i = 10 Then Ux_RoundW = 5
+End Function
+
+' 丸（ラジオボタン）。灰色の輪と白い中、印が付いていれば黒い点
+Sub Ux_Radio(hDC As HDC, ByRef rc As RECT, ByVal st As DWord)
+    Dim i As Long, d As Long, cx As Long
+    cx = rc.left + 6
+    For i = 0 To 12
+        d = Ux_RoundW(i)
+        Ui_Fill(hDC, cx - d, rc.top + i, cx + d + 1, rc.top + i + 1, Ui_SysColor(COLOR_3DSHADOW))
+        If i > 0 And i < 12 Then Ui_Fill(hDC, cx - d + 1, rc.top + i, cx + d, rc.top + i + 1, RGB(255, 255, 255))
+    Next
+    If (st And DFCS_CHECKED) <> 0 Then Ui_Fill(hDC, cx - 2, rc.top + 4, cx + 3, rc.top + 9, RGB(0, 0, 0))
+End Sub
+
+' DrawFrameControl の DFC_BUTTON に似た絵（押しボタン・チェックボックス・ラジオボタン）
+Sub Ui_ButtonFrame(hDC As HDC, ByRef rc As RECT, ByVal st As DWord)
+    Dim kind As DWord, i As Long
+    kind = st And &HFF
+    If kind = DFCS_BUTTONPUSH Then
+        Ui_FillRc(hDC, rc, Ui_SysColor(COLOR_BTNFACE))
+        Ui_Edge(hDC, rc, EDGE_RAISED, BF_RECT)
+        Exit Sub
+    End If
+    If kind = DFCS_BUTTONRADIO Then
+        Ux_Radio(hDC, rc, st)
+        Exit Sub
+    End If
+    Ui_FillRc(hDC, rc, RGB(255, 255, 255))
+    Ui_Edge(hDC, rc, EDGE_SUNKEN, BF_RECT)
+    If (st And DFCS_CHECKED) = 0 Then Exit Sub
+    For i = 0 To 2
+        Ui_Fill(hDC, rc.left + 3 + i, rc.top + 5 + i, rc.left + 4 + i, rc.top + 8 + i, RGB(0, 0, 0))
+    Next
+    For i = 0 To 3
+        Ui_Fill(hDC, rc.left + 6 + i, rc.top + 7 - i, rc.left + 7 + i, rc.top + 10 - i, RGB(0, 0, 0))
+    Next
+End Sub
+
+' rc の左寄せの 1 行（vcenter <> 0 なら上下は真ん中）。rc の外は描かない
+Sub Ui_TextLeft(hDC As HDC, ByRef rc As RECT, s As String, ByVal vcenter As Long)
+    Dim sz As SIZE, y As Long
+    Dim uc As Long, l As Long, t As Long, r As Long, b As Long
+    y = rc.top
+    If vcenter <> 0 Then
+        Ui_TextSize(hDC, s, sz)
+        y = rc.top + (rc.bottom - rc.top - sz.cy) \ 2
+    End If
+    uc = g_uxUClip : l = g_uxUClipL : t = g_uxUClipT : r = g_uxUClipR : b = g_uxUClipB
+    Ui_ClipTo(hDC, rc.left, rc.top, rc.right, rc.bottom)
+    Ui_Text(hDC, rc.left, y, s)
+    g_uxUClip = uc : g_uxUClipL = l : g_uxUClipT = t : g_uxUClipR = r : g_uxUClipB = b
+End Sub
+
+' この四角（ビューの座標）の外を描かない。今の切り抜きがあれば重ねる
+Sub Ui_ClipTo(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long)
+    If g_uxUClip <> 0 Then
+        If l < g_uxUClipL Then l = g_uxUClipL
+        If t < g_uxUClipT Then t = g_uxUClipT
+        If r > g_uxUClipR Then r = g_uxUClipR
+        If b > g_uxUClipB Then b = g_uxUClipB
+    End If
+    g_uxUClip = 1
+    g_uxUClipL = l : g_uxUClipT = t : g_uxUClipR = r : g_uxUClipB = b
+End Sub
+
+Sub Ui_ClipOff(hDC As HDC)
+    g_uxUClip = 0
+End Sub
+
+' 画素バッファにそのまま描く（Ux_Present でまとめて写すのでちらつかない）
+Function Ui_BufBegin(hDC As HDC, ByRef rc As RECT) As HDC
+    Ui_BufBegin = hDC
+End Function
+
+Sub Ui_BufEnd(hDC As HDC, mem As HDC, ByRef rc As RECT)
 End Sub
 
 Sub Ui_CaretCreate(hWnd As HWND, ByVal w As Long, ByVal h As Long)

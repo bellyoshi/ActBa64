@@ -109,6 +109,73 @@ Sub Ui_ReleaseCapture()
     ReleaseCapture()
 End Sub
 
+' マウスの今の位置（hWnd のクライアントの座標）
+Sub Ui_MousePos(hWnd As HWND, ByRef pt As POINT)
+    GetCursorPos(pt)
+    ScreenToClient(hWnd, pt)
+End Sub
+
+' マウスカーソルの形（IDC_*）
+Sub Ui_Cursor(ByVal id As Long)
+    SetCursor(LoadCursor(NULL, MAKEINTRESOURCE(id)))
+End Sub
+
+' ---- フォームデザイナの絵（立体の枠・ボタン・切り抜き・裏の画像） ----
+
+' 窓の見出しの帯の高さ
+Function Ui_CaptionH() As Long
+    Ui_CaptionH = GetSystemMetrics(SM_CYCAPTION)
+End Function
+
+' 立体の枠（DrawEdge。edge は BDR_* / EDGE_*、flags は BF_*）
+Sub Ui_Edge(hDC As HDC, ByRef rc As RECT, ByVal edge As DWord, ByVal flags As DWord)
+    DrawEdge(hDC, rc, edge, flags)
+End Sub
+
+' ボタンの絵（DrawFrameControl の DFC_BUTTON。st は DFCS_BUTTON* と DFCS_CHECKED など）
+Sub Ui_ButtonFrame(hDC As HDC, ByRef rc As RECT, ByVal st As DWord)
+    DrawFrameControl(hDC, rc, DFC_BUTTON, st)
+End Sub
+
+' rc の左寄せの 1 行（vcenter <> 0 なら上下は真ん中）。rc の外は描かない
+Sub Ui_TextLeft(hDC As HDC, ByRef rc As RECT, s As String, ByVal vcenter As Long)
+    Dim wide As *Byte, n As Long, fmt As DWord
+    wide = Enc_Utf8ToWide(s, n)
+    If wide = 0 Then Exit Sub
+    fmt = DT_LEFT Or DT_SINGLELINE
+    If vcenter <> 0 Then fmt = fmt Or DT_VCENTER
+    DrawTextW(hDC, wide, n, rc, fmt)
+    free(wide)
+End Sub
+
+' この四角の外を描かない（今の切り抜きと重ねる）。Ui_ClipOff で戻す
+Sub Ui_ClipTo(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long)
+    IntersectClipRect(hDC, l, t, r, b)
+End Sub
+
+Sub Ui_ClipOff(hDC As HDC)
+    SelectClipRgn(hDC, 0)
+End Sub
+
+Dim g_uiBufBmp As HBITMAP
+Dim g_uiBufOld As HBITMAP
+
+' 裏の画像に描く（ちらつかない）。返す HDC に描き、Ui_BufEnd で hDC へ写す
+Function Ui_BufBegin(hDC As HDC, ByRef rc As RECT) As HDC
+    Dim mem As HDC
+    mem = CreateCompatibleDC(hDC)
+    g_uiBufBmp = CreateCompatibleBitmap(hDC, rc.right + 1, rc.bottom + 1)
+    g_uiBufOld = SelectObject(mem, g_uiBufBmp)
+    Ui_BufBegin = mem
+End Function
+
+Sub Ui_BufEnd(hDC As HDC, mem As HDC, ByRef rc As RECT)
+    BitBlt(hDC, 0, 0, rc.right, rc.bottom, mem, 0, 0, &H00CC0020)
+    SelectObject(mem, g_uiBufOld)
+    DeleteObject(g_uiBufBmp)
+    DeleteDC(mem)
+End Sub
+
 ' ---- キャレット ----
 
 Sub Ui_CaretCreate(hWnd As HWND, ByVal w As Long, ByVal h As Long)
