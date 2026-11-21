@@ -1,0 +1,297 @@
+' Forms/X11Draw.sbp - -linux の Form の絵（32bpp の画素バッファと、FreeType の文字）。
+' Forms.sbp が #include する（単独では include しない）。
+' Form は窓の大きさの画素バッファに部品を描き、XPutImage で窓へ写す（FormsPaint、Form.sbp）。
+' 座標は窓の左上から。色は &HRRGGBB（RGB() の COLORREF ではない）。文字列は UTF-8。
+' 文字は OS のフォント（FORMS_FONT_PATHS の候補の最初に見つかったもの）。日本語の字のあるフォントを先に探す。
+
+#ifdef _LINUX
+
+Declare Function XDefaultVisual Lib "libX11.so.6" (d As VoidPtr, scr As Long) As VoidPtr
+Declare Function XDefaultDepth Lib "libX11.so.6" (d As VoidPtr, scr As Long) As Long
+Declare Function XDefaultGC Lib "libX11.so.6" (d As VoidPtr, scr As Long) As VoidPtr
+Declare Function XCreateImage Lib "libX11.so.6" (d As VoidPtr, visual As VoidPtr, depth As Long, format As Long, offset As Long, data As VoidPtr, w As Long, h As Long, pad As Long, bpl As Long) As VoidPtr
+Declare Function XPutImage Lib "libX11.so.6" (d As VoidPtr, dr As VoidPtr, gc As VoidPtr, img As VoidPtr, sx As Long, sy As Long, dx As Long, dy As Long, w As Long, h As Long) As Long
+
+Declare Function FT_Init_FreeType Lib "libfreetype.so.6" (lib As VoidPtr) As Long
+Declare Function FT_New_Face Lib "libfreetype.so.6" (lib As VoidPtr, path As BytePtr, index As Long, face As VoidPtr) As Long
+Declare Function FT_Set_Pixel_Sizes Lib "libfreetype.so.6" (face As VoidPtr, w As Long, h As Long) As Long
+Declare Function FT_Load_Char Lib "libfreetype.so.6" (face As VoidPtr, code As VoidPtr, flags As Long) As Long
+
+Const FORMS_FONT_PX = 13            ' 文字の大きさ（画素。Windows の DEFAULT_GUI_FONT くらい）
+Const FORMS_FONT_PATHS = 14         ' FormsFontPath$ の候補の数
+
+' Windows の既定の色（&HRRGGBB）
+Const FORMS_C_FACE = &HF0F0F0       ' COLOR_BTNFACE（窓の地）
+Const FORMS_C_WHITE = &HFFFFFF      ' COLOR_WINDOW / COLOR_3DHILIGHT
+Const FORMS_C_LIGHT = &HE3E3E3      ' COLOR_3DLIGHT
+Const FORMS_C_SHADOW = &HA0A0A0     ' COLOR_3DSHADOW
+Const FORMS_C_DKSHADOW = &H696969   ' COLOR_3DDKSHADOW
+Const FORMS_C_TEXT = &H000000       ' COLOR_BTNTEXT
+Const FORMS_C_GRAY = &H6D6D6D       ' COLOR_GRAYTEXT
+
+' 描く先（FormsTarget で決める）
+Dim g_fxBuf As VoidPtr
+Dim g_fxW As Long, g_fxH As Long, g_fxStride As Long
+Dim g_fxClipL As Long, g_fxClipT As Long, g_fxClipR As Long, g_fxClipB As Long
+
+' フォント
+Dim g_fxFtLib As VoidPtr
+Dim g_fxFace As VoidPtr
+Dim g_fxFontTried As Long
+Dim g_fxAsc As Long                 ' 上端から基線まで
+Dim g_fxFontH As Long               ' 1 行の高さ
+
+Function FormsB(buf As VoidPtr, off As Long) As Long
+    Dim p As *Byte
+    p = buf + off
+    FormsB = p[0]
+End Function
+
+' ---- 描く先と切り抜き ----
+
+Sub FormsTarget(buf As VoidPtr, w As Long, h As Long, stride As Long)
+    g_fxBuf = buf
+    g_fxW = w
+    g_fxH = h
+    g_fxStride = stride
+    FormsClipAll()
+End Sub
+
+Sub FormsClipAll()
+    g_fxClipL = 0
+    g_fxClipT = 0
+    g_fxClipR = g_fxW
+    g_fxClipB = g_fxH
+End Sub
+
+' 今の切り抜きをこの四角と重ねる（戻すときは FormsClipAll）
+Sub FormsClip(l As Long, t As Long, r As Long, b As Long)
+    If g_fxClipL < l Then g_fxClipL = l
+    If g_fxClipT < t Then g_fxClipT = t
+    If g_fxClipR > r Then g_fxClipR = r
+    If g_fxClipB > b Then g_fxClipB = b
+End Sub
+
+' ---- 塗る・線 ----
+
+Sub FormsFill(ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal c As DWord)
+    Dim x As Long, y As Long
+    Dim row As *DWord
+    Dim a As VoidPtr
+    Dim off As Long
+    If g_fxBuf = 0 Then Exit Sub
+    If l < g_fxClipL Then l = g_fxClipL
+    If t < g_fxClipT Then t = g_fxClipT
+    If r > g_fxClipR Then r = g_fxClipR
+    If b > g_fxClipB Then b = g_fxClipB
+    If l >= r Or t >= b Then Exit Sub
+    For y = t To b - 1
+        off = y * g_fxStride
+        a = g_fxBuf
+        a = a + off
+        row = a As *DWord
+        For x = l To r - 1
+            row[x] = c
+        Next
+    Next
+End Sub
+
+' 1 画素の線で、左と上を tl、右と下を br
+Sub FormsBevel(ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal tl As DWord, ByVal br As DWord)
+    FormsFill(l, t, r - 1, t + 1, tl)
+    FormsFill(l, t, l + 1, b - 1, tl)
+    FormsFill(l, b - 1, r, b, br)
+    FormsFill(r - 1, t, r, b, br)
+End Sub
+
+' 出っ張った 2 重の枠（EDGE_RAISED）
+Sub FormsRaised(ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long)
+    FormsBevel(l, t, r, b, FORMS_C_LIGHT, FORMS_C_DKSHADOW)
+    FormsBevel(l + 1, t + 1, r - 1, b - 1, FORMS_C_WHITE, FORMS_C_SHADOW)
+End Sub
+
+' へこんだ 2 重の枠（EDGE_SUNKEN）
+Sub FormsSunken(ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long)
+    FormsBevel(l, t, r, b, FORMS_C_SHADOW, FORMS_C_WHITE)
+    FormsBevel(l + 1, t + 1, r - 1, b - 1, FORMS_C_DKSHADOW, FORMS_C_LIGHT)
+End Sub
+
+' 彫った線の枠（EDGE_ETCHED）
+Sub FormsEtched(ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long)
+    FormsBevel(l, t, r, b, FORMS_C_SHADOW, FORMS_C_WHITE)
+    FormsBevel(l + 1, t + 1, r - 1, b - 1, FORMS_C_WHITE, FORMS_C_SHADOW)
+End Sub
+
+' ---- フォント ----
+
+' 候補。日本語の字のある P（文字ごとの幅）のゴシックを先に、無ければ欧文のサンセリフ
+Function FormsFontPath$(i As Long) As String
+    Dim d As String
+    d = "/usr/share/fonts/"
+    If i = 0 Then FormsFontPath$ = d + "opentype/ipafont-gothic/ipagp.ttf"
+    If i = 1 Then FormsFontPath$ = d + "opentype/ipaexfont-gothic/ipaexg.ttf"
+    If i = 2 Then FormsFontPath$ = d + "opentype/noto/NotoSansCJK-Regular.ttc"
+    If i = 3 Then FormsFontPath$ = d + "google-noto-cjk/NotoSansCJK-Regular.ttc"
+    If i = 4 Then FormsFontPath$ = d + "truetype/takao-gothic/TakaoPGothic.ttf"
+    If i = 5 Then FormsFontPath$ = d + "truetype/vlgothic/VL-PGothic-Regular.ttf"
+    If i = 6 Then FormsFontPath$ = d + "ipa-pgothic/ipagp.ttf"
+    If i = 7 Then FormsFontPath$ = d + "opentype/ipafont-gothic/ipag.ttf"
+    If i = 8 Then FormsFontPath$ = d + "truetype/dejavu/DejaVuSans.ttf"
+    If i = 9 Then FormsFontPath$ = d + "dejavu-sans-fonts/DejaVuSans.ttf"
+    If i = 10 Then FormsFontPath$ = d + "TTF/DejaVuSans.ttf"
+    If i = 11 Then FormsFontPath$ = d + "truetype/liberation/LiberationSans-Regular.ttf"
+    If i = 12 Then FormsFontPath$ = d + "liberation-sans/LiberationSans-Regular.ttf"
+    If i = 13 Then FormsFontPath$ = d + "truetype/freefont/FreeSans.ttf"
+End Function
+
+' 1 度だけ FreeType を始め、候補の最初に開けたフォントを使う（無ければ文字は描かない）
+Sub FormsFontInit()
+    Dim lib As VoidPtr, face As VoidPtr, size As VoidPtr
+    Dim i As Long, em As Long, asc As Long
+    Dim path As String
+    If g_fxFontTried <> 0 Then Exit Sub
+    g_fxFontTried = 1
+    g_fxAsc = FORMS_FONT_PX
+    g_fxFontH = FORMS_FONT_PX + 3
+    lib = 0
+    If FT_Init_FreeType(VarPtr(lib)) <> 0 Then Exit Sub
+    g_fxFtLib = lib
+    For i = 0 To FORMS_FONT_PATHS - 1
+        path = FormsFontPath$(i)
+        face = 0
+        If FT_New_Face(g_fxFtLib, StrPtr(path), 0, VarPtr(face)) = 0 And face <> 0 Then Exit For
+        face = 0
+    Next
+    If face = 0 Then Exit Sub
+    FT_Set_Pixel_Sizes(face, 0, FORMS_FONT_PX)
+    g_fxFace = face
+    ' FT_FaceRec: units_per_EM +136、ascender +138（short）、size +160。FT_Size_Metrics.height +64（26.6）
+    em = FormsB(face, 136) + FormsB(face, 137) * 256
+    asc = FormsB(face, 138) + FormsB(face, 139) * 256
+    If asc >= 32768 Then asc = asc - 65536
+    If em > 0 Then g_fxAsc = (asc * FORMS_FONT_PX + em \ 2) \ em
+    size = LxGetQ(face, 160)
+    If size <> 0 Then g_fxFontH = (FormsL(size, 64) + 32) \ 64
+End Sub
+
+' 1 行の高さ
+Function FormsFontH() As Long
+    FormsFontInit()
+    FormsFontH = g_fxFontH
+End Function
+
+' UTF-8 の 1 文字。戻り値はバイト数（壊れていれば 1 で U+FFFD）
+Function FormsNextCp(p As *Byte, i As Long, n As Long, ByRef cp As Long) As Long
+    Dim b As Long, k As Long, j As Long, c As Long
+    b = p[i]
+    FormsNextCp = 1
+    cp = b
+    If b < &H80 Then Exit Function
+    k = 0
+    c = 0
+    If (b And &HE0) = &HC0 Then
+        k = 1
+        c = b And &H1F
+    ElseIf (b And &HF0) = &HE0 Then
+        k = 2
+        c = b And &HF
+    ElseIf (b And &HF8) = &HF0 Then
+        k = 3
+        c = b And 7
+    End If
+    cp = &HFFFD
+    If k = 0 Then Exit Function
+    For j = 1 To k
+        If i + j >= n Then Exit Function
+        If (p[i + j] And &HC0) <> &H80 Then Exit Function
+        c = (c << 6) Or (p[i + j] And &H3F)
+    Next
+    cp = c
+    FormsNextCp = k + 1
+End Function
+
+' FT_Load_Char で描いた字（face->glyph）を、左上 (x, y) の行の基線に合わせて色 c で重ねる。戻り値は送り幅
+Function FormsGlyph(cp As Long, ByVal x As Long, ByVal y As Long, ByVal c As DWord, ByVal draw As Long) As Long
+    Dim g As VoidPtr, src As VoidPtr, p As VoidPtr
+    Dim w As Long, h As Long, pitch As Long, r As Long, k As Long, xx As Long, yy As Long
+    Dim gx As Long, gy As Long, a As Long, off As Long
+    Dim d As DWord, sr As Long, sg As Long, sb As Long, dr As Long, dg As Long, db As Long
+    Dim sp As *Byte, row As *DWord
+    FormsGlyph = FORMS_FONT_PX \ 2
+    If g_fxFace = 0 Then Exit Function
+    If FT_Load_Char(g_fxFace, cp, 4) <> 0 Then Exit Function     ' FT_LOAD_RENDER
+    ' FT_GlyphSlotRec: advance.x +128、bitmap.rows +152、width +156、pitch +160、buffer +168、
+    ' pixel_mode +178、bitmap_left +192、bitmap_top +196
+    g = LxGetQ(g_fxFace, 152)
+    FormsGlyph = (FormsL(g, 128) + 32) \ 64
+    If draw = 0 Or g_fxBuf = 0 Then Exit Function
+    If FormsB(g, 178) <> 2 Then Exit Function                    ' 灰色の段階のときだけ描く
+    h = FormsL(g, 152)
+    w = FormsL(g, 156)
+    pitch = FormsL(g, 160)
+    src = LxGetQ(g, 168)
+    gx = x + FormsL(g, 192)
+    gy = y + g_fxAsc - FormsL(g, 196)
+    sr = (c >> 16) And 255
+    sg = (c >> 8) And 255
+    sb = c And 255
+    For r = 0 To h - 1
+        yy = gy + r
+        If yy >= g_fxClipT And yy < g_fxClipB Then
+            off = r * pitch
+            p = src
+            p = p + off
+            sp = p As *Byte
+            off = yy * g_fxStride
+            p = g_fxBuf
+            p = p + off
+            row = p As *DWord
+            For k = 0 To w - 1
+                xx = gx + k
+                a = sp[k]
+                If a <> 0 And xx >= g_fxClipL And xx < g_fxClipR Then
+                    If a = 255 Then
+                        row[xx] = c
+                    Else
+                        d = row[xx]
+                        dr = (d >> 16) And 255
+                        dg = (d >> 8) And 255
+                        db = d And 255
+                        dr = dr + ((sr - dr) * a) \ 255
+                        dg = dg + ((sg - dg) * a) \ 255
+                        db = db + ((sb - db) * a) \ 255
+                        row[xx] = (dr << 16) Or (dg << 8) Or db
+                    End If
+                End If
+            Next
+        End If
+    Next
+End Function
+
+' 文字列の幅（draw <> 0 なら左上 (x, y) に色 c で描く）
+Function FormsTextRun(s As String, ByVal x As Long, ByVal y As Long, ByVal c As DWord, ByVal draw As Long) As Long
+    Dim p As *Byte
+    Dim n As Long, i As Long, cp As Long, w As Long
+    FormsFontInit()
+    FormsTextRun = 0
+    n = Len(s)
+    If n = 0 Then Exit Function
+    p = StrPtr(s)
+    i = 0
+    w = 0
+    While i < n
+        i = i + FormsNextCp(p, i, n, cp)
+        w = w + FormsGlyph(cp, x + w, y, c, draw)
+    Wend
+    FormsTextRun = w
+End Function
+
+Sub FormsText(s As String, ByVal x As Long, ByVal y As Long, ByVal c As DWord)
+    FormsTextRun(s, x, y, c, 1)
+End Sub
+
+Function FormsTextW(s As String) As Long
+    FormsTextW = FormsTextRun(s, 0, 0, 0, 0)
+End Function
+
+#endif
