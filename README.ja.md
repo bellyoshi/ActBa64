@@ -129,3 +129,7 @@ cd src\actba64
 ## 現状
 
 開発中です。主にまだ無いもの: DirectX 9、`On Error` / `Resume`、`Int64` / `QWord` 型、指数表記の数値リテラル、`Single` の一般の演算、`MENU` リソース。`-linux` では `Include\linux` に Linux 版がある API だけが動き、それ以外はコンパイル時に警告します。
+
+## ライセンス
+
+MIT ライセンスです。ActBa64 で作ったプログラム（EXE / DLL）の著作権は作った人にあり、商用も含めて自由に配布できます。詳しくは [LICENSE.ja.md](LICENSE.ja.md)（原文: [LICENSE](LICENSE)）を見てください。
