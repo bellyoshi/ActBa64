@@ -30,7 +30,6 @@ $Actba64Stage2 = Join-Path $Actba64Dir "bin\stage2"
 $Actba64Exe = Join-Path $Actba64Stage2 "actba64.exe"
 $IncludeSrc = Join-Path $Root "src\Include"
 $HelpSrc = Join-Path $EditorDir "help"
-$FontsSrc = Join-Path $EditorDir "fonts"
 $EditorPj = Join-Path $EditorDir "ProjectEditor.pj"
 $RcDir = Join-Path $Root "src\rc"
 $RcPj = Join-Path $RcDir "rc.pj"
@@ -76,7 +75,6 @@ Assert-File (Join-Path $Actba64Stage2 "rc.exe") "rc.exe missing next to stage2 (
 Assert-File $IncludeSrc "Include missing"
 Assert-File $EditorPj "ProjectEditor project missing"
 Assert-File $HelpSrc "help missing"
-Assert-File (Join-Path $FontsSrc "UDEVGothic-Regular.ttf") "editor font missing"
 
 foreach ($w in $EditorWbp) {
     Assert-File (Join-Path $EditorDir $w) "ProjectEditor RAD file missing (not in repo; needed to compile the editor)"
@@ -143,7 +141,6 @@ Remove-Item -LiteralPath $tmpRc -Force
 Copy-Item -LiteralPath (Join-Path $Actba64Dir "actba_lang_ja.csv") -Destination (Join-Path $ReleaseDir "actba_lang_ja.csv") -Force
 Copy-Item -LiteralPath $IncludeSrc -Destination (Join-Path $ReleaseDir "Include") -Recurse -Force
 Copy-Item -LiteralPath $HelpSrc -Destination (Join-Path $ReleaseDir "help") -Recurse -Force
-Copy-Item -LiteralPath $FontsSrc -Destination (Join-Path $ReleaseDir "fonts") -Recurse -Force
 Get-ChildItem -LiteralPath $EditorDir -Filter "ProjectEditor_lang_*.csv" | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $ReleaseDir $_.Name) -Force
 }

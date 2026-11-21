@@ -2,7 +2,7 @@
 ' X の窓は 1 枚。その中の四角を「ビュー」と呼び、HWND はビューの番号（UX_HWND_BASE + i）。
 ' HDC はそのビューの HWND と同じ値で、描く位置の原点と切り抜きはビューの四角。
 ' 描くのは自前の 32bpp の画素バッファ（0x00RRGGBB）。Ux_Present で XPutImage する。
-' 文字は FreeType（libfreetype.so.6）で fonts/UDEVGothic-Regular.ttf を読み、グリフは表に覚えておく。
+' 文字は FreeType（libfreetype.so.6）で OS の等幅フォント（Ux_FontPath$ の候補で最初に開けたもの）を読み、グリフは表に覚えておく。
 ' XEvent や FreeType の構造体はバイト列から読む（オフセットは x86-64 の Xlib / FreeType 2）。
 
 #ifdef _LINUX
@@ -41,7 +41,7 @@ Const UX_FONT_MAX = 3
 Const UX_GC_N = 4096                ' フォント 1 つのグリフ表の大きさ（2 のべき）
 Const UX_POOL_SIZE = &H400000       ' グリフの画素を置く所
 Const UX_SB_W = 14                  ' スクロールバーの幅
-Const UX_FONT_FILE = "fonts/UDEVGothic-Regular.ttf"
+Const UX_FONT_PATHS = 9             ' Ux_FontPath$ の候補の数
 Const UX_FONT_MONO = 1              ' HFONT の値。EditorFont_Create(-16)
 Const UX_FONT_GUI = 2               ' Ui_GuiFont()
 Const UX_X_MASK = &H2807F           ' KeyPress|KeyRelease|ButtonPress|ButtonRelease|PointerMotion|Exposure|StructureNotify
@@ -371,6 +371,21 @@ Function Ux_FacePtr(f As Long) As VoidPtr
     Ux_FacePtr = LxGetQ(VarPtr(g_uxFaceQ(0)), f * 8)
 End Function
 
+' OS の等幅フォントの候補。日本語の字がある等幅を先に、無ければ欧文の等幅
+Function Ux_FontPath$(i As Long) As String
+    Dim d As String
+    d = "/usr/share/fonts/"
+    If i = 0 Then Ux_FontPath$ = d + "opentype/ipafont-gothic/ipag.ttf"
+    If i = 1 Then Ux_FontPath$ = d + "ipa-gothic/ipag.ttf"
+    If i = 2 Then Ux_FontPath$ = d + "truetype/takao-gothic/TakaoGothic.ttf"
+    If i = 3 Then Ux_FontPath$ = d + "truetype/dejavu/DejaVuSansMono.ttf"
+    If i = 4 Then Ux_FontPath$ = d + "dejavu-sans-mono-fonts/DejaVuSansMono.ttf"
+    If i = 5 Then Ux_FontPath$ = d + "TTF/DejaVuSansMono.ttf"
+    If i = 6 Then Ux_FontPath$ = d + "truetype/liberation/LiberationMono-Regular.ttf"
+    If i = 7 Then Ux_FontPath$ = d + "liberation-mono/LiberationMono-Regular.ttf"
+    If i = 8 Then Ux_FontPath$ = d + "truetype/freefont/FreeMono.ttf"
+End Function
+
 ' フォント f（0 始まり）を px で開く
 Sub Ux_FontLoad(f As Long, px As Long, path As String)
     Dim face As VoidPtr
@@ -401,11 +416,15 @@ Sub Ux_FontInit()
     Dim lib As VoidPtr
     If g_uxFontTried <> 0 Then Exit Sub
     g_uxFontTried = 1
-    path = EditorBuild_ExeDir$() + UX_FONT_FILE
+    Dim i As Long
     lib = 0
     If Ux_FT_Init_FreeType(VarPtr(lib)) = 0 Then g_uxFtLib = lib
     g_uxPool = malloc(UX_POOL_SIZE)
-    Ux_FontLoad(UX_FONT_MONO - 1, 16, path)
+    For i = 0 To UX_FONT_PATHS - 1
+        path = Ux_FontPath$(i)
+        Ux_FontLoad(UX_FONT_MONO - 1, 16, path)
+        If g_uxFontOk(UX_FONT_MONO - 1) <> 0 Then Exit For
+    Next
     Ux_FontLoad(UX_FONT_GUI - 1, 13, path)
 End Sub
 

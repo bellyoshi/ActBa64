@@ -22,13 +22,13 @@
 
 ## 2.62 以前
 
-変数の宣言が不要など、今のバージョンとは多くの違いがあります。そのままでは動きませんが、`-pN88` を付けると動く可能性があります（[language.md §1.7](./language.md#pn88)）。
+変数の宣言が不要など、今のバージョンとは多くの違いがあります。そのままでは動きませんが、`-pAB2` を付けると動く可能性があります（[language.md §1.7](./language.md#pn88)）。
 
 ```powershell
-actba64 old.abp -pN88 -o old.exe
+actba64 old.abp -pAB2 -o old.exe
 ```
 
-ただし、`-pN88` は ActiveBasic よりはるか前の BASIC のプログラムを動かすことを目的としています。
+また、`-pN88` は ActiveBasic よりはるか前の BASIC のプログラムを動かすことを目的としています。
 
 ActiveBasic 2.62 の Windows プログラム（`Window` / `GetWndMsg` / `SendWndMsg` のメッセージループ、`Data` / `Read`、`Field ... As` など）は `-pAB2` を付けます（[language.md §1.8](./language.md#pab2)）。
 

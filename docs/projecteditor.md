@@ -202,7 +202,7 @@ CSV は UTF-8 の `id,text` です。空行と、`#` `;` `[` で始まる行は�
 
 ## 11. 描画
 
-等幅フォントは、exe と同じディレクトリの `fonts\UDEVGothic-Regular.ttf`（フォント名 `UDEV Gothic`）です。読み込めなければ Consolas です。文字高さは 16、行の高さは 18、上の余白は 10 です。左にはソースの行番号（1 始まり）を出し、その右に本文を置きます。行数に合わせて欄の幅が広がります。キャレットのある行の番号は濃い色です。折り返しと横スクロールはありません。
+等幅フォントは OS の `MS Gothic` です（無い環境では Windows が固定ピッチの別のフォントを選びます）。Linux 版は OS の等幅フォント（IPA ゴシック、Takao ゴシック、DejaVu Sans Mono、Liberation Mono などのうち最初に開けたもの）です。文字高さは 16、行の高さは 18、上の余白は 10 です。左にはソースの行番号（1 始まり）を出し、その右に本文を置きます。行数に合わせて欄の幅が広がります。キャレットのある行の番号は濃い色です。折り返しと横スクロールはありません。
 
 タブは 4 桁ごとです。キャレット、選択、強調は、描いた幅と同じ桁を使います。文字は TextShaping なしで描きます。
 
@@ -299,7 +299,7 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 
 ## 14. Linux 版
 
-`actba64 ProjectEditor.pj -linux -o ProjectEditor` で、x86-64 Linux で動くエディタになります（`libX11.so.6` と `libfreetype.so.6` を使う動的リンクの ELF）。隣に置くものは Windows 版と同じで、Linux 版の `actba64`（拡張子なし）、`Include`、`fonts/UDEVGothic-Regular.ttf`、`keywords.txt`、`help`、言語パックです。X の窓が開けなければ（`DISPLAY` が無いなど）メッセージを出して終了します。
+`actba64 ProjectEditor.pj -linux -o ProjectEditor` で、x86-64 Linux で動くエディタになります（`libX11.so.6` と `libfreetype.so.6` を使う動的リンクの ELF）。隣に置くものは Windows 版と同じで、Linux 版の `actba64`（拡張子なし）、`Include`、`keywords.txt`、`help`、言語パックです。X の窓が開けなければ（`DISPLAY` が無いなど）メッセージを出して終了します。
 
 窓は 1 枚です。上からメニューの帯、文書のタブ、文書、メッセージ欄（訳したときに開き、見出しの × で閉じる）を並べます。MDI の子窓の代わりに文書ごとのタブがあり、タブの × か中ボタンで閉じます（保存の確認は Windows 版と同じ）。`.pj` を開くと左にプロジェクトの欄が出て、行を押すとそのファイルを開きます。欄の見出しの × でプロジェクトを閉じます。文書が無いときは Ctrl+N で新規、Ctrl+O で開きます。
 

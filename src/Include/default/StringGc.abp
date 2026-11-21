@@ -5,16 +5,21 @@
 '   StrGcInRange / GcMarkUserBss / GcMarkStack
 '
 ' BSS レイアウトはコンパイラの GC_HDR_* と一致（docs/string-gc.md）。
-' blocks[] は常に 8 バイト枠（32/64 共通）。
+' 見出しは各 8 バイト枠（32/64 共通）。blocks[]（8 バイト枠）と marks[]（1 バイト）は
+' ヒープに置き、満ちたら StrGcGrow が倍にする（数の上限は無い）。
 ' conservative 走査（BSS/スタック）は IR スタブ（stdcall 安定・軽量）。
 
-Const STRGC_MAX_BLOCKS = 4096
+Const STRGC_INIT_CAP = 1024
 Const STRGC_SLOT = 8
+Const STRGC_HEAP_ZERO = &H8
 Const STRGC_HDR_COUNT = 0
-Const STRGC_HDR_BLOCKS = 8
-Const STRGC_HDR_MARKS = 32776
-Const STRGC_HDR_PRECISE_COUNT = 36872
-Const STRGC_HDR_PRECISE_ROOTS = 36880
+Const STRGC_HDR_CAP = 8
+Const STRGC_HDR_BLOCKS = 16
+Const STRGC_HDR_MARKS = 24
+Const STRGC_HDR_LO = 32
+Const STRGC_HDR_HI = 40
+Const STRGC_HDR_PRECISE_COUNT = 48
+Const STRGC_HDR_PRECISE_ROOTS = 56
 
 Type StrGcSlot
     p As VoidPtr
@@ -26,49 +31,98 @@ Function StrGcByteAt(region As VoidPtr, off As Long) As BytePtr
     StrGcByteAt = VarPtr(b[off])
 End Function
 
-Function StrGcGetCount() As Long
+' 見出しの 8 バイト枠の Long（上位は 0 のまま）
+Function StrGcHdrLong(off As Long) As Long
     Dim p As *Long
-    p = StrGcByteAt(StrGcRegion(), STRGC_HDR_COUNT)
-    StrGcGetCount = p[0]
+    p = StrGcByteAt(StrGcRegion(), off)
+    StrGcHdrLong = p[0]
+End Function
+
+Sub StrGcSetHdrLong(off As Long, n As Long)
+    Dim p As *Long
+    p = StrGcByteAt(StrGcRegion(), off)
+    p[0] = n
+    p[1] = 0
+End Sub
+
+' 見出しの 8 バイト枠のポインタ（blocks[] / marks[] の先頭）
+Function StrGcHdrPtr(off As Long) As BytePtr
+    Dim s As *StrGcSlot
+    s = StrGcByteAt(StrGcRegion(), off)
+    StrGcHdrPtr = s[0].p
+End Function
+
+Sub StrGcSetHdrPtr(off As Long, p As VoidPtr)
+    Dim s As *StrGcSlot
+    s = StrGcByteAt(StrGcRegion(), off)
+    s[0].p = p
+End Sub
+
+Function StrGcGetCount() As Long
+    StrGcGetCount = StrGcHdrLong(STRGC_HDR_COUNT)
 End Function
 
 Sub StrGcSetCount(n As Long)
-    Dim b As BytePtr
-    Dim p As *Long
-    Dim i As Long
-    b = StrGcByteAt(StrGcRegion(), STRGC_HDR_COUNT)
-    i = 0
-    While i < STRGC_SLOT
-        b[i] = 0
-        i = i + 1
-    Wend
-    p = b
-    p[0] = n
+    StrGcSetHdrLong(STRGC_HDR_COUNT, n)
 End Sub
 
 Function StrGcGetBlock(i As Long) As VoidPtr
     Dim s As *StrGcSlot
-    s = StrGcByteAt(StrGcRegion(), STRGC_HDR_BLOCKS + i * STRGC_SLOT)
+    s = StrGcByteAt(StrGcHdrPtr(STRGC_HDR_BLOCKS), i * STRGC_SLOT)
     StrGcGetBlock = s[0].p
 End Function
 
 Sub StrGcSetBlock(i As Long, base As VoidPtr)
     Dim s As *StrGcSlot
-    s = StrGcByteAt(StrGcRegion(), STRGC_HDR_BLOCKS + i * STRGC_SLOT)
+    s = StrGcByteAt(StrGcHdrPtr(STRGC_HDR_BLOCKS), i * STRGC_SLOT)
     s[0].p = base
 End Sub
 
 Function StrGcGetMark(i As Long) As Long
     Dim m As BytePtr
-    m = StrGcByteAt(StrGcRegion(), STRGC_HDR_MARKS)
+    m = StrGcHdrPtr(STRGC_HDR_MARKS)
     StrGcGetMark = m[i]
 End Function
 
 Sub StrGcSetMark(i As Long, v As Long)
     Dim m As BytePtr
-    m = StrGcByteAt(StrGcRegion(), STRGC_HDR_MARKS)
+    m = StrGcHdrPtr(STRGC_HDR_MARKS)
     m[i] = v And 255
 End Sub
+
+' 見出し off の表（n バイト）を nw に写し、古い表を解放して nw に差し替える
+Sub StrGcMoveTable(off As Long, nw As VoidPtr, n As Long)
+    Dim old As VoidPtr
+    old = StrGcHdrPtr(off)
+    If old <> 0 Then
+        memcpy(nw, old, n)
+        HeapFree(GetProcessHeap(), 0, old)
+    End If
+    StrGcSetHdrPtr(off, nw)
+End Sub
+
+' blocks[] と marks[] を倍にする。戻り値 0 : メモリが足りない（表はそのまま）
+Function StrGcGrow() As Long
+    Dim heap As HANDLE
+    Dim cap As Long, newCap As Long
+    Dim nb As VoidPtr, nm As VoidPtr
+    StrGcGrow = 0
+    heap = GetProcessHeap()
+    cap = StrGcHdrLong(STRGC_HDR_CAP)
+    newCap = cap * 2
+    If newCap < STRGC_INIT_CAP Then newCap = STRGC_INIT_CAP
+    nb = HeapAlloc(heap, STRGC_HEAP_ZERO, newCap * STRGC_SLOT)
+    nm = HeapAlloc(heap, STRGC_HEAP_ZERO, newCap)
+    If nb = 0 Or nm = 0 Then
+        If nb <> 0 Then HeapFree(heap, 0, nb)
+        If nm <> 0 Then HeapFree(heap, 0, nm)
+        Exit Function
+    End If
+    StrGcMoveTable(STRGC_HDR_BLOCKS, nb, cap * STRGC_SLOT)
+    StrGcMoveTable(STRGC_HDR_MARKS, nm, cap)
+    StrGcSetHdrLong(STRGC_HDR_CAP, newCap)
+    StrGcGrow = 1
+End Function
 
 Function StrGcGetPrecCount() As Long
     Dim p As *Long
@@ -82,6 +136,16 @@ Function StrGcGetPrecRoot(i As Long) As Long
     StrGcGetPrecRoot = pr[i]
 End Function
 
+' 登録した塊の範囲 [lo, hi] を広げる（縮めない）。比べるのは符号なし（StrGcInRange）
+Sub StrGcWiden(base As VoidPtr, nbytes As Long)
+    Dim lo As VoidPtr, hi As VoidPtr, b As BytePtr
+    lo = StrGcHdrPtr(STRGC_HDR_LO)
+    hi = StrGcHdrPtr(STRGC_HDR_HI)
+    b = base
+    If lo = 0 Or StrGcInRange(base, 0, lo) <> 0 Then StrGcSetHdrPtr(STRGC_HDR_LO, base)
+    If StrGcInRange(VarPtr(b[nbytes]), 0, hi) = 0 Then StrGcSetHdrPtr(STRGC_HDR_HI, VarPtr(b[nbytes]))
+End Sub
+
 Function StrHeapAlloc(nbytes As Long) As VoidPtr
     Dim heap As HANDLE
     Dim base As VoidPtr
@@ -92,9 +156,11 @@ Function StrHeapAlloc(nbytes As Long) As VoidPtr
     base = HeapAlloc(heap, 0, nbytes)
     If base = 0 Then Exit Function
     n = StrGcGetCount()
-    If n < STRGC_MAX_BLOCKS Then
+    If n >= StrGcHdrLong(STRGC_HDR_CAP) Then StrGcGrow()
+    If n < StrGcHdrLong(STRGC_HDR_CAP) Then
         StrGcSetBlock(n, base)
         StrGcSetCount(n + 1)
+        StrGcWiden(base, nbytes)
     End If
     StrHeapAlloc = base
 End Function
@@ -111,6 +177,7 @@ Sub StrGcMarkOne(ptr As VoidPtr)
     Dim ub As BytePtr
 
     If ptr = 0 Then Exit Sub
+    If StrGcInRange(ptr, StrGcHdrPtr(STRGC_HDR_LO), StrGcHdrPtr(STRGC_HDR_HI)) = 0 Then Exit Sub
     n = StrGcGetCount()
     i = 0
     While i < n

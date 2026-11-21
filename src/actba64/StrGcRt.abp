@@ -40,7 +40,8 @@ Sub LowEmitRtStrHeapRegBlock(ctx As *LowerCtx, labSkip As Long, gcCount As Long,
     IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
         IrEmit(list, OP_LOAD_PTR, 0, 0)
     IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_MOV_EAX_IMM, GC_MAX_BLOCKS, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, gcCount + GC_HDR_CAP - GC_HDR_COUNT, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
     IrEmit(list, OP_JGE, labSkip, 0)
@@ -50,6 +51,7 @@ Sub LowEmitRtStrHeapRegBlock(ctx As *LowerCtx, labSkip As Long, gcCount As Long,
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_SHL_ECX_3, 0, 0)
     IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_LOAD_PTR, 0, 0)
     IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     IrEmit(list, OP_LOAD_LOCAL, -16, 0)
@@ -136,6 +138,7 @@ Sub LowEmitRtStrGcMarkHit(ctx As *LowerCtx, labLoop As Long, labDone As Long, la
     IrEmit(list, OP_LOAD_LOCAL, -16, 0)
     IrEmit(list, OP_PUSH_RAX, 0, 0)
     IrEmit(list, OP_LEA_RAX_GLOB, gcMarks, 0)
+    IrEmit(list, OP_LOAD_PTR, 0, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
     IrEmit(list, OP_MOV_ECX, 1, 0)
@@ -152,11 +155,12 @@ End Sub
 Sub LowEmitRtStrGcMarkLoop(ctx As *LowerCtx, labLoop As Long, labDone As Long, labNext As Long, labHit As Long, labMark As Long, gcCount As Long, gcBlocks As Long, gcMarks As Long)
     Dim list As *IrList
     list = ctx->list
+    ' i（rcx）>= count（eax）で抜ける。以前は rcx と eax が逆で、最初の比較で抜けて何も印を付けなかった
     IrEmit(list, OP_LABEL, labLoop, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
     IrEmit(list, OP_LEA_RAX_GLOB, gcCount, 0)
         IrEmit(list, OP_LOAD_PTR, 0, 0)
-    IrEmit(list, OP_PUSH_RAX, 0, 0)
-    IrEmit(list, OP_LOAD_LOCAL, -16, 0)
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_CMP_ECX_EAX, 0, 0)
     IrEmit(list, OP_JGE, labDone, 0)
@@ -165,6 +169,7 @@ Sub LowEmitRtStrGcMarkLoop(ctx As *LowerCtx, labLoop As Long, labDone As Long, l
     IrEmit(list, OP_POP_RCX, 0, 0)
     IrEmit(list, OP_SHL_ECX_3, 0, 0)
     IrEmit(list, OP_LEA_RAX_GLOB, gcBlocks, 0)
+    IrEmit(list, OP_LOAD_PTR, 0, 0)
     IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
         IrEmit(list, OP_LOAD_PTR, 0, 0)
     IrEmit(list, OP_STORE_LOCAL, -24, 0)
@@ -206,6 +211,7 @@ Sub LowEmitRtStrGcMarkBody(ctx As *LowerCtx, labId As Long, requireTag As Long)
     IrEmit(list, OP_LOAD_LOCAL, -8, 0)
     IrEmit(list, OP_TEST_RAX, 0, 0)
     IrEmit(list, OP_JZ, labDone, 0)
+    LowEmitRtStrGcMarkBounds(list, labDone)
     IrEmit(list, OP_XOR_EAX, 0, 0)
     IrEmit(list, OP_STORE_LOCAL, -16, 0)
 
@@ -220,6 +226,25 @@ Sub LowEmitRtStrGcConsBody(ctx As *LowerCtx)
     ' タグ無しでも登録塊の範囲に入ればマークする。StrPtr の内部ポインタと、
     ' ヘッダ書き込み前の窓を conservative で落とさないため。
     LowEmitRtStrGcMarkBody(ctx, g_rtStrGcConsLab, 0)
+End Sub
+
+' ptr（-8）が登録した塊の範囲 [lo, hi] の外なら表を探さずに抜ける（符号なし）。
+' スタックやコードのアドレスはここで落ちる
+Sub LowEmitRtStrGcMarkBounds(list As *IrList, labDone As Long)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, g_gcBaseOff + GC_HDR_LO, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_RCX_RAX, 0, 0)
+    IrEmit(list, OP_JB, labDone, 0)
+    IrEmit(list, OP_LOAD_LOCAL, -8, 0)
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    IrEmit(list, OP_LEA_RAX_GLOB, g_gcBaseOff + GC_HDR_HI, 0)
+        IrEmit(list, OP_LOAD_PTR, 0, 0)
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_CMP_RCX_RAX, 0, 0)
+    IrEmit(list, OP_JA, labDone, 0)
 End Sub
 
 ' == Include StringGc 向け組込スタブ ==
