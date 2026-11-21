@@ -119,23 +119,24 @@ GC は **String ヒープだけ** を見る。`malloc` したバッファは対�
 
 ```
 g_gcBaseOff = g_globDataSize
-g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 38928
+g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 2088
 ```
 
-オフセットは `AstLower.abp` 先頭の定数。塊ポインタ枠は **32/64 どちらも 8 バイト刻み**（`SHL_ECX_3`）。32bit では下位 4 バイトだけ使う。
+オフセットは `AstLower.abp` 先頭の定数（Include は `StringGc.abp` の `STRGC_HDR_*`）。見出しの枠と塊ポインタ枠は **32/64 どちらも 8 バイト刻み**（`SHL_ECX_3`）。32bit では下位 4 バイトだけ使う。
 
 | オフセット | 定数 | 内容 |
 |---|---|---|
-| 0 | `GC_HDR_COUNT` | 登録数（ポインタ幅ストア、値は 0..4096） |
-| 8 | `GC_HDR_BLOCKS` | `blocks[4096]` — `HeapAlloc` の **base** |
-| 32776 | `GC_HDR_MARKS` | `marks[4096]` — 1 バイト/塊 |
-| 36872 | `GC_HDR_PRECISE_COUNT` | グローバル precise ルート数 |
-| 36880 | `GC_HDR_PRECISE_ROOTS` | ルートの BSS オフセット（各 4 バイト、最大 512） |
-| 38928 | `GC_REGION_SIZE` | 領域全体 |
+| 0 | `GC_HDR_COUNT` | 登録数 |
+| 8 | `GC_HDR_CAP` | `blocks[]` / `marks[]` の容量（最初は 0） |
+| 16 | `GC_HDR_BLOCKS` | `blocks[]` の先頭（ヒープ）。各要素は `HeapAlloc` の **base** |
+| 24 | `GC_HDR_MARKS` | `marks[]` の先頭（ヒープ）。1 バイト/塊 |
+| 32 | `GC_HDR_PRECISE_COUNT` | グローバル precise ルート数 |
+| 40 | `GC_HDR_PRECISE_ROOTS` | ルートの BSS オフセット（各 4 バイト、最大 512） |
+| 2088 | `GC_REGION_SIZE` | 領域全体 |
 
 `blocks[i]` が指すのはユーザポインタではなく **ヘッダ先頭**。マーク時に `user = base+4`、`end = user+len` を計算する。
 
-上限 `GC_MAX_BLOCKS = 4096` を超えると、`StrHeapAlloc` は確保したポインタを返すだけで **表に載せない**。その塊は二度と回収されない（リーク）。解放済みポインタを使う UAF にはならない。
+`blocks[]` と `marks[]` はヒープに置く。IR（マーク・回収）は見出しからポインタを読み（`LEA` のあと `LOAD_PTR`）、そこに添字を足す。数に上限は無く、満ちたら `StrHeapAlloc` が `StrGcGrow` で倍にする（最初は 1024）。以前は BSS に `blocks[4096]` を置き、4096 個を超えた塊は表に載らず二度と解放されなかった（回帰: `t_strgc_many.abp`）。
 
 ---
 
@@ -145,8 +146,11 @@ g_globDataSize = g_globDataSize + GC_REGION_SIZE   ' 38928
 
 1. `GetProcessHeap` → `HeapAlloc(heap, 0, nbytes)`。
 2. 失敗なら 0 を返す。
-3. `count < 4096` なら `blocks[count] = base`、`count++`。
-4. 戻りは base（ユーザポインタへの `+4` は Cat 等が行う）。
+3. `count` が容量に達していれば `StrGcGrow` で `blocks[]` / `marks[]` を倍にする（新しい表に写し、古い表は `HeapFree`）。
+4. 容量が足りれば `blocks[count] = base`、`count++`。`StrGcGrow` がメモリ不足で失敗したときだけ表に載せない（その塊はリーク）。
+5. 戻りは base（ユーザポインタへの `+4` は Cat 等が行う）。
+
+Include の `StrHeapAlloc` が無いとき（`default.idx` が見つからないとき）に使う IR の確保は表を伸ばさない。容量が 0 のままなので、その場合は塊を表に載せない。
 
 ---
 
@@ -302,8 +306,8 @@ StrGcRegion / Globals / UserBssSize / InRange / GcMarkUserBss / GcMarkStack
 5. **`malloc` と String の混同**  
    `MakeStr` は複製する。元バッファは GC 対象外。`free` は手動。
 
-6. **4096 塊を超える確保**  
-   リーク。エディタのように一時文字列が多いループでは、ループ先頭の Collect が効いている前提。
+6. **4096 塊を超える確保（修正済）**  
+   以前は表が 4096 個で満ち、超えた分はリークした。いまは表を倍にする。生きている塊が多いと、マーク（塊ごとの線形探索）が遅くなる。
 
 7. **関数ラベル ID と戻り型の衝突（修正済）**  
    `AST_FUNC.extra` をラベルで上書きすると `TY_STRING` と衝突し、戻りが precise から外れた。extra は Parser の戻り型のまま。
