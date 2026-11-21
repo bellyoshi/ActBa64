@@ -2,6 +2,8 @@
 ' 第2引数を省略した呼び出しは COLOR_OMIT（パーサが -2 を渡す。背景は変えない）
 ' backcolor が -1 のときは背景を透明にする
 ' カラーコード: 0黒 1青 2赤 3紫 4緑 5水色 6黄 7白
+' パレット 0〜15（N88-BASIC(86) の 4096 色中 16 色モードの既定）。8 灰、9〜15 は 1〜7 の少し暗い色
+' COLOR = (パレット番号, &Hgrb) で変える（g 緑・r 赤・b 青 各 0〜F）。変えた後に描くものから効く
 
 Const COLOR_OMIT = -2
 Const COLOR_BK_TRANS = 1
@@ -10,6 +12,8 @@ Const COLOR_BK_OPAQUE = 2
 Dim g_n88TextCol As Long
 Dim g_n88BackCol As Long
 Dim g_n88ColorOn As Long
+Dim g_n88Pal(15) As Long
+Dim g_n88PalOn As Long
 
 Function ColorBlack() As Long
     ColorBlack = 0
@@ -43,28 +47,47 @@ Function ColorWhite() As Long
     ColorWhite = 7
 End Function
 
-Function ColorCodeLo(code As Long) As Long
-    ColorCodeLo = &HFF00FF
-    If code = ColorBlack() Then ColorCodeLo = 0
-    If code = ColorBlue() Then ColorCodeLo = &HFF0000
-    If code = ColorRed() Then ColorCodeLo = &H0000FF
+' &Hgrb → COLORREF（&HBBGGRR）。各 4 ビットを 8 ビットへ（F → FF）
+Function N88_GrbRef(grb As Long) As Long
+    Dim g As Long, r As Long, b As Long
+    g = ((grb >> 8) And 15) * 17
+    r = ((grb >> 4) And 15) * 17
+    b = (grb And 15) * 17
+    N88_GrbRef = r + (g << 8) + (b << 16)
 End Function
 
-Function ColorCodeHi(code As Long) As Long
-    ColorCodeHi = &HFFFFFF
-    If code = ColorGreen() Then ColorCodeHi = &H00FF00
-    If code = ColorLightBlue() Then ColorCodeHi = &HFFFF00
-    If code = ColorYellow() Then ColorCodeHi = &H00FFFF
+' 3 ビットの色（1 青 2 赤 4 緑）→ &Hgrb の各桁 1
+Function N88_GrbBits(c As Long) As Long
+    N88_GrbBits = (c And 1) + ((c >> 1) And 1) * &H10 + ((c >> 2) And 1) * &H100
 End Function
 
+' パレットの既定（&Hgrb）。0〜7 は F、9〜15 は A、8 は &H777
+Function N88_PalDefault(i As Long) As Long
+    N88_PalDefault = N88_GrbBits(i And 7) * 15
+    If i >= 8 Then N88_PalDefault = N88_GrbBits(i And 7) * 10
+    If i = 8 Then N88_PalDefault = &H777
+End Function
+
+Sub N88_PalInit()
+    Dim i As Long
+    If g_n88PalOn <> 0 Then Exit Sub
+    For i = 0 To 15
+        g_n88Pal(i) = N88_GrbRef(N88_PalDefault(i))
+    Next
+    g_n88PalOn = 1
+End Sub
+
+' COLOR = (p, grb)。p が 0〜15 でなければ何もしない
+Sub N88_SetPalette(p As Long, grb As Long)
+    N88_PalInit()
+    If p < 0 Or p > 15 Then Exit Sub
+    g_n88Pal(p) = N88_GrbRef(grb)
+End Sub
+
+' 色番号 → COLORREF（パレット。16 以上は下 4 ビット）
 Function ColorCode(code As Long) As Long
-    Dim c As Long
-    c = code And 7
-    If c < 4 Then
-        ColorCode = ColorCodeLo(c)
-    Else
-        ColorCode = ColorCodeHi(c)
-    End If
+    N88_PalInit()
+    ColorCode = g_n88Pal(code And 15)
 End Function
 
 Sub N88_InitColor()

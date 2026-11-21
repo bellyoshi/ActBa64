@@ -46,6 +46,7 @@
 - `.so` の `Declare Function ... As Double` / `As Single` の戻り値を受け取ります（`sqrt` / `pow` など。Windows の DLL も同じ）。これまでは戻り値の型を読み捨てていました。
 - `.so` の関数へ `AddressOf(f)` を直に渡すと、BASIC の関数を `.so` から呼べます（`qsort` の比較関数など。整数・ポインタの引数 6 個まで）。
 - `.so` を使う（動的な）ELF は、終わるときに libc の `exit` を呼ぶので、改行の無い `printf` なども書き出されます。
+- `MsgBox` が使えます。窓は出さず、「見出し: 本文」を標準エラーに 1 行で書き、最初のボタン（`MB_OK` なら `IDOK`、`MB_YESNO` なら `IDYES`）を押したことにします。これまでは `unsupported API: MessageBoxA` で終わっていました。
 
 ## v0.1.0（v0.0.9 からの変更点）
 

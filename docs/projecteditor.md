@@ -250,26 +250,35 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 | `PictureBox` | 白地にへこんだ枠と、灰色の名前 |
 | `Panel` | 出っ張った板と、真ん中に `名前.Caption` |
 | `Label` | `名前.Caption` を左寄せの 1 行 |
+| `CheckBox` | 左に印の四角、その右に `名前.Caption` を左寄せの 1 行 |
+| `RadioButton` | 左に印の丸、その右に `名前.Caption` を左寄せの 1 行 |
+| `EditBox` | 白地にへこんだ枠と、`名前.Caption` を左寄せの 1 行 |
+| `GroupBox` | 彫った線の枠と、左上に `名前.Caption`（中は塗らない） |
 | それ以外・宣言が無い | `Button` と同じ |
 
 書かれていない値は 0, 0, 75 x 25 です。`Panel1.AddControl(...)` のような、ほかの部品に載せる行は見ません。
 
 部品を押すと選ばれ、右辺・下辺・右下に白い四角が出ます。左下には選んだ部品の名前・位置・大きさが出ます。部品を引くと動き（左上は 0 より前に出ません）、選んだ部品の白い四角を引くと大きさが変わります（最小 8 x 8）。重なっていれば、後に `AddControl` した方を掴みます。離したときに、変わった値の `名前.Left = 数` などの数だけを書き換えます。行が無ければ `End Sub` の直前に足します。部品の外を押すと選びが外れます。部品の削除はまだありません。
 
-**ツールボックス** はデザイン画面の左の帯で、**Button** / **Image** / **Panel** を並べます。ツールを押すとへこんで選ばれ（もう一度押すか Esc でやめる）、窓のクライアント領域の上ではカーソルが十字になります。そこを押すと、押した位置を左上にして部品を 1 つ足し、選びます。足したらツールの選びは外れます。クライアント領域の外を押すとツールの選びだけ外れます。
+**ツールボックス** はデザイン画面の左の帯で、見出し「Toolbox」と組「General」の下に **Pointer** / **Button** / **Image** / **Panel** / **CheckBox** / **RadioButton** / **EditBox** / **Label** / **GroupBox** をアイコン付きで 1 行ずつ並べます。選んでいる行は水色の帯と青い枠で、ツールを選んでいないときは Pointer です。ツールを押すと選ばれ（もう一度押すか、Pointer を押すか、Esc でやめる）、窓のクライアント領域の上ではカーソルが十字になります。そこを押すと、押した位置を左上にして部品を 1 つ足し、選びます。足したらツールの選びは外れます。クライアント領域の外を押すとツールの選びだけ外れます。
 
 | ツール | 名前 | 型 | 大きさ | `Caption` |
 |---|---|---|---|---|
 | Button | `Button1`、`Button2` … | `Button` | 75 x 25 | 名前 |
 | Image | `Image1` … | `PictureBox` | 100 x 100 | 書かない |
 | Panel | `Panel1` … | `Panel` | 200 x 100 | 名前 |
+| CheckBox | `CheckBox1` … | `CheckBox` | 100 x 20 | 名前 |
+| RadioButton | `RadioButton1` … | `RadioButton` | 100 x 20 | 名前 |
+| EditBox | `EditBox1` … | `EditBox` | 120 x 24 | 名前 |
+| Label | `Label1` … | `Label` | 100 x 20 | 名前 |
+| GroupBox | `GroupBox1` … | `GroupBox` | 200 x 100 | 名前 |
 
 番号は、載せた部品にもフィールドの宣言にも無い一番小さい数です。書き足すのは次の 2 か所で、1 回の編集として元に戻せます。
 
-- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `OpenFileDialog`）の次に足します。無ければ、最初のメソッド（`Sub` / `Function`）より前の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行（無ければ `Class` の行）の次に `Private` の行ごと足します。フィールドはメソッドより後ろに置くとコンパイルできないので、新しいフォームの雛形（`Public` の `WndProc` の後ろに `Private`）でも `Inherits` の次に `Private` を足します。字下げは前の行に合わせます
+- フィールド: `名前 As 型` の行を、`InitializeComponent` のあるクラスの中で最後の部品の宣言（`Button` / `Label` / `PictureBox` / `Panel` / `CheckBox` / `RadioButton` / `EditBox` / `GroupBox` / `OpenFileDialog`）の次に足します。無ければ、最初のメソッド（`Sub` / `Function`）より前の `Private` の行の次（字下げは `Private` + 4）、それも無ければ `Inherits` の行（無ければ `Class` の行）の次に `Private` の行ごと足します。フィールドはメソッドより後ろに置くとコンパイルできないので、新しいフォームの雛形（`Public` の `WndProc` の後ろに `Private`）でも `Inherits` の次に `Private` を足します。字下げは前の行に合わせます
 - `InitializeComponent`: 空行と、`名前.Left` / `.Top` / `.Width` / `.Height`（Image 以外は `.Caption = "名前"`）と `AddControl(名前)` の行を、最後の `AddControl` の行の次に足します。`AddControl` が無ければ `End Sub` の直前（字下げは `End Sub` + 4）です
 
-パネルの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。
+パネルやグループボックスの上に置いても、部品はフォームに載せます（`Panel1.AddControl` はまだありません）。重なった所を押すと後に `AddControl` した方を掴むので、枠の中の部品は枠より後に置いてください。
 
 型が `Button` の部品を **ダブルクリック** すると、押したときの処理を書けるようにしてコードの画面に切り替え、`Sub 名前Click()` の中の空の行にキャレットを置きます。無いものだけを書き足すので、2 回目からは書かずにその `Sub` へ飛びます。
 
@@ -287,3 +296,19 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 ## 13. このエディタがしないこと
 
 置換、折り返し、符号の手選び、プロジェクトの新規作成ウィザード、デバッガは持っていません。フォームデザイナは、窓の大きさと部品の位置と大きさを変え、ツールボックスから部品を足すだけです。部品の削除、名前や `Caption` の書き換え、Button 以外のイベントの行の生成はできません。Ctrl+N や Ctrl+O もありません。RAD 用の `Callback.wbp` / `MakeWindow.wbp` は、このエディタ自身を組むためのファイルです。
+
+## 14. Linux 版
+
+`actba64 ProjectEditor.pj -linux -o ProjectEditor` で、x86-64 Linux で動くエディタになります（`libX11.so.6` と `libfreetype.so.6` を使う動的リンクの ELF）。隣に置くものは Windows 版と同じで、Linux 版の `actba64`（拡張子なし）、`Include`、`fonts/UDEVGothic-Regular.ttf`、`keywords.txt`、`help`、言語パックです。X の窓が開けなければ（`DISPLAY` が無いなど）メッセージを出して終了します。
+
+窓は 1 枚です。上からメニューの帯、文書のタブ、文書、メッセージ欄（訳したときに開き、見出しの × で閉じる）を並べます。MDI の子窓の代わりに文書ごとのタブがあり、タブの × か中ボタンで閉じます（保存の確認は Windows 版と同じ）。`.pj` を開くと左にプロジェクトの欄が出て、行を押すとそのファイルを開きます。欄の見出しの × でプロジェクトを閉じます。文書が無いときは Ctrl+N で新規、Ctrl+O で開きます。
+
+描くところ（[UiDraw.sbp](../src/projecteditor/UiDraw.sbp) の `Ui_` 関数）は Windows 版と同じコードで、Linux 版は [UiX11.sbp](../src/projecteditor/UiX11.sbp) が画素バッファと FreeType で描きます。キー・マウス・メニューの処理も Windows 版と同じで、X のイベントを `WM_*` にして渡します（[LxFrame.sbp](../src/projecteditor/LxFrame.sbp)）。メニュー、右クリックのメニュー、メッセージボックス、ファイルの選択、検索の入力、設定の言語の選択は自前で描きます（[LxMenu.sbp](../src/projecteditor/LxMenu.sbp)、[LxDialog.sbp](../src/projecteditor/LxDialog.sbp)）。
+
+- **ファイルの選択**: 入力欄にファイル名かパス（相対なら一覧のフォルダーから）を書いて Enter。一覧のダブルクリックでフォルダーに入る・ファイルを選ぶ。`.` で始まる名前は出しません。保存で拡張子が無ければ `.abp` を付け、あれば上書きを尋ねます
+- **クリップボード**: X の `CLIPBOARD`（UTF-8）。ほかのアプリとやり取りできます
+- **訳し先**: Basic メニューに **Linux (ELF)** が増え、Linux 版の既定です（`-linux`、出力に `.exe` を付けない）。64bit / 32bit も選べますが、Windows の exe はここでは実行できないので訳すだけです
+- **実行**: コンソールのプログラムは端末（`$TERMINAL`、無ければ `x-terminal-emulator` / `gnome-terminal` / `konsole` / `xfce4-terminal` / `xterm`）の窓で動かし、終わると Enter を待ちます。端末が無ければ、exe のフォルダーで動かして出力と終了コードをメッセージ欄に出します（標準入力は `/dev/null`）
+- **ヘルプ**: `xdg-open` で開きます
+
+Linux 版にまだ無いもの: 日本語入力（IME / XIM）、ファイルのドロップ、フォームデザイナ（デザイナーのタブと F12 は音が鳴るだけ）、入力欄の途中の編集。

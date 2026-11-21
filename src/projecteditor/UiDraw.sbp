@@ -1,0 +1,159 @@
+' UiDraw - 文書の画面（コード・行番号・タブの帯）を描く・測る・キャレット・スクロールバーの窓口。
+' 描くところは HDC / HWND を受け取ってここを呼び、Win32 を直に呼ばない（Linux 版は別の実装を差し込む）。
+' ここにあるのは Windows 版で、中身は前に描くところが直に呼んでいた GDI / user32 と同じ。
+' 色は RGB()（COLORREF）。四角は RECT（right / bottom は含まない）。文字列は UTF-8。
+
+Const UI_GUI_FONT = 17              ' DEFAULT_GUI_FONT
+
+#ifndef _LINUX
+
+#ifdef _ACTBA64
+Declare Function HideCaret Lib "user32.dll" (ByVal hWnd As HWND) As Long
+#endif
+
+' ---- 塗る・枠 ----
+
+Sub Ui_FillRc(hDC As HDC, ByRef rc As RECT, ByVal color As DWord)
+    Dim br As HBRUSH
+    br = CreateSolidBrush(color)
+    FillRect(hDC, rc, br)
+    DeleteObject(br)
+End Sub
+
+Sub Ui_Fill(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal color As DWord)
+    Dim rc As RECT
+    rc.left = l
+    rc.top = t
+    rc.right = r
+    rc.bottom = b
+    Ui_FillRc(hDC, rc, color)
+End Sub
+
+' 1 画素の枠
+Sub Ui_Frame(hDC As HDC, ByRef rc As RECT, ByVal color As DWord)
+    Dim br As HBRUSH
+    br = CreateSolidBrush(color)
+    FrameRect(hDC, rc, br)
+    DeleteObject(br)
+End Sub
+
+Function Ui_SysColor(ByVal index As Long) As DWord
+    Ui_SysColor = GetSysColor(index)
+End Function
+
+' ---- 文字 ----
+
+' 選んだフォントを返す（戻すときは Ui_SelectFont(hDC, 戻り値)）
+Function Ui_SelectFont(hDC As HDC, hFont As HFONT) As HFONT
+    Ui_SelectFont = SelectObject(hDC, hFont)
+End Function
+
+' 見出し・タブの文字のフォント
+Function Ui_GuiFont() As HFONT
+    Ui_GuiFont = GetStockObject(UI_GUI_FONT)
+End Function
+
+Sub Ui_TextColor(hDC As HDC, ByVal color As DWord)
+    SetTextColor(hDC, color)
+End Sub
+
+' 文字の後ろを塗らない
+Sub Ui_Transparent(hDC As HDC)
+    SetBkMode(hDC, TRANSPARENT)
+End Sub
+
+' (x, y) が文字の左上
+Sub Ui_Text(hDC As HDC, ByVal x As Long, ByVal y As Long, s As String)
+    Enc_TextOutUtf8(hDC, x, y, s)
+End Sub
+
+Function Ui_TextSize(hDC As HDC, s As String, ByRef sz As SIZE) As Long
+    Ui_TextSize = Enc_TextExtentUtf8(hDC, s, sz)
+End Function
+
+' rc の真ん中に 1 行
+Sub Ui_TextCenter(hDC As HDC, ByRef rc As RECT, s As String)
+    Dim wide As *Byte, n As Long
+    wide = Enc_Utf8ToWide(s, n)
+    If wide = 0 Then Exit Sub
+    DrawTextW(hDC, wide, n, rc, DT_CENTER Or DT_VCENTER Or DT_SINGLELINE)
+    free(wide)
+End Sub
+
+' ---- 窓 ----
+
+Sub Ui_ClientRect(hWnd As HWND, ByRef rc As RECT)
+    GetClientRect(hWnd, rc)
+End Sub
+
+' 描き直しを頼む（消さずに上から描く）
+Sub Ui_Invalidate(hWnd As HWND)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 描く以外（測る）ための HDC。使い終わったら Ui_ReleaseDC
+Function Ui_GetDC(hWnd As HWND) As HDC
+    Ui_GetDC = GetDC(hWnd)
+End Function
+
+Sub Ui_ReleaseDC(hWnd As HWND, hDC As HDC)
+    ReleaseDC(hWnd, hDC)
+End Sub
+
+' マウスを窓の外まで追う
+Sub Ui_Capture(hWnd As HWND)
+    SetCapture(hWnd)
+End Sub
+
+Sub Ui_ReleaseCapture()
+    ReleaseCapture()
+End Sub
+
+' ---- キャレット ----
+
+Sub Ui_CaretCreate(hWnd As HWND, ByVal w As Long, ByVal h As Long)
+    CreateCaret(hWnd, NULL, w, h)
+End Sub
+
+Sub Ui_CaretDestroy()
+    DestroyCaret()
+End Sub
+
+Sub Ui_CaretPos(ByVal x As Long, ByVal y As Long)
+    SetCaretPos(x, y)
+End Sub
+
+Sub Ui_CaretShow(hWnd As HWND)
+    ShowCaret(hWnd)
+End Sub
+
+Sub Ui_CaretHide(hWnd As HWND)
+    HideCaret(hWnd)
+End Sub
+
+' ---- 縦のスクロールバー ----
+
+' 範囲 nMin..nMax、1 画面 page 行、今の位置 pos（動かせないときも灰色で残す）
+Sub Ui_VScrollSet(hWnd As HWND, ByVal nMin As Long, ByVal nMax As Long, ByVal page As Long, ByVal pos As Long)
+    Dim si As SCROLLINFO
+    FillMemory(VarPtr(si), Len(si), 0)
+    si.cbSize = Len(si)
+    si.fMask = SIF_RANGE Or SIF_PAGE Or SIF_POS Or SIF_DISABLENOSCROLL
+    si.nMin = nMin
+    si.nMax = nMax
+    si.nPage = page
+    si.nPos = pos
+    SetScrollInfo(hWnd, SB_VERT, si, TRUE)
+End Sub
+
+' つまみを引いている位置（取れなければ 0）
+Function Ui_VScrollTrack(hWnd As HWND) As Long
+    Dim si As SCROLLINFO
+    FillMemory(VarPtr(si), Len(si), 0)
+    si.cbSize = Len(si)
+    si.fMask = SIF_TRACKPOS Or SIF_POS
+    GetScrollInfo(hWnd, SB_VERT, si)
+    Ui_VScrollTrack = si.nTrackPos
+End Function
+
+#endif

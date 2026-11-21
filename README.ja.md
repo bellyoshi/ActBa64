@@ -6,6 +6,8 @@ ActBa64 は、ActiveBasic（4.20 / 4.24）の言語の大部分をコンパイ�
 
 目標は、既存の ActiveBasic のプログラムを **ソースを書き換えずに** コンパイルして動かすことです。ただし、完全に同じ動きをするわけではありません。違いは [ActiveBasic との相違](docs/different.md) にまとめています。
 
+ActBa64 は非公式のプロジェクトであり、ActiveBasic の開発元である Discoversoft とは無関係です。
+
 ## 特徴
 
 - **1 本のコンパイラで 3 種類の出力。** `actba64.exe` は既定で 64bit の Windows PE（PE32+）を、`-actba32` で 32bit の PE（PE32）を、`-linux` で x86-64 Linux の ELF を出します。字句解析・構文解析・AST・中間表現は共通で、違うのは機械語とファイル形式だけです。

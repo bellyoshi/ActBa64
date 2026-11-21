@@ -1,0 +1,345 @@
+' LxMenu - Linux 版のメニューの帯と、そこから開くメニュー・右クリックのメニュー（-linux のときだけ）。
+' 中身は LxWin のメニュー（CreateMenu / InsertMenuW / ModifyMenuW などで作ったもの）。
+' 開いている間は LxFrame の自前の窓（LXS_MODAL_MENU）としてイベントを受ける。
+' 帯: 押す・Alt+文字（& の付いた文字）で開く。開いている間は左右のキーと帯の上のマウスで隣へ。
+' メニュー: 上下のキー・Enter・Esc・& の文字・マウス。灰色と区切りは選べない。
+' 項目の文字の Tab の後ろ（Ctrl+S など）は右に寄せて描く。
+
+#ifdef _LINUX
+
+Const LXMN_ITEM_H = 22              ' 項目の高さ
+Const LXMN_SEP_H = 8                ' 区切りの高さ
+Const LXMN_PAD = 10                 ' 帯の項目の左右の余白
+
+Dim g_lxmnBarN As Long
+Dim g_lxmnBarL(15) As Long, g_lxmnBarR(15) As Long
+Dim g_lxmnBarIdx As Long            ' 開いている帯の項目（-1 は右クリックのメニュー）
+Dim g_lxmnOpen As Long              ' 開いているメニュー（HMENU）
+Dim g_lxmnX As Long, g_lxmnY As Long, g_lxmnW As Long, g_lxmnH As Long
+Dim g_lxmnSel As Long               ' 選んでいる項目の位置（-1 は無い）
+
+' == 帯 ==
+
+Sub LxMenu_DrawBar()
+    Dim k As Long, it As Long, x As Long, w As Long
+    Dim label As String
+    Ux_TargetWindow()
+    Ux_FillAbs(0, 0, g_uxW, LXS_MENU_H, &HF8F8F8)
+    Ux_FillAbs(0, LXS_MENU_H - 1, g_uxW, LXS_MENU_H, &HDCDCDC)
+    g_lxmnBarN = 0
+    x = 4
+    For k = 0 To LxM_Count(g_lxMenuBar) - 1
+        If k > 15 Then Exit For
+        it = LxM_ItemAt(g_lxMenuBar, k)
+        label = LxM_Label$(LxMenu_Left$(g_lxiText(it)))
+        w = Ux_TextRun(UX_FONT_GUI, label, 0, 0, 0, 0) + LXMN_PAD * 2
+        If g_lxsModal = LXS_MODAL_MENU And g_lxmnBarIdx = k Then Ux_FillAbs(x, 1, x + w, LXS_MENU_H - 1, &HCCE4F7)
+        Ux_TextRun(UX_FONT_GUI, label, x + LXMN_PAD, 4, &H202020, 1)
+        g_lxmnBarL(k) = x
+        g_lxmnBarR(k) = x + w
+        g_lxmnBarN = g_lxmnBarN + 1
+        x = x + w
+    Next
+End Sub
+
+Function LxMenu_BarAt(ByVal x As Long) As Long
+    Dim k As Long
+    LxMenu_BarAt = -1
+    For k = 0 To g_lxmnBarN - 1
+        If x >= g_lxmnBarL(k) And x < g_lxmnBarR(k) Then LxMenu_BarAt = k
+    Next
+End Function
+
+' 帯の k 番目の下のメニュー（無ければ 0）
+Function LxMenu_BarSub(ByVal k As Long) As Long
+    Dim it As Long
+    LxMenu_BarSub = 0
+    it = LxM_ItemAt(g_lxMenuBar, k)
+    If it < 0 Then Exit Function
+    If (g_lxiFlags(it) And MF_POPUP) <> 0 Then LxMenu_BarSub = g_lxiSub(it)
+End Function
+
+' == 項目 ==
+
+' Tab の前（名前）と後ろ（キー）
+Function LxMenu_Left$(s As String) As String
+    Dim i As Long
+    LxMenu_Left$ = s
+    i = InStr(1, s, Chr$(9))
+    If i > 0 Then LxMenu_Left$ = Left$(s, i - 1)
+End Function
+
+Function LxMenu_Right$(s As String) As String
+    Dim i As Long
+    LxMenu_Right$ = ""
+    i = InStr(1, s, Chr$(9))
+    If i > 0 Then LxMenu_Right$ = Mid$(s, i + 1)
+End Function
+
+Function LxMenu_IsSep(ByVal it As Long) As Long
+    LxMenu_IsSep = 0
+    If (g_lxiFlags(it) And MF_SEPARATOR) <> 0 Then LxMenu_IsSep = 1
+    If (g_lxiFlags(it) And MF_POPUP) = 0 And g_lxiId(it) = 0 And Len(g_lxiText(it)) = 0 Then LxMenu_IsSep = 1
+End Function
+
+' 選べる項目か（区切り・灰色・下のメニューでない）
+Function LxMenu_CanPick(ByVal it As Long) As Long
+    LxMenu_CanPick = 0
+    If it < 0 Then Exit Function
+    If LxMenu_IsSep(it) <> 0 Then Exit Function
+    If (g_lxiFlags(it) And (MF_GRAYED Or MF_DISABLED Or MF_POPUP)) <> 0 Then Exit Function
+    LxMenu_CanPick = 1
+End Function
+
+Function LxMenu_ItemH(ByVal it As Long) As Long
+    LxMenu_ItemH = LXMN_ITEM_H
+    If LxMenu_IsSep(it) <> 0 Then LxMenu_ItemH = LXMN_SEP_H
+End Function
+
+' 開いているメニューの大きさと位置（窓からはみ出さないように寄せる）
+Sub LxMenu_Measure()
+    Dim k As Long, it As Long, w As Long, lw As Long, rw As Long
+    lw = 0
+    rw = 0
+    g_lxmnH = 4
+    For k = 0 To LxM_Count(g_lxmnOpen) - 1
+        it = LxM_ItemAt(g_lxmnOpen, k)
+        w = Ux_TextRun(UX_FONT_GUI, LxM_Label$(LxMenu_Left$(g_lxiText(it))), 0, 0, 0, 0)
+        If w > lw Then lw = w
+        w = Ux_TextRun(UX_FONT_GUI, LxMenu_Right$(g_lxiText(it)), 0, 0, 0, 0)
+        If w > rw Then rw = w
+        g_lxmnH = g_lxmnH + LxMenu_ItemH(it)
+    Next
+    g_lxmnW = 28 + lw + 32 + rw + 12
+    If g_lxmnW < 140 Then g_lxmnW = 140
+    If g_lxmnX + g_lxmnW > g_uxW Then g_lxmnX = g_uxW - g_lxmnW
+    If g_lxmnY + g_lxmnH > g_uxH Then g_lxmnY = g_uxH - g_lxmnH
+    If g_lxmnX < 0 Then g_lxmnX = 0
+    If g_lxmnY < 0 Then g_lxmnY = 0
+End Sub
+
+' 窓の座標 (x, y) の項目の位置（無ければ -1）
+Function LxMenu_ItemAtXY(ByVal x As Long, ByVal y As Long) As Long
+    Dim k As Long, it As Long, t As Long, h As Long
+    LxMenu_ItemAtXY = -1
+    If x < g_lxmnX Or x >= g_lxmnX + g_lxmnW Then Exit Function
+    t = g_lxmnY + 2
+    For k = 0 To LxM_Count(g_lxmnOpen) - 1
+        it = LxM_ItemAt(g_lxmnOpen, k)
+        h = LxMenu_ItemH(it)
+        If y >= t And y < t + h Then
+            LxMenu_ItemAtXY = k
+            Exit Function
+        End If
+        t = t + h
+    Next
+End Function
+
+Sub LxMenu_DrawOpen()
+    Dim k As Long, it As Long, t As Long, h As Long, fg As DWord, x0 As Long, w As Long
+    Dim rtext As String
+    If g_lxmnOpen = 0 Then Exit Sub
+    LxMenu_Measure()
+    Ux_TargetWindow()
+    x0 = g_lxmnX
+    Ux_FillAbs(x0 + 3, g_lxmnY + 3, x0 + g_lxmnW + 3, g_lxmnY + g_lxmnH + 3, &HB4B4B4)
+    Ux_FillAbs(x0, g_lxmnY, x0 + g_lxmnW, g_lxmnY + g_lxmnH, &HFFFFFF)
+    Ux_FrameAbs(x0, g_lxmnY, x0 + g_lxmnW, g_lxmnY + g_lxmnH, &H969696)
+    t = g_lxmnY + 2
+    For k = 0 To LxM_Count(g_lxmnOpen) - 1
+        it = LxM_ItemAt(g_lxmnOpen, k)
+        h = LxMenu_ItemH(it)
+        If LxMenu_IsSep(it) <> 0 Then
+            Ux_FillAbs(x0 + 6, t + h \ 2, x0 + g_lxmnW - 6, t + h \ 2 + 1, &HDCDCDC)
+        Else
+            fg = &H202020
+            If (g_lxiFlags(it) And (MF_GRAYED Or MF_DISABLED)) <> 0 Then
+                fg = &HA0A0A0
+            ElseIf k = g_lxmnSel Then
+                Ux_FillAbs(x0 + 2, t, x0 + g_lxmnW - 2, t + h, &H0078D7)
+                fg = &HFFFFFF
+            End If
+            If (g_lxiFlags(it) And MF_CHECKED) <> 0 Then Ux_TextRun(UX_FONT_GUI, "✓", x0 + 8, t + 4, fg, 1)
+            Ux_TextRun(UX_FONT_GUI, LxM_Label$(LxMenu_Left$(g_lxiText(it))), x0 + 28, t + 4, fg, 1)
+            rtext = LxMenu_Right$(g_lxiText(it))
+            If Len(rtext) > 0 Then
+                w = Ux_TextRun(UX_FONT_GUI, rtext, 0, 0, 0, 0)
+                Ux_TextRun(UX_FONT_GUI, rtext, x0 + g_lxmnW - 12 - w, t + 4, fg, 1)
+            End If
+            If (g_lxiFlags(it) And MF_POPUP) <> 0 Then Ux_TextRun(UX_FONT_GUI, ">", x0 + g_lxmnW - 14, t + 4, fg, 1)
+        End If
+        t = t + h
+    Next
+End Sub
+
+' == 開く・選ぶ ==
+
+' 帯の k 番目のメニューを開いた形にする
+Sub LxMenu_OpenBar(ByVal k As Long)
+    If k < 0 Or k >= g_lxmnBarN Then Exit Sub
+    g_lxmnBarIdx = k
+    g_lxmnOpen = LxMenu_BarSub(k)
+    g_lxmnX = g_lxmnBarL(k)
+    g_lxmnY = LXS_MENU_H
+    g_lxmnSel = -1
+    g_uxDirty = 1
+End Sub
+
+' 選べる次の項目へ（d = 1 下、-1 上）
+Sub LxMenu_Step(ByVal d As Long)
+    Dim n As Long, k As Long, i As Long
+    n = LxM_Count(g_lxmnOpen)
+    If n = 0 Then Exit Sub
+    k = g_lxmnSel
+    For i = 1 To n
+        k = k + d
+        If k < 0 Then k = n - 1
+        If k >= n Then k = 0
+        If LxMenu_CanPick(LxM_ItemAt(g_lxmnOpen, k)) <> 0 Then
+            g_lxmnSel = k
+            g_uxDirty = 1
+            Exit Sub
+        End If
+    Next
+End Sub
+
+Sub LxMenu_Pick(ByVal k As Long)
+    Dim it As Long
+    it = LxM_ItemAt(g_lxmnOpen, k)
+    If LxMenu_CanPick(it) = 0 Then Exit Sub
+    g_lxsModalRet = g_lxiId(it)
+    If g_lxsModalRet = 0 Then g_lxsModalRet = -1
+End Sub
+
+' メニューを開いてイベントを回す。選んだ ID（やめたら 0）
+Function LxMenu_Loop() As Long
+    LxMenu_Loop = 0
+    If g_lxsModal <> 0 Then Exit Function
+    g_lxsModal = LXS_MODAL_MENU
+    g_lxsModalRet = 0
+    g_uxDirty = 1
+    While g_lxsModalRet = 0 And g_lxQuit = 0
+        LxShell_PumpOne()
+    Wend
+    g_lxsModal = 0
+    g_lxmnOpen = 0
+    g_uxDirty = 1
+    If g_lxsModalRet > 0 Then LxMenu_Loop = g_lxsModalRet
+End Function
+
+' 帯から開いて、選んだらそのコマンドを実行する（キーで開いたら最初の項目を選んでおく）
+Sub LxMenu_RunBar(ByVal k As Long, ByVal kbd As Long)
+    Dim id As Long
+    If k < 0 Or k >= g_lxmnBarN Then Exit Sub
+    LxMenu_OpenBar(k)
+    If kbd <> 0 Then LxMenu_Step(1)
+    id = LxMenu_Loop()
+    If id <> 0 Then LxMenu_Command(id)
+End Sub
+
+' メニューの ID を実行する（Windows のフレームの WM_COMMAND と同じ）
+Sub LxMenu_Command(ByVal id As Long)
+    If EditorMenu_OnCommand(id) = 0 Then LxCallback_Command(id)
+    g_uxDirty = 1
+End Sub
+
+' 右クリックのメニュー（TrackPopupMenu）。(x, y) は窓の座標
+Function LxShell_TrackMenu(ByVal h As Long, ByVal x As Long, ByVal y As Long) As Long
+    LxShell_TrackMenu = 0
+    If LxM_Count(h) = 0 Then Exit Function
+    g_lxmnBarIdx = -1
+    g_lxmnOpen = h
+    g_lxmnX = x
+    g_lxmnY = y
+    g_lxmnSel = -1
+    LxShell_TrackMenu = LxMenu_Loop()
+End Function
+
+' == イベント（LxFrame から） ==
+
+Sub LxMenu_BarClick(ByVal x As Long)
+    LxMenu_RunBar(LxMenu_BarAt(x), 0)
+End Sub
+
+' Alt+文字: & の文字が合う帯の項目を開く
+Sub LxMenu_AltKey(ByVal ks As Long)
+    Dim k As Long, c As Long
+    c = ks
+    If c >= &H41 And c <= &H5A Then c = c + 32
+    If c < &H61 Or c > &H7A Then Exit Sub
+    For k = 0 To g_lxmnBarN - 1
+        If LxM_Mnemonic(g_lxiText(LxM_ItemAt(g_lxMenuBar, k))) = c Then
+            LxMenu_RunBar(k, 1)
+            Exit Sub
+        End If
+    Next
+End Sub
+
+Sub LxMenu_Key(ByVal vk As Long, ByVal ks As Long)
+    Dim k As Long, c As Long, it As Long
+    If vk = VK_ESCAPE Then
+        g_lxsModalRet = -1
+    ElseIf vk = VK_DOWN Then
+        LxMenu_Step(1)
+    ElseIf vk = VK_UP Then
+        LxMenu_Step(-1)
+    ElseIf vk = VK_RETURN Or vk = VK_SPACE Then
+        If g_lxmnSel >= 0 Then LxMenu_Pick(g_lxmnSel)
+    ElseIf (vk = VK_LEFT Or vk = VK_RIGHT) And g_lxmnBarIdx >= 0 Then
+        k = g_lxmnBarIdx + 1
+        If vk = VK_LEFT Then k = g_lxmnBarIdx - 1
+        If k < 0 Then k = g_lxmnBarN - 1
+        If k >= g_lxmnBarN Then k = 0
+        LxMenu_OpenBar(k)
+        LxMenu_Step(1)
+    Else
+        c = ks
+        If c >= &H41 And c <= &H5A Then c = c + 32
+        For k = 0 To LxM_Count(g_lxmnOpen) - 1
+            it = LxM_ItemAt(g_lxmnOpen, k)
+            If c >= &H61 And c <= &H7A And LxM_Mnemonic(g_lxiText(it)) = c And LxMenu_CanPick(it) <> 0 Then
+                LxMenu_Pick(k)
+                Exit Sub
+            End If
+        Next
+    End If
+    g_uxDirty = 1
+End Sub
+
+Sub LxMenu_Hover(ByVal x As Long, ByVal y As Long)
+    Dim k As Long
+    If y < LXS_MENU_H And g_lxmnBarIdx >= 0 Then
+        k = LxMenu_BarAt(x)
+        If k >= 0 And k <> g_lxmnBarIdx Then LxMenu_OpenBar(k)
+        Exit Sub
+    End If
+    k = LxMenu_ItemAtXY(x, y)
+    If k >= 0 Then
+        If LxMenu_CanPick(LxM_ItemAt(g_lxmnOpen, k)) = 0 Then k = -1
+    End If
+    If k <> g_lxmnSel Then
+        g_lxmnSel = k
+        g_uxDirty = 1
+    End If
+End Sub
+
+Sub LxMenu_Click(ByVal x As Long, ByVal y As Long)
+    Dim k As Long
+    If y < LXS_MENU_H And g_lxmnBarIdx >= 0 Then
+        k = LxMenu_BarAt(x)
+        If k = g_lxmnBarIdx Or k < 0 Then
+            g_lxsModalRet = -1
+        Else
+            LxMenu_OpenBar(k)
+        End If
+        Exit Sub
+    End If
+    k = LxMenu_ItemAtXY(x, y)
+    If k < 0 Then
+        g_lxsModalRet = -1
+        Exit Sub
+    End If
+    LxMenu_Pick(k)
+End Sub
+
+#endif

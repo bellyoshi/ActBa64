@@ -1,0 +1,132 @@
+' LxShell - ShellExecuteA
+'  実行できるファイル（ディレクトリでなく access X_OK）なら、それを lpParameters 付きで起動する。
+'  それ以外（URL、文書、フォルダー）は $PATH の xdg-open に渡す。待たない（fork を 2 回して孫が execve、
+'  子はすぐ終わるのでゾンビが残らない）。lpDirectory は孫の作業フォルダー。
+'  戻り値は Win32 と同じく 32 より大きければ成功（42）、起動できなければ 2（ファイルが無い）。
+'  孫の execve が失敗しても分からない（起動前に access で確かめるだけ）
+
+Const LX_X_OK = 1
+Const LX_SH_OK = 42
+Const LX_SH_NOTFOUND = 2
+
+' dst[at..] へ src（NUL まで）を写す。dst は LX_ARG_BUF バイト。戻り値は次の位置
+Function LxCatZ(dst As *Byte, at As Long, src As *Byte) As Long
+    Dim i As Long
+    LxCatZ = at
+    If src = 0 Then Exit Function
+    i = 0
+    While src[i] <> 0 And LxCatZ < LX_ARG_BUF - 1
+        dst[LxCatZ] = src[i]
+        LxCatZ = LxCatZ + 1
+        i = i + 1
+    Wend
+    dst[LxCatZ] = 0
+End Function
+
+Function LxCatCh(dst As *Byte, at As Long, c As Long) As Long
+    LxCatCh = at
+    If at >= LX_ARG_BUF - 1 Then Exit Function
+    dst[at] = c
+    dst[at + 1] = 0
+    LxCatCh = at + 1
+End Function
+
+' "s"（" で囲む。中の " はそのまま落ちる。LxSplitArgs と同じ決まり）
+Function LxCatQ(dst As *Byte, at As Long, src As *Byte) As Long
+    LxCatQ = LxCatCh(dst, at, 34)
+    LxCatQ = LxCatZ(dst, LxCatQ, src)
+    LxCatQ = LxCatCh(dst, LxCatQ, 34)
+End Function
+
+Function LxCanExec(path As *Byte) As Long
+    Dim p(LX_PATH_MAX - 1) As Byte
+    Dim a As DWord
+    LxCanExec = 0
+    If path = 0 Then Exit Function
+    If path[0] = 0 Then Exit Function
+    a = Lx_GetFileAttributesA(path)
+    If a = &HFFFFFFFF Then Exit Function
+    If (a And &H10) <> 0 Then Exit Function
+    If LxOk(Lx_Syscall(LX_SYS_ACCESS, LxPath(path, VarPtr(p(0))), LX_X_OK, 0, 0, 0, 0)) = 0 Then Exit Function
+    LxCanExec = 1
+End Function
+
+' name に / が無ければ $PATH の各フォルダーで探す。見つかれば dst（LX_PATH_MAX バイト）に入れて 1
+Function LxWhich(name As *Byte, dst As *Byte) As Long
+    Dim nm As String
+    Dim path As *Byte
+    Dim i As Long, k As Long
+    LxWhich = 0
+    nm = "PATH"
+    path = LxGetEnv(StrPtr(nm))
+    If path = 0 Then Exit Function
+    i = 0
+    While path[i] <> 0
+        k = 0
+        While path[i] <> 0 And path[i] <> &H3A And k < LX_PATH_MAX - 2
+            dst[k] = path[i]
+            k = k + 1
+            i = i + 1
+        Wend
+        If path[i] = &H3A Then i = i + 1
+        If k > 0 Then
+            dst[k] = 0
+            k = LxCatCh(dst, k, &H2F)
+            LxCatZ(dst, k, name)
+            If LxCanExec(dst) <> 0 Then LxWhich = 1
+            If LxWhich <> 0 Then Exit Function
+        End If
+    Wend
+End Function
+
+' 孫で execve（子はすぐ exit 0、親はその子を wait4）。起動できなければ 0
+Function LxSpawnDetached(argv0 As *Byte, argv As *Byte, dir As *Byte) As Long
+    Dim pid As VoidPtr
+    Dim st As Long
+    LxSpawnDetached = 0
+    If LxCanExec(argv0) = 0 Then Exit Function
+    pid = Lx_Syscall(LX_SYS_FORK, 0, 0, 0, 0, 0, 0)
+    If pid = 0 Then
+        If Lx_Syscall(LX_SYS_FORK, 0, 0, 0, 0, 0, 0) = 0 Then
+            g_lxSpawnSi = 0
+            g_lxSpawnDir = dir As VoidPtr
+            LxExecChild(argv0, argv)
+        End If
+        Lx_Syscall(LX_SYS_EXIT_GROUP, 0, 0, 0, 0, 0, 0)
+    End If
+    If LxOk(pid) = 0 Then Exit Function
+    st = 0
+    Lx_Syscall(LX_SYS_WAIT4, pid, VarPtr(st), 0, 0, 0, 0)
+    LxSpawnDetached = 1
+End Function
+
+Function Lx_ShellExecuteA(ByVal hwnd As VoidPtr, ByVal op As *Byte, ByVal file As *Byte, ByVal params As *Byte, ByVal dir As *Byte, ByVal show As Long) As VoidPtr
+    Dim cmd(LX_ARG_BUF - 1) As Byte
+    Dim buf(LX_ARG_BUF - 1) As Byte
+    Dim argv(LX_ARG_MAX * 8 - 1) As Byte
+    Dim opener(LX_PATH_MAX - 1) As Byte
+    Dim nm As String
+    Dim at As Long
+    Lx_ShellExecuteA = LX_SH_NOTFOUND
+    If file = 0 Then Exit Function
+    If file[0] = 0 Then Exit Function
+    If LxCanExec(file) <> 0 Then
+        at = LxCatQ(VarPtr(cmd(0)), 0, file)
+        If params <> 0 Then
+            If params[0] <> 0 Then
+                at = LxCatCh(VarPtr(cmd(0)), at, 32)
+                at = LxCatZ(VarPtr(cmd(0)), at, params)
+            End If
+        End If
+    Else
+        nm = "xdg-open"
+        If LxWhich(StrPtr(nm), VarPtr(opener(0))) = 0 Then Exit Function
+        at = LxCatQ(VarPtr(cmd(0)), 0, VarPtr(opener(0)))
+        at = LxCatCh(VarPtr(cmd(0)), at, 32)
+        at = LxCatQ(VarPtr(cmd(0)), at, file)
+    End If
+    If LxSplitArgs(VarPtr(cmd(0)), VarPtr(buf(0)), VarPtr(argv(0))) = 0 Then Exit Function
+    LxSlashInPlace(VarPtr(buf(0)))
+    If LxSpawnDetached(VarPtr(buf(0)), VarPtr(argv(0)), dir) = 0 Then Exit Function
+    Lx_ShellExecuteA = LX_SH_OK
+End Function

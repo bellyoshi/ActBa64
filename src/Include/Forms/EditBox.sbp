@@ -1,0 +1,52 @@
+' Forms/EditBox.sbp - 1 行の文字を打ち込む部品 EditBox。
+' Forms.sbp が #include する（単独では include しない）。
+
+#ifdef _LINUX
+
+' 1 行の文字を打ち込む部品。X11 版は Caption を覚えるだけ
+Class EditBox
+    Inherits Control
+Public
+    Function GetText() As String
+        GetText = Caption
+    End Function
+
+    Sub SetText(s As String)
+        SetCaption(s)
+    End Sub
+End Class
+
+#else
+
+' 1 行の文字を打ち込む部品（EDIT。Lazarus の TEdit）。縁がへこみ、長い文字は横に流れる。
+' 初めの文字は Caption。文字が変わると、親の WndProc に WM_COMMAND（HIWORD(wParam) = EN_CHANGE、
+' lParam = Handle）が届く。窓ができたあとの文字は GetText / SetText で読み書きする
+' （打ち込んで変わった文字は Caption に入らない）
+Class EditBox
+    Inherits Control
+Public
+    Override Sub CreateHandle(parent As HWND)
+        Handle = CreateWindowEx(WS_EX_CLIENTEDGE, "EDIT", StrPtr(Caption), WS_CHILD Or WS_VISIBLE Or WS_TABSTOP Or ES_LEFT Or ES_AUTOHSCROLL, Left, Top, Width, Height, parent, 0, GetModuleHandle(0), 0)
+        AfterCreate()
+    End Sub
+
+    ' 今の文字（UTF-8）。窓がまだ無ければ Caption
+    Function GetText() As String
+        Dim n As Long, buf As *Byte
+        GetText = Caption
+        If Handle = 0 Then Exit Function
+        n = GetWindowTextLength(Handle) * 3 + 1     ' UTF-16 の 1 文字は UTF-8 で 3 バイトまで
+        buf = malloc(n)
+        If buf = 0 Then Exit Function
+        GetWindowText(Handle, buf, n)
+        GetText = MakeStr(buf)
+        free(buf)
+    End Function
+
+    ' 文字を変える（SetCaption と同じ）。窓がもうあれば窓の文字も変わり、EN_CHANGE が届く
+    Sub SetText(s As String)
+        SetCaption(s)
+    End Sub
+End Class
+
+#endif

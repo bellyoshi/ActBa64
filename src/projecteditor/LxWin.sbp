@@ -1,0 +1,642 @@
+' LxWin - Linux 版のエディタだけで使う Win32 API の代わり（-linux のときだけ）。
+' 名前が Lx_<API名> の関数は、actba64 がその API の呼び出し先にする（Include\linux と同じ仕組み）。
+' ここにあるのは、エディタが自分のビュー（UiX11 の HWND）とメニューに対して呼ぶものだけで、
+' 一般の Win32 の代わりではない（窓を作る・部品・ダイアログは LxShell が自前で持つ）。
+' 文字列の W 版は UTF-16 で来るので、UTF-8 に直して扱う。
+
+#ifdef _LINUX
+
+Const LXM_BASE = &H2000             ' HMENU の値は LXM_BASE + 添字
+Const LXM_MAX = 32                  ' メニューの数
+Const LXM_PER = 48                  ' メニュー 1 つの項目の数
+Const LXI_MAX = 512                 ' 項目の数
+
+Dim g_lxQuit As Long
+Dim g_lxFocus As Long               ' キーを受けるビュー（HWND）
+
+' メニュー
+Dim g_lxmUsed(31) As Long
+Dim g_lxmN(31) As Long
+Dim g_lxmItem(1535) As Long         ' メニュー m の k 番目の項目 = g_lxmItem(m * LXM_PER + k)
+Dim g_lxiUsed(511) As Long
+Dim g_lxiText(511) As String
+Dim g_lxiId(511) As Long
+Dim g_lxiFlags(511) As Long
+Dim g_lxiSub(511) As Long           ' MF_POPUP の下のメニュー（HMENU）
+Dim g_lxMenuBar As Long             ' SetMenu で付けたメニュー（HMENU）
+
+' == 文字列 ==
+
+' UTF-16（NUL まで）→ UTF-8
+Function LxW_Utf8$(w As *Byte) As String
+    Dim n As Long
+    LxW_Utf8$ = ""
+    If w = 0 Then Exit Function
+    n = 0
+    While w[n * 2] <> 0 Or w[n * 2 + 1] <> 0
+        n = n + 1
+    Wend
+    If n = 0 Then Exit Function
+    LxW_Utf8$ = Enc_WideToUtf8$(w, n)
+End Function
+
+Function LxA_Str$(p As *Byte) As String
+    LxA_Str$ = ""
+    If p = 0 Then Exit Function
+    LxA_Str$ = Enc_DupCStr$(p, lstrlen(p))
+End Function
+
+' InsMenu は狭い文字列のまま InsertMenuW へ渡すので、UTF-16 らしければ（2 バイト目が 0）W として読む
+Function LxW_Guess$(p As *Byte) As String
+    LxW_Guess$ = ""
+    If p = 0 Then Exit Function
+    If p[0] <> 0 And p[1] = 0 Then
+        LxW_Guess$ = LxW_Utf8$(p)
+    Else
+        LxW_Guess$ = LxA_Str$(p)
+    End If
+End Function
+
+' == 窓（ビュー） ==
+
+Function Lx_InvalidateRect(ByVal h As VoidPtr, ByVal rc As VoidPtr, ByVal erase As Long) As Long
+    g_uxDirty = 1
+    Lx_InvalidateRect = 1
+End Function
+
+Function Lx_UpdateWindow(ByVal h As VoidPtr) As Long
+    g_uxDirty = 1
+    Lx_UpdateWindow = 1
+End Function
+
+Function Lx_GetClientRect(ByVal h As VoidPtr, ByVal rc As *Long) As Long
+    Dim r As RECT
+    Ui_ClientRect(h As HWND, r)
+    rc[0] = r.left
+    rc[1] = r.top
+    rc[2] = r.right
+    rc[3] = r.bottom
+    Lx_GetClientRect = 1
+End Function
+
+Function Lx_SetFocus(ByVal h As VoidPtr) As VoidPtr
+    Lx_SetFocus = g_lxFocus
+    g_lxFocus = h As Long
+End Function
+
+Function Lx_GetFocus() As VoidPtr
+    Lx_GetFocus = g_lxFocus
+End Function
+
+Function Lx_IsWindow(ByVal h As VoidPtr) As Long
+    Lx_IsWindow = 0
+    If Ux_Index(h As HWND) >= 0 Then Lx_IsWindow = 1
+End Function
+
+Function Lx_ShowWindow(ByVal h As VoidPtr, ByVal cmd As Long) As Long
+    g_uxDirty = 1
+    Lx_ShowWindow = 1
+End Function
+
+' 描くのはビューそのもの（HDC = HWND）
+Function Lx_BeginPaint(ByVal h As VoidPtr, ByVal ps As VoidPtr) As VoidPtr
+    Lx_BeginPaint = h
+End Function
+
+Function Lx_EndPaint(ByVal h As VoidPtr, ByVal ps As VoidPtr) As Long
+    Lx_EndPaint = 1
+End Function
+
+' 文書のビューの既定の処理。閉じるなら文書を閉じる（保存の確認は MainWndProc が先に済ませている）
+Function Lx_DefMDIChildProcA(ByVal h As VoidPtr, ByVal msg As DWord, ByVal wp As VoidPtr, ByVal lp As VoidPtr) As VoidPtr
+    Lx_DefMDIChildProcA = 0
+    If msg = WM_CLOSE Then LxShell_DestroyDoc(h As HWND)
+End Function
+
+Function Lx_DefMDIChildProcW(ByVal h As VoidPtr, ByVal msg As DWord, ByVal wp As VoidPtr, ByVal lp As VoidPtr) As VoidPtr
+    Lx_DefMDIChildProcW = Lx_DefMDIChildProcA(h, msg, wp, lp)
+End Function
+
+' WM_MDIACTIVATE（文書を前へ）だけを扱う
+Function Lx_SendMessageA(ByVal h As VoidPtr, ByVal msg As DWord, ByVal wp As VoidPtr, ByVal lp As VoidPtr) As VoidPtr
+    Lx_SendMessageA = 0
+    If msg = WM_MDIACTIVATE Then LxShell_Activate(wp As HWND)
+End Function
+
+Function Lx_SendMessageW(ByVal h As VoidPtr, ByVal msg As DWord, ByVal wp As VoidPtr, ByVal lp As VoidPtr) As VoidPtr
+    Lx_SendMessageW = Lx_SendMessageA(h, msg, wp, lp)
+End Function
+
+Sub Lx_PostQuitMessage(ByVal code As Long)
+    g_lxQuit = 1
+End Sub
+
+' フレームか前面の文書なら X の窓の見出しにする（文書の見出しはタブが自分で作る）。
+' SetWindowText は -linux では UTF-8 のまま来ることがあるので、どちらか見て読む
+Function Lx_SetWindowTextW(ByVal h As VoidPtr, ByVal w As *Byte) As Long
+    Lx_SetWindowTextW = 1
+    If (h As Long) = (hMainWnd As Long) Or (h As Long) = (g_activeChild As Long) Then Ux_SetTitle(LxW_Guess$(w))
+    g_uxDirty = 1
+End Function
+
+Function Lx_SetWindowTextA(ByVal h As VoidPtr, ByVal s As *Byte) As Long
+    Lx_SetWindowTextA = 1
+    If (h As Long) = (hMainWnd As Long) Or (h As Long) = (g_activeChild As Long) Then Ux_SetTitle(LxA_Str$(s))
+    g_uxDirty = 1
+End Function
+
+Function Lx_DragAcceptFiles(ByVal h As VoidPtr, ByVal f As Long) As Long
+    Lx_DragAcceptFiles = 0
+End Function
+
+' == キー・マウス ==
+
+' 押されていれば上位ビット（Shift / Ctrl / Alt だけ分かる）
+Function Lx_GetKeyState(ByVal vk As Long) As Long
+    Lx_GetKeyState = 0
+    If vk = VK_SHIFT And g_uxShift <> 0 Then Lx_GetKeyState = &HFFFF8000
+    If vk = VK_CONTROL And g_uxCtrl <> 0 Then Lx_GetKeyState = &HFFFF8000
+    If vk = VK_MENU And g_uxAlt <> 0 Then Lx_GetKeyState = &HFFFF8000
+End Function
+
+Function Lx_GetAsyncKeyState(ByVal vk As Long) As Long
+    Lx_GetAsyncKeyState = Lx_GetKeyState(vk)
+End Function
+
+Function Lx_MessageBeep(ByVal t As DWord) As Long
+    Ux_Beep()
+    Lx_MessageBeep = 1
+End Function
+
+' 最後のマウスの位置（画面の座標）
+Function Lx_GetCursorPos(ByVal pt As *Long) As Long
+    pt[0] = g_lxsMouseX + g_lxsRootDX
+    pt[1] = g_lxsMouseY + g_lxsRootDY
+    Lx_GetCursorPos = 1
+End Function
+
+' IME はまだ無い（コンテキストが 0 なので MainWnd の IME の処理は何もしない）
+Function Lx_ImmGetContext(ByVal h As VoidPtr) As VoidPtr
+    Lx_ImmGetContext = 0
+End Function
+
+Function Lx_ImmReleaseContext(ByVal h As VoidPtr, ByVal c As VoidPtr) As Long
+    Lx_ImmReleaseContext = 1
+End Function
+
+Function Lx_ImmGetCompositionStringW(ByVal c As VoidPtr, ByVal idx As DWord, ByVal buf As VoidPtr, ByVal n As DWord) As Long
+    Lx_ImmGetCompositionStringW = 0
+End Function
+
+Function Lx_ImmSetCompositionWindow(ByVal c As VoidPtr, ByVal cf As VoidPtr) As Long
+    Lx_ImmSetCompositionWindow = 1
+End Function
+
+' == メッセージボックス（LxShell の自前の窓） ==
+
+Function Lx_MessageBoxW(ByVal h As VoidPtr, ByVal text As *Byte, ByVal cap As *Byte, ByVal typ As DWord) As Long
+    Lx_MessageBoxW = LxShell_MsgBox(LxW_Utf8$(text), LxW_Utf8$(cap), typ)
+End Function
+
+' == メニュー（中身だけ。描くのは LxShell） ==
+
+Function LxM_Index(h As VoidPtr) As Long
+    Dim m As Long
+    LxM_Index = -1
+    m = (h As Long) - LXM_BASE
+    If m < 0 Or m >= LXM_MAX Then Exit Function
+    If g_lxmUsed(m) = 0 Then Exit Function
+    LxM_Index = m
+End Function
+
+Function LxM_New() As VoidPtr
+    Dim m As Long
+    LxM_New = 0
+    For m = 0 To LXM_MAX - 1
+        If g_lxmUsed(m) = 0 Then
+            g_lxmUsed(m) = 1
+            g_lxmN(m) = 0
+            LxM_New = LXM_BASE + m
+            Exit Function
+        End If
+    Next
+End Function
+
+Function Lx_CreateMenu() As VoidPtr
+    Lx_CreateMenu = LxM_New()
+End Function
+
+Function Lx_CreatePopupMenu() As VoidPtr
+    Lx_CreatePopupMenu = LxM_New()
+End Function
+
+Function Lx_DestroyMenu(ByVal h As VoidPtr) As Long
+    Dim m As Long, k As Long, it As Long
+    Lx_DestroyMenu = 0
+    m = LxM_Index(h)
+    If m < 0 Then Exit Function
+    For k = 0 To g_lxmN(m) - 1
+        it = g_lxmItem(m * LXM_PER + k)
+        g_lxiUsed(it) = 0
+        g_lxiText(it) = ""
+    Next
+    g_lxmN(m) = 0
+    g_lxmUsed(m) = 0
+    If g_lxMenuBar = (h As Long) Then g_lxMenuBar = 0
+    Lx_DestroyMenu = 1
+End Function
+
+Function Lx_SetMenu(ByVal w As VoidPtr, ByVal h As VoidPtr) As Long
+    g_lxMenuBar = h As Long
+    g_uxDirty = 1
+    Lx_SetMenu = 1
+End Function
+
+Function Lx_DrawMenuBar(ByVal w As VoidPtr) As Long
+    g_uxDirty = 1
+    Lx_DrawMenuBar = 1
+End Function
+
+Function LxM_FreeItem() As Long
+    Dim i As Long
+    LxM_FreeItem = -1
+    For i = 0 To LXI_MAX - 1
+        If g_lxiUsed(i) = 0 Then
+            LxM_FreeItem = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Sub LxM_SetItem(it As Long, flags As Long, idOrSub As VoidPtr, text As String)
+    g_lxiFlags(it) = flags
+    g_lxiText(it) = text
+    g_lxiId(it) = 0
+    g_lxiSub(it) = 0
+    If (flags And MF_POPUP) <> 0 Then
+        g_lxiSub(it) = idOrSub As Long
+    Else
+        g_lxiId(it) = (idOrSub As Long) And &HFFFF
+    End If
+End Sub
+
+' 位置 pos（-1 や数より大きければ最後）に足す
+Function LxM_Insert(h As VoidPtr, pos As Long, flags As Long, idOrSub As VoidPtr, text As String) As Long
+    Dim m As Long, it As Long, k As Long
+    LxM_Insert = 0
+    m = LxM_Index(h)
+    If m < 0 Then Exit Function
+    If g_lxmN(m) >= LXM_PER Then Exit Function
+    it = LxM_FreeItem()
+    If it < 0 Then Exit Function
+    g_lxiUsed(it) = 1
+    LxM_SetItem(it, flags, idOrSub, text)
+    If pos < 0 Or pos > g_lxmN(m) Or (flags And MF_BYPOSITION) = 0 Then pos = g_lxmN(m)
+    For k = g_lxmN(m) To pos + 1 Step -1
+        g_lxmItem(m * LXM_PER + k) = g_lxmItem(m * LXM_PER + k - 1)
+    Next
+    g_lxmItem(m * LXM_PER + pos) = it
+    g_lxmN(m) = g_lxmN(m) + 1
+    LxM_Insert = 1
+End Function
+
+Function Lx_InsertMenuW(ByVal h As VoidPtr, ByVal pos As DWord, ByVal flags As DWord, ByVal idOrSub As VoidPtr, ByVal text As *Byte) As Long
+    Dim p As Long
+    p = pos As Long
+    If pos = &HFFFFFFFF Then p = -1
+    Lx_InsertMenuW = LxM_Insert(h, p, flags As Long, idOrSub, LxW_Guess$(text))
+End Function
+
+Function Lx_AppendMenuW(ByVal h As VoidPtr, ByVal flags As DWord, ByVal idOrSub As VoidPtr, ByVal text As *Byte) As Long
+    Lx_AppendMenuW = LxM_Insert(h, -1, (flags As Long) Or MF_BYPOSITION, idOrSub, LxW_Utf8$(text))
+End Function
+
+Function Lx_AppendMenuA(ByVal h As VoidPtr, ByVal flags As DWord, ByVal idOrSub As VoidPtr, ByVal text As *Byte) As Long
+    Lx_AppendMenuA = LxM_Insert(h, -1, (flags As Long) Or MF_BYPOSITION, idOrSub, LxA_Str$(text))
+End Function
+
+' 項目を探す（MF_BYPOSITION なら位置、でなければ ID を下のメニューまで）。戻り値は項目の添字（-1 は無い）
+Function LxM_Find(h As VoidPtr, key As Long, byPos As Long, depth As Long) As Long
+    Dim m As Long, k As Long, it As Long
+    LxM_Find = -1
+    m = LxM_Index(h)
+    If m < 0 Or depth > 4 Then Exit Function
+    If byPos <> 0 Then
+        If key >= 0 And key < g_lxmN(m) Then LxM_Find = g_lxmItem(m * LXM_PER + key)
+        Exit Function
+    End If
+    For k = 0 To g_lxmN(m) - 1
+        it = g_lxmItem(m * LXM_PER + k)
+        If (g_lxiFlags(it) And (MF_POPUP Or MF_SEPARATOR)) = 0 And g_lxiId(it) = key Then
+            LxM_Find = it
+            Exit Function
+        End If
+    Next
+    For k = 0 To g_lxmN(m) - 1
+        it = g_lxmItem(m * LXM_PER + k)
+        If (g_lxiFlags(it) And MF_POPUP) <> 0 Then
+            LxM_Find = LxM_Find(g_lxiSub(it) As VoidPtr, key, 0, depth + 1)
+            If LxM_Find >= 0 Then Exit Function
+        End If
+    Next
+End Function
+
+Function Lx_ModifyMenuW(ByVal h As VoidPtr, ByVal pos As DWord, ByVal flags As DWord, ByVal idOrSub As VoidPtr, ByVal text As *Byte) As Long
+    Dim it As Long
+    Lx_ModifyMenuW = 0
+    it = LxM_Find(h, pos As Long, (flags And MF_BYPOSITION) As Long, 0)
+    If it < 0 Then Exit Function
+    LxM_SetItem(it, (flags As Long) And (Not MF_BYPOSITION), idOrSub, LxW_Utf8$(text))
+    g_uxDirty = 1
+    Lx_ModifyMenuW = 1
+End Function
+
+' 前のチェックの状態（MF_CHECKED / MF_UNCHECKED）。無ければ -1
+Function Lx_CheckMenuItem(ByVal h As VoidPtr, ByVal id As DWord, ByVal flags As DWord) As Long
+    Dim it As Long
+    Lx_CheckMenuItem = -1
+    it = LxM_Find(h, id As Long, (flags And MF_BYPOSITION) As Long, 0)
+    If it < 0 Then Exit Function
+    Lx_CheckMenuItem = g_lxiFlags(it) And MF_CHECKED
+    g_lxiFlags(it) = g_lxiFlags(it) And (Not MF_CHECKED)
+    If (flags And MF_CHECKED) <> 0 Then g_lxiFlags(it) = g_lxiFlags(it) Or MF_CHECKED
+End Function
+
+Function Lx_EnableMenuItem(ByVal h As VoidPtr, ByVal id As DWord, ByVal flags As DWord) As Long
+    Dim it As Long
+    Lx_EnableMenuItem = -1
+    it = LxM_Find(h, id As Long, (flags And MF_BYPOSITION) As Long, 0)
+    If it < 0 Then Exit Function
+    Lx_EnableMenuItem = g_lxiFlags(it) And (MF_GRAYED Or MF_DISABLED)
+    g_lxiFlags(it) = g_lxiFlags(it) And (Not (MF_GRAYED Or MF_DISABLED))
+    g_lxiFlags(it) = g_lxiFlags(it) Or (flags And (MF_GRAYED Or MF_DISABLED))
+End Function
+
+Function Lx_GetMenuItemCount(ByVal h As VoidPtr) As Long
+    Dim m As Long
+    Lx_GetMenuItemCount = -1
+    m = LxM_Index(h)
+    If m >= 0 Then Lx_GetMenuItemCount = g_lxmN(m)
+End Function
+
+' 右クリックのメニュー。(x, y) は画面の座標。TPM_RETURNCMD なので選んだ ID を返す（やめたら 0）
+Function Lx_TrackPopupMenu(ByVal h As VoidPtr, ByVal flags As DWord, ByVal x As Long, ByVal y As Long, ByVal r As Long, ByVal w As VoidPtr, ByVal rc As VoidPtr) As Long
+    Lx_TrackPopupMenu = LxShell_TrackMenu(h As Long, x - g_lxsRootDX, y - g_lxsRootDY)
+End Function
+
+' メニュー m の k 番目（無ければ -1）
+Function LxM_ItemAt(h As Long, k As Long) As Long
+    Dim m As Long
+    LxM_ItemAt = -1
+    m = LxM_Index(h As VoidPtr)
+    If m < 0 Then Exit Function
+    If k < 0 Or k >= g_lxmN(m) Then Exit Function
+    LxM_ItemAt = g_lxmItem(m * LXM_PER + k)
+End Function
+
+Function LxM_Count(h As Long) As Long
+    Dim m As Long
+    LxM_Count = 0
+    m = LxM_Index(h As VoidPtr)
+    If m >= 0 Then LxM_Count = g_lxmN(m)
+End Function
+
+' 「&F」の & を取る（&& は & 1 つ）
+Function LxM_Label$(s As String) As String
+    Dim i As Long, c As String
+    LxM_Label$ = ""
+    i = 1
+    While i <= Len(s)
+        c = Mid$(s, i, 1)
+        If c = "&" And i < Len(s) Then
+            i = i + 1
+            c = Mid$(s, i, 1)
+        End If
+        LxM_Label$ = LxM_Label$ + c
+        i = i + 1
+    Wend
+End Function
+
+' 「&F」の F（小文字にして）。無ければ 0
+Function LxM_Mnemonic(s As String) As Long
+    Dim i As Long, b As Long
+    Dim p As *Byte
+    LxM_Mnemonic = 0
+    p = StrPtr(s)
+    For i = 0 To Len(s) - 2
+        If p[i] = &H26 And p[i + 1] <> &H26 Then
+            b = p[i + 1]
+            If b >= &H41 And b <= &H5A Then b = b + 32
+            LxM_Mnemonic = b
+            Exit Function
+        End If
+    Next
+End Function
+
+#endif
+
+#ifdef _LINUX
+' == クリップボード（X の CLIPBOARD セレクション） ==
+' コピーすると自分が CLIPBOARD を持ち、ほかのアプリの求め（SelectionRequest）に UTF-8 で答える。
+' 貼り付けは、自分が持っていればそのまま、ほかが持っていれば XConvertSelection で UTF8_STRING を
+' もらう（SelectionNotify を 1 秒ほど待つ。待つ間のほかのイベントは描き直しだけ扱う）。
+
+Declare Function Ux_XSetSelectionOwner Lib "libX11.so.6" Alias "XSetSelectionOwner" (d As VoidPtr, sel As VoidPtr, w As VoidPtr, t As VoidPtr) As Long
+Declare Function Ux_XGetSelectionOwner Lib "libX11.so.6" Alias "XGetSelectionOwner" (d As VoidPtr, sel As VoidPtr) As VoidPtr
+Declare Function Ux_XConvertSelection Lib "libX11.so.6" Alias "XConvertSelection" (d As VoidPtr, sel As VoidPtr, target As VoidPtr, prop As VoidPtr, w As VoidPtr, t As VoidPtr) As Long
+Declare Function Ux_XGetWindowProperty Lib "libX11.so.6" Alias "XGetWindowProperty" (d As VoidPtr, w As VoidPtr, prop As VoidPtr, off As VoidPtr, n As VoidPtr, del As Long, req As VoidPtr, actType As VoidPtr, actFmt As VoidPtr, nItems As VoidPtr, after As VoidPtr, data As VoidPtr) As Long
+Declare Function Ux_XSendEvent Lib "libX11.so.6" Alias "XSendEvent" (d As VoidPtr, w As VoidPtr, propagate As Long, mask As VoidPtr, ev As VoidPtr) As Long
+Declare Function Ux_XFree Lib "libX11.so.6" Alias "XFree" (p As VoidPtr) As Long
+
+Const LXC_XA_ATOM = 4
+Const LXC_XA_STRING = 31
+
+Dim g_lxClipOwn As Long             ' 自分が CLIPBOARD を持っている
+Dim g_lxcEv(191) As Byte            ' 貼り付けを待つ間に受けるイベント
+Dim g_lxcSend(191) As Byte          ' SelectionNotify を送る
+Dim g_lxcTargets(23) As Byte        ' TARGETS の答え（Atom 3 つ）
+
+Dim g_lxClip As String              ' UTF-8
+Dim g_lxClipHas As Long
+Dim g_lxClipMem As VoidPtr          ' GetClipboardData で渡した UTF-16（次に渡すとき解放）
+
+Function Lx_GlobalAlloc(ByVal flags As DWord, ByVal n As VoidPtr) As VoidPtr
+    Lx_GlobalAlloc = malloc(n As Long)
+End Function
+
+Function Lx_GlobalLock(ByVal h As VoidPtr) As VoidPtr
+    Lx_GlobalLock = h
+End Function
+
+Function Lx_GlobalUnlock(ByVal h As VoidPtr) As Long
+    Lx_GlobalUnlock = 1
+End Function
+
+Function Lx_GlobalFree(ByVal h As VoidPtr) As VoidPtr
+    If h <> 0 Then free(h)
+    Lx_GlobalFree = 0
+End Function
+
+Function Lx_OpenClipboard(ByVal h As VoidPtr) As Long
+    Lx_OpenClipboard = 1
+End Function
+
+Function Lx_CloseClipboard() As Long
+    Lx_CloseClipboard = 1
+End Function
+
+Function Lx_EmptyClipboard() As Long
+    g_lxClip = ""
+    g_lxClipHas = 0
+    Lx_EmptyClipboard = 1
+End Function
+
+' CF_UNICODETEXT だけ。中身は UTF-8 にして持ち、メモリは解放する（Windows はシステムが持つ）
+Function Lx_SetClipboardData(ByVal fmt As DWord, ByVal h As VoidPtr) As VoidPtr
+    Lx_SetClipboardData = 0
+    If fmt <> CF_UNICODETEXT Or h = 0 Then Exit Function
+    g_lxClip = LxW_Utf8$(h As *Byte)
+    g_lxClipHas = 1
+    free(h)
+    LxClip_Own()
+    Lx_SetClipboardData = 1
+End Function
+
+Function Lx_IsClipboardFormatAvailable(ByVal fmt As DWord) As Long
+    Lx_IsClipboardFormatAvailable = 0
+    If fmt <> CF_UNICODETEXT Then Exit Function
+    If LxClip_Fetch() <> 0 Then Lx_IsClipboardFormatAvailable = 1
+End Function
+
+Function Lx_GetClipboardData(ByVal fmt As DWord) As VoidPtr
+    Dim chars As Long
+    Lx_GetClipboardData = 0
+    If fmt <> CF_UNICODETEXT Then Exit Function
+    If LxClip_Fetch() = 0 Then Exit Function
+    If g_lxClipMem <> 0 Then free(g_lxClipMem)
+    g_lxClipMem = Enc_Utf8ToWide(g_lxClip, chars)
+    Lx_GetClipboardData = g_lxClipMem
+End Function
+
+Function LxClip_Atom(name As String) As VoidPtr
+    LxClip_Atom = Ux_XInternAtom(g_uxDpy, StrPtr(name), 0)
+End Function
+
+' 自分が CLIPBOARD を持つ
+Sub LxClip_Own()
+    If g_uxDpy = 0 Then Exit Sub
+    Ux_XSetSelectionOwner(g_uxDpy, LxClip_Atom("CLIPBOARD"), g_uxWin, 0)
+    g_lxClipOwn = 0
+    If Ux_XGetSelectionOwner(g_uxDpy, LxClip_Atom("CLIPBOARD")) = g_uxWin Then g_lxClipOwn = 1
+End Sub
+
+' ほかのアプリの求め（SelectionRequest: owner +32, requestor +40, selection +48, target +56, property +64, time +72）
+Sub LxClip_Request(e As VoidPtr)
+    Dim req As VoidPtr, target As VoidPtr, prop As VoidPtr, n As VoidPtr
+    Dim b As VoidPtr
+    req = LxGetQ(e, 40)
+    target = LxGetQ(e, 56)
+    prop = LxGetQ(e, 64)
+    If prop = 0 Then prop = target
+    If target = LxClip_Atom("TARGETS") Then
+        LxSetQ(VarPtr(g_lxcTargets(0)), 0, LxClip_Atom("TARGETS"))
+        LxSetQ(VarPtr(g_lxcTargets(0)), 8, LxClip_Atom("UTF8_STRING"))
+        LxSetQ(VarPtr(g_lxcTargets(0)), 16, LXC_XA_STRING)
+        Ux_XChangeProperty(g_uxDpy, req, prop, LXC_XA_ATOM, 32, 0, VarPtr(g_lxcTargets(0)), 3)
+    ElseIf target = LxClip_Atom("UTF8_STRING") Or target = LXC_XA_STRING Or target = LxClip_Atom("TEXT") Then
+        Ux_XChangeProperty(g_uxDpy, req, prop, target, 8, 0, StrPtr(g_lxClip), Len(g_lxClip))
+    Else
+        prop = 0
+    End If
+    ' SelectionNotify: requestor +32, selection +40, target +48, property +56, time +64
+    b = VarPtr(g_lxcSend(0))
+    FillMemory(b, 192, 0)
+    Ux_SetL(b, 0, 31)
+    Ux_SetL(b, 16, 1)
+    LxSetQ(b, 32, req)
+    LxSetQ(b, 40, LxGetQ(e, 48))
+    LxSetQ(b, 48, target)
+    LxSetQ(b, 56, prop)
+    LxSetQ(b, 64, LxGetQ(e, 72))
+    Ux_XSendEvent(g_uxDpy, req, 0, 0, b)
+    Ux_XFlush(g_uxDpy)
+End Sub
+
+' X のイベントのうちクリップボードのもの（SelectionClear 29 / SelectionRequest 30）を扱って 1
+Function LxClip_Event(e As VoidPtr, t As Long) As Long
+    LxClip_Event = 0
+    If t = 29 Then g_lxClipOwn = 0
+    If t = 30 Then LxClip_Request(e)
+    If t = 29 Or t = 30 Then LxClip_Event = 1
+End Function
+
+' ほかのアプリの CLIPBOARD を UTF-8 でもらう。もらえたら g_lxClip に入れて 1
+Function LxClip_Convert() As Long
+    Dim prop As VoidPtr, e As VoidPtr
+    Dim actType As VoidPtr, actFmt As VoidPtr, nItems As VoidPtr, after As VoidPtr, data As VoidPtr
+    Dim i As Long, t As Long
+    LxClip_Convert = 0
+    prop = LxClip_Atom("ACTBA64_CLIP")
+    Ux_XConvertSelection(g_uxDpy, LxClip_Atom("CLIPBOARD"), LxClip_Atom("UTF8_STRING"), prop, g_uxWin, 0)
+    Ux_XFlush(g_uxDpy)
+    e = VarPtr(g_lxcEv(0))
+    For i = 1 To 100
+        While Ux_XPending(g_uxDpy) > 0
+            Ux_XNextEvent(g_uxDpy, e)
+            t = Ux_L(e, 0)
+            If t = 31 Then
+                If LxGetQ(e, 56) = 0 Then Exit Function
+                data = 0
+                Ux_XGetWindowProperty(g_uxDpy, g_uxWin, prop, 0, &H1000000, 1, 0, VarPtr(actType), VarPtr(actFmt), VarPtr(nItems), VarPtr(after), VarPtr(data))
+                If data = 0 Then Exit Function
+                g_lxClip = Enc_DupCStr$(data As *Byte, nItems As Long)
+                Ux_XFree(data)
+                LxClip_Convert = 1
+                Exit Function
+            End If
+            If LxClip_Event(e, t) = 0 And (t = 12 Or t = 22) Then g_uxDirty = 1
+        Wend
+        Sleep(10)
+    Next
+End Function
+
+' 貼り付けられる文字があれば g_lxClip に入れて 1
+Function LxClip_Fetch() As Long
+    LxClip_Fetch = 0
+    If g_lxClipOwn <> 0 Or g_uxDpy = 0 Then
+        LxClip_Fetch = g_lxClipHas
+        Exit Function
+    End If
+    If Ux_XGetSelectionOwner(g_uxDpy, LxClip_Atom("CLIPBOARD")) = 0 Then Exit Function
+    If LxClip_Convert() = 0 Then Exit Function
+    If Len(g_lxClip) > 0 Then LxClip_Fetch = 1
+End Function
+
+' == ほかの小さな代わり ==
+
+' ドロップは来ない
+Function Lx_DragQueryFileA(ByVal h As VoidPtr, ByVal i As DWord, ByVal buf As *Byte, ByVal n As DWord) As DWord
+    Lx_DragQueryFileA = 0
+End Function
+
+Sub Lx_DragFinish(ByVal h As VoidPtr)
+End Sub
+
+' 窓のクラス名は無い（空）
+Function Lx_GetClassNameA(ByVal h As VoidPtr, ByVal buf As *Byte, ByVal n As Long) As Long
+    If buf <> 0 And n > 0 Then buf[0] = 0
+    Lx_GetClassNameA = 0
+End Function
+#endif
+
+#ifdef _LINUX
+Function Lx_SetCapture(ByVal h As VoidPtr) As VoidPtr
+    Lx_SetCapture = g_uxCapture
+    g_uxCapture = h As Long
+End Function
+
+Function Lx_ReleaseCapture() As Long
+    g_uxCapture = 0
+    Lx_ReleaseCapture = 1
+End Function
+#endif
