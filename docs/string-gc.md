@@ -79,7 +79,7 @@ ActiveBasic と同じレイアウト。
 
 - **precise マーク**では使わない（登録済み塊なら無条件にマーク）。
 - **conservative マーク**では必須。ヘッダに印が無い塊はスキップする（確保直後でまだヘッダを書いていない窓、および「たまたまアドレス範囲に入った整数」への耐性の一部）。
-- 旧 `StrFree` も印がある塊だけ `HeapFree(base)` していた。代入経路からは呼ばれなくなっている（本体生成は `g_rtStrFreeLab` が確保されたときだけ）。
+- 旧 `StrFree`（印がある塊だけ `HeapFree(base)`）はどこからも呼ばれなくなったので消した。
 
 ---
 
@@ -284,7 +284,7 @@ CALL StrCollect                 ' Include（無ければ IR Collect）
 
 ```
 Cat / Mid / Str$ / Print / Input / Val / ...
-MakeStr / StrCmp / StrFree（呼ばれたとき）
+MakeStr / StrCmp（呼ばれたとき）
 StrHeapAlloc / Precise / Cons / Collect（IR・フォールバックおよび 32bit Collect）
 StrGcRegion / Globals / UserBssSize / InRange / GcMarkUserBss / GcMarkStack
 ```
