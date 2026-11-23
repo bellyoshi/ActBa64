@@ -182,6 +182,32 @@ Sub ParseSkipColons(p As *Parser)
     Wend
 End Sub
 
+' 文を読んだ後。同じ論理行に `:` も無く次の語が続けば、ActiveBasic 4.20 と同じくエラー。
+' -pAB2 は ActiveBasic 2.62 と同じく行の残りを捨てる（`x = 5 Print` の Print は無視）。-pN88 は調べない
+' 戻り値 true : 続けて読んでよい  false : エラー
+Function ParseStmtEnd(p As *Parser) As boolean
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim k As Long
+    Dim ln As Long
+    ParseStmtEnd = true
+    If p->n88Mode <> 0 Or p->pos <= 0 Then Exit Function
+    lx = p->lx
+    toks = lx->toks
+    k = toks[p->pos].kind
+    If k = TK_EOF Or k = TK_COLON Or k = TK_SEMI Then Exit Function
+    ln = toks[p->pos - 1].logLine
+    If toks[p->pos].logLine <> ln Then Exit Function
+    If CompIsAB2() <> 0 Then
+        While toks[p->pos].kind <> TK_EOF And toks[p->pos].logLine = ln
+            p->pos = p->pos + 1
+        Wend
+        Exit Function
+    End If
+    ParseFail(p, Tr$(1174, "expected end of statement (use ':' to put statements on one line)"))
+    ParseStmtEnd = false
+End Function
+
 ' End / End Sub の衝突回避: stop は "End" + second（sub/function/if 等）の組のみ
 Function ParseStmtListUntilEndPair(p As *Parser, second As *Byte) As Long
     Dim nFirst As Long
@@ -211,6 +237,7 @@ Function ParseStmtListUntilEndPair(p As *Parser, second As *Byte) As Long
             ' Nested lists still abort; top-level ParseProgram recovers.
             Exit Function
         End If
+        If ParseStmtEnd(p) = false Then Exit Function
         If nFirst < 0 Then
             nFirst = nStmt
         Else

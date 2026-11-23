@@ -36,6 +36,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 - 未定義の名前はコンパイルエラー。メッセージは `"名前" is not a valid identifier`（`actba_lang_ja.csv` があれば AB 4.20 と同じ `"名前" 無効な識別子です。`。[build.md](./build.md#メッセージの言語)）
 - 空白を挟まない `SelectCase` / `EndSelect` / `EndIf` / `EndSub` / `EndFunction` / `ExitFunction` / `ExitSub` は、間に空白を入れた形と同じ
 - 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）。単行 `If ... Then` では、同じ行の `:` で続く文と `Else` はその `If` の一部です
+- `:` なしで同じ行に文を続けると（`x = 5 Print`、`r = F()  Wend`）、ActiveBasic 4.20 と同じく `expected end of statement (use ':' to put statements on one line)` のエラー。`-pAB2` では行の残りを無視する（[§1.8](#pab2)）。`-pN88` は調べない
 - `If` / `Select Case` などのブロックの中で、後ろに語が続かない単独の `End` はプログラム終了の文。`End If` / `End Select` のように同じ行に語が続くときだけブロックの終わり
 
 <a id="line-continuation"></a>行の継続:
@@ -242,6 +243,7 @@ actba64 old.bas -pAB2 -o old.exe
 - `Type` の配列メンバは `( )` でも添字にできる（`LogFont.lfFaceName(0) = ...`）
 - `Delete` は文ではなく、変数名に使える
 - `On Error Goto` は読み飛ばす（エラーの横取りは未対応）
+- 文の後ろに `:` なしで同じ行に続けた語は、AB2 と同じく行の残りごと無視する（`x = 5 Print` の `Print` は実行しない）。`-pAB2` 以外ではエラー（[§1.2](#12-字句)）
 - 文字列は UTF-8。保存したファイルも UTF-8 になる（読むときは Shift-JIS のファイルも窓に出せる）
 - ユーザーのソースで `ByVal` / `ByRef` を書かない引数は `ByRef`（AB2 の既定。`Sub F(rc As RECT)` も書ける）。Include の関数は `ByVal` のまま。`ByRef` の引数に定数や式を渡すと「ByRef の引数には変数を渡してください」（AB2 も変数が必要だった）
 - 数値の後ろの `#`（`3.14159#`、`2#`）は Double の印
