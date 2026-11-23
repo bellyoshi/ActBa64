@@ -54,7 +54,7 @@ Or open `ProjectEditor.exe`, type the program and choose Run from the Basic menu
 ### Command line
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-pAB2] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-linux] [-X] [-pN88] [-pAB2] [-o <out>]
 ```
 
 | Option | Meaning |
@@ -62,6 +62,7 @@ actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-pAB2] [-o <out>]
 | `-o <out>` | Output path. Required for a `.abp`; optional for a `.pj` that has `#OUTPUT_RELEASE` (relative to the `.pj`) |
 | `-actba32` | 32-bit PE instead of 64-bit |
 | `-linux` | x86-64 Linux ELF |
+| `-X` | Leave out functions and methods that are never called, and the APIs only they use (Hello World 64-bit: 163 KB → 12 KB). `-linux` always does this |
 | `-pN88` | Read the source as N88-BASIC |
 | `-pAB2` | Read the source as ActiveBasic 2.62 |
 

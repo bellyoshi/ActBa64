@@ -54,7 +54,7 @@ actba64 hello.abp -linux -o hello           # x86-64 Linux ELF
 ### コマンドライン
 
 ```text
-actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-pAB2] [-o <out>]
+actba64 <src.abp|.pj> [-actba32] [-linux] [-X] [-pN88] [-pAB2] [-o <out>]
 ```
 
 | オプション | 意味 |
@@ -62,6 +62,7 @@ actba64 <src.abp|.pj> [-actba32] [-linux] [-pN88] [-pAB2] [-o <out>]
 | `-o <out>` | 出力先。`.abp` では必須です。`.pj` に `#OUTPUT_RELEASE` があれば省略でき、そのパスは `.pj` のあるフォルダが基準です |
 | `-actba32` | 64bit の代わりに 32bit の PE を出す |
 | `-linux` | x86-64 Linux の ELF を出す |
+| `-X` | 呼ばれない関数・メソッドと、そこからしか使わない API を exe に入れない（Hello World 64bit: 163KB → 12KB）。`-linux` では付けなくても常にこうなる |
 | `-pN88` | ソースを N88-BASIC として読む |
 | `-pAB2` | ソースを ActiveBasic 2.62 として読む |
 
