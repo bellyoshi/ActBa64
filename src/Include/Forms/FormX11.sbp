@@ -1,0 +1,232 @@
+' Forms/FormX11.sbp - -linux の Form の窓（X サーバーへつなぐ、窓 → Form の表、窓を作る・壊す、見出し）。
+' Forms.sbp が #include する（単独では include しない）。
+
+#ifdef _LINUX
+
+' 8 バイト・4 バイトの読み書き（VoidPtr 配列は使わない）
+Function FormsQ(buf As VoidPtr, off As Long) As VoidPtr
+    FormsQ = LxGetQ(buf, off)
+End Function
+
+Function FormsL(buf As VoidPtr, off As Long) As Long
+    Dim p As *Long
+    p = buf + off
+    FormsL = p[0]
+End Function
+
+Sub FormsSetL(buf As VoidPtr, off As Long, v As Long)
+    Dim p As *Long
+    p = buf + off
+    p[0] = v
+End Sub
+
+Function FormsAtom(i As Long) As VoidPtr
+    FormsAtom = LxGetQ(VarPtr(g_formsAtom(0)), i * 8)
+End Function
+
+' ==== X サーバー ====
+
+' 1 度だけ X サーバーへつなぐ。つながらなければ終わる
+Sub FormsOpen()
+    If FormsTryOpen() <> 0 Then Exit Sub
+    Print "Forms: cannot open X display (DISPLAY is not set?)"
+    ExitProcess(1)
+End Sub
+
+' X サーバーへつなぐ（つないであればそのまま）。つながらなければ 0
+Function FormsTryOpen() As Long
+    FormsTryOpen = 1
+    If g_formsDpy <> 0 Then Exit Function
+    FormsTryOpen = 0
+    g_formsDpy = XOpenDisplay(0)
+    If g_formsDpy = 0 Then Exit Function
+    FormsTryOpen = 1
+    g_formsScr = XDefaultScreen(g_formsDpy)
+    FormsInitAtoms()
+End Function
+
+' 閉じるボタンの Atom（g_formsAtom の 0: WM_DELETE_WINDOW、8: WM_PROTOCOLS）
+Sub FormsInitAtoms()
+    LxSetQ(VarPtr(g_formsAtom(0)), 0, XInternAtom(g_formsDpy, "WM_DELETE_WINDOW", 0))
+    LxSetQ(VarPtr(g_formsAtom(0)), 8, XInternAtom(g_formsDpy, "WM_PROTOCOLS", 0))
+End Sub
+
+' ==== 窓 → Form の表（g_formsTab。16 バイトずつ (Window, *Form)） ====
+
+' 窓 → Form。無ければ 0
+Function FormsFind(w As VoidPtr) As *Form
+    Dim i As Long
+    FormsFind = 0
+    If w = 0 Then Exit Function
+    i = FormsSlot(w)
+    If i >= 0 Then FormsFind = FormsQ(VarPtr(g_formsTab(0)), i * 16 + 8) As *Form
+End Function
+
+' 表で窓 w のある最初の番号（w = 0 なら最初の空き）。無ければ -1
+Function FormsSlot(w As VoidPtr) As Long
+    Dim i As Long
+    FormsSlot = -1
+    For i = FORMS_MAX - 1 To 0 Step -1
+        If FormsQ(VarPtr(g_formsTab(0)), i * 16) = w Then FormsSlot = i
+    Next
+End Function
+
+Sub FormsSetSlot(i As Long, w As VoidPtr, f As VoidPtr)
+    LxSetQ(VarPtr(g_formsTab(0)), i * 16, w)
+    LxSetQ(VarPtr(g_formsTab(0)), i * 16 + 8, f)
+End Sub
+
+Sub FormsBind(w As VoidPtr, f As VoidPtr)
+    Dim i As Long
+    i = FormsSlot(0)
+    If i >= 0 Then FormsSetSlot(i, w, f)
+End Sub
+
+Sub FormsUnbind(w As VoidPtr)
+    Dim i As Long
+    For i = 0 To FORMS_MAX - 1
+        If FormsQ(VarPtr(g_formsTab(0)), i * 16) = w Then FormsSetSlot(i, 0, 0)
+    Next
+End Sub
+
+' ==== 窓を作る・壊す ====
+
+' 窓を作り、見出し・位置・閉じるボタンを設定して WM_CREATE を送る
+Sub FormsCreate(p As VoidPtr)
+    Dim f As *Form, w As VoidPtr, x As Long, y As Long, flags As Long
+    f = p As *Form
+    FormsOpen()
+    flags = FormsPlace(f, x, y)
+    w = XCreateSimpleWindow(g_formsDpy, XRootWindow(g_formsDpy, g_formsScr), x, y, f->Width, f->Height, 0, 0, &HF0F0F0)
+    f->Handle = w As HWND
+    FormsBind(w, p)
+    FormsSetupWindow(f, w, flags, x, y)
+End Sub
+
+' 位置 (x, y) と大きさ（f->Width / Height。CW_USEDEFAULT なら 400 x 300）を決める。
+' 位置が CW_USEDEFAULT なら (0, 0) で WM に任せる。戻り値は XSizeHints の flags
+Function FormsPlace(f As *Form, ByRef x As Long, ByRef y As Long) As Long
+    x = f->Left
+    y = f->Top
+    FormsPlace = 3                  ' USPosition | USSize
+    If x = CW_USEDEFAULT Or y = CW_USEDEFAULT Then FormsPlace = FormsPlaceAny(x, y)
+    If f->Width = CW_USEDEFAULT Or f->Width <= 0 Then f->Width = 400
+    If f->Height = CW_USEDEFAULT Or f->Height <= 0 Then f->Height = 300
+End Function
+
+' 位置を WM に任せる（(0, 0) と USSize だけ）
+Function FormsPlaceAny(ByRef x As Long, ByRef y As Long) As Long
+    x = 0
+    y = 0
+    FormsPlaceAny = 2
+End Function
+
+' 見出しと位置・大きさ（WM が従うように USPosition / USSize）を付け、部品を作って WM_CREATE を送る
+Sub FormsSetupWindow(f As *Form, w As VoidPtr, flags As Long, x As Long, y As Long)
+    FormsTitle(w, f->Caption)
+    FormsSizeHints(VarPtr(g_formsHint(0)), flags, x, y, f->Width, f->Height)
+    XSetWMNormalHints(g_formsDpy, w, VarPtr(g_formsHint(0)))
+    FormsWmInput(w)
+    f->CreateControls()
+    f->WndProc(WM_CREATE, 0, 0)
+End Sub
+
+' XSizeHints（80 バイト）に flags と位置・大きさを入れる
+Sub FormsSizeHints(h As VoidPtr, flags As Long, x As Long, y As Long, cx As Long, cy As Long)
+    RtlFillMemory(h, 80, 0)
+    FormsSetL(h, 0, flags)
+    FormsSetL(h, 8, x)
+    FormsSetL(h, 12, y)
+    FormsSetL(h, 16, cx)
+    FormsSetL(h, 20, cy)
+End Sub
+
+' 閉じるボタンを ClientMessage で受け、FORMS_X_MASK のイベントを受ける
+Sub FormsWmInput(w As VoidPtr)
+    XSetWMProtocols(g_formsDpy, w, VarPtr(g_formsAtom(0)), 1)
+    XSelectInput(g_formsDpy, w, FORMS_X_MASK)
+End Sub
+
+' 見出し。_NET_WM_NAME は UTF-8（日本語も出る）、WM_NAME は古い WM 向け
+Sub FormsTitle(w As VoidPtr, cap As String)
+    XStoreName(g_formsDpy, w, StrPtr(cap))
+    XChangeProperty(g_formsDpy, w, XInternAtom(g_formsDpy, "_NET_WM_NAME", 0), XInternAtom(g_formsDpy, "UTF8_STRING", 0), 8, 0, StrPtr(cap), FormsStrLen(StrPtr(cap)))
+    XFlush(g_formsDpy)
+End Sub
+
+' WM_DESTROY を送ってから窓を壊す（Windows の DestroyWindow と同じ順）
+Sub FormsDestroy(p As VoidPtr)
+    Dim f As *Form, w As VoidPtr
+    f = p As *Form
+    w = f->Handle As VoidPtr
+    If w = 0 Then Exit Sub
+    f->WndProc(WM_DESTROY, 0, 0)
+    FormsUnbind(w)
+    FormsDropWindow(f, w)
+End Sub
+
+' Form から窓と画素バッファを外して、窓 w を壊す
+Sub FormsDropWindow(f As *Form, w As VoidPtr)
+    f->Handle = 0
+    f->LxFocus = 0
+    f->LxPress = 0
+    FormsFreeBuf(f)
+    XDestroyWindow(g_formsDpy, w)
+    XFlush(g_formsDpy)
+End Sub
+
+' 画素バッファ（LxBuf）とその XImage を捨てる
+Sub FormsFreeBuf(f As *Form)
+    FormsFreeImage(f->LxImg)
+    f->LxImg = 0
+    If f->LxBuf <> 0 Then free(f->LxBuf)
+    f->LxBuf = 0
+End Sub
+
+' 閉じるボタンと同じ ClientMessage（WM_DELETE_WINDOW）を自分へ送る
+Sub FormsPostClose(h As HWND)
+    FormsCloseMsg(VarPtr(g_formsSend(0)), h As VoidPtr)
+    XSendEvent(g_formsDpy, h As VoidPtr, 0, 0, VarPtr(g_formsSend(0)))
+    XFlush(g_formsDpy)
+End Sub
+
+' 窓 w の閉じるボタンの ClientMessage を b（192 バイト）に作る
+Sub FormsCloseMsg(b As VoidPtr, w As VoidPtr)
+    RtlFillMemory(b, 192, 0)
+    FormsSetL(b, 0, 33)             ' ClientMessage
+    LxSetQ(b, 32, w)                ' window
+    LxSetQ(b, 40, FormsAtom(1))     ' message_type = WM_PROTOCOLS
+    FormsSetL(b, 48, 32)            ' format
+    LxSetQ(b, 56, FormsAtom(0))     ' data.l[0] = WM_DELETE_WINDOW
+End Sub
+
+' 窓の見出しを読む（X サーバーにあるもの）。テスト用
+Function FormsGetTitle(h As HWND, buf As *Byte, n As Long) As Long
+    Dim s As VoidPtr
+    FormsGetTitle = 0
+    buf[0] = 0
+    s = 0
+    If XFetchName(g_formsDpy, h As VoidPtr, VarPtr(s)) = 0 Then Exit Function
+    FormsGetTitle = FormsTakeName(buf, s, n)
+End Function
+
+' XFetchName の名前 s を buf へ写して（n バイトまで、0 で終わる）XFree する。s が 0 なら 0
+Function FormsTakeName(buf As *Byte, s As VoidPtr, n As Long) As Long
+    FormsTakeName = 0
+    If s = 0 Then Exit Function
+    FormsCopyZ(buf, s, n)
+    XFree(s)
+    FormsTakeName = 1
+End Function
+
+Sub FormsCopyZ(buf As *Byte, src As *Byte, n As Long)
+    Dim i As Long
+    i = 0
+    While i < n - 1 And src[i] <> 0
+        buf[i] = src[i]
+        i = i + 1
+    Wend
+    buf[i] = 0
+End Sub
+
+#endif
