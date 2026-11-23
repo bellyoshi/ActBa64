@@ -29,9 +29,7 @@ Public
         Dim ofn As OPENFILENAME
         Dim filt(1023) As Byte
         Dim buf(FORMS_PATH_MAX) As Byte
-        FormsFilter(Filter, VarPtr(filt(0)), 1024)
-        FormsCopyZ(FileName, VarPtr(buf(0)), FORMS_PATH_MAX)
-        FormsFillOfn(ofn, hOwner, VarPtr(filt(0)), VarPtr(buf(0)), Title)
+        FormsFillOfn(ofn, hOwner, VarPtr(filt(0)), VarPtr(buf(0)), Filter, FileName, Title)
         Execute = False
         If GetOpenFileName(ofn) = 0 Then Exit Function
         FileName = MakeStr(VarPtr(buf(0)))
@@ -41,31 +39,50 @@ End Class
 
 ' "a|b|c" を GetOpenFileName の "a NUL b NUL c NUL NUL" にして dst（n バイト）へ
 Sub FormsFilter(s As String, dst As *Byte, n As Long)
-    Dim i As Long, p As *Byte
-    p = StrPtr(s)
-    i = 0
-    While i < Len(s) And i < n - 2
-        dst[i] = p[i]
-        If p[i] = &H7C Then dst[i] = 0
-        i = i + 1
-    Wend
+    Dim i As Long
+    i = FormsCopyBytes(s, dst, n - 2)
+    FormsBarToNul(dst, i)
     dst[i] = 0
     dst[i + 1] = 0
 End Sub
 
 ' s を dst（n バイト）へ、末尾の 0 込みで（長すぎれば切る）
 Sub FormsCopyZ(s As String, dst As *Byte, n As Long)
-    Dim i As Long, p As *Byte
-    p = StrPtr(s)
-    i = 0
-    While i < Len(s) And i < n - 1
-        dst[i] = p[i]
-        i = i + 1
-    Wend
+    Dim i As Long
+    i = FormsCopyBytes(s, dst, n - 1)
     dst[i] = 0
 End Sub
 
-Sub FormsFillOfn(ByRef ofn As OPENFILENAME, hOwner As HWND, filt As *Byte, buf As *Byte, title As String)
+' s の先頭から dst へ n バイトまで写す（末尾の 0 は付けない）。戻り値は写したバイト数
+Function FormsCopyBytes(s As String, dst As *Byte, n As Long) As Long
+    Dim i As Long, p As *Byte
+    p = StrPtr(s)
+    i = 0
+    While i < Len(s) And i < n
+        dst[i] = p[i]
+        i = i + 1
+    Wend
+    FormsCopyBytes = i
+End Function
+
+' dst の先頭 n バイトの | を 0 にする
+Sub FormsBarToNul(dst As *Byte, n As Long)
+    Dim i As Long
+    For i = 0 To n - 1
+        If dst[i] = &H7C Then dst[i] = 0
+    Next
+End Sub
+
+' ofn を埋める。filt（1024 バイト）へ filter を、buf（FORMS_PATH_MAX バイト）へ fname を写す
+Sub FormsFillOfn(ByRef ofn As OPENFILENAME, hOwner As HWND, filt As *Byte, buf As *Byte, filter As String, fname As String, title As String)
+    FormsFilter(filter, filt, 1024)
+    FormsCopyZ(fname, buf, FORMS_PATH_MAX)
+    FormsOfnBase(ofn, hOwner, filt, buf)
+    If title <> "" Then ofn.lpstrTitle = StrPtr(title)
+End Sub
+
+' ofn を 0 にして、持ち主・絞り込み・ファイル名の場所・決まったフラグを入れる
+Sub FormsOfnBase(ByRef ofn As OPENFILENAME, hOwner As HWND, filt As *Byte, buf As *Byte)
     RtlFillMemory(VarPtr(ofn), SizeOf(OPENFILENAME), 0)
     ofn.lStructSize = SizeOf(OPENFILENAME)
     ofn.hwndOwner = hOwner
@@ -73,7 +90,6 @@ Sub FormsFillOfn(ByRef ofn As OPENFILENAME, hOwner As HWND, filt As *Byte, buf A
     ofn.nFilterIndex = 1
     ofn.lpstrFile = buf
     ofn.nMaxFile = FORMS_PATH_MAX
-    If title <> "" Then ofn.lpstrTitle = StrPtr(title)
     ofn.Flags = OFN_FILEMUSTEXIST Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER
 End Sub
 
