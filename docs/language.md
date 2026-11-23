@@ -36,6 +36,7 @@ ActiveBasic 互換の **サブセット** 仕様です。完全互換ではあ�
 - 未定義の名前はコンパイルエラー。メッセージは `"名前" is not a valid identifier`（`actba_lang_ja.csv` があれば AB 4.20 と同じ `"名前" 無効な識別子です。`。[build.md](./build.md#メッセージの言語)）
 - 空白を挟まない `SelectCase` / `EndSelect` / `EndIf` / `EndSub` / `EndFunction` / `ExitFunction` / `ExitSub` は、間に空白を入れた形と同じ
 - 文の区切りは改行。同一行の `:` 連結可（`a = 1: b = 2`）。単行 `If ... Then` では、同じ行の `:` で続く文と `Else` はその `If` の一部です
+- `:` なしで同じ行に文を続けると（`x = 5 Print`、`r = F()  Wend`）、ActiveBasic 4.20 と同じく `expected end of statement (use ':' to put statements on one line)` のエラー。`-pAB2` では行の残りを無視する（[§1.8](#pab2)）。`-pN88` は調べない
 - `If` / `Select Case` などのブロックの中で、後ろに語が続かない単独の `End` はプログラム終了の文。`End If` / `End Select` のように同じ行に語が続くときだけブロックの終わり
 
 <a id="line-continuation"></a>行の継続:
@@ -242,6 +243,7 @@ actba64 old.bas -pAB2 -o old.exe
 - `Type` の配列メンバは `( )` でも添字にできる（`LogFont.lfFaceName(0) = ...`）
 - `Delete` は文ではなく、変数名に使える
 - `On Error Goto` は読み飛ばす（エラーの横取りは未対応）
+- 文の後ろに `:` なしで同じ行に続けた語は、AB2 と同じく行の残りごと無視する（`x = 5 Print` の `Print` は実行しない）。`-pAB2` 以外ではエラー（[§1.2](#12-字句)）
 - 文字列は UTF-8。保存したファイルも UTF-8 になる（読むときは Shift-JIS のファイルも窓に出せる）
 - ユーザーのソースで `ByVal` / `ByRef` を書かない引数は `ByRef`（AB2 の既定。`Sub F(rc As RECT)` も書ける）。Include の関数は `ByVal` のまま。`ByRef` の引数に定数や式を渡すと「ByRef の引数には変数を渡してください」（AB2 も変数が必要だった）
 - 数値の後ろの `#`（`3.14159#`、`2#`）は Double の印
@@ -947,7 +949,12 @@ Application.Run(mainForm)
   - 既定の `WndProc` は `WM_CLOSE` で窓を壊し（その前に `WM_DESTROY`）、`WM_DESTROY` でループを終わらせて `0` を返す（`DefWindowProc` / `PostQuitMessage` は無い）
   - 見出しは `_NET_WM_NAME`（UTF-8）にも入れる。位置と大きさは `XSizeHints` の `USPosition` / `USSize` で WM に渡す。背景は `&HF0F0F0`
   - 描画（GDI）はまだ無い。`Handle` は X の Window（`HWND` に入れている）
-  - `Button` / `Label` / `PictureBox` などの部品は、`AddControl` は通るが子窓を作らない（窓には出ない）。`SetCaption` / `SetEnabled` / `SetBounds` / `SetBitmap` は値を変えるだけ（フォームの `SetCaption` は窓の見出しも変える）。`OpenFileDialog.Execute` はいつも `False`
+  - 部品は子窓を作らず、フォームが窓の画素バッファに描いて `XPutImage` で写す（`Forms\X11Draw.sbp`）。文字は `libfreetype.so.6` と OS のフォント（日本語の字のある P ゴシックを先に探し、無ければ DejaVu Sans などの欧文フォント。日本語のフォントが無いと日本語の字は出ない）。部品の `Handle` は窓ではない、部品ごとに違う 0 でない値（`WM_COMMAND` の `lParam` と比べられる）
+  - `Button` / `CheckBox` / `RadioButton` は押して離すと親の `WndProc` に `WM_COMMAND`（`BN_CLICKED`）が届く。`CheckBox` は印が切り替わり、`RadioButton` はフォームのほかのラジオボタンの印を外す（印は `Checked` に入る）。押した部品はキーを受け、空白キーでも押せる（Tab で移るのはまだ無い。Windows 版も同じ）
+  - `EditBox` は押すとキャレットが入り、英数字・記号・BackSpace・Delete・← →・Home・End が効く。文字が変わると `WM_COMMAND`（`EN_CHANGE`）。日本語の入力（IME）はまだ無い
+  - 部品の上の左ボタンと、部品が受けているキーは部品へ行き、フォームの `WndProc` には届かない（使えない部品の上は届く。Windows 版と同じ）
+  - `SetCaption` / `SetEnabled` / `SetBounds` は描き直す。`PictureBox` の絵はまだ描かない（`SetBitmap` は値を覚えるだけ）。`OpenFileDialog.Execute` はいつも `False`
+  - `MsgBox` / `MessageBox` は X の窓になる（`Forms\MsgBox.sbp`。`Forms.sbp` を使うプログラムだけ。使わなければ標準エラーへ 1 行）。閉じるまでほかのフォームの入力を止める。ボタンは `MB_OK` / `MB_OKCANCEL` / `MB_ABORTRETRYIGNORE` / `MB_YESNOCANCEL` / `MB_YESNO` / `MB_RETRYCANCEL`（文字は英語）、`MB_DEFBUTTON2` / `3` も効く。Enter は今のボタン、Esc と閉じるボタンは Cancel（`MB_OK` は OK。Cancel の無い組では効かない）、Tab・← → でボタンを移る。アイコン（`MB_ICON*`）はまだ出さない。X につながらなければ標準エラーへ書く
 
 ## 8. WinAPI / IAT
 

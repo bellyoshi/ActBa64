@@ -3,7 +3,22 @@
 
 #ifdef _LINUX
 
-' 部品。X11 版ではまだ子窓を作らない（AddControl は通るが、窓には出ない）
+' 部品の種類（LxKind）
+Const FORMS_K_NONE = 0
+Const FORMS_K_BUTTON = 1
+Const FORMS_K_CHECK = 2
+Const FORMS_K_RADIO = 3
+Const FORMS_K_EDIT = 4
+Const FORMS_K_LABEL = 5
+Const FORMS_K_PANEL = 6
+Const FORMS_K_GROUP = 7
+Const FORMS_K_PICTURE = 8
+
+Dim g_formsNextId As Long           ' 部品の Handle（窓ではない番号）の次の値
+
+' 部品。X11 版は子窓を作らず、Form の画素バッファに描き（FormsPaintCtl、Form.sbp）、
+' Form がマウスとキーを部品へ配る。Handle は窓ではないが、部品ごとに違う 0 でない値
+' （WndProc の WM_COMMAND の lParam と比べられる）
 Class Control
 Public
     Left As Long
@@ -14,30 +29,49 @@ Public
     Handle As HWND
     Enabled As Long             ' 使えるか（初めは True）
     NextControl As *Control     ' 同じ Form に載せた次の部品（Forms.sbp が使う）
+    Checked As Long             ' CheckBox / RadioButton の印（X11 版はここに持つ）
+    Owner As VoidPtr            ' 載っている Form（*Form。CreateHandle で決まる）
+    LxCaret As Long             ' EditBox: キャレットの位置（Caption のバイト）
+    LxScroll As Long            ' EditBox: 横に流した画素
 
     Sub Control()
         Enabled = True
     End Sub
 
+    ' 種類（FORMS_K_*）。子のクラスが Override する
+    Virtual Function LxKind() As Long
+        LxKind = FORMS_K_NONE
+    End Function
+
+    ' Form の窓ができたときに Form が呼ぶ。番号を Handle にし、Form を覚える
     Virtual Sub CreateHandle(parent As HWND)
+        g_formsNextId = g_formsNextId + 1
+        Handle = (&H10000 + g_formsNextId) As HWND
+        Owner = FormsFind(parent As VoidPtr)
+        LxCaret = Len(Caption)
+        LxScroll = 0
     End Sub
 
-    ' 文字を変える（X11 版は Caption を変えるだけ）
+    ' 文字を変える。窓がもうあれば描き直す
     Sub SetCaption(s As String)
         Caption = s
+        If LxCaret > Len(Caption) Then LxCaret = Len(Caption)
+        FormsCtlChanged(Owner)
     End Sub
 
-    ' 使える・使えないを変える（X11 版は Enabled を変えるだけ）
+    ' 使える・使えないを変える（使えない部品は灰色で、押せない）
     Sub SetEnabled(b As Long)
         Enabled = b
+        FormsCtlChanged(Owner)
     End Sub
 
-    ' 位置と大きさを変える（X11 版は値を変えるだけ）
+    ' 位置と大きさを変える
     Sub SetBounds(x As Long, y As Long, w As Long, h As Long)
         Left = x
         Top = y
         Width = w
         Height = h
+        FormsCtlChanged(Owner)
     End Sub
 End Class
 
