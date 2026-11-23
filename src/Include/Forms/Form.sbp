@@ -236,10 +236,10 @@ Sub FormsDestroy(p As VoidPtr)
     f->Handle = 0
     f->LxFocus = 0
     f->LxPress = 0
-    ' XImage は壊さない（XDestroyImage は libc の free で data を解放するため）
+    FormsFreeImage(f->LxImg)
+    f->LxImg = 0
     If f->LxBuf <> 0 Then free(f->LxBuf)
     f->LxBuf = 0
-    f->LxImg = 0
     XDestroyWindow(g_formsDpy, w)
     XFlush(g_formsDpy)
 End Sub
@@ -263,15 +263,27 @@ Function FormsXY(x As Long, y As Long) As LPARAM
     FormsXY = ((y And &HFFFF) * &H10000 + (x And &HFFFF)) As LPARAM
 End Function
 
-' KeySym → 仮想キー（英数字・Enter・Esc・BS・Tab・空白・矢印。ほかは KeySym のまま）
+' KeySym → 仮想キー（英数字・空白・Enter・Esc・BS・Tab・矢印・Home / End / PageUp / PageDown・
+' Insert / Delete・F1〜F12・Shift / Ctrl / Alt・テンキーの数字。ほかは KeySym のまま）
 Function FormsVk(ks As Long) As Long
     FormsVk = ks
     If ks >= &H61 And ks <= &H7A Then FormsVk = ks - &H20
-    If ks = &HFF0D Then FormsVk = 13
+    If ks = &HFF0D Or ks = &HFF8D Then FormsVk = 13       ' VK_RETURN（テンキーの Enter も）
     If ks = &HFF1B Then FormsVk = 27
     If ks = &HFF08 Then FormsVk = 8
-    If ks = &HFF09 Then FormsVk = 9
+    If ks = &HFF09 Or ks = &HFE20 Then FormsVk = 9        ' VK_TAB（Shift+Tab の ISO_Left_Tab も）
     If ks >= &HFF51 And ks <= &HFF54 Then FormsVk = ks - &HFF51 + 37
+    If ks = &HFF50 Then FormsVk = &H24                    ' VK_HOME
+    If ks = &HFF57 Then FormsVk = &H23                    ' VK_END
+    If ks = &HFF55 Then FormsVk = &H21                    ' VK_PRIOR
+    If ks = &HFF56 Then FormsVk = &H22                    ' VK_NEXT
+    If ks = &HFF63 Then FormsVk = &H2D                    ' VK_INSERT
+    If ks = &HFFFF Then FormsVk = &H2E                    ' VK_DELETE
+    If ks >= &HFFBE And ks <= &HFFC9 Then FormsVk = ks - &HFFBE + &H70   ' VK_F1〜VK_F12
+    If ks = &HFFE1 Or ks = &HFFE2 Then FormsVk = &H10     ' VK_SHIFT
+    If ks = &HFFE3 Or ks = &HFFE4 Then FormsVk = &H11     ' VK_CONTROL
+    If ks = &HFFE9 Or ks = &HFFEA Then FormsVk = &H12     ' VK_MENU（Alt）
+    If ks >= &HFFB0 And ks <= &HFFB9 Then FormsVk = ks - &HFFB0 + &H60   ' VK_NUMPAD0〜9
 End Function
 
 ' マウスのボタン → WM_?BUTTONDOWN（up = 1 なら UP）。ホイールなどは 0
@@ -346,6 +358,7 @@ Sub FormsPaint(p As VoidPtr)
     If h < 1 Then h = 1
     If f->LxBuf = 0 Or w <> f->LxBufW Or h <> f->LxBufH Then
         old = f->LxBuf
+        FormsFreeImage(f->LxImg)
         f->LxBuf = malloc(w * h * 4)
         f->LxBufW = w
         f->LxBufH = h
