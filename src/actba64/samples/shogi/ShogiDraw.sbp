@@ -1,0 +1,178 @@
+' ============================================================
+' ShogiDraw.sbp - 盤と駒台を描く・どこを押したか（GDI）
+'
+' Lazarus 版は 81 個の TPanel + TImage で盤を作っていたが、
+' ここではフォームの WM_PAINT で盤と駒台をまとめて描く。
+' 画面の左が 9 筋、右が 1 筋。後手の駒は 180 度回して描く。
+' 後手の駒台は盤の左上、先手の駒台は盤の右下。
+' ============================================================
+
+Const SHOGI_CELL = 50               ' 1 マスの画素
+Const SHOGI_BOARD_L = 110           ' 盤の左上
+Const SHOGI_BOARD_T = 40
+Const SHOGI_BOARD_PX = 450          ' SHOGI_CELL * 9
+Const SHOGI_DAI_W = 80              ' 駒台の幅
+Const SHOGI_DAI_ROWS = 7            ' 駒台の行（飛・角・金・銀・桂・香・歩）
+Const SHOGI_GOTE_DAI_L = 20
+Const SHOGI_SENTE_DAI_L = 570       ' SHOGI_BOARD_L + SHOGI_BOARD_PX + 10
+Const SHOGI_CLIENT_W = 670
+Const SHOGI_CLIENT_H = 510
+
+Const SHOGI_C_WOOD = &H70C0E8       ' 盤（COLORREF は &HBBGGRR）
+Const SHOGI_C_DAI = &HC0C0C0        ' 駒台（clSilver）
+Const SHOGI_C_SELECT = &H00FFFF     ' 選んでいる駒（clYellow）
+Const SHOGI_C_SENTE = &HFF0000      ' 先手の字（clBlue）
+Const SHOGI_C_GOTE = &H0000FF       ' 後手の字（clRed）
+
+Dim g_shogiFontUp As HFONT          ' 先手の駒の字
+Dim g_shogiFontDown As HFONT        ' 後手の駒の字（180 度）
+Dim g_shogiFontNum As HFONT         ' 持ち駒の枚数
+
+' ---- 位置 ----
+
+Function ShogiCellLeft(x As Long) As Long
+    ShogiCellLeft = SHOGI_BOARD_L + (9 - x) * SHOGI_CELL
+End Function
+
+Function ShogiCellTop(y As Long) As Long
+    ShogiCellTop = SHOGI_BOARD_T + (y - 1) * SHOGI_CELL
+End Function
+
+Function ShogiDaiLeft(s As Long) As Long
+    ShogiDaiLeft = SHOGI_GOTE_DAI_L
+    If s <> 0 Then ShogiDaiLeft = SHOGI_SENTE_DAI_L
+End Function
+
+' 駒台の上の端（先手は盤の下にそろえる）
+Function ShogiDaiTop(s As Long) As Long
+    ShogiDaiTop = SHOGI_BOARD_T
+    If s <> 0 Then ShogiDaiTop = SHOGI_BOARD_T + SHOGI_BOARD_PX - SHOGI_DAI_ROWS * SHOGI_CELL
+End Function
+
+' 駒台の i 行目（0〜6）の上の端。後手は上下を逆に（歩が上）
+Function ShogiDaiRowTop(s As Long, i As Long) As Long
+    Dim r As Long
+    r = i
+    If s = 0 Then r = SHOGI_DAI_ROWS - 1 - i
+    ShogiDaiRowTop = ShogiDaiTop(s) + r * SHOGI_CELL
+End Function
+
+' ---- どこを押したか ----
+
+' 盤の上なら 1 で、筋と段を x, y に
+Function ShogiHitBoard(px As Long, py As Long, ByRef x As Long, ByRef y As Long) As Long
+    ShogiHitBoard = 0
+    If px < SHOGI_BOARD_L Or px >= SHOGI_BOARD_L + SHOGI_BOARD_PX Then Exit Function
+    If py < SHOGI_BOARD_T Or py >= SHOGI_BOARD_T + SHOGI_BOARD_PX Then Exit Function
+    x = 9 - (px - SHOGI_BOARD_L) \ SHOGI_CELL
+    y = (py - SHOGI_BOARD_T) \ SHOGI_CELL + 1
+    ShogiHitBoard = 1
+End Function
+
+' 駒台 s の上なら、その行の駒の種類（外なら KK_NONE）
+Function ShogiHitDai(s As Long, px As Long, py As Long) As Long
+    Dim i As Long
+    ShogiHitDai = KK_NONE
+    If px < ShogiDaiLeft(s) Or px >= ShogiDaiLeft(s) + SHOGI_DAI_W Then Exit Function
+    For i = 0 To SHOGI_DAI_ROWS - 1
+        If py >= ShogiDaiRowTop(s, i) And py < ShogiDaiRowTop(s, i) + SHOGI_CELL Then ShogiHitDai = KK_HISHA + i
+    Next
+End Function
+
+' ---- 描く ----
+
+Sub ShogiMakeFonts()
+    If g_shogiFontUp <> 0 Then Exit Sub
+    g_shogiFontUp = CreateFont(-30, 0, 0, 0, FW_BOLD, 0, 0, 0, SHIFTJIS_CHARSET, 0, 0, 0, 0, "MS UI Gothic")
+    g_shogiFontDown = CreateFont(-30, 0, 1800, 1800, FW_BOLD, 0, 0, 0, SHIFTJIS_CHARSET, 0, 0, 0, 0, "MS UI Gothic")
+    g_shogiFontNum = CreateFont(-16, 0, 0, 0, FW_BOLD, 0, 0, 0, SHIFTJIS_CHARSET, 0, 0, 0, 0, "MS UI Gothic")
+End Sub
+
+Sub ShogiFreeFonts()
+    If g_shogiFontUp = 0 Then Exit Sub
+    DeleteObject(g_shogiFontUp)
+    DeleteObject(g_shogiFontDown)
+    DeleteObject(g_shogiFontNum)
+    g_shogiFontUp = 0
+End Sub
+
+' 枠付きの四角を塗る（枠は黒の 1 画素）
+Sub ShogiBox(hdc As HDC, l As Long, t As Long, r As Long, b As Long, fillC As DWord)
+    Dim brush As HBRUSH, old As Long
+    brush = CreateSolidBrush(fillC)
+    old = SelectObject(hdc, brush)
+    Rectangle(hdc, l, t, r, b)
+    SelectObject(hdc, old)
+    DeleteObject(brush)
+End Sub
+
+' (cx, cy) を真ん中に駒の字を描く。後手は 180 度回す
+Sub ShogiDrawKoma(hdc As HDC, k As Long, s As Long, cx As Long, cy As Long)
+    Dim name As String, sz As SIZE
+    name = ShogiKomaName$(k)
+    SetTextColor(hdc, SHOGI_C_GOTE)
+    If s <> 0 Then SetTextColor(hdc, SHOGI_C_SENTE)
+    SelectObject(hdc, g_shogiFontUp)
+    GetTextExtentPoint32(hdc, StrPtr(name), Len(name), sz)
+    If s <> 0 Then TextOut(hdc, cx - sz.cx \ 2, cy - sz.cy \ 2, StrPtr(name), Len(name))
+    If s = 0 Then ShogiDrawDown(hdc, name, cx + sz.cx \ 2, cy + sz.cy \ 2)
+End Sub
+
+' 180 度の字は、出す点の左上へ伸びる
+Sub ShogiDrawDown(hdc As HDC, name As String, x As Long, y As Long)
+    SelectObject(hdc, g_shogiFontDown)
+    TextOut(hdc, x, y, StrPtr(name), Len(name))
+End Sub
+
+' 盤の 1 マス（sel が 0 以外なら選んでいる色）
+Sub ShogiDrawCell(hdc As HDC, ByRef g As ShogiGame, x As Long, y As Long, sel As Long)
+    Dim l As Long, t As Long, fillC As DWord
+    l = ShogiCellLeft(x)
+    t = ShogiCellTop(y)
+    fillC = SHOGI_C_WOOD
+    If sel <> 0 Then fillC = SHOGI_C_SELECT
+    ShogiBox(hdc, l, t, l + SHOGI_CELL + 1, t + SHOGI_CELL + 1, fillC)
+    If g.KindAt(x, y) = KK_NONE Then Exit Sub
+    ShogiDrawKoma(hdc, g.KindAt(x, y), g.SenteAt(x, y), l + SHOGI_CELL \ 2, t + SHOGI_CELL \ 2)
+End Sub
+
+' 盤（selX, selY は選んでいるマス。0 なら無し）
+Sub ShogiDrawBoard(hdc As HDC, ByRef g As ShogiGame, selX As Long, selY As Long)
+    Dim x As Long, y As Long
+    For y = 1 To 9
+        For x = 1 To 9
+            ShogiDrawCell(hdc, g, x, y, (x = selX And y = selY))
+        Next
+    Next
+End Sub
+
+' 駒台の 1 行（持っている駒だけ呼ぶ）
+Sub ShogiDrawDaiRow(hdc As HDC, ByRef g As ShogiGame, s As Long, i As Long, sel As Long)
+    Dim k As Long, l As Long, t As Long
+    k = KK_HISHA + i
+    l = ShogiDaiLeft(s)
+    t = ShogiDaiRowTop(s, i)
+    If sel = k Then ShogiBox(hdc, l + 2, t + 1, l + SHOGI_CELL - 2, t + SHOGI_CELL - 1, SHOGI_C_SELECT)
+    ShogiDrawKoma(hdc, k, s, l + SHOGI_CELL \ 2, t + SHOGI_CELL \ 2)
+    If g.GetMochi(s, k) >= 2 Then ShogiDrawCount(hdc, g.GetMochi(s, k), l + SHOGI_CELL, t + 16)
+End Sub
+
+' 2 枚以上のときの枚数
+Sub ShogiDrawCount(hdc As HDC, n As Long, x As Long, y As Long)
+    Dim t As String
+    t = Str$(n)
+    SelectObject(hdc, g_shogiFontNum)
+    SetTextColor(hdc, &H000000)
+    TextOut(hdc, x, y, StrPtr(t), Len(t))
+End Sub
+
+' 駒台 s（sel は選んでいる持ち駒。KK_NONE なら無し）
+Sub ShogiDrawDai(hdc As HDC, ByRef g As ShogiGame, s As Long, sel As Long)
+    Dim i As Long, l As Long, t As Long
+    l = ShogiDaiLeft(s)
+    t = ShogiDaiTop(s)
+    ShogiBox(hdc, l, t, l + SHOGI_DAI_W, t + SHOGI_DAI_ROWS * SHOGI_CELL, SHOGI_C_DAI)
+    For i = 0 To SHOGI_DAI_ROWS - 1
+        If g.GetMochi(s, KK_HISHA + i) > 0 Then ShogiDrawDaiRow(hdc, g, s, i, sel)
+    Next
+End Sub
