@@ -1,0 +1,100 @@
+' ============================================================
+' InputForm - 数を 1 つ打ち込むダイアログ（PageFormUnit / ZoomRateFormUnit 相当）
+'
+'   If g_input.Ask(owner, "ページを指定", "ページ (1 - 10)", "3", s) Then ...
+'
+' 閉じるまで持ち主の窓を使えなくする。Enter は OK、Esc は取り消し。
+' ============================================================
+
+Class InputForm
+    Inherits Form
+Private
+    PromptLabel As Label
+    ValueEdit As EditBox
+    OkButton As Button
+    CancelButton As Button
+    done As Long                ' 0: 待っている 1: OK 2: 取り消し
+Public
+    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+        If msg = WM_COMMAND Then OnCommand(wParam, lParam)
+        If msg = WM_CLOSE Then Finish(2) : WndProc = 0 : Exit Function
+        WndProc = Super.WndProc(msg, wParam, lParam)
+    End Function
+
+    ' ダイアログを出して、OK なら True で value に打ち込んだ文字
+    Function Ask(owner As HWND, title As String, prompt As String, init As String, ByRef value As String) As Long
+        Prepare(title, prompt, init)
+        EnableWindow(owner, FALSE)
+        ShowEdit()
+        RunLoop()
+        EnableWindow(owner, TRUE)
+        ShowWindow(Handle, SW_HIDE)
+        Ask = (done = 1)
+        If done = 1 Then value = ValueEdit.GetText()
+    End Function
+
+Private
+    Override Sub InitializeComponent()
+        Width = 300 : Height = 150
+        Left = 400 : Top = 300
+        Place(PromptLabel, 12, 12, 260, 20, "")
+        Place(ValueEdit, 12, 36, 260, 24, "")
+        Place(OkButton, 112, 72, 76, 28, "OK")
+        Place(CancelButton, 196, 72, 76, 28, "キャンセル")
+    End Sub
+
+    Sub Place(ByRef c As Control, x As Long, y As Long, w As Long, h As Long, s As String)
+        c.Left = x : c.Top = y : c.Width = w : c.Height = h
+        c.Caption = s
+        AddControl(c)
+    End Sub
+
+    Sub Prepare(title As String, prompt As String, init As String)
+        InitComponents()
+        SetCaption(title)
+        PromptLabel.SetCaption(prompt)
+        ValueEdit.SetText(init)
+        done = 0
+    End Sub
+
+    ' done が決まるまでメッセージを回す（IsDialogMessage で Enter / Esc / Tab が効く）
+    Sub RunLoop()
+        Dim m As MSG
+        While done = 0 And GetMessage(m, 0, 0, 0) > 0
+            If IsDialogMessage(Handle, m) = 0 Then
+                TranslateMessage(m)
+                DispatchMessage(m)
+            End If
+        Wend
+    End Sub
+
+    ' 窓を出し、打ち込む所を選んだ状態にする
+    Sub ShowEdit()
+        Show()
+        SetFocus(ValueEdit.Handle)
+        SendMessageW(ValueEdit.Handle, EM_SETSEL, 0, -1)
+    End Sub
+
+    Sub OnCommand(wParam As WPARAM, lParam As LPARAM)
+        If LOWORD(wParam) = IDOK Or lParam = OkButton.Handle Then Finish(1)
+        If LOWORD(wParam) = IDCANCEL Or lParam = CancelButton.Handle Then Finish(2)
+    End Sub
+
+    ' 終わり方を決め、RunLoop の GetMessage を起こす（送られたメッセージだけでは戻らないため）
+    Sub Finish(how As Long)
+        done = how
+        PostMessage(Handle, WM_NULL, 0, 0)
+    End Sub
+End Class
+
+' 打ち込んだ文字を数に（数でなければ -1）
+Function InputNumber(s As String) As Double
+    Dim i As Long, c As Long
+    InputNumber = -1
+    If Len(s) = 0 Then Exit Function
+    For i = 0 To Len(s) - 1
+        c = s[i]
+        If (c < &H30 Or c > &H39) And c <> &H2E Then Exit Function
+    Next
+    InputNumber = Val(s)
+End Function

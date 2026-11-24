@@ -1,0 +1,70 @@
+' ============================================================
+' Pdfium.sbp - pdfium.dll（64bit）で PDF のページを描く
+'
+' pdfium.dll は exe と同じフォルダに置く（無ければ起動しない。静的インポートのため）。
+' ============================================================
+
+Declare Sub FPDF_InitLibrary Lib "pdfium.dll" ()
+Declare Sub FPDF_DestroyLibrary Lib "pdfium.dll" ()
+Declare Function FPDF_LoadDocument Lib "pdfium.dll" (path As *Byte, password As *Byte) As VoidPtr
+Declare Sub FPDF_CloseDocument Lib "pdfium.dll" (doc As VoidPtr)
+Declare Function FPDF_GetPageCount Lib "pdfium.dll" (doc As VoidPtr) As Long
+Declare Function FPDF_LoadPage Lib "pdfium.dll" (doc As VoidPtr, index As Long) As VoidPtr
+Declare Sub FPDF_ClosePage Lib "pdfium.dll" (page As VoidPtr)
+Declare Function FPDF_GetPageWidth Lib "pdfium.dll" (page As VoidPtr) As Double
+Declare Function FPDF_GetPageHeight Lib "pdfium.dll" (page As VoidPtr) As Double
+Declare Function FPDFBitmap_CreateEx Lib "pdfium.dll" (w As Long, h As Long, format As Long, buffer As VoidPtr, stride As Long) As VoidPtr
+Declare Sub FPDFBitmap_Destroy Lib "pdfium.dll" (bitmap As VoidPtr)
+Declare Sub FPDFBitmap_FillRect Lib "pdfium.dll" (bitmap As VoidPtr, left As Long, top As Long, w As Long, h As Long, color As DWord)
+Declare Sub FPDF_RenderPageBitmap Lib "pdfium.dll" (bitmap As VoidPtr, page As VoidPtr, x As Long, y As Long, w As Long, h As Long, rotate As Long, flags As Long)
+
+Const FPDFBitmap_BGRA = 4
+Const FPDF_ANNOT = &H01
+Const FPDF_LCD_TEXT = &H02
+
+' path（UTF-8）の PDF を開く。開けなければ 0
+Function PdfOpen(path As String) As VoidPtr
+    PdfOpen = FPDF_LoadDocument(StrPtr(path), 0)
+End Function
+
+' ページ index の幅 / 高さ（ポイント）。読めなければ 1
+Function PdfPageRatio(doc As VoidPtr, index As Long) As Double
+    Dim page As VoidPtr, w As Double, h As Double
+    PdfPageRatio = 1
+    page = FPDF_LoadPage(doc, index)
+    If page = 0 Then Exit Function
+    w = FPDF_GetPageWidth(page)
+    h = FPDF_GetPageHeight(page)
+    FPDF_ClosePage(page)
+    If w > 0 And h > 0 Then PdfPageRatio = w / h
+End Function
+
+' 32bit の画素 bits（bw x bh）の (x, y) にページを w x h、rot（0〜3、右回りに 90° ずつ）で描く
+Sub PdfDraw(doc As VoidPtr, index As Long, bits As VoidPtr, bw As Long, bh As Long, x As Long, y As Long, w As Long, h As Long, rot As Long)
+    Dim page As VoidPtr, bmp As VoidPtr
+    page = FPDF_LoadPage(doc, index)
+    If page = 0 Then Exit Sub
+    bmp = FPDFBitmap_CreateEx(bw, bh, FPDFBitmap_BGRA, bits, bw * 4)
+    PdfWhite(bmp, bw, bh, x, y, w, h)
+    FPDF_RenderPageBitmap(bmp, page, x, y, w, h, rot, FPDF_ANNOT Or FPDF_LCD_TEXT)
+    FPDFBitmap_Destroy(bmp)
+    FPDF_ClosePage(page)
+End Sub
+
+' ページの場所（窓に入る分）を白く塗る（PDF の紙の色）
+Sub PdfWhite(bmp As VoidPtr, bw As Long, bh As Long, x As Long, y As Long, w As Long, h As Long)
+    Dim l As Long, t As Long, r As Long, b As Long
+    l = ViewerMax(x, 0) : t = ViewerMax(y, 0)
+    r = ViewerMin(x + w, bw) : b = ViewerMin(y + h, bh)
+    If r > l And b > t Then FPDFBitmap_FillRect(bmp, l, t, r - l, b - t, &HFFFFFFFF)
+End Sub
+
+Function ViewerMax(a As Long, b As Long) As Long
+    ViewerMax = a
+    If b > a Then ViewerMax = b
+End Function
+
+Function ViewerMin(a As Long, b As Long) As Long
+    ViewerMin = a
+    If b < a Then ViewerMin = b
+End Function

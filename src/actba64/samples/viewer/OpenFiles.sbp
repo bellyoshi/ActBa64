@@ -1,0 +1,109 @@
+' ============================================================
+' OpenFiles.sbp - ファイルを開く（複数選べるダイアログと、窓へのドロップ）
+'
+' パスは UTF-16 で受けて UTF-8 にする（日本語のパスも開ける）。
+' ============================================================
+
+Const OFN_ALLOWMULTISELECT = &H00000200
+Const OFN_OPEN_FLAGS = OFN_FILEMUSTEXIST Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER Or OFN_ALLOWMULTISELECT
+
+' 開けないファイルの名前を貯めて、最後にまとめて知らせる
+Dim g_openFailed As String
+
+Sub OpAddPath(path As String)
+    If g_model.AddFile(path) = 0 Then g_openFailed = g_openFailed + "・" + ExtractFileName(path) + Chr$(13) + Chr$(10)
+End Sub
+
+Sub OpReportFailed()
+    If g_openFailed <> "" Then OpWarn("次のファイルは開けませんでした:" + Chr$(13) + Chr$(10) + g_openFailed)
+    g_openFailed = ""
+    AppUpdate()
+End Sub
+
+' 「開く」のダイアログ（複数選べる）
+Sub OpOpenFiles(owner As HWND)
+    Dim ofn As OPENFILENAME, buf As *Word, filt[2048] As Byte
+    buf = calloc(VIEWER_WPATH * 2)
+    OpFillOfn(ofn, owner, buf, VarPtr(filt[0]) As *Word)
+    If GetOpenFileNameW(ofn) Then OpAddSelected(buf)
+    free(buf)
+    OpReportFailed()
+End Sub
+
+Sub OpFillOfn(ByRef ofn As OPENFILENAME, owner As HWND, buf As *Word, filt As *Word)
+    OpWideFilter(VIEWER_FILTER, filt, 1024)
+    RtlFillMemory(VarPtr(ofn), SizeOf(OPENFILENAME), 0)
+    ofn.lStructSize = SizeOf(OPENFILENAME) : ofn.hwndOwner = owner
+    ofn.lpstrFilter = filt
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = buf
+    ofn.nMaxFile = VIEWER_WPATH
+    ofn.Flags = OFN_OPEN_FLAGS
+End Sub
+
+' "a|b|c" を "a NUL b NUL c NUL NUL" の UTF-16 にする
+Sub OpWideFilter(s As String, dst As *Word, n As Long)
+    Dim i As Long
+    ViewerToWide(s, dst, n - 1)
+    i = 0
+    While dst[i] <> 0
+        If dst[i] = &H7C Then dst[i] = 0
+        i = i + 1
+    Wend
+    dst[i + 1] = 0
+End Sub
+
+' 選んだ結果（1 つなら "パス NUL NUL"、複数なら "フォルダ NUL 名前 NUL 名前 NUL NUL"）を足す
+Sub OpAddSelected(buf As *Word)
+    Dim dir As String, p As *Word
+    dir = ViewerFromWide(buf)
+    p = OpNextWide(buf)
+    If p[0] = 0 Then OpAddPath(dir) : Exit Sub
+    While p[0] <> 0
+        OpAddPath(dir + "\" + ViewerFromWide(p))
+        p = OpNextWide(p)
+    Wend
+End Sub
+
+' NUL 終端の UTF-16 の、次の文字列の先頭
+Function OpNextWide(p As *Word) As *Word
+    Dim i As Long
+    i = 0
+    While p[i] <> 0
+        i = i + 1
+    Wend
+    OpNextWide = VarPtr(p[i + 1]) As *Word
+End Function
+
+' 窓へドロップされたファイルを足す（WM_DROPFILES）
+Sub OpDropFiles(hDrop As HANDLE)
+    Dim i As Long, n As Long
+    n = DragQueryFileW(hDrop, &HFFFFFFFF, 0, 0)
+    For i = 0 To n - 1
+        OpDropOne(hDrop, i)
+    Next
+    DragFinish(hDrop)
+    OpReportFailed()
+End Sub
+
+' ドロップの i 番目を足す（開けない種類は黙って飛ばす。フォルダなど）
+Sub OpDropOne(hDrop As HANDLE, i As Long)
+    Dim buf As *Word, path As String
+    buf = calloc(VIEWER_WPATH * 2)
+    DragQueryFileW(hDrop, i, buf, VIEWER_WPATH)
+    path = ViewerFromWide(buf)
+    free(buf)
+    If CanOpen(path) Then OpAddPath(path)
+End Sub
+
+' コマンドラインのファイルを足す（exe へのドロップ・「送る」も同じ）
+Sub OpOpenArgs()
+    Dim argv As *VoidPtr, n As Long, i As Long
+    argv = CommandLineToArgvW(GetCommandLineW(), n)
+    If argv = 0 Then Exit Sub
+    For i = 1 To n - 1
+        OpAddPath(ViewerFromWide(argv[i] As *Word))
+    Next
+    LocalFree(argv)
+    OpReportFailed()
+End Sub

@@ -1,0 +1,131 @@
+' ============================================================
+' OperationActions.sbp - 操作画面のメニューとボタンがすること
+'
+' ボタンはメニューと同じ番号（IDM_*）でここへ来る。
+' ============================================================
+
+Sub OpMenuCommand(id As Long)
+    If id >= IDM_LIST_BASE And id < IDM_LIST_BASE + MAX_FILES Then g_model.SelectOnly(id - IDM_LIST_BASE) : AppUpdate() : Exit Sub
+    If id >= IDM_MON_BASE And id < IDM_MON_BASE + MAX_MONITORS Then OpSetMonitor(id - IDM_MON_BASE) : Exit Sub
+    If OpPageCommand(id) Or OpZoomCommand(id) Or OpRotateCommand(id) Then AppUpdate() : Exit Sub
+    If OpScreenCommand(id) Then Exit Sub
+    OpOtherCommand(id)
+End Sub
+
+Function OpPageCommand(id As Long) As Long
+    OpPageCommand = True
+    Select Case id
+        Case IDM_FIRST : DoSetPage(0)
+        Case IDM_PREV : DoPageBy(-1)
+        Case IDM_NEXT : DoPageBy(1)
+        Case IDM_LAST : DoLastPage()
+        Case Else : OpPageCommand = False
+    End Select
+End Function
+
+Function OpZoomCommand(id As Long) As Long
+    OpZoomCommand = True
+    Select Case id
+        Case IDM_ZOOMIN : DoZoomIn()
+        Case IDM_ZOOMOUT : DoZoomOut()
+        Case IDM_ZOOMRATE : OpAskRate()
+        Case Else : OpZoomCommand = False
+    End Select
+End Function
+
+Function OpRotateCommand(id As Long) As Long
+    OpRotateCommand = True
+    Select Case id
+        Case IDM_ROT000 : DoRotate(0)
+        Case IDM_ROT090 : DoRotate(90)
+        Case IDM_ROT180 : DoRotate(180)
+        Case IDM_ROT270 : DoRotate(270)
+        Case Else : OpRotateCommand = False
+    End Select
+End Function
+
+Function OpScreenCommand(id As Long) As Long
+    OpScreenCommand = True
+    Select Case id
+        Case IDM_SHOW : g_model.View() : g_screen.ShowScreen() : AppUpdate()
+        Case IDM_CLOSESCREEN : g_screen.HideScreen()
+        Case IDM_BACKGROUND : OpBackground()
+        Case Else : OpScreenCommand = False
+    End Select
+End Function
+
+Sub OpOtherCommand(id As Long)
+    Select Case id
+        Case IDM_OPEN : OpOpenFiles(g_op.Handle)
+        Case IDM_EXIT : g_op.Close()
+        Case IDM_BGCOLOR : OpChooseColor()
+        Case IDM_AUTO : g_op.ToggleAuto()
+        Case IDM_ABOUT : OpAbout()
+        Case IDM_PAGE : OpAskPage() : AppUpdate()
+    End Select
+End Sub
+
+' 背景表示（自動表示のときは選択を外す。そうでなければスクリーンだけ背景にする）
+Sub OpBackground()
+    If g_op.IsAuto() Then
+        g_model.DeselectAll()
+    Else
+        g_model.ShowBackground()
+        g_screen.ShowScreen()
+    End If
+    AppUpdate()
+End Sub
+
+Sub OpSetMonitor(i As Long)
+    If i >= g_monCount Then Exit Sub
+    g_screen.Monitor = i
+    g_screen.PlaceOnMonitor()
+    MenuCheckMonitor(i)
+    AppUpdate()
+End Sub
+
+' ページを打ち込んで移る
+Sub OpAskPage()
+    Dim d As *DocFile, s As String, k As Long
+    d = CurDoc()
+    If d = 0 Then Exit Sub
+    If g_input.Ask(g_op.Handle, "ページを指定", "ページ（1 - " + Str$(d->PageCount()) + "）", Str$(d->PageIndex() + 1), s) = 0 Then Exit Sub
+    k = InputNumber(s)          ' Double の式をメソッドの Long の引数へ直接渡すと 0 になるので、一度 Long に入れる
+    If k >= 1 And k <= d->PageCount() Then d->SetPage(k - 1) Else OpWarn("1 から " + Str$(d->PageCount()) + " までの数を入れてください。")
+End Sub
+
+' 拡大率（%）を打ち込む
+Sub OpAskRate()
+    Dim d As *DocFile, s As String, n As Double
+    d = CurDoc()
+    If d = 0 Then Exit Sub
+    If g_input.Ask(g_op.Handle, "拡大率を指定", "拡大率（100 - 500 %）", Str$(DRound(d->Zoom.Rate * 100)), s) = 0 Then Exit Sub
+    n = InputNumber(s)
+    If n >= 100 And n <= 500 Then d->Zoom.SetRate(n / 100) Else OpWarn("100 から 500 までの数を入れてください。")
+End Sub
+
+Sub OpWarn(s As String)
+    MessageBox(g_op.Handle, s, "Viewer By 2nd Monitor", MB_OK Or MB_ICONWARNING)
+End Sub
+
+Sub OpAbout()
+    Dim s As String
+    s = "Viewer By 2nd Monitor（ActBa64 版）" + Chr$(13) + Chr$(10) + Chr$(13) + Chr$(10)
+    s = s + "2 台目のモニターに画像と PDF を映すビューアーです。" + Chr$(13) + Chr$(10)
+    s = s + "Lazarus 版 ViewerBy2nd を ActiveBasic で書き直したものです。"
+    MessageBox(g_op.Handle, s, "このアプリについて", MB_OK Or MB_ICONINFORMATION)
+End Sub
+
+Dim g_custColors[15] As Long
+
+' 背景色を選ぶ
+Sub OpChooseColor()
+    Dim cc As CHOOSECOLOR
+    RtlFillMemory(VarPtr(cc), SizeOf(CHOOSECOLOR), 0)
+    cc.lStructSize = SizeOf(CHOOSECOLOR)
+    cc.hwndOwner = g_op.Handle
+    cc.rgbResult = g_model.BgColor
+    cc.lpCustColors = VarPtr(g_custColors[0])
+    cc.Flags = CC_RGBINIT Or CC_FULLOPEN
+    If ChooseColor(cc) Then g_model.BgColor = cc.rgbResult : AppUpdate()
+End Sub

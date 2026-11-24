@@ -1,0 +1,171 @@
+' ============================================================
+' Zoom.sbp - 拡大率と表示の中心（ZoomUnit 相当）
+'
+' 中心 Cx / Cy は絵の中の位置（0.0〜1.0）。窓の大きさに依らないので、
+' 操作画面のプレビューとスクリーンで同じ所が見える。
+' ============================================================
+
+Const ZOOM_MAX = 5.0
+
+' 絵全体を窓のどこに、どの大きさで置くか（窓の座標。はみ出た分は切れる）
+Type ViewLayout
+    x As Long
+    y As Long
+    w As Long
+    h As Long
+End Type
+
+Function DMin(a As Double, b As Double) As Double
+    DMin = a
+    If b < a Then DMin = b
+End Function
+
+Function DMax(a As Double, b As Double) As Double
+    DMax = a
+    If b > a Then DMax = b
+End Function
+
+Function DClamp(v As Double, lo As Double, hi As Double) As Double
+    DClamp = DMax(lo, DMin(v, hi))
+End Function
+
+' 四捨五入（負の数も 0 から遠い方へ）
+Function DRound(d As Double) As Long
+    If d >= 0 Then
+        DRound = d + 0.5
+    Else
+        DRound = -(0.5 - d)
+    End If
+End Function
+
+' 拡大の段（ZoomLevels）
+Function ZoomLevel(i As Long) As Double
+    Select Case i
+        Case 0 : ZoomLevel = 1.0
+        Case 1 : ZoomLevel = 1.25
+        Case 2 : ZoomLevel = 1.5
+        Case 3 : ZoomLevel = 2.0
+        Case 4 : ZoomLevel = 3.0
+        Case Else : ZoomLevel = ZOOM_MAX
+    End Select
+End Function
+
+Class ZoomState
+Public
+    Rate As Double              ' 1.0（窓に全体が入る）〜 ZOOM_MAX
+    Cx As Double
+    Cy As Double
+
+    Sub ZoomState()
+        Rate = 1.0
+        CenterClear()
+    End Sub
+
+    Sub CenterClear()
+        Cx = 0.5
+        Cy = 0.5
+    End Sub
+
+    Sub SetRate(r As Double)
+        Rate = DClamp(r, 1.0, ZOOM_MAX)
+    End Sub
+
+    Sub ZoomIn()
+        Dim i As Long
+        For i = 0 To 5
+            If ZoomLevel(i) > Rate + 0.0001 Then
+                Rate = ZoomLevel(i)
+                Exit Sub
+            End If
+        Next
+    End Sub
+
+    Sub ZoomOut()
+        Dim i As Long
+        For i = 5 To 0 Step -1
+            If ZoomLevel(i) < Rate - 0.0001 Then
+                Rate = ZoomLevel(i)
+                Exit Sub
+            End If
+        Next
+    End Sub
+
+    ' 等倍（Rate = 1）のときの絵の大きさ。ratio は絵の 幅 / 高さ
+    Sub NormalSize(ratio As Double, w As Long, h As Long, ByRef nw As Double, ByRef nh As Double)
+        If w / h > ratio Then
+            nh = h : nw = h * ratio
+        Else
+            nw = w : nh = w / ratio
+        End If
+    End Sub
+
+    ' w x h の窓に置くときの絵の場所
+    Sub Layout(ratio As Double, w As Long, h As Long, ByRef lay As ViewLayout)
+        Dim zw As Double, zh As Double
+        ZoomedSize(ratio, w, h, zw, zh)
+        lay.x = DRound(Offset(Cx, zw, w))
+        lay.y = DRound(Offset(Cy, zh, h))
+        lay.w = DRound(zw)
+        lay.h = DRound(zh)
+    End Sub
+
+    ' 窓の幅に合わせる
+    Sub FitWidth(ratio As Double, w As Long, h As Long)
+        Dim nw As Double, nh As Double
+        NormalSize(ratio, w, h, nw, nh)
+        SetRate(w / nw)
+    End Sub
+
+    ' 絵をつかんで (dx, dy) 動かした（窓 w x h の上で）
+    Sub DragBy(ratio As Double, w As Long, h As Long, dx As Long, dy As Long)
+        Dim zw As Double, zh As Double
+        ZoomedSize(ratio, w, h, zw, zh)
+        Cx = ClampCenter(Cx - dx / zw, zw, w)
+        Cy = ClampCenter(Cy - dy / zh, zh, h)
+    End Sub
+
+    ' ホイールで上下に送る
+    Sub WheelScroll(delta As Long)
+        Cy = DClamp(Cy - delta / 1200.0 / Rate, 0.0, 1.0)
+    End Sub
+
+    ' Ctrl + ホイールで、マウスの下の所を動かさずに拡大・縮小
+    Sub WheelZoom(ratio As Double, w As Long, h As Long, delta As Long, mx As Long, my As Long)
+        Dim lay As ViewLayout, u As Double, v As Double, old As Double
+        Layout(ratio, w, h, lay)
+        u = (mx - lay.x) / lay.w : v = (my - lay.y) / lay.h
+        old = Rate
+        If delta > 0 Then ZoomIn() Else ZoomOut()
+        If old <> Rate Then KeepPoint(ratio, w, h, u, v, mx, my)
+    End Sub
+
+Private
+    Sub ZoomedSize(ratio As Double, w As Long, h As Long, ByRef zw As Double, ByRef zh As Double)
+        NormalSize(ratio, w, h, zw, zh)
+        zw = zw * Rate
+        zh = zh * Rate
+    End Sub
+
+    ' 中心 c（0〜1）、絵の長さ z、窓の長さ n のとき、絵の左（上）端の窓の座標
+    Function Offset(c As Double, z As Double, n As Long) As Double
+        Dim d As Double, s As Double
+        d = DMin(z, n)
+        s = DClamp(c * z - d / 2, 0, z - d)
+        Offset = (n - d) / 2 - s
+    End Function
+
+    ' 窓の端より外を見ないように、中心を絵の内側に収める
+    Function ClampCenter(c As Double, z As Double, n As Long) As Double
+        Dim half As Double
+        half = DMin(z, n) / 2 / z
+        ClampCenter = DClamp(c, half, 1 - half)
+    End Function
+
+    ' 絵の中の (u, v) が窓の (mx, my) に来るように中心を決める
+    Sub KeepPoint(ratio As Double, w As Long, h As Long, u As Double, v As Double, mx As Long, my As Long)
+        Dim zw As Double, zh As Double
+        ZoomedSize(ratio, w, h, zw, zh)
+        Cx = ClampCenter((u * zw - mx + w / 2) / zw, zw, w)
+        Cy = ClampCenter((v * zh - my + h / 2) / zh, zh, h)
+    End Sub
+End Class

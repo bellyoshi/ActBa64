@@ -1,0 +1,246 @@
+' ============================================================
+' ScreenForm - スクリーン（2 台目のモニターに出す窓。frmViewer 相当）
+'
+' Model.ViewFile を窓いっぱいに描く（無ければ背景の色だけ）。右クリックでメニュー。
+' 閉じるボタンでは窓を隠すだけ（アプリは操作画面を閉じると終わる）。
+' ============================================================
+
+Const SCR_OPERATION = 1001
+Const SCR_WINDOW = 1002
+Const SCR_FULL = 1003
+Const SCR_HIDETITLE = 1004
+Const SCR_SHOWTITLE = 1005
+Const SCR_CLOSE = 1006
+
+Class ScreenForm
+    Inherits Form
+Private
+    cache As HBITMAP            ' 描いた絵（窓の大きさ）
+    cacheW As Long
+    cacheH As Long
+    fullScreen As Long
+    titleHidden As Long
+    winRect As RECT             ' 全画面にする前の窓の場所
+Public
+    Monitor As Long             ' 全画面にするモニター（Monitors.sbp の番号）
+
+    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+        WndProc = 0
+        If OnMessage(msg, wParam, lParam) Then Exit Function
+        If msg = WM_ERASEBKGND Then WndProc = 1 : Exit Function
+        If msg = WM_CLOSE Then HideScreen() : Exit Function
+        WndProc = Super.WndProc(msg, wParam, lParam)
+    End Function
+
+    ' 描き直す（絵を作り直す）
+    Sub Refresh()
+        DropCache()
+        If Handle <> 0 Then InvalidateRect(Handle, 0, FALSE)
+    End Sub
+
+    Sub ShowScreen()
+        If IsShown() = 0 Then Show()
+        Refresh()
+    End Sub
+
+    Sub HideScreen()
+        If Handle <> 0 Then ShowWindow(Handle, SW_HIDE)
+        AppUpdate()
+    End Sub
+
+    Function IsShown() As Long
+        IsShown = False
+        If Handle <> 0 Then IsShown = IsWindowVisible(Handle)
+    End Function
+
+    Function IsFullScreen() As Long
+        IsFullScreen = fullScreen
+    End Function
+
+    Function IsTitleHidden() As Long
+        IsTitleHidden = titleHidden
+    End Function
+
+    ' クライアントの幅と高さ（窓がまだ無ければ InitializeComponent の大きさ）
+    Sub ClientSize(ByRef w As Long, ByRef h As Long)
+        InitComponents()
+        w = Width - 16 : h = Height - 39
+        If Handle <> 0 Then ViewerClientSize(Handle, w, h)
+        If w < 1 Then w = 1
+        If h < 1 Then h = 1
+    End Sub
+
+    ' Monitor のモニターいっぱいにする / 元の窓に戻す
+    Sub SetFullScreen(b As Long)
+        If Handle = 0 Or b = fullScreen Then Exit Sub
+        If b Then GetWindowRect(Handle, winRect)
+        fullScreen = b
+        ApplyStyle()
+    End Sub
+
+    Sub SetTitleHidden(b As Long)
+        titleHidden = b
+        If Handle <> 0 And fullScreen = 0 Then ApplyStyle()
+    End Sub
+
+    ' 窓を Monitor のモニターの真ん中に置く（全画面ならそのモニターいっぱいに）
+    Sub PlaceOnMonitor()
+        If fullScreen Then
+            ApplyStyle()
+        Else
+            SetBounds2(MonitorX(Monitor) + (MonitorW(Monitor) - Width) \ 2, MonitorY(Monitor) + (MonitorH(Monitor) - Height) \ 2, Width, Height)
+        End If
+    End Sub
+
+Private
+    Override Sub InitializeComponent()
+        Width = 800
+        Height = 600
+        Left = MonitorX(Monitor) + (MonitorW(Monitor) - Width) \ 2
+        Top = MonitorY(Monitor) + (MonitorH(Monitor) - Height) \ 2
+        Caption = "Viewer By 2nd Monitor スクリーン"
+    End Sub
+
+    ' 扱ったら True
+    Function OnMessage(msg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
+        OnMessage = True
+        Select Case msg
+            Case WM_PAINT : OnPaint()
+            Case WM_SIZE : Refresh() : AppScreenResized()
+            Case WM_CONTEXTMENU : ShowPopup()
+            Case Else : OnMessage = OnInput(msg, wParam, lParam)
+        End Select
+    End Function
+
+    Function OnInput(msg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
+        OnInput = True
+        Select Case msg
+            Case WM_COMMAND : OnCommand(LOWORD(wParam))
+            Case WM_MOUSEWHEEL : OnWheel(wParam, lParam)
+            Case WM_KEYDOWN : OnKey(wParam As Long)
+            Case Else : OnInput = False
+        End Select
+    End Function
+
+    Sub OnPaint()
+        Dim ps As PAINTSTRUCT, hdc As HDC, w As Long, h As Long
+        hdc = BeginPaint(Handle, ps)
+        ClientSize(w, h)
+        If cache = 0 Or cacheW <> w Or cacheH <> h Then MakeCache(w, h)
+        BlitBitmap(hdc, cache, 0, 0, w, h)
+        EndPaint(Handle, ps)
+    End Sub
+
+    Sub MakeCache(w As Long, h As Long)
+        DropCache()
+        cache = RenderDoc(g_model.ViewFile(), w, h, g_model.BgColor)
+        cacheW = w
+        cacheH = h
+    End Sub
+
+    Sub DropCache()
+        If cache <> 0 Then DeleteObject(cache)
+        cache = 0
+    End Sub
+
+    Sub OnWheel(wParam As WPARAM, lParam As LPARAM)
+        Dim pt As POINTAPI, w As Long, h As Long
+        pt.x = WheelX(lParam) : pt.y = WheelY(lParam)
+        ScreenToClient(Handle, pt)
+        ClientSize(w, h)
+        DoWheel(g_model.ViewFile(), w, h, WheelDelta(wParam), pt.x, pt.y, (LOWORD(wParam) And MK_CONTROL) <> 0)
+        AppUpdate()
+    End Sub
+
+    ' Esc で全画面をやめる
+    Sub OnKey(vk As Long)
+        If vk = VK_ESCAPE And fullScreen Then SetFullScreen(False)
+    End Sub
+
+    Sub ShowPopup()
+        Dim m As HMENU, pt As POINTAPI, id As Long
+        m = MakePopup()
+        GetCursorPos(pt)
+        id = TrackPopupMenu(m, TPM_RETURNCMD Or TPM_RIGHTBUTTON, pt.x, pt.y, 0, Handle, 0)
+        DestroyMenu(m)
+        If id <> 0 Then OnCommand(id)
+    End Sub
+
+    Function MakePopup() As HMENU
+        Dim m As HMENU
+        m = CreatePopupMenu()
+        AppendMenu(m, MenuFlag(fullScreen), SCR_WINDOW, "ウインドウ")
+        AppendMenu(m, MenuFlag(fullScreen = 0), SCR_FULL, "フルスクリーン")
+        AppendTitleItems(m)
+        AppendPopupTail(m)
+        MakePopup = m
+    End Function
+
+    Sub AppendTitleItems(m As HMENU)
+        AppendMenu(m, MF_SEPARATOR, 0, 0)
+        AppendMenu(m, MenuFlag(fullScreen = 0 And titleHidden = 0), SCR_HIDETITLE, "タイトルバーを隠す")
+        AppendMenu(m, MenuFlag(fullScreen = 0 And titleHidden), SCR_SHOWTITLE, "タイトルバーを表示する")
+    End Sub
+
+    Sub AppendPopupTail(m As HMENU)
+        AppendMenu(m, MF_SEPARATOR, 0, 0)
+        AppendMenu(m, MF_STRING, SCR_OPERATION, "操作ウインドウをトップに表示")
+        AppendMenu(m, MF_STRING, SCR_CLOSE, "閉じる")
+    End Sub
+
+    Sub OnCommand(id As Long)
+        Select Case id
+            Case SCR_WINDOW : SetFullScreen(False)
+            Case SCR_FULL : SetFullScreen(True)
+            Case SCR_HIDETITLE : SetTitleHidden(True)
+            Case SCR_SHOWTITLE : SetTitleHidden(False)
+            Case SCR_OPERATION : AppShowOperation()
+            Case SCR_CLOSE : HideScreen()
+        End Select
+    End Sub
+
+    ' 全画面・見出しの有無に合わせて、窓の形と場所を変える
+    Sub ApplyStyle()
+        Dim st As DWord
+        st = WS_OVERLAPPEDWINDOW Or WS_VISIBLE
+        If fullScreen Or titleHidden Then st = WS_POPUP Or WS_VISIBLE
+        SetWindowLongPtr(Handle, GWL_STYLE, st As LONG_PTR)
+        ApplyBounds()
+    End Sub
+
+    Sub ApplyBounds()
+        If fullScreen Then
+            SetBounds2(MonitorX(Monitor), MonitorY(Monitor), MonitorW(Monitor), MonitorH(Monitor))
+        Else
+            SetBounds2(winRect.left, winRect.top, winRect.right - winRect.left, winRect.bottom - winRect.top)
+        End If
+    End Sub
+
+    Sub SetBounds2(x As Long, y As Long, w As Long, h As Long)
+        If Handle <> 0 Then SetWindowPos(Handle, 0, x, y, w, h, SWP_NOZORDER Or SWP_FRAMECHANGED)
+        If Handle = 0 Then Left = x : Top = y
+        If fullScreen = 0 Then Width = w : Height = h
+    End Sub
+End Class
+
+' 使える（b が真）ならふつうの項目、使えなければ灰色
+Function MenuFlag(b As Long) As DWord
+    MenuFlag = MF_STRING
+    If b = 0 Then MenuFlag = MF_STRING Or MF_GRAYED
+End Function
+
+' WM_MOUSEWHEEL の回した量（符号つき）と、マウスの画面の座標
+Function WheelDelta(wParam As WPARAM) As Long
+    WheelDelta = HIWORD(wParam As Long)
+    If WheelDelta > 32767 Then WheelDelta = WheelDelta - 65536
+End Function
+
+Function WheelX(lParam As LPARAM) As Long
+    WheelX = LOWORD(lParam As Long)
+    If WheelX > 32767 Then WheelX = WheelX - 65536
+End Function
+
+Function WheelY(lParam As LPARAM) As Long
+    WheelY = HIWORD(lParam As Long)
+    If WheelY > 32767 Then WheelY = WheelY - 65536
+End Function
