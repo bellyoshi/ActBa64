@@ -84,11 +84,10 @@ Function LowNewSize(ctx As *LowerCtx, typeIdx As Long) As Long
     LowNewSize = sizes[typeIdx]
 End Function
 
-Function LowNewCtorLab(ctx As *LowerCtx, typeIdx As Long) As Long
+Function LowNewCtorLab(ctx As *LowerCtx, typeIdx As Long, name As *Byte) As Long
     Dim ast As *Ast
-    Dim name(SYM_NAME_LEN - 1) As Byte
     ast = ctx->ast
-    LowNewCtorLab = LowFindCtorLab(ctx, ast->types, typeIdx, VarPtr(name))
+    LowNewCtorLab = LowFindCtorLab(ctx, ast->types, typeIdx, name)
 End Function
 
 Function LowFindDtorLab(ctx As *LowerCtx, typeTable As *TypeTable, typeIdx As Long, dst As *Byte) As Long
@@ -129,22 +128,24 @@ Function LowNewArgLeft(ctx As *LowerCtx, arg As Long) As Long
     LowNewArgLeft = e
 End Function
 
-Function LowNewSaveOneArg(ctx As *LowerCtx, arg As Long, off As Long) As Long
+' 実引数を Ctor の仮引数 argIdx（This が 0）の型へ変換して off へ退避する
+Function LowNewSaveOneArg(ctx As *LowerCtx, arg As Long, off As Long, sig As *Byte, argIdx As Long) As Long
     Dim e As Long
     e = LowNewArgLeft(ctx, arg)
     LowNewSaveOneArg = 0
     If e < 0 Then Exit Function
     If LowExprArg(ctx, e) = 0 Then Exit Function
+    LowEmitMethodArgCvt(ctx, e, sig, argIdx)
     IrEmit(ctx->list, OP_STORE_LOCAL, off, 0)
     LowNewSaveOneArg = 1
 End Function
 
-Function LowNewSaveFrom(ctx As *LowerCtx, arg As Long, off As Long) As Long
+Function LowNewSaveFrom(ctx As *LowerCtx, arg As Long, off As Long, sig As *Byte, argIdx As Long) As Long
     LowNewSaveFrom = 0
     If arg < 0 Then LowNewSaveFrom = 1
     If arg < 0 Then Exit Function
-    If LowNewSaveOneArg(ctx, arg, off) = 0 Then Exit Function
-    LowNewSaveFrom = LowNewSaveFrom(ctx, LowArgNext(ctx, arg), off - 8)
+    If LowNewSaveOneArg(ctx, arg, off, sig, argIdx) = 0 Then Exit Function
+    LowNewSaveFrom = LowNewSaveFrom(ctx, LowArgNext(ctx, arg), off - 8, sig, argIdx + 1)
 End Function
 
 Function LowNewLoadCount(ctx As *LowerCtx, left As Long) As Long
@@ -175,22 +176,25 @@ Sub LowNewSetArgs(ctx As *LowerCtx, idx As Long)
     g_nwVtLab = LowVtLab(ctx, LowNodeExtra(ctx, idx))
 End Sub
 
-Function LowNewMeta(ctx As *LowerCtx, idx As Long) As Long
+Function LowNewMeta(ctx As *LowerCtx, idx As Long, sig As *Byte) As Long
     Dim ti As Long
     ti = LowNodeExtra(ctx, idx)
     LowNewSetArgs(ctx, idx)
     g_nwSz = LowNewSize(ctx, ti)
-    g_nwLab = LowNewCtorLab(ctx, ti)
+    g_nwLab = LowNewCtorLab(ctx, ti, sig)
     LowNewMeta = 0
     If g_nwLab < 0 Then LowNewMissing(ctx)
     If g_nwLab >= 0 Then LowNewMeta = 1
 End Function
 
+' 引数の中の New が g_nw* を書き換えるので、Ctor の名前はこのフレームに持つ
 Function LowNewPrep(ctx As *LowerCtx, idx As Long) As Long
+    Dim sig(SYM_NAME_LEN - 1) As Byte
     LowNewPrep = 0
     If LowNewSaveCount(ctx, idx) = 0 Then Exit Function
-    If LowNewSaveFrom(ctx, LowNodeRight(ctx, idx), g_nwArg) = 0 Then Exit Function
-    LowNewPrep = LowNewMeta(ctx, idx)
+    LowNewCtorLab(ctx, LowNodeExtra(ctx, idx), VarPtr(sig))
+    If LowNewSaveFrom(ctx, LowNodeRight(ctx, idx), g_nwArg, VarPtr(sig), 1) = 0 Then Exit Function
+    LowNewPrep = LowNewMeta(ctx, idx, VarPtr(sig))
 End Function
 
 Sub LowMulSize(list As *IrList, size As Long)
