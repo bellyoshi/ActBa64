@@ -1,5 +1,66 @@
 # リリースノート
 
+## v0.1.4（v0.1.3 からの変更点）
+
+### ハイライト
+
+- **255 バイトを超える文字列リテラルを書けます。** これまでは 255 バイトで切れていました。`"..."`、`ex"..."`、`Const`、`Len`、連結のどれでも全体の長さになります。
+- **AB 4.20 の RAD で作ったウィンドウのプロジェクトをそのままコンパイルできます。** `#USEWINDOW=1` の `.pj` の隣に `<名前>.wnd` があれば、ProjectEditor はコンパイルの前にそこから `Callback.wbp` と `MakeWindow.wbp` を作り直します。AB 4.20 の Samples などで、AB 4.20 の出力とバイト単位で一致することを確かめています。詳しくは [projecteditor.md §7.1](./projecteditor.md#71-ab4-互換の-radusewindow1) を見てください。
+
+### コンパイラ
+
+AB 4 が通していた書き方を読むようにしました。
+
+- `Const X = 32 As DWord` のように、値の後ろに `As 型` を書けます。
+- `If i = > n`、`If i = < n`（`=` と `>` / `<` の間の空白）を `>=` / `<=` と読みます。
+- `& HC` のように `&` と `H` の間に空白がある 16 進を読みます（`If & HC ...` のようにキーワードの後ろでも）。直前が値なら、これまでどおり連結の `&` です。
+- `Else 条件 Then` の行はただの `Else` として読み、警告を出します。`ElseIf` と書いてください。
+- `If x Then Continue` の次の行の `For` / `Do` / `While` を、`Continue For` などと読まなくなりました。
+- `Sub F(a As Long, )` のように、仮引数の最後のカンマを読み飛ばします。
+- 配列の初期化子の要素に `As` を付けられます（`[&H3031 As BytePtr, "Nintendo", ...] As BytePtr`）。
+- `*Function(...)` の `As` を省くと、`Function` と同じく `Double` を返す関数ポインタになります。
+- `TypeDef X = *` で行が終わる型を、`VoidPtr` と同じ型の無いポインタとして読みます。
+- 配列でも関数ポインタでもない変数に `()` を付けた `v()` は、`v` の値です。
+- 小文字の `this` を `This` と同じに扱います。
+- メソッドの中で、フィールドと同じ名前の仮引数があれば、仮引数を先に読みます（`Sub Init(Max As DWord)` の中の `Max`）。
+
+ポインタと関数ポインタ:
+
+- `Dim a[n] As *T`（`*Long`、`*Type`、関数ポインタの `TypeDef` も）は、要素がポインタ幅の配列です。`a[i]->x` で `T` のメンバを読み書きできます。
+- `a[i]->x = v`、`a[i].f[j] = v` のように、配列の要素から続く左辺に代入できます。
+- `*Type` のフィールドの先を読み書きできます: `info->pkh->com_size`、メソッドの中の `tbl[i].hash` / `tbl->size`。これまではフィールドがクラスを指すときだけでした。後ろで定義する `Type` を指すフィールドにも使えます。
+- `Type` / `Class` のフィールドにある関数ポインタを呼べます: `p->rom.init_cb(h)`、`obj->fp(x)`。戻り値は `Long` の幅として読みます。
+- `TypeDef F = *Function(...)` を後ろに書いても、前の手続きの仮引数 `f As F` を `f(...)` と呼べます。
+
+不具合の修正:
+
+- 関数ポインタの `TypeDef` 型のフィールドを持つ `Type` の大域変数があると、`-actba32` でコンパイラが落ちることがありました（落ちないこともありました）。関数ポインタの型が仮引数の情報をフィールドの欄に入れていたためで、別の欄に分けました。
+- `Beep(周波数, ミリ秒)` を kernel32 の `Beep` API の呼び出しとして読みます。引数の無い `Beep` 文はこれまでどおりです。
+- 中身の無い `#include` ファイルを「開けません」にせず、空のファイルとして読みます。
+
+### ActiveBasic との違い
+
+- HongKongArduinoClone と RGBALib は、関数のアドレスやポインタを `DWord` で持つ 32bit 前提のソースです。64bit で作ると起動の後に落ちるので、`-actba32` で作ってください。
+- HongKongArduinoClone の進捗表示（`ProgressCallback`）は、AB 4 の vtable を書き換え、メソッドの先頭に `This` を受ける捨て引数 `_this As VoidPtr` を置いています。ActBa64 は `This` の渡し方が違うので、そのままでは引数が 1 つずれます。捨て引数を消してください（[different.md](./different.md#動作が異なるもの)）。
+
+### Include
+
+- `api_user32.sbp` に `IsDialogMessage`（`IsDialogMessageA` / `IsDialogMessageW`）を足しました。`IsDialogMessage` は `W` です。
+- `ab_listview.sbp` に `LVN_KEYDOWN` を足しました。
+
+### ProjectEditor
+
+- `#USEWINDOW=1` のプロジェクトで、`.wnd` から `Callback.wbp` / `MakeWindow.wbp` を作ります（上のハイライト）。
+- 開いた文書とプロジェクトのパスを UTF-8 にそろえました。CP932 のパスが、保存の確認などで化けていました。
+
+### サンプル
+
+- `src/actba64/samples/viewer` に、PDF の表示に使う `pdfium.dll` を入れました。
+
+### テスト
+
+- 回帰テスト `test/t_ab4_hkac.abp`、`test/t_ab4_lspk.abp`、`test/t_long_string_lit.abp` と、ユニットテスト `RadGenTest` を足しました。
+
 ## v0.1.3（v0.1.2 からの変更点）
 
 ### ハイライト

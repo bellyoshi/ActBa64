@@ -1,0 +1,145 @@
+' RadEvent - AB 4.20 の RAD のイベント表（窓のメッセージと部品の通知コード）。
+' 表は「|名前=値|名前=値…」の文字列。名前は大文字小文字を区別しないで引き、書き方は表のものを返す。
+
+' 窓のイベント: 名前=メッセージ=引数。引数が * のものは RadGenEvent が別に書く
+Function RadEv_WinTable$() As String
+    Dim s As String
+    s = "|Create=WM_CREATE=*|Destroy=WM_DESTROY=*|Paint=WM_PAINT=*|QueryClose=WM_CLOSE=*|Notify=WM_NOTIFY=*"
+    s = s + "|Activate=WM_ACTIVATE=LOWORD(wParam),HIWORD(wParam)|DropFiles=WM_DROPFILES=wParam As HDROP"
+    s = s + "|HScroll=WM_HSCROLL=" + RadEv_ScrollArgs$() + "|VScroll=WM_VSCROLL=" + RadEv_ScrollArgs$()
+    s = s + "|KeyDown=WM_KEYDOWN=" + RadEv_KeyArgs$() + "|KeyPress=WM_CHAR=" + RadEv_KeyArgs$()
+    s = s + "|KeyUp=WM_KEYUP=" + RadEv_KeyArgs$() + RadEv_MouseTable$()
+    s = s + "|Move=WM_MOVE=LOWORD(lParam),HIWORD(lParam)|Resize=WM_SIZE=" + RadEv_MouseArgs$()
+    RadEv_WinTable$ = s + "|SetFocus=WM_SETFOCUS=|Timer=WM_TIMER=wParam As DWord|MciNotify=MM_MCINOTIFY=wParam,lParam|"
+End Function
+
+Function RadEv_ScrollArgs$() As String
+    RadEv_ScrollArgs$ = "LOWORD(wParam),HIWORD(wParam),lParam As HWND"
+End Function
+
+Function RadEv_KeyArgs$() As String
+    RadEv_KeyArgs$ = "wParam As Long,lParam As Long"
+End Function
+
+Function RadEv_MouseArgs$() As String
+    RadEv_MouseArgs$ = "wParam As Long,LOWORD(lParam),HIWORD(lParam)"
+End Function
+
+Function RadEv_MouseTable$() As String
+    Dim s As String
+    s = RadEv_Btn$("L") + RadEv_Btn$("M") + RadEv_Btn$("R")
+    RadEv_MouseTable$ = s + "|MouseMove=WM_MOUSEMOVE=" + RadEv_MouseArgs$()
+End Function
+
+Function RadEv_Btn$(b As String) As String
+    Dim s As String
+    s = "|" + b + "ButtonDown=WM_" + b + "BUTTONDOWN=" + RadEv_MouseArgs$()
+    s = s + "|" + b + "ButtonUp=WM_" + b + "BUTTONUP=" + RadEv_MouseArgs$()
+    RadEv_Btn$ = s + "|" + b + "ButtonDblClick=WM_" + b + "BUTTONDBLCLK=" + RadEv_MouseArgs$()
+End Function
+
+' 表 tbl で name を引き、「名前=…」の「…」を返す（無ければ ""）。outName に表の書き方の名前
+Function RadEv_Look$(tbl As String, name As String, ByRef outName As String) As String
+    Dim a As Long
+    Dim e As Long
+    RadEv_Look$ = "" : outName = ""
+    a = InStr(1, Lower$(tbl), "|" + Lower$(name) + "=")
+    If a = 0 Or Len(name) = 0 Then Exit Function
+    e = InStr(a + 1, tbl, "|")
+    outName = Mid$(tbl, a + 1, Len(name))
+    RadEv_Look$ = Mid$(tbl, a + Len(name) + 2, e - a - Len(name) - 2)
+End Function
+
+' 「メッセージ=引数」の前と後ろ
+Function RadEv_Before$(s As String) As String
+    Dim i As Long
+    i = InStr(1, s, "=")
+    RadEv_Before$ = s
+    If i > 0 Then RadEv_Before$ = Left$(s, i - 1)
+End Function
+
+Function RadEv_After$(s As String) As String
+    Dim i As Long
+    i = InStr(1, s, "=")
+    RadEv_After$ = ""
+    If i > 0 Then RadEv_After$ = Mid$(s, i + 1)
+End Function
+
+' 部品の種類（.wnd の ITEM の最後の数）。1 Button 2 CheckBox 3 ComboBox 4 EditBox 5 GroupBox
+' 6 HScrollBar 7 ImageBox 8 ListBox 9 ListView 10 RadioButton 11 Static 12 TreeView 13 UpDown
+' 14 VScrollBar 15 ProgressBar 16 TrackBar
+Function RadEv_TypeTable$() As String
+    Dim s As String
+    s = "|1=BUTTON=btn|2=BUTTON=btn|3=COMBOBOX=cb|4=EDIT=ed|5=BUTTON=|6=SCROLLBAR=|7=STATIC=stc"
+    s = s + "|8=LISTBOX=lb|9=SysListView32=lv|10=BUTTON=btn|11=STATIC=stc|12=SysTreeView32=nm"
+    RadEv_TypeTable$ = s + "|13=UpDown=ud|14=SCROLLBAR=|15=msctls_progress32=|16=msctls_trackbar32=|"
+End Function
+
+Function RadEv_Class$(t As Long) As String
+    Dim n As String
+    RadEv_Class$ = RadEv_Before$(RadEv_Look$(RadEv_TypeTable$(), Str$(t), n))
+    If Len(RadEv_Class$) = 0 Then RadEv_Class$ = "STATIC"
+End Function
+
+' 通知を WM_NOTIFY で受ける部品（ListView / TreeView / UpDown）なら 1
+Function RadEv_IsNotify(t As Long) As Long
+    RadEv_IsNotify = 0
+    If t = 9 Or t = 12 Or t = 13 Then RadEv_IsNotify = 1
+End Function
+
+' 部品の種類 t のイベント ev の通知コード（無ければ ""）。outName に表の書き方
+Function RadEv_CtlCode$(t As Long, ev As String, ByRef outName As String) As String
+    Dim n As String
+    RadEv_CtlCode$ = RadEv_Look$(RadEv_CtlTable$(RadEv_After$(RadEv_Look$(RadEv_TypeTable$(), Str$(t), n))), ev, outName)
+End Function
+
+Function RadEv_CtlTable$(grp As String) As String
+    RadEv_CtlTable$ = "|"
+    If grp = "btn" Or grp = "stc" Then RadEv_CtlTable$ = RadEv_ClickTable$(grp)
+    If grp = "lb" Then RadEv_CtlTable$ = RadEv_LbTable$()
+    If grp = "ed" Then RadEv_CtlTable$ = RadEv_EdTable$()
+    If grp = "cb" Then RadEv_CtlTable$ = RadEv_CbTable$()
+    If grp = "nm" Then RadEv_CtlTable$ = RadEv_NmTable$()
+    If grp = "lv" Then RadEv_CtlTable$ = RadEv_LvTable$() + Mid$(RadEv_NmTable$(), 2)
+    If grp = "ud" Then RadEv_CtlTable$ = "|Deltapos=UDN_DELTAPOS" + RadEv_NmTable$()
+End Function
+
+Function RadEv_ClickTable$(grp As String) As String
+    RadEv_ClickTable$ = "|Click=BN_CLICKED|DblClick=BN_DBLCLK|"
+    If grp = "stc" Then RadEv_ClickTable$ = "|Click=STN_CLICKED|DblClick=STN_DBLCLK|"
+End Function
+
+Function RadEv_LbTable$() As String
+    Dim s As String
+    s = "|DblClick=LBN_DBLCLK|ErrSpace=LBN_ERRSPACE|KillFocus=LBN_KILLFOCUS|SelCancel=LBN_SELCANCEL"
+    RadEv_LbTable$ = s + "|SelChange=LBN_SELCHANGE|SetFocus=LBN_SETFOCUS|"
+End Function
+
+Function RadEv_EdTable$() As String
+    Dim s As String
+    s = "|Change=EN_CHANGE|ErrSpace=EN_ERRSPACE|HScroll=EN_HSCROLL|KillFocus=EN_KILLFOCUS"
+    RadEv_EdTable$ = s + "|MaxText=EN_MAXTEXT|SetFocus=EN_SETFOCUS|Update=EN_UPDATE|VScroll=EN_VSCROLL|"
+End Function
+
+Function RadEv_CbTable$() As String
+    Dim s As String
+    s = "|CloseUp=CBN_CLOSEUP|DblClick=CBN_DBLCLK|DropDown=CBN_DROPDOWN|EditChange=CBN_EDITCHANGE"
+    s = s + "|EditUpdate=CBN_EDITUPDATE|ErrSpace=CBN_ERRSPACE|KillFocus=CBN_KILLFOCUS|SelChange=CBN_SELCHANGE"
+    RadEv_CbTable$ = s + "|SelEndCancel=CBN_SELENDCANCEL|SelEndOk=CBN_SELENDOK|SetFocus=CBN_SETFOCUS|"
+End Function
+
+Function RadEv_NmTable$() As String
+    Dim s As String
+    s = "|Click=NM_CLICK|CustomDraw=NM_CUSTOMDRAW|DblClick=NM_DBLCLK|KillFocus=NM_KILLFOCUS"
+    s = s + "|OutOfMemory=NM_OUTOFMEMORY|RClick=NM_RCLICK|RDblClick=NM_RDBLCLK"
+    RadEv_NmTable$ = s + "|ReleasedCapture=NM_RELEASEDCAPTURE|Return=NM_RETURN|SetFocus=NM_SETFOCUS|"
+End Function
+
+Function RadEv_LvTable$() As String
+    Dim s As String
+    s = "|BeginDrag=LVN_BEGINDRAG|BeginLabelEdit=LVN_BEGINLABELEDIT|BeginRDrag=LVN_BEGINRDRAG"
+    s = s + "|ColumnClick=LVN_COLUMNCLICK|DeleteAllItems=LVN_DELETEALLITEMS|DeleteItem=LVN_DELETEITEM"
+    s = s + "|EndLabelEdit=LVN_ENDLABELEDIT|GetDispInfo=LVN_GETDISPINFO|InsertItem=LVN_INSERTITEM"
+    s = s + "|ItemChanged=LVN_ITEMCHANGED|ItemChanging=LVN_ITEMCHANGING|KeyDown=LVN_KEYDOWN"
+    RadEv_LvTable$ = s + "|SetDispInfo=LVN_SETDISPINFO|"
+End Function

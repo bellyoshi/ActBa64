@@ -39,13 +39,10 @@ Function FpGet(fi As Long) As Long
     FpGet = g_fpTi[fi]
 End Function
 
-' ParseFieldTypeSize が読んだ *名前 がクラスなら、その型番号を g_pfPtrTi に（ほかは -1）
+' ParseFieldTypeSize が読んだ *名前 の型番号を g_pfPtrTi に（型でなければ -1）。
+' 後ろで定義する Type はまだフィールドが無いので、クラスか Type かは使うときに見る（LowFieldPtrUdtTi）
 Sub FpNotePtrName(types As *TypeTable, tname As *Byte)
-    Dim ti As Long
-    g_pfPtrTi = -1
-    ti = TyFind(types, tname)
-    If ti < 0 Then Exit Sub
-    If TyIsClass(types, ti) <> 0 Then g_pfPtrTi = ti
+    g_pfPtrTi = TyFind(types, tname)
 End Sub
 
 ' AST_MEMBER の左（This / 変数 / 入れ子のフィールド）の型番号。分からなければ -1
@@ -70,14 +67,33 @@ End Function
 ' idx が *クラス のフィールド（メソッドの中の p は This.p）なら、そのクラスの型番号。ほかは -1
 Function LowFieldPtrClassTi(ctx As *LowerCtx, idx As Long) As Long
     Dim ast As *Ast
+    LowFieldPtrClassTi = LowFieldPtrUdtTi(ctx, idx)
+    If LowFieldPtrClassTi < 0 Then Exit Function
+    ast = ctx->ast
+    If TyIsClass(ast->types, LowFieldPtrClassTi) = 0 Then LowFieldPtrClassTi = -1
+End Function
+
+' idx が *T（クラスか、フィールドのある Type）のフィールドなら T の型番号。ほかは -1
+Function LowFieldPtrUdtTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
     Dim fname(SYM_NAME_LEN - 1) As Byte
     Dim ti As Long
-    LowFieldPtrClassTi = -1
+    LowFieldPtrUdtTi = -1
     If idx < 0 Then Exit Function
     If LowNodeKind(ctx, idx) <> AST_MEMBER Then Exit Function
     ti = LowMemberBaseTi(ctx, idx)
     If ti < 0 Then Exit Function
     ast = ctx->ast
     AstCopyName(ast, idx, VarPtr(fname))
-    LowFieldPtrClassTi = FpGet(AccFindField(ast->types, ti, VarPtr(fname)))
+    ti = FpGet(AccFindField(ast->types, ti, VarPtr(fname)))
+    If ti < 0 Then Exit Function
+    If TyIsClass(ast->types, ti) = 0 And LowTiIsStruct(ctx, ti) = 0 Then Exit Function
+    LowFieldPtrUdtTi = ti
+End Function
+
+' a[i] の a が *T のフィールドなら T の型番号。ほかは -1
+Function LowIdxFieldPtrTi(ctx As *LowerCtx, idx As Long) As Long
+    LowIdxFieldPtrTi = -1
+    If LowNodeKind(ctx, idx) <> AST_INDEX Then Exit Function
+    LowIdxFieldPtrTi = LowFieldPtrUdtTi(ctx, LowNodeLeft(ctx, idx))
 End Function

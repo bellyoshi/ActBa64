@@ -344,7 +344,8 @@ Dim h As COFF_HEADER
 - `Const name(仮引数) = expr`: 使うたびに仮引数へ実引数の式を埋め込んで展開する（64 個まで、入れ子 16 段まで）
 - `Dim` の `As` は省ける。スカラーも配列も `Double`（`#n88basic` は不要）
 - 末尾 `$` は `String`（`Dim name$`、`Dim name$(n)`）。配列の添字は 0 始まり
-- `Dim name[n] = [式, ...] As *Byte` は要素が C 文字列ポインタの配列。`0` は NULL。`As` は初期化子の後
+- `Dim name[n] = [式, ...] As *Byte` は要素が C 文字列ポインタの配列。`0` は NULL。`As` は初期化子の後。要素にも `&H3031 As BytePtr` のように `As` を付けられる
+- `Dim name[n] As *T`（`*Long`、`*Type`、`TypeDef F = *Function(...)` の `F` も）は要素がポインタ幅の配列。`name[i]->x` で `T` のメンバを読み書きできる
 - `Include\default` で組み込み定数を自動導入
 
 ### 3.2 手続き
@@ -654,7 +655,9 @@ s(r)
 
 - `AddressOf` で手続きアドレスを取得し、`*Function` / `*Sub`（またはその `TypeDef`）へ代入
 - 呼び出しは通常の関数呼び出しと同じ構文。引数型の厳密照合は未（個数・ABI は通常の call と同じ）
-- 戻り型はシグネチャの `As`（`Sub` は戻り値なし）
+- 戻り型はシグネチャの `As`（`Sub` は戻り値なし）。`*Function(...)` の `As` を省くと `Function` と同じく `Double`
+- `Type` / `Class` のフィールドの関数ポインタも呼べる: `p->rom.init_cb(h)`、`obj->fp(x)`（同じ名前のメソッドがあればメソッド）。戻り値は `Long` 幅として読む
+- `TypeDef F = *Function(...)` を後ろに書いても、前の手続きの仮引数 `f As F` を `f(...)` と呼べる
 
 ### 5.2.2 リソース埋め込み
 

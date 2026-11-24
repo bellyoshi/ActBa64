@@ -1,0 +1,166 @@
+' RadSrc - 窓のソース（.wnd の FILEPATH）から、イベント プロシージャを書いてある順に拾う。
+' 名前の形（AB 4.20 と同じ）:
+'   窓_イベント            例 MainWnd_Create / MainWnd_Resize
+'   窓_部品_イベント       例 MainWnd_CommandButton1_Click / MainWnd_EditBox1_Change
+'   窓_メニューID_MenuClick 例 MainWnd_IDM_OPEN_MenuClick
+' g_rhKind: 0 = 窓のイベント、1 = 部品（WM_COMMAND）、2 = メニュー、3 = 部品（WM_NOTIFY）
+
+Dim g_rhCount As Long
+Dim g_rhWin(2047) As Long
+Dim g_rhKind(2047) As Long
+Dim g_rhItem(2047) As String
+Dim g_rhEv(2047) As String
+Dim g_rhCode(2047) As String
+
+Sub RadSrc_Reset()
+    g_rhCount = 0
+End Sub
+
+' 窓 w のソースの本文 text を 1 行ずつ見る
+Sub RadSrc_Scan(w As Long, text As String)
+    Dim p As Long
+    p = 1
+    While p <= Len(text)
+        RadSrc_Line(w, RadLine$(text, p))
+    Wend
+End Sub
+
+Sub RadSrc_Line(w As Long, t As String)
+    Dim name As String
+    Dim pre As String
+    name = RadSrc_ProcName$(t)
+    pre = Lower$(g_rwName(w)) + "_"
+    If Len(name) <= Len(pre) Then Exit Sub
+    If Lower$(Left$(name, Len(pre))) <> pre Then Exit Sub
+    RadSrc_Take(w, Mid$(name, Len(pre) + 1))
+End Sub
+
+' 「Sub 名前(」「Function 名前(」の名前。ほかの行は ""
+Function RadSrc_ProcName$(t As String) As String
+    Dim p As Long
+    RadSrc_ProcName$ = ""
+    p = 0
+    If Lower$(Left$(t, 4)) = "sub " Then p = 5
+    If Lower$(Left$(t, 9)) = "function " Then p = 10
+    If p > 0 Then RadSrc_ProcName$ = RadSrc_Ident$(t, p)
+End Function
+
+Function RadSrc_IsIdCh(c As String) As Long
+    Dim n As Long
+    RadSrc_IsIdCh = 0
+    If Len(c) = 0 Then Exit Function
+    n = Asc(c)
+    If n >= 48 And n <= 57 Or n >= 65 And n <= 90 Or n >= 97 And n <= 122 Or n = 95 Then RadSrc_IsIdCh = 1
+End Function
+
+' p0 の後ろの空白を飛ばした識別子（英数字と _）
+Function RadSrc_Ident$(t As String, p0 As Long) As String
+    Dim s As String
+    Dim e As Long
+    s = Trim$(Mid$(t, p0))
+    e = 1
+    While RadSrc_IsIdCh(Mid$(s, e, 1)) <> 0
+        e = e + 1
+    Wend
+    RadSrc_Ident$ = Left$(s, e - 1)
+End Function
+
+' プロジェクトのソース text に、窓の CALLBACK の関数があるか見る（g_rwCbFound）
+Sub RadSrc_ScanCb(text As String)
+    Dim p As Long
+    p = 1
+    While p <= Len(text)
+        RadSrc_CbLine(Lower$(RadSrc_ProcName$(RadLine$(text, p))))
+    Wend
+End Sub
+
+Sub RadSrc_CbLine(name As String)
+    Dim w As Long
+    If Len(name) = 0 Then Exit Sub
+    For w = 0 To g_rwCount - 1
+        If Lower$(g_rwCallback(w)) = name Then g_rwCbFound(w) = 1
+    Next
+End Sub
+
+' 窓名_ の後ろ rest を、窓のイベント・メニュー・部品のイベントのどれかとして足す
+Sub RadSrc_Take(w As Long, rest As String)
+    Dim u As Long
+    u = RadSrc_LastUnder(rest)
+    If u = 0 Then
+        RadSrc_TakeWin(w, rest)
+    Else
+        RadSrc_TakePart(w, Left$(rest, u - 1), Mid$(rest, u + 1))
+    End If
+End Sub
+
+Sub RadSrc_TakeWin(w As Long, ev As String)
+    Dim info As String
+    Dim evName As String
+    info = RadEv_Look$(RadEv_WinTable$(), ev, evName)
+    If Len(info) > 0 Then RadSrc_Add(w, 0, "", evName, RadEv_Before$(info))
+End Sub
+
+Function RadSrc_LastUnder(s As String) As Long
+    Dim i As Long
+    RadSrc_LastUnder = 0
+    For i = Len(s) To 1 Step -1
+        If Mid$(s, i, 1) = "_" Then
+            RadSrc_LastUnder = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Sub RadSrc_TakePart(w As Long, part As String, ev As String)
+    If Lower$(ev) = "menuclick" Then
+        If RadWnd_IsMenuId(part) <> 0 Then RadSrc_Add(w, 2, RadWnd_MenuIdName$(part), "MenuClick", "")
+        Exit Sub
+    End If
+    RadSrc_TakeCtl(w, RadWnd_FindItem(w, part), ev)
+End Sub
+
+' 種類は WM_COMMAND の部品なら 1、WM_NOTIFY の部品なら 3
+Sub RadSrc_TakeCtl(w As Long, i As Long, ev As String)
+    Dim code As String
+    Dim evName As String
+    If i < 0 Then Exit Sub
+    code = RadEv_CtlCode$(g_riType(i), ev, evName)
+    If Len(code) = 0 Then Exit Sub
+    RadSrc_Add(w, 1 + 2 * RadEv_IsNotify(g_riType(i)), g_riName(i), evName, code)
+End Sub
+
+Sub RadSrc_Add(w As Long, kind As Long, item As String, ev As String, code As String)
+    Dim h As Long
+    If RadSrc_Find(w, kind, item, ev) >= 0 Or g_rhCount >= 2048 Then Exit Sub
+    h = g_rhCount
+    g_rhCount = g_rhCount + 1
+    g_rhWin(h) = w : g_rhKind(h) = kind : g_rhItem(h) = item
+    g_rhEv(h) = ev : g_rhCode(h) = code
+End Sub
+
+' 同じ窓・種類・部品・イベントの番号（無ければ -1）。item / ev は大文字小文字を区別しない
+Function RadSrc_Find(w As Long, kind As Long, item As String, ev As String) As Long
+    Dim h As Long
+    RadSrc_Find = -1
+    For h = 0 To g_rhCount - 1
+        If g_rhWin(h) = w And g_rhKind(h) = kind And Lower$(g_rhItem(h)) = Lower$(item) And Lower$(g_rhEv(h)) = Lower$(ev) Then
+            RadSrc_Find = h
+            Exit Function
+        End If
+    Next
+End Function
+
+' 窓 w に窓のイベント ev があれば 1
+Function RadSrc_Has(w As Long, ev As String) As Long
+    RadSrc_Has = 0
+    If RadSrc_Find(w, 0, "", ev) >= 0 Then RadSrc_Has = 1
+End Function
+
+' 窓 w に種類 kind のものが 1 つでもあれば 1
+Function RadSrc_HasKind(w As Long, kind As Long) As Long
+    Dim h As Long
+    RadSrc_HasKind = 0
+    For h = 0 To g_rhCount - 1
+        If g_rhWin(h) = w And g_rhKind(h) = kind Then RadSrc_HasKind = 1
+    Next
+End Function

@@ -1,0 +1,174 @@
+' RadGenDlg - Callback.wbp の後半（DefaultCallProc、ダイアログの窓クラス、DialogBox / EndDialog /
+' CreateDialog）と MakeWindow.wbp（ノーマル ウィンドウの窓クラスを登録して作る）。
+
+Sub RadGen_Tail()
+    RadOut("Function DefaultCallProc(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT")
+    RadOut(RadT$(1) + "DefaultCallProc=DefWindowProc(hWnd,message,wParam,lParam)")
+    RadOut("End Function" + Chr$(13) + Chr$(10))
+    RadGen_WndClass("_RadSys_dlgwcl")
+    RadOut("_RadSys_dlgwcl.lpszClassName=" + Chr$(34) + "NORMALDLG" + Chr$(34))
+    RadOut("_RadSys_dlgwcl.hbrBackground=h3DFaceBrush")
+    RadOut("_RadSys_dlgwcl.lpfnWndProc=AddressOf(DefaultCallProc)")
+    RadGen_TailDlg()
+End Sub
+
+Sub RadGen_TailDlg()
+    RadOut("RegisterClassEx(_RadSys_dlgwcl)")
+    RadOut("")
+    RadGen_DialogBox()
+    RadGen_EndDialog()
+    RadOut("")
+    RadGen_CreateDialog()
+End Sub
+
+' WNDCLASSEX の変数 v の、窓クラスの共通の行（ダイアログ用はアイコンまで、ノーマル用はカーソルまで）
+Sub RadGen_WndClass(v As String)
+    RadOut("Dim " + v + " As WNDCLASSEX")
+    RadOut("FillMemory(VarPtr(" + v + "),Len(" + v + "),0)")
+    RadOut(v + ".cbSize=Len(" + v + ")")
+    RadOut(v + ".hInstance=GetModuleHandle(0)")
+    RadOut(v + ".style=CS_HREDRAW or CS_VREDRAW or CS_DBLCLKS")
+    If v <> "_RadSys_dlgwcl" Then Exit Sub
+    RadGen_StdIcon(v)
+    RadOut(v + ".hCursor=LoadCursor(NULL,MAKEINTRESOURCE(IDC_ARROW))")
+End Sub
+
+Sub RadGen_StdIcon(v As String)
+    RadOut(v + ".hIcon=LoadIcon(NULL,MAKEINTRESOURCE(IDI_APPLICATION))")
+    RadOut(v + ".hIconSm=LoadIcon(NULL,MAKEINTRESOURCE(IDI_WINLOGO))")
+End Sub
+
+' TYPE が type の窓が 1 つでもあれば 1
+Function RadGen_HasType(t As Long) As Long
+    Dim w As Long
+    RadGen_HasType = 0
+    For w = 0 To g_rwCount - 1
+        If g_rwType(w) = t Then RadGen_HasType = 1
+    Next
+End Function
+
+' モーダル ダイアログが無ければ中身は空（AB 4.20 と同じ）
+Sub RadGen_DialogBox()
+    RadOut("Function DialogBox(hOwnerWnd As HWND, TemplateName As LPSTR) As LONG_PTR")
+    If RadGen_HasType(1) <> 0 Then RadGen_DlgBody()
+    RadOut("End Function")
+End Sub
+
+Sub RadGen_DlgBody()
+    RadGen_DlgIfs(1, "")
+    RadOut(RadT$(1) + "Else")
+    RadOut(RadT$(2) + "Exit Function")
+    RadOut(RadT$(1) + "End If")
+    RadOut(RadT$(1) + "EnableWindow(hOwnerWnd,0)" + Chr$(13) + Chr$(10))
+    RadGen_DlgLoop()
+End Sub
+
+Sub RadGen_DlgLoop()
+    RadOut(RadT$(1) + "Dim msg As MSG, iResult As Long")
+    RadOut(RadT$(1) + "Do")
+    RadOut(RadT$(2) + "iResult=GetMessage(msg,0,0,0)")
+    RadOut(RadT$(2) + "If iResult=0 or iResult=-1 Then Exit Do")
+    RadOut(RadT$(2) + "TranslateMessage(msg)")
+    RadOut(RadT$(2) + "DispatchMessage(msg)")
+    RadOut(RadT$(1) + "Loop")
+    RadOut(RadT$(1) + "DialogBox=msg.wParam")
+End Sub
+
+Sub RadGen_EndDialog()
+    RadOut("Sub EndDialog(hWnd As HWND, lResult As Long)")
+    RadOut(RadT$(1) + "EnableWindow(GetWindow(hWnd,GW_OWNER),1)")
+    RadOut(RadT$(1) + "DestroyWindow(hWnd)")
+    RadOut(RadT$(1) + "PostMessage(0,WM_QUIT,lResult,0)")
+    RadOut("End Sub")
+End Sub
+
+Sub RadGen_CreateDialog()
+    RadOut("Function CreateDialog(hOwnerWnd As HWND, TemplateName As LPSTR) As HWND")
+    If RadGen_HasType(2) <> 0 Then
+        RadGen_DlgIfs(2, "CreateDialog")
+        RadOut(RadT$(1) + "End If")
+    End If
+    RadOut("End Function")
+End Sub
+
+' TYPE が t の窓ごとに If / ElseIf lstrcmp(TemplateName,"窓")=0 Then …。ret が空でなければ ret=ハンドル
+Sub RadGen_DlgIfs(t As Long, ret As String)
+    Dim w As Long
+    Dim kw As String
+    kw = "If "
+    For w = 0 To g_rwCount - 1
+        If g_rwType(w) = t Then RadGen_DlgIf(w, ret, kw)
+    Next
+End Sub
+
+Sub RadGen_DlgIf(w As Long, ret As String, ByRef kw As String)
+    RadOut(RadT$(1) + kw + "lstrcmp(TemplateName," + RadQ$(g_rwName(w)) + ")=0 Then")
+    RadGen_DlgOpen(w, ret)
+    kw = "ElseIf "
+End Sub
+
+Sub RadGen_DlgOpen(w As Long, ret As String)
+    Dim h As String
+    h = g_rwHandle(w)
+    RadOut(RadT$(2) + h + "=" + RadGen_DlgCreate$(w))
+    RadOut(RadT$(2) + "SetWindowLong(" + h + ",GWL_WNDPROC,AddressOf(" + RadGen_Proc$(w) + ") As LONG_PTR)")
+    RadOut(RadT$(2) + "SendMessage(" + h + ",WM_INITDIALOG,0,0)")
+    If Len(g_rwIcon(w)) > 0 Then RadOut(RadT$(2) + "SendMessage(" + h + ",WM_SETICON,ICON_SMALL,LoadIcon(GetModuleHandle(0)," + g_rwIcon(w) + "))")
+    RadOut(RadT$(2) + "ShowWindow(" + h + ",SW_SHOW)")
+    If Len(ret) > 0 Then RadOut(RadT$(2) + ret + "=" + h)
+End Sub
+
+Function RadGen_DlgCreate$(w As Long) As String
+    Dim s As String
+    s = "CreateWindowEx(" + g_rwExStyle(w) + "," + Chr$(34) + "NORMALDLG" + Chr$(34) + "," + RadQ$(g_rwCaption(w))
+    s = s + "," + g_rwStyle(w) + "," + g_rwPoint(w) + "," + g_rwSize(w) + ",hOwnerWnd,"
+    RadGen_DlgCreate$ = s + Str$(g_rwId(w)) + " As HMENU,GetModuleHandle(0),0)"
+End Function
+
+' MakeWindow.wbp の中身
+
+' MakeWindow.wbp の全文
+Function RadGen_MakeWindow$() As String
+    Dim w As Long, k As Long
+    g_rgOut = ""
+    RadGen_MakeHead()
+    k = 0
+    For w = 0 To g_rwCount - 1
+        If g_rwType(w) = 0 Then RadGen_MakeOne(w, k)
+    Next
+    RadGen_MakeWindow$ = g_rgOut
+End Function
+
+Sub RadGen_MakeHead()
+    RadOut(RadGen_Banner$() + Chr$(13) + Chr$(10))
+    RadGen_WndClass("_RadSys_wcl")
+    RadOut("_RadSys_wcl.hCursor=LoadCursor(NULL,MAKEINTRESOURCE(IDC_ARROW))" + Chr$(13) + Chr$(10))
+End Sub
+
+' ノーマル ウィンドウ w を窓クラス <CLASS><k> で登録して作る
+Sub RadGen_MakeOne(w As Long, ByRef k As Long)
+    Dim klass As String
+    klass = g_rwClass(w) + Str$(k) : k = k + 1
+    RadGen_MakeIcon(w)
+    RadOut("_RadSys_wcl.lpszClassName=" + RadQ$(klass))
+    RadOut("_RadSys_wcl.lpfnWndProc=AddressOf(" + RadGen_Proc$(w) + ")")
+    RadOut("_RadSys_wcl.hbrBackground=h3DFaceBrush")
+    RadOut("RegisterClassEx(_RadSys_wcl)")
+    RadGen_MakeCreate(w, klass)
+End Sub
+
+Sub RadGen_MakeIcon(w As Long)
+    If Len(g_rwIcon(w)) = 0 Then
+        RadGen_StdIcon("_RadSys_wcl")
+        Exit Sub
+    End If
+    RadOut("_RadSys_wcl.hIcon=LoadIcon(_RadSys_wcl.hInstance,MAKEINTRESOURCE(" + g_rwIcon(w) + "))")
+    RadOut("_RadSys_wcl.hIconSm=LoadIcon(_RadSys_wcl.hInstance,MAKEINTRESOURCE(" + g_rwIcon(w) + "))")
+End Sub
+
+Sub RadGen_MakeCreate(w As Long, klass As String)
+    Dim s As String
+    s = "CreateWindowEx(" + g_rwExStyle(w) + "," + RadQ$(klass) + "," + RadQ$(g_rwCaption(w))
+    s = s + "," + g_rwStyle(w) + "," + g_rwPoint(w) + "," + g_rwSize(w) + ",0,0,GetModuleHandle(0),0)"
+    RadOut(s)
+End Sub

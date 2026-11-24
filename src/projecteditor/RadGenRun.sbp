@@ -1,0 +1,157 @@
+' RadGenRun - #USEWINDOW=1 のプロジェクトのコンパイルの前に、<プロジェクト名>.wnd から
+' Callback.wbp と MakeWindow.wbp を作り直す（AB 4.20 の ProjectEditor と同じく、毎回上書き）。
+' 書く文字コードは .wnd と同じ（AB 4.20 の .wnd は Shift_JIS）。
+
+' .wnd が無いプロジェクト（Form クラスで窓を作るものなど）は何もしない。
+' #OPTION の &H2 があれば InitCommonControlsEx を足す（AB 4.20 と同じ）
+
+Dim g_rgErr As String
+Dim g_rgDone As String      ' 作ったときの .wnd のパス（作らなければ ""）
+Dim g_rgOption As Long
+
+' 生成が要らないか、うまくいけば 1。.wnd が読めない・書けないときは 0（g_rgErr に理由）
+Function RadGen_Run(pjPath As String) As Long
+    Dim dir As String
+    Dim name As String
+    RadGen_Run = 1
+    g_rgErr = "" : g_rgDone = ""
+    dir = ProjDirOf$(pjPath) : name = RadGen_BaseName$(pjPath)
+    If GetFileAttributes(StrPtr(dir + name + ".wnd")) = -1 Then Exit Function
+    RadGen_Run = RadGen_Make(pjPath, dir, name)
+    If RadGen_Run <> 0 Then g_rgDone = dir + name + ".wnd"
+End Function
+
+Function RadGen_Make(pjPath As String, dir As String, name As String) As Long
+    Dim enc As Long
+    RadGen_Make = 0
+    If RadGen_LoadAll(dir, name, enc) = 0 Then Exit Function
+    RadGen_ScanPj(pjPath, dir)
+    RadGen_Make = RadGen_WriteAll(dir, name, g_rgOption, enc)
+End Function
+
+' パスのファイル名から拡張子を除いたもの
+Function RadGen_BaseName$(path As String) As String
+    Dim s As String
+    Dim i As Long
+    s = Mid$(path, Len(ProjDirOf$(path)) + 1)
+    For i = Len(s) To 1 Step -1
+        If Mid$(s, i, 1) = "." Then Exit For
+    Next
+    If i > 0 Then s = Left$(s, i - 1)
+    RadGen_BaseName$ = s
+End Function
+
+Function RadGen_LoadAll(dir As String, name As String, ByRef enc As Long) As Long
+    Dim w As Long
+    RadGen_LoadAll = 0
+    If RadGen_LoadWnd(dir + name + ".wnd", enc) = 0 Then Exit Function
+    RadSrc_Reset()
+    For w = 0 To g_rwCount - 1
+        If Len(g_rwFile(w)) > 0 Then RadSrc_Scan(w, RadGen_LoadSrc$(RadGen_Join$(dir, g_rwFile(w))))
+    Next
+    RadGen_LoadAll = 1
+End Function
+
+' .pj の #OPTION を読み、#SOURCE のファイルから CALLBACK の関数を探す（別のファイルに書いてもよい）
+Sub RadGen_ScanPj(pjPath As String, dir As String)
+    Dim pj As String
+    Dim p As Long
+    Dim inSrc As Long
+    pj = RadGen_LoadSrc$(pjPath)
+    p = 1 : inSrc = 0 : g_rgOption = 0
+    While p <= Len(pj)
+        RadGen_PjLine(RadLine$(pj, p), dir, inSrc)
+    Wend
+End Sub
+
+Sub RadGen_PjLine(t As String, dir As String, ByRef inSrc As Long)
+    If Len(t) = 0 Or Left$(t, 1) = "'" Then Exit Sub
+    If Left$(t, 1) = "#" Then
+        inSrc = 0
+        If Lower$(t) = "#source" Then inSrc = 1
+        If Lower$(RadWnd_Key$(t)) = "#option" Then g_rgOption = RadWnd_Num(RadWnd_Val$(t))
+        Exit Sub
+    End If
+    If inSrc <> 0 Then RadSrc_ScanCb(RadGen_LoadSrc$(RadGen_Join$(dir, t)))
+End Sub
+
+Function RadGen_Join$(dir As String, rel As String) As String
+    RadGen_Join$ = dir + rel
+    If Len(rel) >= 2 Then
+        If Mid$(rel, 2, 1) = ":" Or Left$(rel, 1) = "\" Then RadGen_Join$ = rel
+    End If
+End Function
+
+Function RadGen_LoadWnd(path As String, ByRef enc As Long) As Long
+    Dim n As Long, p As *Byte
+    RadGen_LoadWnd = 0
+    p = LoadFile(StrPtr(path), n)
+    If p = 0 Then g_rgErr = "Failed to read " + path + "."
+    If p = 0 Then Exit Function
+    RadGen_ParseBytes(p, n, enc)
+    free(p)
+    RadGen_LoadWnd = 1
+End Function
+
+Sub RadGen_ParseBytes(p As *Byte, ByVal n As Long, ByRef enc As Long)
+    enc = Enc_Detect(p, n)
+    If enc = ENC_UTF8 And RadGen_IsAscii(p, n) <> 0 Then enc = ENC_CP932
+    If enc = ENC_CP932 Then n = RadGen_Unescape(p, n)
+    RadWnd_Parse(Enc_BytesToUtf8$(p, n, enc))
+End Sub
+
+' 英数字だけの .wnd は Shift_JIS として扱い、出力も Shift_JIS にする（AB 4.20 で開ける）
+Function RadGen_IsAscii(p As *Byte, n As Long) As Long
+    Dim i As Long
+    RadGen_IsAscii = 1
+    For i = 0 To n - 1
+        If p[i] >= &H80 Then RadGen_IsAscii = 0
+    Next
+End Function
+
+' AB 4.20 は 2 バイト目が \（&H5C）の Shift_JIS の字（「表」「ソ」など）の後ろに \ を足して書く。それを除く
+Function RadGen_Unescape(p As *Byte, n As Long) As Long
+    Dim i As Long, j As Long
+    i = 0 : j = 0
+    While i < n
+        p[j] = p[i]
+        If Enc_IsSjisLead(p[i]) <> 0 And i + 1 < n Then RadGen_Unescape2(p, n, i, j)
+        i = i + 1 : j = j + 1
+    Wend
+    RadGen_Unescape = j
+End Function
+
+Sub RadGen_Unescape2(p As *Byte, n As Long, ByRef i As Long, ByRef j As Long)
+    i = i + 1 : j = j + 1
+    p[j] = p[i]
+    If p[i] <> &H5C Or i + 1 >= n Then Exit Sub
+    If p[i + 1] = &H5C Then i = i + 1
+End Sub
+
+' ソースを UTF-8 の文字列で（読めなければ ""）
+Function RadGen_LoadSrc$(path As String) As String
+    Dim n As Long
+    Dim p As *Byte
+    RadGen_LoadSrc$ = ""
+    p = LoadFile(StrPtr(path), n)
+    If p = 0 Then Exit Function
+    RadGen_LoadSrc$ = Enc_BytesToUtf8$(p, n, Enc_Detect(p, n))
+    free(p)
+End Function
+
+Function RadGen_WriteAll(dir As String, name As String, ByVal opt As Long, enc As Long) As Long
+    RadGen_WriteAll = 0
+    If RadGen_Save(dir + "Callback.wbp", RadGen_Callback$(name, opt), enc) = 0 Then Exit Function
+    RadGen_WriteAll = RadGen_Save(dir + "MakeWindow.wbp", RadGen_MakeWindow$(), enc)
+End Function
+
+' text を enc で書く
+Function RadGen_Save(path As String, text As String, enc As Long) As Long
+    Dim n As Long
+    Dim bytes As *Byte
+    RadGen_Save = 0
+    bytes = Enc_EncodeText(text, enc, n)
+    If bytes <> 0 Then RadGen_Save = WriteAll(StrPtr(path), bytes, n)
+    If bytes <> 0 Then free(bytes)
+    If RadGen_Save = 0 Then g_rgErr = "Failed to write " + path + "."
+End Function

@@ -1,0 +1,175 @@
+' RadGenHead - Callback.wbp の前半（ID の Const、ハンドル・フォント・メニュー、<名前>_DestroyObjects）。
+' 書き方は AB 4.20 の ProjectEditor の出力に合わせる（改行は CRLF）。
+
+Dim g_rgOut As String
+Dim g_rgMenus As String     ' DestroyMenu する順（作った順）。| 区切り
+
+Sub RadOut(s As String)
+    g_rgOut = g_rgOut + s + Chr$(13) + Chr$(10)
+End Sub
+
+' Callback.wbp の全文。opt は .pj の #OPTION（&H2 なら InitCommonControlsEx）
+Function RadGen_Callback$(projName As String, ByVal opt As Long) As String
+    g_rgOut = ""
+    RadGen_Head(projName, opt And 2)
+    RadGen_EventCalls()
+    RadGen_Tail()
+    RadGen_Callback$ = g_rgOut
+End Function
+
+Function RadT$(n As Long) As String
+    Dim i As Long
+    RadT$ = ""
+    For i = 1 To n
+        RadT$ = RadT$ + Chr$(9)
+    Next
+End Function
+
+' &H と 8 桁の 16 進（小文字）
+Function RadHex$(v As Long) As String
+    Dim h As String
+    h = Hex$(v)
+    While Len(h) < 8
+        h = "0" + h
+    Wend
+    RadHex$ = "&H" + Right$(h, 8)
+End Function
+
+' " で囲む。中の " は "+Chr$(34)+" にする
+Function RadQ$(s As String) As String
+    Dim i As Long
+    RadQ$ = Chr$(34)
+    For i = 1 To Len(s)
+        RadQ$ = RadQ$ + RadQCh$(Mid$(s, i, 1))
+    Next
+    RadQ$ = RadQ$ + Chr$(34)
+End Function
+
+Function RadQCh$(c As String) As String
+    RadQCh$ = c
+    If c = Chr$(34) Then RadQCh$ = Chr$(34) + "+Chr$(34)+" + Chr$(34)
+End Function
+
+Function RadGen_Banner$() As String
+    RadGen_Banner$ = "'このファイルはウィンドウ定義ファイル（*.wnd）をもとに生成されています"
+End Function
+
+' Callback.wbp の前半。useCtl <> 0 なら InitCommonControlsEx（.pj の #OPTION の &H2）
+Sub RadGen_Head(projName As String, useCtl As Long)
+    RadOut(RadGen_Banner$())
+    RadOut("")
+    If useCtl <> 0 Then RadGen_InitCtls()
+    RadGen_Consts()
+    RadOut("")
+    RadGen_WinDims()
+    RadGen_Menus()
+    RadGen_Destroy(projName)
+End Sub
+
+Sub RadGen_InitCtls()
+    RadOut("Dim _RadSys_InitCtrls As INITCOMMONCONTROLSEX")
+    RadOut("_RadSys_InitCtrls.dwSize=Len(_RadSys_InitCtrls)")
+    RadOut("_RadSys_InitCtrls.dwICC=ICC_WIN95_CLASSES")
+    RadOut("InitCommonControlsEx(_RadSys_InitCtrls)")
+    RadOut("")
+End Sub
+
+' 部品の名前（全部の窓）とメニューの ID に 1000 から番号。同じ名前は 1 回だけ
+Sub RadGen_Consts()
+    Dim i As Long, n As Long
+    Dim used As String
+    used = "|" : n = 1000
+    For i = 0 To g_riCount - 1
+        RadGen_Const(g_riName(i), used, n)
+    Next
+    RadGen_MenuConsts(used, n)
+End Sub
+
+Sub RadGen_MenuConsts(ByRef used As String, ByRef n As Long)
+    Dim i As Long
+    For i = 0 To g_reCount - 1
+        If g_reKind(i) = 2 Then RadGen_Const(g_reId(i), used, n)
+    Next
+End Sub
+
+Sub RadGen_Const(name As String, ByRef used As String, ByRef n As Long)
+    If Len(name) = 0 Then Exit Sub
+    If InStr(1, used, "|" + Lower$(name) + "|") > 0 Then Exit Sub
+    used = used + Lower$(name) + "|"
+    RadOut("Const " + name + "=" + Str$(n))
+    n = n + 1
+End Sub
+
+Sub RadGen_WinDims()
+    Dim w As Long
+    For w = 0 To g_rwCount - 1
+        RadOut("Dim " + g_rwHandle(w) + " As HWND")
+        RadOut("Dim hFont_" + g_rwName(w) + " As HFONT")
+        RadOut("hFont_" + g_rwName(w) + "=CreateFont(" + g_rwFont(w) + ")")
+    Next
+    RadGen_Brush()
+End Sub
+
+Sub RadGen_Brush()
+    RadOut("Dim h3DFaceBrush As HBRUSH")
+    RadOut("h3DFaceBrush=CreateSolidBrush(GetSysColor(COLOR_3DFACE))" + Chr$(13) + Chr$(10))
+    RadOut("")
+End Sub
+
+' メニューは後ろの項目から位置 0 へ InsMenu する（AB 4.20 と同じ）
+Sub RadGen_Menus()
+    Dim m As Long
+    g_rgMenus = "|"
+    For m = 0 To g_rmCount - 1
+        RadGen_NewMenu("hMenu_" + g_rmName(m), "CreateMenu")
+        RadGen_MenuKids(m, -1, "hMenu_" + g_rmName(m))
+        RadOut("")
+    Next
+End Sub
+
+' Dim h As HMENU / h=CreateMenu() か CreatePopupMenu()。DestroyMenu する順に足す
+Sub RadGen_NewMenu(h As String, fn As String)
+    RadOut("Dim " + h + " As HMENU")
+    RadOut(h + "=" + fn + "()")
+    g_rgMenus = g_rgMenus + h + "|"
+End Sub
+
+Sub RadGen_MenuKids(m As Long, parent As Long, h As String)
+    Dim e As Long
+    For e = g_reCount - 1 To 0 Step -1
+        If g_reMenu(e) = m And g_reParent(e) = parent Then RadGen_MenuEntry(m, e, h)
+    Next
+End Sub
+
+Sub RadGen_MenuEntry(m As Long, e As Long, h As String)
+    Dim pre As String
+    pre = "InsMenu " + h + ",0,MF_BYPOSITION"
+    If g_reKind(e) = 3 Then RadOut(pre)
+    If g_reKind(e) = 2 Then RadOut(pre + ",Ex" + RadQ$(g_reCaption(e)) + "," + g_reId(e) + ",0," + Str$(g_reState(e)))
+    If g_reKind(e) <> 1 Then Exit Sub
+    RadGen_NewMenu(g_reHandle(e), "CreatePopupMenu")
+    RadGen_MenuKids(m, e, g_reHandle(e))
+    RadOut(pre + ",Ex" + RadQ$(g_reCaption(e)) + ",0," + g_reHandle(e) + "," + Str$(g_reState(e)))
+End Sub
+
+Sub RadGen_Destroy(projName As String)
+    Dim w As Long
+    RadOut("Sub " + projName + "_DestroyObjects()")
+    RadGen_DestroyMenus()
+    For w = 0 To g_rwCount - 1
+        RadOut(Chr$(9) + "DeleteObject(hFont_" + g_rwName(w) + ")")
+    Next
+    RadOut(Chr$(9) + "DeleteObject(h3DFaceBrush)")
+    RadOut("End Sub" + Chr$(13) + Chr$(10))
+End Sub
+
+Sub RadGen_DestroyMenus()
+    Dim p As Long
+    Dim e As Long
+    p = 2
+    While p <= Len(g_rgMenus)
+        e = InStr(p, g_rgMenus, "|")
+        RadOut(Chr$(9) + "DestroyMenu(" + Mid$(g_rgMenus, p, e - p) + ")")
+        p = e + 1
+    Wend
+End Sub

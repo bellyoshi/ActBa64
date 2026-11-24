@@ -96,7 +96,49 @@ Sub ParsePreTypeDefSize(p As *Parser, at As Long, ti As Long)
     sizes = types->typeSizes
     If sizes[ti] = 0 Then sizes[ti] = ParsePreTypeDefTargetSize(p, at)
     If ParsePreIsDataPtrAt(p, at) Then types->typePtrAt[ti] = at + 1
+    ParsePreFnPtr(p, at, ti)
     p->pos = save
+End Sub
+
+' TypeDef F = *Function(...) / *Sub(...) なら、前の Sub の仮引数 f As F でも f(...) と呼べるよう
+' 関数ポインタの型として先に入れる。仮引数の鎖は本体の TypeDef で入れる。p->pos を動かす
+Sub ParsePreFnPtr(p As *Parser, at As Long, ti As Long)
+    Dim kw(KW_LEN - 1) As Byte
+    Dim ast As *Ast
+    Dim isSub As Long
+    Dim depth As Long
+    Dim k As Long
+    Dim retTy As Long
+    If ParseTokKindAt(p, at) <> TK_STAR Then Exit Sub
+    If ParseTokKindAt(p, at + 1) <> TK_IDENT Or ParseTokKindAt(p, at + 2) <> TK_LPAREN Then Exit Sub
+    p->pos = at + 1
+    isSub = -1
+    lstrcpy(VarPtr(kw), "function")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then isSub = 0
+    lstrcpy(VarPtr(kw), "sub")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then isSub = 1
+    If isSub < 0 Then Exit Sub
+    retTy = -1
+    If isSub = 0 Then
+        ' 閉じ括弧の後ろの As Double だけを見る。As を省けば Double、ほかは Long と同じ幅
+        k = at + 3
+        depth = 1
+        While depth > 0
+            If ParseTokKindAt(p, k) = TK_EOF Then Exit Sub
+            If ParseTokKindAt(p, k) = TK_LPAREN Then depth = depth + 1
+            If ParseTokKindAt(p, k) = TK_RPAREN Then depth = depth - 1
+            k = k + 1
+        Wend
+        retTy = TY_DOUBLE
+        lstrcpy(VarPtr(kw), "as")
+        If ParseIdentIsAt(p, k, VarPtr(kw)) <> 0 Then
+            retTy = TY_LONG
+            lstrcpy(VarPtr(kw), "double")
+            If ParseIdentIsAt(p, k + 1, VarPtr(kw)) <> 0 Then retTy = TY_DOUBLE
+        End If
+    End If
+    ast = p->ast
+    TySetFnPtr(ast->types, ti, -1, retTy)
 End Sub
 
 ' TypeDef A = *T（*Function / *Sub は除く）なら true。p->pos を動かす
@@ -105,7 +147,9 @@ Function ParsePreIsDataPtrAt(p As *Parser, at As Long) As boolean
     ParsePreIsDataPtrAt = false
     If ParseTokKindAt(p, at) <> TK_STAR Then Exit Function
     If ParseTokKindAt(p, at + 1) <> TK_IDENT Then Exit Function
+    ' TypeDef X = * で行が終わるなら、次の行の語は型ではない
     p->pos = at + 1
+    If ParseTypeDefBareStar(p, at) Then Exit Function
     lstrcpy(VarPtr(kw), "function")
     If ParseIdentIs(p, VarPtr(kw)) <> 0 Then Exit Function
     lstrcpy(VarPtr(kw), "sub")

@@ -194,6 +194,8 @@ Dim g_udtArrN As Long
 Dim g_udtArrGlob(255) As Long
 Dim g_udtArrOff(255) As Long
 Dim g_udtArrPool(255) As Long
+' Dim a[n] As *T の T（要素が指す UDT）。ポインタ配列でなければ -1
+Dim g_udtArrPtee(255) As Long
 ' Dim の登録中に LowDimUdtArrBytes が決めた pool id（多次元でなければ -1）
 Dim g_dimUdtPool As Long
 
@@ -211,6 +213,7 @@ Sub ArrUdtDropLocals()
             g_udtArrGlob(k) = g_udtArrGlob(i)
             g_udtArrOff(k) = g_udtArrOff(i)
             g_udtArrPool(k) = g_udtArrPool(i)
+            g_udtArrPtee(k) = g_udtArrPtee(i)
             k = k + 1
         End If
     Next
@@ -230,23 +233,54 @@ Function ArrUdtFind(isGlob As Long, off As Long) As Long
     Next
 End Function
 
-' 戻り値 1 : 登録した  0 : 表があふれた
-Function ArrUdtNote(isGlob As Long, off As Long, pool As Long) As Long
+' (大域か, オフセット) の行。無ければ足す。表があふれたら -1
+Function ArrUdtSlot(isGlob As Long, off As Long) As Long
     Dim i As Long
-    ArrUdtNote = 1
     i = ArrUdtFind(isGlob, off)
     If i < 0 Then
         If g_udtArrN >= ARR_UDT_MAX Then
-            ArrUdtNote = 0
+            ArrUdtSlot = -1
             Exit Function
         End If
         i = g_udtArrN
         g_udtArrN = g_udtArrN + 1
+        g_udtArrPool(i) = -1
+        g_udtArrPtee(i) = -1
     End If
     g_udtArrGlob(i) = 0
     If isGlob <> 0 Then g_udtArrGlob(i) = 1
     g_udtArrOff(i) = off
+    ArrUdtSlot = i
+End Function
+
+' 戻り値 1 : 登録した  0 : 表があふれた
+Function ArrUdtNote(isGlob As Long, off As Long, pool As Long) As Long
+    Dim i As Long
+    ArrUdtNote = 0
+    i = ArrUdtSlot(isGlob, off)
+    If i < 0 Then Exit Function
     g_udtArrPool(i) = pool
+    g_udtArrPtee(i) = -1
+    ArrUdtNote = 1
+End Function
+
+' Dim a[n] As *T の T を覚える。戻り値 1 : 登録した  0 : 表があふれた
+Function ArrPtrNote(isGlob As Long, off As Long, ti As Long) As Long
+    Dim i As Long
+    ArrPtrNote = 0
+    i = ArrUdtSlot(isGlob, off)
+    If i < 0 Then Exit Function
+    g_udtArrPool(i) = -1
+    g_udtArrPtee(i) = ti
+    ArrPtrNote = 1
+End Function
+
+' Dim a[n] As *T の T。違えば -1
+Function ArrPtrTi(isGlob As Long, off As Long) As Long
+    Dim i As Long
+    ArrPtrTi = -1
+    i = ArrUdtFind(isGlob, off)
+    If i >= 0 Then ArrPtrTi = g_udtArrPtee(i)
 End Function
 
 ' 多次元 UDT 配列の stride pool id。1 次元なら -1

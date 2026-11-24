@@ -1,0 +1,192 @@
+' Expect: 0
+' Target: actba64
+' AB 4 のプログラム（HongKongArduinoClone / RGBALib）で使われていた書き方:
+' Then Continue の次の行の For、Const X = 1 As DWord、= > / = <、& HC、Else 条件 Then、
+' Sub F(a, )、[ x As T, ... ]、As を省いた *Function、Dim a[n] As *T と a[i]->x、a[i].f[j] = v、
+' 関数ポインタのフィールドの呼び出し、関数ポインタの型の配列、後ろで TypeDef する関数ポインタの仮引数、
+' 小文字の this、フィールドと同じ名前の仮引数
+#console
+
+Const SLEEP_T = 32 As DWord
+Const BIG = (160 * 1024) AS DWord
+
+' 後ろで TypeDef する関数ポインタの型を仮引数に使う
+Function UseNext(f As NextFn, a As DWord) As DWord
+    UseNext = f(a, 2)
+End Function
+
+Function Twice(a As DWord, b As DWord) As DWord
+    Twice = a * 2 + b
+End Function
+
+TypeDef NextFn = *Function(a As DWord, b As DWord) As DWord
+TypeDef InitFn = *Function(h As Long) As Long
+TypeDef ExitFn = *Function(h As Long)
+
+Dim g_hits As Long
+
+Function OnInit(h As Long) As Long
+    g_hits = g_hits + h
+    OnInit = 1
+End Function
+
+Function OnExit(h As Long)
+    g_hits = g_hits + h * 100
+    OnExit = 0.5
+End Function
+
+Type RomModel
+    adr As DWord
+    init_cb As InitFn
+    exit_cb As ExitFn
+End Type
+
+Type MapModel
+    sram As DWord
+    rom As RomModel
+End Type
+
+' 関数ポインタのフィールドを持つ Type の大域変数（-actba32 で TyAlignOf が仮引数の鎖を読んでいた）
+Dim g_model As MapModel
+
+Type Align(1) Dir
+    index As Byte
+    dummy[6] As Byte
+End Type
+
+Type Info
+    a As Long
+    title[15] As Byte
+End Type
+
+Dim g_list[3] As *Info
+
+Function GetFn(x As Long) As Long
+    GetFn = x + 1
+End Function
+
+Class Wrapper
+Public
+    fp As *Function(x As Long) As Long
+    Sub Load()
+        fp = AddressOf(GetFn)
+    End Sub
+End Class
+
+Class Counter
+Private
+    Max As Long
+    Now As Long
+Public
+    Sub Init(_this As VoidPtr, Max As DWord)
+        this.Now = 0
+        this.Max = Max
+        Now = Now + 1
+    End Sub
+    Function Total() As Long
+        Total = THIS.Max * 10 + Now
+    End Function
+End Class
+
+Function Pick(m As Long) As Long
+    If m = 1 Then
+        Pick = 10
+    Else m = 2 Then
+        Pick = 20
+    End If
+End Function
+
+Sub Trail(a As Long, )
+    g_hits = g_hits + a
+End Sub
+
+Dim i As Long, j As Long, n As Long
+
+' 1: Then Continue の次の行の For は別の文
+n = 0
+For i = 0 To 2
+    If i = 1 Then Continue
+    For j = 0 To 1
+        n = n + 1
+    Next j
+Next i
+If n <> 4 Then ExitProcess(1)
+
+' 2: Const X = 1 As DWord
+If SLEEP_T <> 32 Or BIG <> 163840 Then ExitProcess(2)
+
+' 3: = > / = <
+i = 5
+If Not (i = > 5 And i = < 5) Then ExitProcess(3)
+
+' 4: & HC（& と H の間に空白）
+If & HC + 1 <> 13 Then ExitProcess(4)
+
+' 5: Else 条件 Then はただの Else
+If Pick(1) <> 10 Or Pick(2) <> 20 Or Pick(3) <> 20 Then ExitProcess(5)
+
+' 6: Sub F(a, )
+g_hits = 0
+Trail(7)
+If g_hits <> 7 Then ExitProcess(6)
+
+' 7: [ ] の要素の As
+Dim lic[5] = [
+    &H3031 As BytePtr, "Nintendo",
+    &H3035 As BytePtr, "Zamuse",
+    &H0000 As BytePtr, NULL
+] As BytePtr
+If lic[2] <> &H3035 Or lstrcmp(lic[3], "Zamuse") <> 0 Then ExitProcess(7)
+
+' 8: 関数ポインタのフィールドを呼ぶ（値の Type、ポインタ、As を省いた *Function）
+Dim pm As *MapModel
+pm = VarPtr(g_model)
+g_model.rom.init_cb = AddressOf(OnInit)
+g_model.rom.exit_cb = AddressOf(OnExit)
+g_hits = 0
+If pm->rom.init_cb Then pm->rom.init_cb(3)
+g_model.rom.exit_cb(2)
+If g_hits <> 203 Then ExitProcess(8)
+
+' 9: Class の *Function フィールドを呼ぶ
+Dim w As *Wrapper
+w = New Wrapper
+w->Load()
+If w->fp(41) <> 42 Then ExitProcess(9)
+
+' 10: 後ろで TypeDef した関数ポインタの仮引数
+If UseNext(AddressOf(Twice), 20) <> 42 Then ExitProcess(10)
+
+' 11: Dim a[n] As *T と a[i]->x
+For i = 0 To 2
+    g_list[i] = calloc(SizeOf(Info))
+    g_list[i]->a = i * 10
+    lstrcpy(g_list[i]->title, "T")
+Next
+g_list[3] = NULL
+n = 0
+i = 0
+While g_list[i] <> NULL
+    n = n + g_list[i]->a + g_list[i]->title[0]
+    i = i + 1
+Wend
+If n <> 30 + 3 * &H54 Then ExitProcess(11)
+
+' 12: a[i].f[j] = v
+Dim dirs[2] As Dir
+dirs[1].dummy[0] = 9
+dirs[1].index = 4
+If dirs[1].dummy[0] + dirs[1].index <> 13 Then ExitProcess(12)
+
+' 13: 関数ポインタの型の配列
+Dim fa[1] As InitFn
+fa[1] = AddressOf(OnInit) As InitFn
+If fa[1] = 0 Then ExitProcess(13)
+
+' 14: 小文字の this、フィールドと同じ名前の仮引数
+Dim c As *Counter
+c = New Counter
+c->Init(0, 9)
+If c->Total() <> 91 Then ExitProcess(14)
+
+ExitProcess(0)

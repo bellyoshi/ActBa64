@@ -54,12 +54,23 @@ Function LowAddrMemberIdxBase(ctx As *LowerCtx, base As Long, ByRef tiOut As Lon
     ast = ctx->ast
     nodes = ast->nodes
     If LowAddr(ctx, base) = 0 Then Exit Function
+    ' *T のフィールドの要素（tbl[i].x）: 要素の番地はもう rax
+    If LowIdxFieldPtrTi(ctx, base) >= 0 Then
+        tiOut = LowIdxFieldPtrTi(ctx, base)
+        LowAddrMemberIdxBase = true
+        Exit Function
+    End If
     LowIdxBaseName(ast, base, VarPtr(name))
     If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then
         ctx->err = 1
         Exit Function
     End If
     tiOut = vTypeIdx
+    ' Dim a[n] As *T: 要素のポインタを読んで、その先の T
+    If vTy = TY_PTR_BYTE_ARR Then
+        tiOut = ArrPtrTi(vGlob, vOff)
+        LowLoadSized(ctx->list, TyPtrSize())
+    End If
     LowAddrMemberIdxBase = true
 End Function
 
@@ -118,6 +129,11 @@ Function LowAddrMember(ctx As *LowerCtx, idx As Long) As Long
         ' nested: a.b.c — address of a.b then + offset(c)
         If LowAddr(ctx, base) = 0 Then Exit Function
         typeIdx = LowMemberFieldType(ctx, base)
+        ' *T のフィールドの先（h.tbl->x）: フィールドのポインタを読む
+        If typeIdx < 0 Then
+            typeIdx = LowFieldPtrUdtTi(ctx, base)
+            If typeIdx >= 0 Then LowLoadSized(list, TyPtrSize())
+        End If
         If typeIdx < 0 Then
             ctx->err = 1
             Exit Function

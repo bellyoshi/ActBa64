@@ -1,0 +1,142 @@
+' AB4 互換の RAD（RadWnd / RadMenu / RadEvent / RadSrc / RadGen*）: .wnd とソースから Callback.wbp / MakeWindow.wbp を作る。
+' 期待する文は AB 4.20 の ProjectEditor が書いたもの（Desktop の a プロジェクトと Samples\TextEditor）と同じ形。
+
+Dim rgN As String
+Dim rgQ As String
+Dim rgT As String
+Dim rgWnd As String
+Dim rgSrc As String
+Dim rgOut As String
+rgN = Chr$(13) & Chr$(10)
+rgQ = Chr$(34)
+rgT = Chr$(9)
+
+' ---- a.wnd（ノーマル ウィンドウにボタン 1 つ）
+rgWnd = "WINDOW:MainWnd" & rgN & "    HANDLE    = hMainWnd" & rgN & "    POINT     = -2147483648,-2147483648" & rgN
+rgWnd = rgWnd & "    SIZE      = 480,360" & rgN & "    CAPTION   = " & rgQ & "a" & rgQ & rgN & "    STYLE     = &H10cf0000" & rgN
+rgWnd = rgWnd & "    EXSTYLE   = &H00000000" & rgN & "    ID        = 0" & rgN & "    BGCOLOR   = 15" & rgN
+rgWnd = rgWnd & "    FONT      = -12,0,0,0,400,0,0,0,128,3,2,1,32," & rgQ & "MS UI Gothic" & rgQ & rgN
+rgWnd = rgWnd & "    CLASS     = " & rgQ & "NORMAL" & rgQ & rgN & "    CALLBACK  = MainWndProc" & rgN & "    TYPE      = 0" & rgN
+rgWnd = rgWnd & "    FILEPATH  = MainWnd.sbp" & rgN
+rgWnd = rgWnd & "    ITEM      = CommandButton1,50,94,177,103," & rgQ & "Button1" & rgQ & ",&H50000000,&H00000000,1" & rgN & "END" & rgN
+RadWnd_Parse(rgWnd)
+Assert(1, g_rwCount, "rad one window")
+Assert(-1, g_rwName(0) = "MainWnd" And g_rwHandle(0) = "hMainWnd", "rad window name")
+Assert(-1, g_rwPoint(0) = "-2147483648,-2147483648" And g_rwSize(0) = "480,360", "rad window rect")
+Assert(-1, g_rwStyle(0) = "&H10cf0000" And g_rwCaption(0) = "a", "rad window style")
+Assert(1, g_riCount, "rad one item")
+Assert(-1, g_riName(0) = "CommandButton1" And g_riRect(0) = "50,94,177,103", "rad item")
+Assert(-1, g_riCaption(0) = "Button1" And g_riType(0) = 1, "rad item caption type")
+
+rgSrc = "Function MainWndProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord" & rgN
+rgSrc = rgSrc & "End Function" & rgN & "Sub MainWnd_Destroy()" & rgN & "    a_DestroyObjects()" & rgN & "End Sub" & rgN
+RadSrc_Reset()
+RadSrc_Scan(0, rgSrc)
+RadSrc_ScanCb(rgSrc)
+Assert(1, RadSrc_Has(0, "destroy"), "rad has destroy")
+Assert(0, RadSrc_Has(0, "Create"), "rad no create")
+Assert(1, g_rwCbFound(0), "rad callback found")
+
+rgOut = RadGen_Callback$("a", 0)
+Assert(-1, Left$(rgOut, Len(RadGen_Banner$()) + 4) = RadGen_Banner$() & rgN & rgN, "rad cb banner")
+Assert(-1, InStr(1, rgOut, rgN & "Const CommandButton1=1000" & rgN & rgN & "Dim hMainWnd As HWND" & rgN) > 0, "rad cb const")
+Assert(-1, InStr(1, rgOut, "h3DFaceBrush=CreateSolidBrush(GetSysColor(COLOR_3DFACE))" & rgN & rgN & rgN & "Sub a_DestroyObjects()" & rgN) > 0, "rad cb no menu")
+rgSrc = rgT & rgT & "Case WM_DESTROY" & rgN & rgT & rgT & rgT & "MainWnd_Destroy()" & rgN & rgT & rgT & "Case WM_CREATE" & rgN
+rgSrc = rgSrc & rgT & rgT & rgT & "hMainWnd=hWnd" & rgN & rgT & rgT & rgT & "CreateWindowEx(&H00000000," & rgQ & "BUTTON" & rgQ & "," & rgQ & "Button1" & rgQ
+rgSrc = rgSrc & ",&H50000000,50,94,177,103,hWnd,CommandButton1 As HMENU,GetModuleHandle(0),0)" & rgN
+rgSrc = rgSrc & rgT & rgT & rgT & "SendMessage(GetDlgItem(hWnd,CommandButton1),WM_SETFONT,hFont_MainWnd As WPARAM,0)" & rgN
+rgSrc = rgSrc & rgT & rgT & "Case WM_CLOSE" & rgN & rgT & rgT & rgT & "Dim cancel=0 As Integer" & rgN & rgT & rgT & rgT & "If cancel=0 Then DestroyWindow(hWnd)" & rgN
+rgSrc = rgSrc & rgT & rgT & "Case Else" & rgN
+Assert(-1, InStr(1, rgOut, rgSrc) > 0, "rad cb eventcall")
+Assert(-1, InStr(1, rgOut, "Function DialogBox(hOwnerWnd As HWND, TemplateName As LPSTR) As LONG_PTR" & rgN & "End Function" & rgN & "Sub EndDialog(") > 0, "rad cb empty dialogbox")
+rgSrc = "Function CreateDialog(hOwnerWnd As HWND, TemplateName As LPSTR) As HWND" & rgN & "End Function" & rgN
+Assert(-1, Right$(rgOut, Len(rgSrc)) = rgSrc, "rad cb end")
+
+rgSrc = RadGen_Banner$() & rgN & rgN & "Dim _RadSys_wcl As WNDCLASSEX" & rgN & "FillMemory(VarPtr(_RadSys_wcl),Len(_RadSys_wcl),0)" & rgN
+rgSrc = rgSrc & "_RadSys_wcl.cbSize=Len(_RadSys_wcl)" & rgN & "_RadSys_wcl.hInstance=GetModuleHandle(0)" & rgN
+rgSrc = rgSrc & "_RadSys_wcl.style=CS_HREDRAW or CS_VREDRAW or CS_DBLCLKS" & rgN & "_RadSys_wcl.hCursor=LoadCursor(NULL,MAKEINTRESOURCE(IDC_ARROW))" & rgN & rgN
+rgSrc = rgSrc & "_RadSys_wcl.hIcon=LoadIcon(NULL,MAKEINTRESOURCE(IDI_APPLICATION))" & rgN & "_RadSys_wcl.hIconSm=LoadIcon(NULL,MAKEINTRESOURCE(IDI_WINLOGO))" & rgN
+rgSrc = rgSrc & "_RadSys_wcl.lpszClassName=" & rgQ & "NORMAL0" & rgQ & rgN & "_RadSys_wcl.lpfnWndProc=AddressOf(MainWndProc)" & rgN
+rgSrc = rgSrc & "_RadSys_wcl.hbrBackground=h3DFaceBrush" & rgN & "RegisterClassEx(_RadSys_wcl)" & rgN
+rgSrc = rgSrc & "CreateWindowEx(&H00000000," & rgQ & "NORMAL0" & rgQ & "," & rgQ & "a" & rgQ & ",&H10cf0000,-2147483648,-2147483648,480,360,0,0,GetModuleHandle(0),0)" & rgN
+Assert(-1, RadGen_MakeWindow$() = rgSrc, "rad makewindow")
+
+' CALLBACK の関数がどこにも無ければ EventCall_<窓>
+g_rwCbFound(0) = 0
+Assert(-1, InStr(1, RadGen_MakeWindow$(), "AddressOf(EventCall_MainWnd)") > 0, "rad callback fallback")
+
+' ---- メニュー（入れ子の POPUP）・部品のイベント・ダイアログ
+rgWnd = "WINDOW:MainWnd" & rgN & "HANDLE = hMainWnd" & rgN & "MENUID = M" & rgN & "TYPE = 0" & rgN
+rgWnd = rgWnd & "ITEM = Btn,1,2,3,4," & rgQ & "Go" & rgQ & ",&H50000000,&H00000000,1" & rgN
+rgWnd = rgWnd & "ITEM = Ed,1,2,3,4," & rgQ & "" & rgQ & ",&H50000080,&H00000200,4" & rgN
+rgWnd = rgWnd & "ITEM = LV,1,2,3,4," & rgQ & "" & rgQ & ",&H50000005,&H00000200,9" & rgN & "END" & rgN
+rgWnd = rgWnd & "WINDOW:Dlg" & rgN & "HANDLE = hDlg" & rgN & "CAPTION = " & rgQ & "Say " & rgQ & "hi" & rgQ & rgQ & rgN & "STYLE = &H00C80000" & rgN
+rgWnd = rgWnd & "EXSTYLE = &H10" & rgN & "SIZE = 300, 200" & rgN & "CALLBACK = DlgProc" & rgN & "TYPE = 1" & rgN
+rgWnd = rgWnd & "ITEM = Btn,1,2,3,4," & rgQ & "a,b" & rgQ & rgQ & ",&H50000000,&H00000000,1" & rgN & "END" & rgN
+rgWnd = rgWnd & "MENU:M" & rgN & "POPUP = " & rgQ & "File" & rgQ & ",0" & rgN & "ITEM = IDM_OPEN," & rgQ & "Open" & rgQ & ",0" & rgN
+rgWnd = rgWnd & "POPUP = " & rgQ & "Sub" & rgQ & ",0" & rgN & "ITEM = IDM_A," & rgQ & "A" & rgQ & ",0" & rgN & "END" & rgN
+rgWnd = rgWnd & "SEPARATOR" & rgN & "ITEM = IDM_EXIT," & rgQ & "Exit" & rgQ & ",8" & rgN & "END" & rgN
+rgWnd = rgWnd & "POPUP = " & rgQ & "Help" & rgQ & ",0" & rgN & "END" & rgN & "END" & rgN
+RadWnd_Parse(rgWnd)
+Assert(2, g_rwCount, "rad two windows")
+Assert(-1, g_rwCaption(1) = "Say " & rgQ & "hi" & rgQ And g_rwSize(1) = "300,200", "rad dlg caption size")
+Assert(-1, g_rwStyle(1) = "&H00C80000" And g_rwExStyle(1) = "&H00000010", "rad hex text")
+Assert(-1, g_riCaption(3) = "a,b" & rgQ And g_riStyle(3) = "&H50000000" And g_riType(3) = 1, "rad item caption comma quote")
+Assert(1, g_rmCount, "rad one menu")
+Assert(7, g_reCount, "rad menu entries")
+Assert(-1, g_reHandle(0) = "hMenu_M_0" And g_reHandle(2) = "hMenu_M_0_1" And g_reHandle(6) = "hMenu_M_1", "rad menu handles")
+Assert(-1, g_reParent(3) = 2 And g_reParent(4) = 0 And g_reKind(4) = 3 And g_reState(5) = 8, "rad menu tree")
+Assert(1, RadWnd_IsMenuId("idm_open"), "rad menu id")
+
+rgSrc = "Sub MainWnd_Paint(hDC As HDC)" & rgN & "Sub MainWnd_Create(ByRef cs As CREATESTRUCT)" & rgN
+rgSrc = rgSrc & "Sub MainWnd_btn_Click()" & rgN & "  sub MainWnd_Ed_Change()" & rgN & "Sub MainWnd_Btn_DblClick()" & rgN
+rgSrc = rgSrc & "Sub MainWnd_LV_ItemChanged(ByRef nm As NMLISTVIEW)" & rgN & "Sub MainWnd_IDM_EXIT_MenuClick()" & rgN
+rgSrc = rgSrc & "Sub MainWnd_IDM_NONE_MenuClick()" & rgN & "Sub MainWnd_Btn_Change()" & rgN & "Sub MainWnd_Helper()" & rgN
+rgSrc = rgSrc & "Sub MainWnd_QueryClose(ByRef cancel As Integer)" & rgN & "' Sub MainWnd_Resize()" & rgN & "Sub MainWnd_Timer(id As DWord)" & rgN
+RadSrc_Reset()
+RadSrc_Scan(0, rgSrc)
+RadSrc_Scan(1, "Function DlgProc(hWnd As HWND) As LRESULT" & rgN & "Sub Dlg_Btn_Click()" & rgN & "Sub Dlg_Create(ByRef cs As CREATESTRUCT)" & rgN)
+RadSrc_ScanCb("Function DlgProc(hWnd As HWND) As LRESULT" & rgN)
+Assert(11, g_rhCount, "rad handlers")
+Assert(-1, g_rhKind(2) = 1 And g_rhItem(2) = "Btn" And g_rhEv(2) = "Click" And g_rhCode(2) = "BN_CLICKED", "rad ctl handler")
+Assert(-1, g_rhKind(5) = 3 And g_rhCode(5) = "LVN_ITEMCHANGED", "rad notify handler")
+Assert(-1, g_rhKind(6) = 2 And g_rhItem(6) = "IDM_EXIT", "rad menu handler")
+
+rgOut = RadGen_Callback$("p", 2)
+Assert(-1, InStr(1, rgOut, rgN & "InitCommonControlsEx(_RadSys_InitCtrls)" & rgN & rgN & "Const Btn=1000" & rgN & "Const Ed=1001" & rgN & "Const LV=1002" & rgN & "Const IDM_OPEN=1003" & rgN) > 0, "rad consts once")
+rgSrc = "Dim hMenu_M As HMENU" & rgN & "hMenu_M=CreateMenu()" & rgN & "Dim hMenu_M_1 As HMENU" & rgN & "hMenu_M_1=CreatePopupMenu()" & rgN
+rgSrc = rgSrc & "InsMenu hMenu_M,0,MF_BYPOSITION,Ex" & rgQ & "Help" & rgQ & ",0,hMenu_M_1,0" & rgN & "Dim hMenu_M_0 As HMENU" & rgN & "hMenu_M_0=CreatePopupMenu()" & rgN
+rgSrc = rgSrc & "InsMenu hMenu_M_0,0,MF_BYPOSITION,Ex" & rgQ & "Exit" & rgQ & ",IDM_EXIT,0,8" & rgN & "InsMenu hMenu_M_0,0,MF_BYPOSITION" & rgN
+rgSrc = rgSrc & "Dim hMenu_M_0_1 As HMENU" & rgN & "hMenu_M_0_1=CreatePopupMenu()" & rgN & "InsMenu hMenu_M_0_1,0,MF_BYPOSITION,Ex" & rgQ & "A" & rgQ & ",IDM_A,0,0" & rgN
+rgSrc = rgSrc & "InsMenu hMenu_M_0,0,MF_BYPOSITION,Ex" & rgQ & "Sub" & rgQ & ",0,hMenu_M_0_1,0" & rgN
+rgSrc = rgSrc & "InsMenu hMenu_M_0,0,MF_BYPOSITION,Ex" & rgQ & "Open" & rgQ & ",IDM_OPEN,0,0" & rgN & "InsMenu hMenu_M,0,MF_BYPOSITION,Ex" & rgQ & "File" & rgQ & ",0,hMenu_M_0,0" & rgN & rgN
+Assert(-1, InStr(1, rgOut, rgSrc & "Sub p_DestroyObjects()" & rgN & rgT & "DestroyMenu(hMenu_M)" & rgN & rgT & "DestroyMenu(hMenu_M_1)" & rgN & rgT & "DestroyMenu(hMenu_M_0)" & rgN & rgT & "DestroyMenu(hMenu_M_0_1)" & rgN) > 0, "rad menus")
+' Paint はソースで Create より前なので WM_CREATE より前。QueryClose / Timer
+Assert(-1, InStr(1, rgOut, "Case WM_DESTROY" & rgN & rgT & rgT & "Case WM_PAINT" & rgN & rgT & rgT & rgT & "Dim ps As PAINTSTRUCT") > 0, "rad paint first")
+Assert(-1, InStr(1, rgOut, rgT & "MainWnd_Paint(hDC)" & rgN & rgT & rgT & rgT & "EndPaint(hWnd,ps)" & rgN & rgT & rgT & "Case WM_CREATE" & rgN & rgT & rgT & rgT & "hMainWnd=hWnd" & rgN & rgT & rgT & rgT & "SetMenu(hWnd,hMenu_M)" & rgN) > 0, "rad create after paint")
+Assert(-1, InStr(1, rgOut, "MainWnd_Create(ByVal (lParam As VoidPtr))" & rgN & rgT & rgT & "Case WM_TIMER" & rgN & rgT & rgT & rgT & "MainWnd_Timer(wParam As DWord)" & rgN & rgT & rgT & "Case WM_CLOSE" & rgN) > 0, "rad timer")
+Assert(-1, InStr(1, rgOut, "Dim cancel=0 As Integer" & rgN & rgT & rgT & rgT & "MainWnd_QueryClose(cancel)" & rgN & rgT & rgT & rgT & "If cancel=0 Then DestroyWindow(hWnd)") > 0, "rad queryclose")
+Assert(-1, InStr(1, rgOut, rgT & "Case LV" & rgN & rgT & rgT & rgT & rgT & rgT & "Select Case pnmHdr->code" & rgN & rgT & rgT & rgT & rgT & rgT & rgT & "Case LVN_ITEMCHANGED" & rgN & rgT & rgT & rgT & rgT & rgT & rgT & rgT & "MainWnd_LV_ItemChanged(ByVal (pnmHdr As VoidPtr))") > 0, "rad notify")
+Assert(-1, InStr(1, rgOut, rgT & "Case BN_CLICKED" & rgN & rgT & rgT & rgT & rgT & rgT & rgT & rgT & "MainWnd_Btn_Click()" & rgN & rgT & rgT & rgT & rgT & rgT & rgT & "Case BN_DBLCLK" & rgN) > 0, "rad btn grouped")
+Assert(-1, InStr(1, rgOut, "Case EN_CHANGE" & rgN & rgT & rgT & rgT & rgT & rgT & rgT & rgT & "MainWnd_Ed_Change()" & rgN & rgT & rgT & rgT & rgT & rgT & "End Select" & rgN & rgT & rgT & rgT & rgT & "Case IDM_EXIT" & rgN & rgT & rgT & rgT & rgT & rgT & "MainWnd_IDM_EXIT_MenuClick()" & rgN) > 0, "rad command order")
+Assert(0, InStr(1, rgOut, "IDM_NONE"), "rad unknown menu ignored")
+Assert(0, InStr(1, rgOut, "Btn_Change"), "rad unknown ctl event ignored")
+Assert(0, InStr(1, rgOut, "Helper"), "rad helper ignored")
+' ダイアログ: WM_INITDIALOG が先、閉じるは EndDialog、DialogBox は CALLBACK の関数
+Assert(-1, InStr(1, rgOut, "Case WM_INITDIALOG" & rgN & rgT & rgT & rgT & "hDlg=hWnd" & rgN) > 0, "rad dlg init")
+Assert(-1, InStr(1, rgOut, "Dlg_Create(ByVal (lParam As VoidPtr))" & rgN & rgT & rgT & "Case WM_DESTROY" & rgN & rgT & rgT & "Case WM_CLOSE" & rgN) > 0, "rad dlg destroy")
+Assert(-1, InStr(1, rgOut, "If cancel=0 Then EndDialog(hWnd,0)") > 0, "rad dlg enddialog")
+Assert(-1, InStr(1, rgOut, rgQ & "a,b" & rgQ & "+Chr$(34)+" & rgQ & rgQ & ",&H50000000") > 0, "rad quote escape")
+rgSrc = rgT & "If lstrcmp(TemplateName," & rgQ & "Dlg" & rgQ & ")=0 Then" & rgN & rgT & rgT & "hDlg=CreateWindowEx(&H00000010," & rgQ & "NORMALDLG" & rgQ & ","
+rgSrc = rgSrc & rgQ & "Say " & rgQ & "+Chr$(34)+" & rgQ & "hi" & rgQ & "+Chr$(34)+" & rgQ & rgQ & ",&H00C80000,0,0,300,200,hOwnerWnd,0 As HMENU,GetModuleHandle(0),0)" & rgN
+rgSrc = rgSrc & rgT & rgT & "SetWindowLong(hDlg,GWL_WNDPROC,AddressOf(DlgProc) As LONG_PTR)" & rgN
+Assert(-1, InStr(1, rgOut, rgSrc) > 0, "rad dialogbox")
+Assert(-1, InStr(1, rgOut, rgT & "EnableWindow(hOwnerWnd,0)" & rgN & rgN & rgT & "Dim msg As MSG, iResult As Long" & rgN) > 0, "rad dialogbox loop")
+Assert(0, InStr(1, RadGen_MakeWindow$(), "Dlg"), "rad makewindow no dialog")
+
+' 部品の種類と通知コードの表
+Assert(-1, RadEv_Class$(3) = "COMBOBOX" And RadEv_Class$(9) = "SysListView32" And RadEv_Class$(16) = "msctls_trackbar32", "rad class")
+Assert(-1, RadEv_CtlCode$(3, "selchange", rgSrc) = "CBN_SELCHANGE" And rgSrc = "SelChange", "rad cb code")
+Assert(-1, RadEv_CtlCode$(13, "Deltapos", rgSrc) = "UDN_DELTAPOS" And RadEv_CtlCode$(12, "Click", rgSrc) = "NM_CLICK", "rad nm code")
+Assert(-1, RadEv_CtlCode$(5, "Click", rgSrc) = "" And RadEv_CtlCode$(1, "Change", rgSrc) = "", "rad no code")
+Assert(-1, RadWnd_HexText$("&H10") = "&H00000010" And RadWnd_HexText$("&H503008C4") = "&H503008C4", "rad hextext")

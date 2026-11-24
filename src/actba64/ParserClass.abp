@@ -2,6 +2,19 @@
 '  ParserClass - Type / Class
 ' ===================================================
 
+' TypeDef X = * の * の後ろが同じ行に無ければ true
+Function ParseTypeDefBareStar(p As *Parser, starAt As Long) As boolean
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    ParseTypeDefBareStar = true
+    lx = p->lx
+    If p->pos >= lx->count Then Exit Function
+    toks = lx->toks
+    If ParseTokKind(p) = TK_EOF Then Exit Function
+    If toks[p->pos].logLine <> toks[starAt].logLine Then Exit Function
+    ParseTypeDefBareStar = false
+End Function
+
 Function ParseTypeDefStmt(p As *Parser) As Long
     Dim ast As *Ast
     Dim types As *TypeTable
@@ -30,8 +43,15 @@ Function ParseTypeDefStmt(p As *Parser) As Long
             Exit Function
         End If
         If p->err <> 0 Then Exit Function
-        If Not ParseCopyIdent(p, VarPtr(tname)) Then Exit Function
         sz = TyPtrSize()
+        If ParseTypeDefBareStar(p, starAt) Then
+            ' TypeDef X = * で行が終わる（ActiveBasic は通す）: 型の無いポインタ（VoidPtr と同じ）
+            starAt = -1
+            ti = TyAdd(types, VarPtr(name))
+            If ti >= 0 Then types->typePtrAt[ti] = 0
+        ElseIf Not ParseCopyIdent(p, VarPtr(tname)) Then
+            Exit Function
+        End If
     Else
         If Not ParseCopyIdent(p, VarPtr(tname)) Then Exit Function
         sz = TySizeOfName(types, VarPtr(tname))

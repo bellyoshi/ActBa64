@@ -56,6 +56,34 @@ Function ParseIsElseSpaceIf(p As *Parser) As Long
     If toks[p->pos + 1].logLine = toks[p->pos].logLine Then ParseIsElseSpaceIf = 1
 End Function
 
+' Else Mode = 1 Then のように Else の後ろに条件と Then が続く行（ActiveBasic は通す）。
+' 条件は使わず、ただの Else として読む
+Sub ParseSkipElseCondThen(p As *Parser)
+    Dim kThen(KW_SHORT_LEN - 1) As Byte
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim i As Long
+    Dim ln As Long
+    Dim last As Long
+    lx = p->lx
+    toks = lx->toks
+    If p->pos <= 0 Or p->pos >= lx->count Then Exit Sub
+    ln = toks[p->pos - 1].logLine
+    If toks[p->pos].logLine <> ln Then Exit Sub
+    last = p->pos
+    i = p->pos
+    While i < lx->count
+        If toks[i].logLine <> ln Then Exit While
+        last = i
+        i = i + 1
+    Wend
+    If last = p->pos Then Exit Sub
+    lstrcpy(VarPtr(kThen), "then")
+    If ParseIdentIsAt(p, last, VarPtr(kThen)) = 0 Then Exit Sub
+    DiagWarn(toks[p->pos].srcLine, Tr$(1175, "the condition between Else and Then is ignored; use ElseIf"))
+    p->pos = last + 1
+End Sub
+
 Function ParseIfElseParts(p As *Parser) As Long
     Dim elseList As Long
     Dim kElse(KW_SHORT_LEN - 1) As Byte
@@ -81,6 +109,7 @@ Function ParseIfElseParts(p As *Parser) As Long
 
     If ParseIdentIs(p, VarPtr(kElse)) <> 0 Then
         p->pos = p->pos + 1
+        ParseSkipElseCondThen(p)
         elseList = ParseStmtListUntil(p, VarPtr(kEnd), VarPtr(empty))
         If p->err <> 0 Then Exit Function
         ParseIfElseParts = elseList
@@ -227,10 +256,21 @@ Function ParseContinueBare(p As *Parser) As Long
 End Function
 
 Function ParseContinueKwStmt(p As *Parser) As Long
+    Dim lx As *Lexer
+    Dim toks As *Tok
+    Dim contLine As Long
     ParseContinueKwStmt = -1
+    lx = p->lx
+    toks = lx->toks
+    contLine = toks[p->pos].logLine
     p->pos = p->pos + 1
-    ParseContinueKwStmt = ParseContinueNamed(p)
-    If ParseContinueKwStmt <> -2 Then Exit Function
+    ' 次の行の For / Do / While は別の文。単独の Continue として読む
+    If p->pos < lx->count Then
+        If toks[p->pos].logLine = contLine Then
+            ParseContinueKwStmt = ParseContinueNamed(p)
+            If ParseContinueKwStmt <> -2 Then Exit Function
+        End If
+    End If
     ParseContinueKwStmt = ParseContinueBare(p)
 End Function
 

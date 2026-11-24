@@ -6,13 +6,16 @@ Function ParseConstString(p As *Parser, name As *Byte) As Long
     Dim nConst As Long
     Dim nStr As Long
     Dim s(TEXT_LEN - 1) As Byte
+    Dim lid As Long
 
     ParseConstString = -1
     ast = p->ast
+    lid = ParseTokLongStr(p)
     If Not ParseStringArg(p, VarPtr(s)) Then Exit Function
     nStr = AstAddNode(ast, AST_STRING)
     If nStr < 0 Then Exit Function
     AstSetStr(ast, nStr, VarPtr(s))
+    AstSetLongStr(ast, nStr, lid)
     nConst = AstAddNode(ast, AST_CONST)
     If nConst < 0 Then Exit Function
     AstSetStr(ast, nConst, name)
@@ -83,6 +86,8 @@ Function ParseConstEq(p As *Parser, name As *Byte) As Long
     ParseConstEq = -1
     If Not ParseExpect(p, TK_EQ) Then Exit Function
     ParseConstEq = ParseConstRhs(p, name)
+    ' Const X = 32 As DWord の後ろの As 型も読み飛ばす
+    If ParseConstEq >= 0 Then ParseConstSkipAs(p)
 End Function
 
 Function ParseConstStmt(p As *Parser) As Long
@@ -159,7 +164,6 @@ Function ParseAssignIndexLhs(p As *Parser, name As *Byte) As Long
     Dim head As Long
     Dim nArgs As Long
     Dim idLine As Long
-    Dim mem(SYM_NAME_LEN - 1) As Byte
 
     ParseAssignIndexLhs = -1
     ast = p->ast
@@ -185,16 +189,18 @@ Function ParseAssignIndexLhs(p As *Parser, name As *Byte) As Long
         nodes[nIdx].num = 1
     End If
     AstSetSrcLine(ast, nIdx, idLine)
-    If ParseTokKind(p) = TK_DOT Then
-        p->pos = p->pos + 1
-        If Not ParseCopyIdent(p, VarPtr(mem)) Then Exit Function
-        nCall = AstAddNode(ast, AST_MEMBER)
+    ' a[i].x / a[i]->x / a[i].x[j] / a[i].M() と続く左辺
+    If ParseTokKind(p) = TK_DOT Or ParseTokKind(p) = TK_ARROW Then
+        nIdx = ParsePostfixMemIdx(p, nIdx)
+        If nIdx < 0 Then Exit Function
+        AstSetSrcLine(ast, nIdx, idLine)
+        nCall = ParseMemberCall(p, nIdx)
         If nCall < 0 Then Exit Function
-        AstSetStr(ast, nCall, VarPtr(mem))
         nodes = ast->nodes
-        nodes[nCall].left = nIdx
-        nodes[nCall].num = 0
-        AstSetSrcLine(ast, nCall, idLine)
+        If nodes[nCall].kind = AST_CALL Then
+            ParseAssignIndexLhs = nCall
+            Exit Function
+        End If
         nIdx = nCall
     End If
     ParseAssignIndexLhs = ParseAssignOpRhs(p, nIdx)

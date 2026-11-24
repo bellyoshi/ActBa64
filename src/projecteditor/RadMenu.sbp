@@ -1,0 +1,111 @@
+' RadMenu - .wnd の MENU: … END を読む（RadWnd.sbp の続き）。
+' POPUP のハンドル名は hMenu_<メニューID>_<位置>…（入れ子なら _<位置> を足す。AB 4.20 と同じ）
+
+Sub RadWnd_NewMenu(name As String)
+    If g_rmCount >= 64 Then Exit Sub
+    g_rpMenu = g_rmCount
+    g_rmName(g_rmCount) = name
+    g_rmCount = g_rmCount + 1
+    g_rpDepth = 0
+    g_rpWin = -1
+End Sub
+
+Sub RadWnd_MenuLine(t As String)
+    Dim k As String
+    k = RadWnd_Key$(t)
+    If k = "end" Then RadWnd_MenuEnd()
+    If k = "separator" Then RadWnd_AddEntry(3, "", "", 0)
+    If k = "popup" Then RadWnd_Popup(RadWnd_Val$(t))
+    If k = "item" Then RadWnd_MenuItem(RadWnd_Val$(t))
+End Sub
+
+Sub RadWnd_MenuEnd()
+    If g_rpDepth > 0 Then
+        g_rpDepth = g_rpDepth - 1
+    Else
+        g_rpMenu = -1
+    End If
+End Sub
+
+' 状態は最後の " の後ろの , の次
+Function RadWnd_State(v As String) As Long
+    Dim b As Long
+    RadWnd_State = 0
+    b = RadWnd_LastQuote(v)
+    If b = 0 Then Exit Function
+    b = InStr(b, v, ",")
+    If b > 0 Then RadWnd_State = RadWnd_Num(Mid$(v, b + 1))
+End Function
+
+' POPUP = "文字",状態
+Sub RadWnd_Popup(v As String)
+    Dim e As Long
+    e = RadWnd_AddEntry(1, "", RadWnd_Quoted$(v), RadWnd_State(v))
+    If e < 0 Or g_rpDepth >= 32 Then Exit Sub
+    g_rpStack(g_rpDepth) = e
+    g_rpDepth = g_rpDepth + 1
+End Sub
+
+' ITEM = ID,"文字",状態
+Sub RadWnd_MenuItem(v As String)
+    Dim p As Long
+    Dim id As String
+    p = 1
+    id = RadWnd_Field$(v, p)
+    RadWnd_AddEntry(2, id, RadWnd_Quoted$(v), RadWnd_State(v))
+End Sub
+
+Function RadWnd_AddEntry(kind As Long, id As String, cap As String, state As Long) As Long
+    Dim e As Long
+    RadWnd_AddEntry = -1
+    If g_reCount >= 1024 Then Exit Function
+    e = g_reCount : g_reCount = g_reCount + 1
+    g_reMenu(e) = g_rpMenu : g_reKind(e) = kind : g_reId(e) = id
+    g_reCaption(e) = cap : g_reState(e) = state
+    RadWnd_SetParent(e)
+    RadWnd_AddEntry = e
+End Function
+
+Sub RadWnd_SetParent(e As Long)
+    Dim parentH As String
+    g_reParent(e) = -1
+    parentH = "hMenu_" + g_rmName(g_rpMenu)
+    If g_rpDepth > 0 Then
+        g_reParent(e) = g_rpStack(g_rpDepth - 1)
+        parentH = g_reHandle(g_reParent(e))
+    End If
+    g_reHandle(e) = parentH + "_" + Str$(RadWnd_Siblings(e))
+End Sub
+
+' e より前にある、同じ親の項目の数（= 親の中での位置）
+Function RadWnd_Siblings(e As Long) As Long
+    Dim i As Long
+    RadWnd_Siblings = 0
+    For i = 0 To e - 1
+        If g_reMenu(i) = g_reMenu(e) And g_reParent(i) = g_reParent(e) Then RadWnd_Siblings = RadWnd_Siblings + 1
+    Next
+End Function
+
+' メニュー ID が .wnd のどこかの ITEM にあれば 1
+Function RadWnd_IsMenuId(id As String) As Long
+    Dim e As Long
+    RadWnd_IsMenuId = 0
+    For e = 0 To g_reCount - 1
+        If g_reKind(e) = 2 And Lower$(g_reId(e)) = Lower$(id) Then
+            RadWnd_IsMenuId = 1
+            Exit Function
+        End If
+    Next
+End Function
+
+' 名前の大文字小文字を .wnd の書き方にそろえる（ID）
+Function RadWnd_MenuIdName$(id As String) As String
+    Dim e As Long
+    RadWnd_MenuIdName$ = id
+    For e = 0 To g_reCount - 1
+        If g_reKind(e) = 2 And Lower$(g_reId(e)) = Lower$(id) Then
+            RadWnd_MenuIdName$ = g_reId(e)
+            Exit Function
+        End If
+    Next
+End Function
