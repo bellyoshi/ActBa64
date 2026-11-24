@@ -103,6 +103,41 @@ Function ParseFactorBuiltinB(p As *Parser) As Long
     ParseFactorBuiltinB = bi
 End Function
 
+' SizeOf( の後ろが Int64 / QWord なら 8、* なら（*Function も）ポインタの幅。その語を読み、組なら 0
+Function ParseSizeofFixedSz(p As *Parser) As Long
+    ParseSizeofFixedSz = 0
+    If ParseTakeWide(p) <> 0 Then
+        ParseSizeofFixedSz = 8
+    ElseIf ParseTokKind(p) = TK_STAR Then
+        While ParseTokKind(p) = TK_STAR
+            p->pos = p->pos + 1
+        Wend
+        ParseSizeofFixedSz = TyPtrSize()
+    End If
+End Function
+
+' 大きさの決まった SizeOf なら数の節を作り true（n は節、失敗なら -1）。違えば false で位置は動かさない
+Function ParseSizeofFixed(p As *Parser, ByRef n As Long) As boolean
+    Dim sz As Long
+    sz = ParseSizeofFixedSz(p)
+    ParseSizeofFixed = false
+    If sz = 0 Then Exit Function
+    ParseSizeofFixed = true
+    p->pos = p->pos + 1
+    If ParseExpect(p, TK_RPAREN) Then n = ParseNumNode(p, sz)
+End Function
+
+' 整数の数の節。失敗なら -1
+Function ParseNumNode(p As *Parser, v As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = p->ast
+    ParseNumNode = AstAddNode(ast, AST_NUM)
+    If ParseNumNode < 0 Then Exit Function
+    nodes = ast->nodes
+    nodes[ParseNumNode].num = v
+End Function
+
 Function ParseFactorSizeof(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
@@ -114,14 +149,9 @@ Function ParseFactorSizeof(p As *Parser) As Long
     ast = p->ast
     p->pos = p->pos + 1
     If Not ParseExpect(p, TK_LPAREN) Then Exit Function
-    ' SizeOf(Int64) / SizeOf(QWord) は 8
-    If ParseTakeWide(p) <> 0 Then
-        p->pos = p->pos + 1
-        If Not ParseExpect(p, TK_RPAREN) Then Exit Function
-        n = AstAddNode(ast, AST_NUM)
-        If n < 0 Then Exit Function
-        nodes = ast->nodes
-        nodes[n].num = 8
+    ' SizeOf(Int64) / SizeOf(QWord) は 8、SizeOf(*型) はポインタの幅
+    n = -1
+    If ParseSizeofFixed(p, n) Then
         ParseFactorSizeof = n
         Exit Function
     End If
@@ -139,10 +169,22 @@ Function ParseFactorSizeof(p As *Parser) As Long
     ParseFactorSizeof = n
 End Function
 
+' AddressOf( 名前 の後ろが -> / . なら、名前をオブジェクトの変数の節にし、name へメソッド名を写す
+Function ParseAddrOfObj(p As *Parser, name As *Byte, ByRef obj As Long) As boolean
+    obj = -1
+    ParseAddrOfObj = true
+    If ParseTokKind(p) <> TK_ARROW And ParseTokKind(p) <> TK_DOT Then Exit Function
+    p->pos = p->pos + 1
+    obj = AstAddNode(p->ast, AST_VAR)
+    If obj >= 0 Then AstSetStr(p->ast, obj, name)
+    ParseAddrOfObj = ParseCopyIdent(p, name)
+End Function
+
 Function ParseFactorAddressOf(p As *Parser) As Long
     Dim ast As *Ast
     Dim nodes As *AstNode
     Dim n As Long
+    Dim obj As Long
     Dim name(SYM_NAME_LEN - 1) As Byte
 
     ParseFactorAddressOf = -1
@@ -150,12 +192,15 @@ Function ParseFactorAddressOf(p As *Parser) As Long
     p->pos = p->pos + 1
     If Not ParseExpect(p, TK_LPAREN) Then Exit Function
     If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    If Not ParseAddrOfObj(p, VarPtr(name), obj) Then Exit Function
     If Not ParseExpect(p, TK_RPAREN) Then Exit Function
     n = AstAddNode(ast, AST_BUILTIN)
     If n < 0 Then Exit Function
     AstSetStr(ast, n, VarPtr(name))
     nodes = ast->nodes
     nodes[n].num = BIK_ADDRESSOF
+    ' AddressOf(obj->Method) / AddressOf(obj.Method) は left にオブジェクトの変数
+    nodes[n].left = obj
     ' クラス内なら、同名の関数が無いときにメソッドを探せるよう型番号を残す
     nodes[n].extra = p->classTypeIdx
     ParseFactorAddressOf = n

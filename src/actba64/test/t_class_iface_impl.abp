@@ -1,0 +1,114 @@
+' Expect: 0
+' Target: actba64
+#console
+
+' 中身の無い Virtual の Class（COM インターフェース）を継承して中身を書く Class。
+' vtable はプログラムが作って先頭に入れる（AB4 のサンプル class.abp を 64bit 向けにしたもの）。
+' Class A : Inherits B の 1 行の形、AddressOf(obj->Method)、SizeOf(*Function)、
+' 基底クラスのポインタの Delete で実体の Dtor が呼ばれることを見る。
+
+Dim g_log As Long
+
+Class ClassPrototype
+Public
+    Virtual Function A_proto() As Byte
+    Virtual Function B_proto(opt1 As Long, opt2 As Byte) As Byte
+End Class
+
+Class ClassMain : Inherits ClassPrototype
+Public
+    Function A() As Byte
+        Print "This is ClassMain->A()"
+        g_log = g_log * 10 + 1
+    End Function
+
+    Function B(opt1 As Long, opt2 As Byte) As Byte
+        Print "This is ClassMain->B()"
+        Print ex"	opt1 ="; opt1
+        Print ex"	opt2 ="; opt2
+        If opt1 = 7 And opt2 = 255 Then g_log = g_log * 10 + 2
+    End Function
+
+    Sub ~ClassMain()
+        Print "Deconst ClassMain"
+        g_log = g_log * 10 + 3
+    End Sub
+End Class
+
+Class ClassSub : Inherits ClassPrototype
+Public
+    Function A() As Byte : Print "This is ClassSub->A()" : g_log = g_log * 10 + 4 : End Function
+
+    Function B(opt1 As Long, opt2 As Byte) As Byte
+        Print "This is ClassSub->B()"
+        Print ex"	opt1 ="; opt1
+        Print ex"	opt2 ="; opt2
+        If opt1 = 1 And opt2 = 2 Then g_log = g_log * 10 + 5
+    End Function
+
+    Sub ~ClassSub()
+        Print "Deconst ClassSub"
+        g_log = g_log * 10 + 6
+    End Sub
+End Class
+
+' オブジェクトの先頭（__vptr）へ vtable を入れる
+Sub SetVTable(obj As VoidPtr, vt As VoidPtr)
+    Dim slot As *VoidPtr
+    slot = obj
+    slot[0] = vt
+End Sub
+
+Function New_ClassMain() As *ClassPrototype
+    Dim cm As *ClassMain
+    Dim VTable As *VoidPtr
+    cm = New ClassMain
+    New_ClassMain = cm
+    VTable = calloc(SizeOf(*Function) * 3)
+    VTable[0] = AddressOf(cm->A)
+    VTable[1] = AddressOf(cm->B)
+    SetVTable(cm, VTable)
+End Function
+
+Function New_ClassSub() As *ClassPrototype
+    Dim cs As *ClassSub
+    Dim VTable As *VoidPtr
+    cs = New ClassSub
+    New_ClassSub = cs
+    VTable = calloc(SizeOf(*Function) * 3)
+    VTable[0] = AddressOf(cs->A)
+    VTable[1] = AddressOf(cs->B)
+    SetVTable(cs, VTable)
+End Function
+
+' vtable とオブジェクトを解放する
+Sub Delete_ClassProto(ByRef cProto As *ClassPrototype)
+    Dim slot As *VoidPtr
+    If cProto = NULL Then Exit Sub
+    slot = cProto
+    If slot[0] <> NULL Then free(slot[0])
+    Delete cProto
+    cProto = NULL
+End Sub
+
+Dim cUse As *ClassPrototype
+
+If SizeOf(*Function) <> SizeOf(VoidPtr) Then ExitProcess(1)
+If SizeOf(ClassMain) <> SizeOf(VoidPtr) Then ExitProcess(2)
+
+Print "-------- ClassMain --------"
+cUse = New_ClassMain()
+cUse->A_proto()
+cUse->B_proto(7, -1 As Byte)
+Delete_ClassProto(cUse)
+If cUse <> NULL Then ExitProcess(3)
+
+Print
+Print "-------- ClassSub ---------"
+cUse = New_ClassSub()
+cUse->A_proto()
+cUse->B_proto(1, 2)
+Delete_ClassProto(cUse)
+
+If g_log <> 123456 Then ExitProcess(4)
+ExitProcess(0)

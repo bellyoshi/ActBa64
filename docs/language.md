@@ -414,8 +414,9 @@ Delete p                        ' dtor を逆順に呼び、塊を解放。Delet
 - ctor/dtor 省略時は空の無引数版を暗黙生成
 - フィールドの無い Class も `Dim` / `New` できる（大きさは 1 バイト。中身の無い `Virtual` だけの COM インターフェースは除く）
 - メソッドはマングル名（例: `Counter_Add`）の通常 `Sub`/`Function` として生成（64bit は `RCX=This`、32bit は stdcall の第1引数）
-- `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。`Virtual` 呼び出しは vtable
+- `Inherits Parent` は親のフィールドを先頭に置き、`Virtual` スロットをコピーする。`Virtual` 呼び出しは vtable。`Class Child : Inherits Parent` と 1 行にも書ける
 - 中身の無い `Virtual Sub M(...)` / `Virtual Function M(...) As T`（宣言だけ）の Class は COM インターフェース。空の ctor/dtor を付けず、それを `Inherits` した Class も同じ
+  - ただし COM インターフェースを `Inherits` して、本体のある `Sub` / `Function`（ctor / dtor を含む）を書いた Class は実体の Class になる。先頭（オフセット 0）に隠しフィールド `__vptr` を持ち、空の ctor/dtor も付く。vtable はコンパイラが作らないので、プログラムが `AddressOf(obj->Method)` を並べた表を作り、先頭へ入れる（`test/t_class_iface_impl.abp`）。表の関数は `This` を第1引数で受ける（[相違点](./different.md#動作が異なるもの)）
 - 中身のある `Virtual` / `Override`（ユーザーの vtable）:
 
 ```
@@ -448,8 +449,8 @@ End Class
 - 自動で呼ぶ基底 ctor は引数なしに合う定義。基底に引数なしの ctor が無いのに `Super.Parent(...)` を書かないときはコンパイルエラー（`base class ctor requires arguments`）
 - 値のメンバ Class は、そのフィールドを宣言した Class の ctor 先頭でメンバ ctor、dtor 末尾でメンバ dtor を呼ぶ。メンバ ctor にユーザー引数があるときはコンパイルエラー
 - `p->Release()` のようにポインタ経由で仮想メソッドを呼べる
-- `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 8 バイトに要素数（`Long`）があり、返すポインタはその直後。個数を省略したときは 1。コンストラクタ引数は一度だけ評価し、各要素へ同じ値を渡す。確保に失敗したときは 0 を返し、コンストラクタは呼ばない
-- `Delete` は変数のクラスポインタ型から `Class_Dtor` を逆順に呼び、ヘッダごと `HeapFree` する。クラスは使用箇所より前に定義する。ポインタのクラス型が取れない `Delete` はコンパイルエラー。`Delete 0` は何もしない
+- `New Class[(args)]` / `New [count] Class[(args)]` はオブジェクト先頭へのポインタを返す。塊の先頭 24 バイトが頭（+0 要素の大きさ、+8 Dtor の番地、+16 要素数）で、返すポインタはその直後。個数を省略したときは 1。コンストラクタ引数は一度だけ評価し、各要素へ同じ値を渡す。確保に失敗したときは 0 を返し、コンストラクタは呼ばない
+- `Delete` は頭の Dtor を要素ごとに逆順に呼び、頭ごと `HeapFree` する。Dtor は `New` したときのクラスのものなので、基底クラス（COM インターフェースも）のポインタで `Delete` しても実体のクラスの Dtor が呼ばれる。ポインタのクラス型が取れない `Delete` はコンパイルエラー。`Delete 0` は何もしない
 
 ### 3.4 Enum
 
@@ -616,7 +617,9 @@ ExitProcess(式)
 ```
 VarPtr(左辺)
 AddressOf(手続き名)
+AddressOf(obj->Method)   ' obj のクラス（か継承元）のメソッド。obj.Method も可
 SizeOf(型名)
+SizeOf(*型名)            ' ポインタの幅（*Function も。64bit は 8、-actba32 は 4）
 Len(文字列 | UDT変数)     ' 文字列長 or 構造体サイズ
 Asc(s)
 Left$(s, n) / Right$(s, n) / Mid$(s, start[, len])

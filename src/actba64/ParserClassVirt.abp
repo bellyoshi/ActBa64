@@ -150,6 +150,48 @@ Function ParseClassVtSetup(p As *Parser, ti As Long, ByRef isIface As Long) As b
     If VtSetUser(ti) = 0 Then ParseClassVtSetup = false
 End Function
 
+' ---- COM インターフェースを継承して中身を書く Class ----
+' 中身の無い Virtual の Class（COM インターフェース）を継承し、本体のある Sub / Function を持つ Class は
+' インターフェースでなく実体の Class。先頭に __vptr を置く（vtable はプログラムが SetPointer などで入れる）。
+
+' Class 本体の 1 語。End Sub / End Function なら 1、End Class なら 0、ほかは -1
+Function PvImplStep(p As *Parser, ByRef pos As Long) As Long
+    PvImplStep = 0
+    If ParseTokKindAt(p, pos) = TK_EOF Or PvIsEndClass(p, pos) <> 0 Then Exit Function
+    PvImplStep = -1
+    If PvIsEnd(p, pos) <> 0 And PvIsProc(p, pos + 1) <> 0 Then PvImplStep = 1
+    pos = pos + 1
+End Function
+
+' 今の位置から End Class までに本体のある Sub / Function があれば 1
+Function ParseClassScanImpl(p As *Parser) As Long
+    Dim pos As Long
+    pos = p->pos
+    ParseClassScanImpl = -1
+    While ParseClassScanImpl < 0
+        ParseClassScanImpl = PvImplStep(p, pos)
+    Wend
+End Function
+
+' 親が COM インターフェース（フィールドが無い）なら、子の先頭に __vptr を置く
+Function PvImplVptr(p As *Parser, ti As Long) As boolean
+    Dim types As *TypeTable
+    Dim sizes As *Long
+    types = PsTypes(p)
+    sizes = types->typeSizes
+    PvImplVptr = true
+    If sizes[AccParent(ti)] = 0 Then PvImplVptr = ParseClassVtField(p, ti)
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function ParseClassImplSetup(p As *Parser, ti As Long, ByRef isIface As Long) As boolean
+    ParseClassImplSetup = true
+    If isIface = 0 Or VtIsUser(ti) <> 0 Or AccParent(ti) < 0 Then Exit Function
+    If ParseClassScanImpl(p) = 0 Then Exit Function
+    isIface = 0
+    ParseClassImplSetup = PvImplVptr(p, ti)
+End Function
+
 ' ---- 本体のメンバ ----
 
 Sub PvFailName(p As *Parser, id As Long, fmt As String, name As *Byte)
