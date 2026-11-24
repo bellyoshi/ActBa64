@@ -1,5 +1,40 @@
 # リリースノート
 
+## v0.1.3（v0.1.2 からの変更点）
+
+### ハイライト
+
+- **COM インターフェースを継承して中身を書く Class を作れます。** 中身の無い `Virtual` だけの Class を `Inherits` し、本体のある `Sub` / `Function` を書くと実体の Class になります（先頭に `__vptr`）。vtable は `AddressOf(obj->Method)` を並べてプログラムが作ります。AB4 のサンプルのように、1 つのポインタ変数で違うクラスのメソッドを呼べます。
+- **基底クラスのポインタで `Delete` しても、`New` した実体のクラスの Dtor が呼ばれます。**
+- **サンプルを 2 つ足しました。** 2 台目のモニターに画像と PDF を映すビューアー（`src/actba64/samples/viewer`）と、二人で指す将棋（`src/actba64/samples/shogi`）です。
+
+### コンパイラ
+
+- `Class A : Inherits B` と 1 行に書けるようにしました。
+- `AddressOf(obj->Method)` / `AddressOf(obj.Method)` で、`obj` のクラス（か継承元）のメソッドの番地を取れます。
+- `SizeOf(*型)`（`SizeOf(*Function)` も）はポインタの幅（64bit は 8、`-actba32` は 4）になります。
+- 中身の無い `Virtual` の Class を継承して本体のある `Sub` / `Function` を書いた Class は、COM インターフェースでなく実体の Class にします。これまでは空の ctor が付かず、`New` が `missing ctor` になっていました。
+- `New` の塊の頭を 8 バイトから 24 バイト（要素の大きさ・Dtor の番地・要素数）にしました。`Delete` は頭の Dtor を呼ぶので、基底クラスや COM インターフェースのポインタで消しても実体の Dtor が呼ばれます。Dtor の見つからない `Delete` の `missing dtor` のエラーは無くなりました。
+- ポインタ越しに呼ぶメソッドの `Long` の引数へ `Double` の式を渡すと 0 が渡っていたのを直しました。
+- `arr[i] = udt.rc` のように、入れ子のメンバーから配列の要素へ構造体を代入すると違う値が写っていたのを直しました。
+
+### ActiveBasic との違い
+
+- AB4 はメソッドの `This` を ECX で渡し、宣言だけの `Virtual`（COM）の呼び出しでは `This` をスタックの第1引数にも積みます。ActBa64 は `This` を第1引数で渡します。AB4 で vtable に入れるメソッドの先頭に `This` を受けるための捨て引数（`dummy As Long`）を置いていたソースは、捨て引数を消してください。vtable やオブジェクトの先頭を `DWord` / `SetDWord` で扱うと 64bit ではアドレスが切れるので、`*VoidPtr` と `SizeOf(*Function)` を使ってください。詳しくは [different.md](./different.md#動作が異なるもの) を見てください。
+
+### サンプル
+
+- `src/actba64/samples/viewer`: Lazarus の ViewerBy2nd を `Forms.sbp` で書き直したビューアー。画像（GDI+）と PDF（pdfium.dll）を操作画面で選び、スクリーンの窓に映します。ページ送り、拡大・縮小、回転、背景表示、自動表示、全画面、モニターの選択に対応します。動画と設定の保存はまだです。Windows の 64bit のみで、exe と同じフォルダに 64bit の pdfium.dll が要ります。
+- `src/actba64/samples/shogi`: 盤と駒台を GDI で描き、押した場所で駒を動かす・持ち駒を打つ将棋。成りは尋ね、行き所が無ければ自動で成ります。王手・詰みの判定はしません。Windows のみです。
+
+### Include
+
+- `-linux` の Forms の長いファイルを役目ごとに分けました（`FormX11` / `FormEvent` / `FormPaint` / `FormInput` / `FormEdit` / `X11Font` / `MsgBoxEvent`）。Forms の手続きはすべて 10 行以内にしました。動きは変わりません。
+
+### ビルド・その他
+
+- README のコマンドラインに `-X` を載せました。
+
 ## v0.1.2（v0.1.1 からの変更点）
 
 ### ハイライト
