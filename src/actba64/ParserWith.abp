@@ -7,8 +7,31 @@ Function ParseIsSelfField(p As *Parser, name As *Byte) As Long
     Dim off As Long, sz As Long, cnt As Long
     ParseIsSelfField = 0
     If p->classTypeIdx < 0 Then Exit Function
+    ' 同じ名前の仮引数があれば、フィールドより仮引数が先
+    If ParseIsMethParam(p, name) <> 0 Then Exit Function
     ast = p->ast
     If TyFindField(ast->types, p->classTypeIdx, name, off, sz, cnt) <> 0 Then ParseIsSelfField = 1
+End Function
+
+' メソッドの仮引数の名前なら 1。同じ名前のフィールドより仮引数が先（Sub Init(Max As DWord) の Max）
+Function ParseIsMethParam(p As *Parser, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim cur As Long
+    Dim pname(SYM_NAME_LEN - 1) As Byte
+    ParseIsMethParam = 0
+    If g_parseProcDepth <= 0 Or g_clsMethParams <= 0 Then Exit Function
+    ast = p->ast
+    cur = g_clsMethParams
+    While cur >= 0
+        AstCopyName(ast, cur, VarPtr(pname))
+        If TyNameEq(VarPtr(pname), name) <> 0 Then
+            ParseIsMethParam = 1
+            Exit Function
+        End If
+        nodes = ast->nodes
+        cur = nodes[cur].nxt
+    Wend
 End Function
 
 Function ParseClassIdentExpr(p As *Parser, name As *Byte) As Long
@@ -34,7 +57,7 @@ Function ParseClassIdentExpr(p As *Parser, name As *Byte) As Long
             Exit Function
         End If
     End If
-    If p->classTypeIdx >= 0 Then
+    If ParseIsSelfField(p, name) <> 0 Then
         If TyFindField(types, p->classTypeIdx, name, fieldOff, fieldSize, fieldCount) <> 0 Then
             lstrcpy(VarPtr(kMe), "This")
             nMe = AstAddNode(ast, AST_VAR)

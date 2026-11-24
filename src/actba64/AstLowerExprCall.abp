@@ -75,6 +75,135 @@ Function LowMethodRetTy(ctx As *LowerCtx, idx As Long) As Long
     LowMethodRetTy = LowFindFuncRetTy(ctx, VarPtr(sig))
 End Function
 
+' ---------------------------------------------------
+'  関数ポインタのフィールドを呼ぶ: p->rom.init_cb(h) / obj->fp(a)
+'  （TypeDef F = *Function(...) のフィールド、Class の *Function フィールド）
+' ---------------------------------------------------
+
+' 受け手（AST_VAR / AST_MEMBER / 配列の要素）の Type / Class 番号。違えば -1
+Function LowFnFieldRecvTi(ctx As *LowerCtx, recv As Long) As Long
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    LowFnFieldRecvTi = -1
+    If recv < 0 Then Exit Function
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[recv].kind = AST_MEMBER Then
+        LowFnFieldRecvTi = LowMemberFieldType(ctx, recv)
+        Exit Function
+    End If
+    If nodes[recv].kind = AST_VAR Then
+        AstCopyName(ast, recv, VarPtr(name))
+    ElseIf nodes[recv].kind = AST_INDEX Or nodes[recv].kind = AST_CALL Then
+        LowIdxBaseName(ast, recv, VarPtr(name))
+    Else
+        Exit Function
+    End If
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    If nodes[recv].kind = AST_VAR Then
+        If vTy = TY_UDT Or vTy = TY_PTR_UDT Then LowFnFieldRecvTi = vTi
+    Else
+        If vTy = TY_UDT_ARR Then LowFnFieldRecvTi = vTi
+        If vTy = TY_PTR_BYTE_ARR Then LowFnFieldRecvTi = ArrPtrTi(vGl, vOff)
+    End If
+End Function
+
+' 受け手の先頭アドレスを rax へ
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowFnFieldRecvAddr(ctx As *LowerCtx, recv As Long) As boolean
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    LowFnFieldRecvAddr = false
+    ast = ctx->ast
+    nodes = ast->nodes
+    If nodes[recv].kind = AST_MEMBER Then
+        If LowAddr(ctx, recv) = 0 Then Exit Function
+    ElseIf nodes[recv].kind = AST_VAR Then
+        AstCopyName(ast, recv, VarPtr(name))
+        If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+        If vTy = TY_PTR_UDT Or vBr <> 0 Then
+            LowEmitLoadOff(ctx->list, vOff, vGl)
+        Else
+            LowEmitLeaOff(ctx->list, vOff, vGl)
+        End If
+    Else
+        If Not LowAddrMemberIdxBase(ctx, recv, vTi) Then Exit Function
+    End If
+    LowFnFieldRecvAddr = true
+End Function
+
+' 呼べるメソッドなら 1（Virtual か、Class_名前 の関数がある）
+Function LowFnFieldIsMethod(ctx As *LowerCtx, ti As Long, name As *Byte) As Long
+    Dim buf(TEXT_LEN - 1) As Byte
+    Dim ast As *Ast
+    Dim typeTable As *TypeTable
+    Dim names As *Byte
+    Dim vals As *Long
+    LowFnFieldIsMethod = 0
+    ast = ctx->ast
+    typeTable = ast->types
+    If TyIsClass(typeTable, ti) = 0 Then Exit Function
+    vals = typeTable->typeVirtCount
+    If vals[ti] > 0 Then
+        If TyFindVirt(typeTable, ti, name) >= 0 Then
+            LowFnFieldIsMethod = 1
+            Exit Function
+        End If
+    End If
+    names = typeTable->typeNames
+    LowMangleClass(VarPtr(names[LowMethodDefTi(ti, name) * TYNAME_LEN]), name, VarPtr(buf))
+    If LowFindFunc(ctx, VarPtr(buf)) >= 0 Then LowFnFieldIsMethod = 1
+End Function
+
+' 関数ポインタのフィールドの呼び出しなら出力して 1、エラーは 0。フィールドでなければ -2
+Function LowExprCallFnField(ctx As *LowerCtx, idx As Long) As Long
+    Dim stackPad(LOW_STACK_PAD - 1) As Byte
+    Dim nodes As *AstNode
+    Dim ast As *Ast
+    Dim list As *IrList
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim recv As Long, ti As Long, nArgs As Long, callBytes As Long, keep As Long
+    Dim fOff As Long, fSize As Long, fCnt As Long, fTy As Long
+    LowExprCallFnField = -2
+    ast = ctx->ast
+    list = ctx->list
+    nodes = ast->nodes
+    recv = nodes[idx].right
+    AstCopyName(ast, idx, VarPtr(name))
+    ti = LowFnFieldRecvTi(ctx, recv)
+    If ti < 0 Then Exit Function
+    If TyFindFieldEx(ast->types, ti, VarPtr(name), fOff, fSize, fCnt, fTy) = 0 Then Exit Function
+    If fSize <> TyPtrSize() Or fCnt > 1 Then Exit Function
+    If LowFnFieldIsMethod(ctx, ti, VarPtr(name)) <> 0 Then Exit Function
+    LowExprCallFnField = 0
+    nArgs = nodes[idx].num
+    If nArgs > LOW_MAX_ARGS Then
+        ctx->err = 1
+        Exit Function
+    End If
+    ' 呼ぶ先を先に読み、引数の領域の上へ置く（引数を並べると rax / rcx が変わるため）
+    If Not LowFnFieldRecvAddr(ctx, recv) Then Exit Function
+    If fOff <> 0 Then IrEmit(list, OP_ADD_RAX_IMM, fOff, 0)
+    IrEmit(list, OP_LOAD_PTR, 0, 0)
+    keep = ABI_ALIGN
+    If TyIs32() <> 0 Then keep = 4
+    IrEmit(list, OP_SUB_RSP, keep, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, 0, 0)
+    callBytes = LowCallBytes(nArgs)
+    If callBytes > 0 Then IrEmit(list, OP_SUB_RSP, callBytes, 0)
+    If Not LowEmitCallArgHomes(ctx, idx, nArgs, 0, 0, VarPtr(name)) Then Exit Function
+    LowEmitLoadRegArgs(list, nArgs)
+    IrEmit(list, OP_LOAD_RSP_RAX, callBytes, 0)
+    IrEmit(list, OP_CALL_RAX, 0, 0)
+    LowEmitCallFinish(list, callBytes)
+    IrEmit(list, OP_ADD_RSP, keep, 0)
+    LowExprCallFnField = 1
+End Function
+
 Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(LOW_STACK_PAD - 1) As Byte
     Dim nodes As *AstNode
@@ -94,6 +223,12 @@ Function LowExprCallMethod(ctx As *LowerCtx, idx As Long) As Long
     typeTable = ast->types
     AstCopyName(ast, idx, VarPtr(name))
     ' obj.Method(...) / p->Method(...) — right=receiver, left=user args, str=short name
+    ' 関数ポインタのフィールド（p->cb(...)）はメソッドではない
+    argIdx = LowExprCallFnField(ctx, idx)
+    If argIdx <> -2 Then
+        LowExprCallMethod = argIdx
+        Exit Function
+    End If
     typeIdx = LowRecvClassTi(ctx, nodes[idx].right)
     If typeIdx < 0 Then
         LowerDiagError(ctx, idx, Tr1$(1038, "method call on non-class '{0}'", MakeStr(VarPtr(name))))
