@@ -4,7 +4,6 @@
 
 ### ハイライト
 
-- **AB 4 で書かれた実際のプログラムが、ソースを直さずにコンパイルできるようになりました。** [HongKongArduinoClone](https://github.com/RGBA-CRT/HongKongArduinoClone) と [LSPK-Extractor](https://github.com/RGBA-CRT/LSPK-Extracter) を、同じ作者のライブラリ [RGBALib](https://github.com/RGBA-CRT/RGBALib) ごとコンパイルできます。RGBALib は AB と同じく `actba64.exe` の隣の `Include\` に置いてください。どちらも `-actba32` で作ってください（下の「ActiveBasic との違い」）。
 - **255 バイトを超える文字列リテラルを書けます。** これまでは 255 バイトで切れていました。`"..."`、`ex"..."`、`Const`、`Len`、連結のどれでも全体の長さになります。
 - **AB 4.20 の RAD で作ったウィンドウのプロジェクトをそのままコンパイルできます。** `#USEWINDOW=1` の `.pj` の隣に `<名前>.wnd` があれば、ProjectEditor はコンパイルの前にそこから `Callback.wbp` と `MakeWindow.wbp` を作り直します。AB 4.20 の Samples などで、AB 4.20 の出力とバイト単位で一致することを確かめています。詳しくは [projecteditor.md §7.1](./projecteditor.md#71-ab4-互換の-radusewindow1) を見てください。
 
