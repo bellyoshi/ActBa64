@@ -1,0 +1,74 @@
+' Expect: 0
+' Target: actba64
+' AB 4 のプログラム（LSPK-Extractor / RGBALib の abcdecl.sbp）で使われていた書き方:
+' TypeDef X = * で終わる行、変数の v()、*Type のフィールドの -> と添字（メソッドの中も）、
+' 後ろで定義する Type へのポインタのフィールド
+#console
+
+TypeDef proto_any = *
+TypeDef proto_get = *Function() As VoidPtr
+
+Type DirInfo
+    name As BytePtr
+    info As *PfsDir
+End Type
+
+' DirInfo の info より後ろで定義する
+Type PfsDir
+    start_child As Long
+    child_count As Long
+End Type
+
+Type FindData
+    current As Long
+    stop As Long
+End Type
+TypeDef FindHandle = *FindData
+
+Type PkhBlock
+    hash As DWord
+    size As DWord
+End Type
+
+Class Reader
+    tbl As *PkhBlock
+Public
+    Function Build(n As Long) As DWord
+        Dim i As Long
+        tbl = calloc(SizeOf(PkhBlock) * n)
+        For i = 0 To n - 1
+            tbl[i].hash = i * 3
+            tbl[i].size = 1
+        Next
+        tbl->size = 5
+        Build = tbl[2].hash + tbl[1].size + tbl->size
+    End Function
+End Class
+
+Function NextOf(h As FindHandle) As Long
+    NextOf = h->current
+    h->current++
+End Function
+
+Dim p As proto_any
+If SizeOf(proto_any) <> SizeOf(VoidPtr) Then ExitProcess(1)
+
+' 1: *Type のフィールドの ->（後ろで定義する Type）
+Dim d As DirInfo, pd As *DirInfo
+d.info = calloc(SizeOf(PfsDir))
+pd = VarPtr(d)
+pd->info->start_child = 4
+d.info->child_count = 3
+If pd->info->start_child + d.info->child_count <> 7 Then ExitProcess(2)
+
+' 2: メソッドの中の tbl[i].x / tbl->x（tbl は *Type のフィールド）
+Dim r As Reader
+If r.Build(3) <> 12 Then ExitProcess(3)
+
+' 3: 変数の v() は v の値
+Dim fd As FindData, hf As FindHandle
+fd.current = 7
+hf = VarPtr(fd)
+If NextOf(hf()) <> 7 Or fd.current <> 8 Then ExitProcess(4)
+
+ExitProcess(0)
