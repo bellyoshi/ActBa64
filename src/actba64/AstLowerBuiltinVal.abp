@@ -230,3 +230,43 @@ Function LowExprBuiltin(ctx As *LowerCtx, idx As Long) As Long
     End If
     LowExprBuiltin = r
 End Function
+
+' AddressOf(obj->Method) の obj の変数のクラス。見つからなければ -1
+Function LowAddrOfObjTi(ctx As *LowerCtx, obj As Long) As Long
+    Dim v(4) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowAddrOfObjTi = -1
+    If obj < 0 Then Exit Function
+    AstCopyName(ctx->ast, obj, VarPtr(name))
+    If LowLookupVar(ctx, VarPtr(name), VarPtr(v(0)), VarPtr(v(1)), VarPtr(v(2)), VarPtr(v(3)), VarPtr(v(4))) Then LowAddrOfObjTi = v(2)
+End Function
+
+' クラス ti（か継承元）のメソッド name のマングル名を dst へ
+Sub LowAddrOfMangle(ctx As *LowerCtx, ti As Long, name As *Byte, dst As *Byte)
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim names As *Byte
+    ast = ctx->ast
+    types = ast->types
+    names = types->typeNames
+    LowMangleClass(VarPtr(names[LowMethodDefTi(ti, name) * TYNAME_LEN]), name, dst)
+End Sub
+
+' クラス ti（か継承元）のメソッド name の関数のラベル。無ければ -1
+Function LowAddrOfMeth(ctx As *LowerCtx, ti As Long, name As *Byte) As Long
+    Dim mangled(MANGLED_LEN - 1) As Byte
+    LowAddrOfMeth = -1
+    If ti < 0 Then Exit Function
+    LowAddrOfMangle(ctx, ti, name, VarPtr(mangled))
+    LowAddrOfMeth = LowFindFunc(ctx, VarPtr(mangled))
+End Function
+
+' AddressOf の節 e の関数のラベル（name は節の名前）。無ければ -1
+Function LowAddrOfNode(ctx As *LowerCtx, e As Long, name As *Byte) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    ast = ctx->ast
+    nodes = ast->nodes
+    LowAddrOfNode = LowAddrOfMeth(ctx, LowAddrOfObjTi(ctx, nodes[e].left), name)
+    If nodes[e].left < 0 Then LowAddrOfNode = LowAddrOfLab(ctx, name, nodes[e].extra)
+End Function
