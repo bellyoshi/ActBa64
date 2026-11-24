@@ -1,0 +1,273 @@
+' RadWnd - AB4 互換の RAD: ウィンドウ定義ファイル（*.wnd）を読む。
+' #USEWINDOW=1 のプロジェクトでは、コンパイルの前に .wnd から Callback.wbp / MakeWindow.wbp を作る
+' （RadSrc / RadEvent / RadGenHead / RadGenEvent / RadGenDlg / RadGenRun）。
+' 今のフォームデザイナ（FormDesign*.sbp、Form クラスの InitializeComponent）とは別物。
+'
+' .wnd の形（AB 4.20 の ProjectEditor が書くもの）:
+'   WINDOW:名前 … END        キー = 値 の行と ITEM = 名前,x,y,幅,高さ,"文字",&H様式,&H拡張様式,種類
+'   MENU:名前 … END          POPUP = "文字",状態 … END / ITEM = ID,"文字",状態 / SEPARATOR
+
+Dim g_rwCount As Long
+Dim g_rwName(63) As String
+Dim g_rwHandle(63) As String
+Dim g_rwPoint(63) As String
+Dim g_rwSize(63) As String
+Dim g_rwCaption(63) As String
+Dim g_rwStyle(63) As String    ' &H と 8 桁（.wnd の書き方のまま）
+Dim g_rwExStyle(63) As String    ' &H と 8 桁（.wnd の書き方のまま）
+Dim g_rwMenu(63) As String
+Dim g_rwId(63) As Long
+Dim g_rwFont(63) As String
+Dim g_rwClass(63) As String
+Dim g_rwCallback(63) As String
+Dim g_rwType(63) As Long
+Dim g_rwFile(63) As String
+Dim g_rwIcon(63) As String
+Dim g_rwCbFound(63) As Long     ' CALLBACK の関数がソースにあれば 1（RadSrc）
+
+Dim g_riCount As Long
+Dim g_riWin(1023) As Long
+Dim g_riName(1023) As String
+Dim g_riRect(1023) As String
+Dim g_riCaption(1023) As String
+Dim g_riStyle(1023) As String    ' &H と 8 桁（.wnd の書き方のまま）
+Dim g_riExStyle(1023) As String    ' &H と 8 桁（.wnd の書き方のまま）
+Dim g_riType(1023) As Long
+
+' メニュー。g_reKind: 1 = POPUP、2 = ITEM、3 = SEPARATOR。g_reParent: 親の POPUP（-1 は最上位）
+Dim g_rmCount As Long
+Dim g_rmName(63) As String
+Dim g_reCount As Long
+Dim g_reMenu(1023) As Long
+Dim g_reKind(1023) As Long
+Dim g_reId(1023) As String
+Dim g_reCaption(1023) As String
+Dim g_reState(1023) As Long
+Dim g_reParent(1023) As Long
+Dim g_reHandle(1023) As String
+
+' 読んでいる場所: g_rpWin（-1 は窓の外）、g_rpMenu、POPUP の入れ子
+Dim g_rpWin As Long
+Dim g_rpMenu As Long
+Dim g_rpDepth As Long
+Dim g_rpStack(31) As Long
+
+Sub RadWnd_Reset()
+    g_rwCount = 0
+    g_riCount = 0
+    g_rmCount = 0
+    g_reCount = 0
+    g_rpWin = -1
+    g_rpMenu = -1
+    g_rpDepth = 0
+End Sub
+
+' 文字列を Long に（10 進と &H の 16 進）
+Function RadWnd_Num(s As String) As Long
+    RadWnd_Num = Val(Trim$(s))
+End Function
+
+' text の p からの 1 行（前後の空白と CR を除く）。p は次の行の先頭へ進む
+Function RadLine$(text As String, ByRef p As Long) As String
+    Dim e As Long
+    e = InStr(p, text, Chr$(10))
+    If e = 0 Then e = Len(text) + 1
+    RadLine$ = RadWnd_Strip$(Mid$(text, p, e - p))
+    p = e + 1
+End Function
+
+' text を 1 行ずつ読む
+Sub RadWnd_Parse(text As String)
+    Dim p As Long
+    RadWnd_Reset()
+    p = 1
+    While p <= Len(text)
+        RadWnd_Line(RadLine$(text, p))
+    Wend
+End Sub
+
+Function RadWnd_Strip$(s As String) As String
+    Dim t As String
+    t = s
+    If Right$(t, 1) = Chr$(13) Then t = Left$(t, Len(t) - 1)
+    RadWnd_Strip$ = Trim$(t)
+End Function
+
+Sub RadWnd_Line(t As String)
+    If Len(t) = 0 Then Exit Sub
+    If RadWnd_Head(t) <> 0 Then Exit Sub
+    If g_rpMenu >= 0 Then
+        RadWnd_MenuLine(t)
+    ElseIf g_rpWin >= 0 Then
+        RadWnd_WinLine(RadWnd_Key$(t), RadWnd_Val$(t))
+    End If
+End Sub
+
+' WINDOW: / MENU: の行なら 1
+Function RadWnd_Head(t As String) As Long
+    RadWnd_Head = 1
+    If Lower$(Left$(t, 7)) = "window:" Then
+        RadWnd_NewWin(Trim$(Mid$(t, 8)))
+    ElseIf Lower$(Left$(t, 5)) = "menu:" Then
+        RadWnd_NewMenu(Trim$(Mid$(t, 6)))
+    Else
+        RadWnd_Head = 0
+    End If
+End Function
+
+' 「キー = 値」のキー（小文字）。= が無ければ行全体
+Function RadWnd_Key$(t As String) As String
+    Dim i As Long
+    i = InStr(1, t, "=")
+    If i = 0 Then i = Len(t) + 1
+    RadWnd_Key$ = Lower$(Trim$(Left$(t, i - 1)))
+End Function
+
+Function RadWnd_Val$(t As String) As String
+    Dim i As Long
+    RadWnd_Val$ = ""
+    i = InStr(1, t, "=")
+    If i > 0 Then RadWnd_Val$ = Trim$(Mid$(t, i + 1))
+End Function
+
+Sub RadWnd_NewWin(name As String)
+    Dim w As Long
+    If g_rwCount >= 64 Then Exit Sub
+    w = g_rwCount
+    g_rwCount = g_rwCount + 1
+    RadWnd_ClearWin(w)
+    g_rwName(w) = name
+    g_rpWin = w
+End Sub
+
+Sub RadWnd_ClearWin(w As Long)
+    g_rwHandle(w) = "" : g_rwPoint(w) = "0,0" : g_rwSize(w) = "0,0"
+    g_rwCaption(w) = "" : g_rwStyle(w) = RadHex$(0) : g_rwExStyle(w) = RadHex$(0)
+    g_rwMenu(w) = "" : g_rwId(w) = 0 : g_rwClass(w) = "NORMAL"
+    g_rwFont(w) = "-12,0,0,0,400,0,0,0,128,3,2,1,32," + Chr$(34) + "MS UI Gothic" + Chr$(34)
+    g_rwCallback(w) = "" : g_rwType(w) = 0 : g_rwFile(w) = "" : g_rwIcon(w) = "" : g_rwCbFound(w) = 0
+End Sub
+
+Sub RadWnd_WinLine(k As String, v As String)
+    If k = "end" Then g_rpWin = -1
+    If k = "item" Then RadWnd_Item(v)
+    If k = "handle" Then g_rwHandle(g_rpWin) = v
+    If k = "point" Then g_rwPoint(g_rpWin) = RadWnd_NoSp$(v)
+    If k = "size" Then g_rwSize(g_rpWin) = RadWnd_NoSp$(v)
+    If k = "caption" Then g_rwCaption(g_rpWin) = RadWnd_Quoted$(v)
+    RadWnd_WinLine2(k, v)
+End Sub
+
+Sub RadWnd_WinLine2(k As String, v As String)
+    If g_rpWin < 0 Then Exit Sub
+    If k = "style" Then g_rwStyle(g_rpWin) = RadWnd_HexText$(v)
+    If k = "exstyle" Then g_rwExStyle(g_rpWin) = RadWnd_HexText$(v)
+    If k = "menuid" Then g_rwMenu(g_rpWin) = v
+    If k = "id" Then g_rwId(g_rpWin) = RadWnd_Num(v)
+    If k = "font" Then g_rwFont(g_rpWin) = v
+    RadWnd_WinLine3(k, v)
+End Sub
+
+Sub RadWnd_WinLine3(k As String, v As String)
+    If k = "class" Then g_rwClass(g_rpWin) = RadWnd_Quoted$(v)
+    If k = "callback" Then g_rwCallback(g_rpWin) = v
+    If k = "type" Then g_rwType(g_rpWin) = RadWnd_Num(v)
+    If k = "filepath" Then g_rwFile(g_rpWin) = v
+    If k = "iconid" Then g_rwIcon(g_rpWin) = v
+End Sub
+
+' 様式の値。&H と 8 桁ならそのまま（大文字小文字も）、ほかは &H と 8 桁の小文字に直す
+Function RadWnd_HexText$(v As String) As String
+    Dim t As String
+    t = Trim$(v)
+    RadWnd_HexText$ = t
+    If Len(t) = 10 And Lower$(Left$(t, 2)) = "&h" Then Exit Function
+    RadWnd_HexText$ = RadHex$(RadWnd_Num(t))
+End Function
+
+' 空白を除く（"x, y" も "x,y" に）
+Function RadWnd_NoSp$(v As String) As String
+    Dim i As Long
+    Dim s As String
+    s = ""
+    For i = 1 To Len(v)
+        If Mid$(v, i, 1) <> " " And Mid$(v, i, 1) <> Chr$(9) Then s = s + Mid$(v, i, 1)
+    Next
+    RadWnd_NoSp$ = s
+End Function
+
+' "…" の中身（最初の " から最後の " まで）
+Function RadWnd_Quoted$(v As String) As String
+    Dim a As Long
+    Dim b As Long
+    RadWnd_Quoted$ = v
+    a = InStr(1, v, Chr$(34))
+    If a = 0 Then Exit Function
+    b = RadWnd_LastQuote(v)
+    If b <= a Then b = Len(v) + 1
+    RadWnd_Quoted$ = Mid$(v, a + 1, b - a - 1)
+End Function
+
+Function RadWnd_LastQuote(v As String) As Long
+    Dim i As Long
+    RadWnd_LastQuote = 0
+    For i = Len(v) To 1 Step -1
+        If Mid$(v, i, 1) = Chr$(34) Then
+            RadWnd_LastQuote = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' p から次の , の手前まで。p は , の次へ進む
+Function RadWnd_Field$(v As String, ByRef p As Long) As String
+    Dim e As Long
+    e = InStr(p, v, ",")
+    If e = 0 Then e = Len(v) + 1
+    RadWnd_Field$ = Trim$(Mid$(v, p, e - p))
+    p = e + 1
+End Function
+
+' ITEM = 名前,x,y,幅,高さ,"文字",&H様式,&H拡張様式,種類[,画像の種類,"画像"]
+Sub RadWnd_Item(v As String)
+    Dim i As Long, p As Long
+    If g_riCount >= 1024 Then Exit Sub
+    i = g_riCount
+    g_riCount = g_riCount + 1
+    g_riWin(i) = g_rpWin : p = 1
+    g_riName(i) = RadWnd_Field$(v, p)
+    RadWnd_ItemRect(v, p, i)
+    RadWnd_ItemRest(v, p, i)
+End Sub
+
+Sub RadWnd_ItemRect(v As String, ByRef p As Long, i As Long)
+    Dim r As String
+    r = RadWnd_Field$(v, p)
+    r = r + "," + RadWnd_Field$(v, p)
+    r = r + "," + RadWnd_Field$(v, p)
+    g_riRect(i) = r + "," + RadWnd_Field$(v, p)
+End Sub
+
+' 文字の終わりは「",&H」（文字の中に , や " があってもよい）
+Sub RadWnd_ItemRest(v As String, ByRef p As Long, i As Long)
+    Dim a As Long, b As Long
+    a = InStr(p, v, Chr$(34))
+    b = InStr(a + 1, v, Chr$(34) + ",&")
+    If a = 0 Or b = 0 Then Exit Sub
+    g_riCaption(i) = Mid$(v, a + 1, b - a - 1) : p = b + 2
+    g_riStyle(i) = RadWnd_HexText$(RadWnd_Field$(v, p))
+    g_riExStyle(i) = RadWnd_HexText$(RadWnd_Field$(v, p))
+    g_riType(i) = RadWnd_Num(RadWnd_Field$(v, p))
+End Sub
+
+' 窓 w の部品 name（大文字小文字は区別しない）。無ければ -1
+Function RadWnd_FindItem(w As Long, name As String) As Long
+    Dim i As Long
+    RadWnd_FindItem = -1
+    For i = 0 To g_riCount - 1
+        If g_riWin(i) = w And Lower$(g_riName(i)) = Lower$(name) Then
+            RadWnd_FindItem = i
+            Exit Function
+        End If
+    Next
+End Function

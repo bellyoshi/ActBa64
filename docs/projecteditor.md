@@ -124,7 +124,7 @@ IME の変換中文字列はキャレット位置に重ねて表示し、確定�
 | 指令 | 用途 |
 |---|---|
 | `#OUTPUT_RELEASE` | コンパイル出力。無ければ `.pj` の拡張子を `.exe` にしたもの |
-| `#USEWINDOW` | 実行時にコンソールを残すか。値は 10 進整数。未指定と `0` はコンソール、`1` 以上は exe を直接起動 |
+| `#USEWINDOW` | 実行時にコンソールを残すか。値は 10 進整数。未指定と `0` はコンソール、`1` 以上は exe を直接起動。`1` で `<名前>.wnd` があれば、コンパイルの前に `Callback.wbp` / `MakeWindow.wbp` を作る（[§7.1](#71-ab4-互換の-radusewindow1)） |
 
 `#SOURCE` の外でも、この 2 つはファイル全体から読みます。
 
@@ -168,6 +168,37 @@ actba64 -actba32 <入力> -o <出力>
 | それ以外の単体 | exe を直接起動 |
 
 単体の `#console` は、行頭の空白とタブを除いた先頭 8 文字が `#console` と一致するときだけです。大小は区別します。
+
+### 7.1 AB4 互換の RAD（#USEWINDOW=1）
+
+AB 4.20 の ProjectEditor で作ったウィンドウのプロジェクトを、そのままコンパイルできます。`.pj` が `#USEWINDOW=1` で、`.pj` と同じフォルダに `<.pj の名前>.wnd` があるときは、コンパイルの前にその `.wnd` から `Callback.wbp` と `MakeWindow.wbp` を作り直します。AB 4.20 と同じく毎回上書きするので、この 2 つは手で直さないでください。メッセージウィンドウには `Generated Callback.wbp and MakeWindow.wbp from <.wnd>` と出ます。`.wnd` が無いとき（`Form` クラスで窓を作るプロジェクトなど）は何もしません。`.wnd` が読めないときや書けないときはコンパイルしません。
+
+[§12](#12-フォームデザイナ) のフォームデザイナ（`Form` クラスの `InitializeComponent`）とは別物です。`.wnd` を編集する画面はありません。
+
+書く中身は AB 4.20 の出力と同じです。AB 4.20 の Samples（CDPlayer / Downloader / Puzzle / SystemWatcher / TextEditor / Driving）と、AB 4.20 で作った小さなプロジェクトで、バイト単位で一致することを確かめています。古い版で書かれた Samples の一部には、モーダル ダイアログが無いのに `DialogBox` の中に `Else` から始まる行が入っています。ActBa64 は今の AB 4.20 と同じく中身を空にします。
+
+- 文字コードは `.wnd` と同じです（AB 4.20 の `.wnd` は Shift_JIS。英数字だけの `.wnd` も Shift_JIS で書きます）。改行は CRLF です
+- 部品の名前とメニューの ID に 1000 から番号を振って `Const` にします。名前が同じものは 1 回だけです
+- 窓ごとに `EventCall_<窓>` を作ります。`.wnd` の `FILEPATH` のソースに書いてあるイベント プロシージャだけを、書いてある順に呼びます。`WM_DESTROY` が先頭で、ダイアログでは `WM_INITDIALOG` が先頭です。その後に `WM_CLOSE`、`WM_NOTIFY`、`WM_COMMAND` が続きます
+- `MakeWindow.wbp` と `DialogBox` が登録する窓のプロシージャは `CALLBACK` の関数です。その関数が `#SOURCE` のどのファイルにも無ければ `EventCall_<窓>` にします（AB 4.20 は `FILEPATH` のファイルだけを見ます）
+- `#OPTION` に `&H2` があれば、先頭で `InitCommonControlsEx` を呼びます
+- `TYPE` は 0 がノーマル ウィンドウ（`MakeWindow.wbp` で作る）、1 がモーダル ダイアログ（`DialogBox`）、2 がモードレス ダイアログ（`CreateDialog`）です
+
+イベント プロシージャの名前は `窓_イベント`、`窓_部品_イベント`、`窓_メニューID_MenuClick` です。大小は区別しません。
+
+| 種類 | イベント |
+|---|---|
+| 窓 | `Activate` `Create` `Destroy` `DropFiles` `HScroll` `VScroll` `KeyDown` `KeyPress` `KeyUp` `LButtonDown` `LButtonUp` `LButtonDblClick`（M / R も）`MouseMove` `Move` `Resize` `Paint` `QueryClose` `SetFocus` `Timer` `MciNotify` `Notify` |
+| Button / CheckBox / RadioButton | `Click` `DblClick` |
+| Static / ImageBox | `Click` `DblClick` |
+| EditBox | `Change` `ErrSpace` `HScroll` `KillFocus` `MaxText` `SetFocus` `Update` `VScroll` |
+| ComboBox | `CloseUp` `DblClick` `DropDown` `EditChange` `EditUpdate` `ErrSpace` `KillFocus` `SelChange` `SelEndCancel` `SelEndOk` `SetFocus` |
+| ListBox | `DblClick` `ErrSpace` `KillFocus` `SelCancel` `SelChange` `SetFocus` |
+| ListView | `BeginDrag` `BeginLabelEdit` `BeginRDrag` `ColumnClick` `DeleteAllItems` `DeleteItem` `EndLabelEdit` `GetDispInfo` `InsertItem` `ItemChanged` `ItemChanging` `KeyDown` `SetDispInfo` と下の NM_ のもの |
+| TreeView | `Click` `CustomDraw` `DblClick` `KillFocus` `OutOfMemory` `RClick` `RDblClick` `ReleasedCapture` `Return` `SetFocus`（`NM_*`） |
+| UpDown | `Deltapos` と上の NM_ のもの |
+
+まだ扱わないもの: `BGCOLOR` は 15（3D FACE）のときと同じ背景になります（白・黒・色・ビットマップの背景は作りません）。ImageBox の画像は読み込みません。`.idx` と `MainWnd.sbp` は作りません（AB 4.20 で作ったものを使います）。
 
 ## 8. メッセージからソースへ
 
@@ -295,7 +326,7 @@ RAD の第一段階です。前面のソースに `Sub InitializeComponent`（`O
 
 ## 13. このエディタがしないこと
 
-置換、折り返し、符号の手選び、プロジェクトの新規作成ウィザード、デバッガは持っていません。フォームデザイナは、窓の大きさと部品の位置と大きさを変え、ツールボックスから部品を足すだけです。部品の削除、名前や `Caption` の書き換え、Button 以外のイベントの行の生成はできません。Ctrl+N や Ctrl+O もありません。RAD 用の `Callback.wbp` / `MakeWindow.wbp` は、このエディタ自身を組むためのファイルです。
+置換、折り返し、符号の手選び、プロジェクトの新規作成ウィザード、デバッガは持っていません。フォームデザイナは、窓の大きさと部品の位置と大きさを変え、ツールボックスから部品を足すだけです。部品の削除、名前や `Caption` の書き換え、Button 以外のイベントの行の生成はできません。Ctrl+N や Ctrl+O もありません。`src/projecteditor` の `Callback.wbp` / `MakeWindow.wbp` は、このエディタ自身を組むためのファイルです（`ProjectEditor.pj` は `#USEWINDOW=3` なので、[§7.1](#71-ab4-互換の-radusewindow1) の生成はしません）。
 
 ## 14. Linux 版
 

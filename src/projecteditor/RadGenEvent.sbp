@@ -1,0 +1,223 @@
+' RadGenEvent - Callback.wbp の EventCall_<窓>（窓のメッセージからイベント プロシージャを呼ぶ）。
+' 並び: WM_DESTROY と WM_CREATE（ダイアログは WM_INITDIALOG が先）、ソースに書いた順の窓のイベント、
+' WM_CLOSE、WM_NOTIFY、WM_COMMAND。イベント プロシージャがソースに無いものは呼ばない。
+
+' TYPE: 0 = ノーマル ウィンドウ、1 = モーダル ダイアログ、2 = モードレス ダイアログ
+Function RadGen_IsDlg(w As Long) As Long
+    RadGen_IsDlg = 0
+    If g_rwType(w) <> 0 Then RadGen_IsDlg = 1
+End Function
+
+' 窓のプロシージャ。CALLBACK の関数がソースに無ければ EventCall_<窓>（AB 4.20 と同じ）
+Function RadGen_Proc$(w As Long) As String
+    RadGen_Proc$ = g_rwCallback(w)
+    If g_rwCbFound(w) = 0 Then RadGen_Proc$ = "EventCall_" + g_rwName(w)
+End Function
+
+Sub RadGen_EventCalls()
+    Dim w As Long
+    For w = 0 To g_rwCount - 1
+        RadGen_EventCall(w)
+    Next
+End Sub
+
+Sub RadGen_EventCall(w As Long)
+    Dim f As String
+    f = "EventCall_" + g_rwName(w)
+    RadOut("Function " + f + "(hWnd As HWND, message As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT")
+    RadOut(RadT$(1) + "Select Case message")
+    RadGen_Cases(w)
+    RadGen_EventEnd(f)
+End Sub
+
+Sub RadGen_EventEnd(f As String)
+    RadOut(RadT$(2) + "Case Else")
+    RadOut(RadT$(3) + f + "=DefWindowProc(hWnd,message,wParam,lParam)")
+    RadOut(RadT$(3) + "Exit Function")
+    RadOut(RadT$(1) + "End Select")
+    RadOut(RadT$(1) + f + "=0")
+    RadOut("End Function" + Chr$(13) + Chr$(10))
+End Sub
+
+Sub RadGen_Cases(w As Long)
+    RadGen_CaseFirst(w)
+    RadGen_WinEvents(w)
+    RadGen_CaseClose(w)
+    RadGen_CaseNotify(w)
+    RadGen_CaseCommand(w)
+End Sub
+
+Sub RadGen_CaseFirst(w As Long)
+    If RadGen_IsDlg(w) <> 0 Then
+        RadGen_CaseCreate(w, "WM_INITDIALOG")
+        RadGen_CaseDestroy(w)
+    Else
+        RadGen_CaseDestroy(w)
+        If RadSrc_Has(w, "Create") = 0 Then RadGen_CaseCreate(w, "WM_CREATE")
+    End If
+End Sub
+
+Sub RadGen_CaseDestroy(w As Long)
+    RadOut(RadT$(2) + "Case WM_DESTROY")
+    If RadSrc_Has(w, "Destroy") <> 0 Then RadOut(RadT$(3) + g_rwName(w) + "_Destroy()")
+End Sub
+
+Sub RadGen_CaseCreate(w As Long, msg As String)
+    Dim i As Long
+    RadOut(RadT$(2) + "Case " + msg)
+    RadOut(RadT$(3) + g_rwHandle(w) + "=hWnd")
+    If Len(g_rwMenu(w)) > 0 Then RadOut(RadT$(3) + "SetMenu(hWnd,hMenu_" + g_rwMenu(w) + ")")
+    For i = 0 To g_riCount - 1
+        If g_riWin(i) = w Then RadGen_Control(w, i)
+    Next
+    If RadSrc_Has(w, "Create") <> 0 Then RadOut(RadT$(3) + g_rwName(w) + "_Create(ByVal (lParam As VoidPtr))")
+End Sub
+
+' 部品を作ってフォントを付ける
+Sub RadGen_Control(w As Long, i As Long)
+    If g_riType(i) = 13 Then
+        RadOut(RadT$(3) + RadGen_UpDown$(i))
+    Else
+        RadOut(RadT$(3) + RadGen_CreateCtl$(i))
+    End If
+    RadOut(RadT$(3) + "SendMessage(GetDlgItem(hWnd," + g_riName(i) + "),WM_SETFONT,hFont_" + g_rwName(w) + " As WPARAM,0)")
+End Sub
+
+Function RadGen_UpDown$(i As Long) As String
+    Dim s As String
+    s = "CreateUpDownControl(" + Str$(RadWnd_Num(g_riStyle(i))) + "," + g_riRect(i) + ",hWnd," + g_riName(i)
+    RadGen_UpDown$ = s + ",GetWindowLong(hWnd,GWL_HINSTANCE),0,0,100,0)"
+End Function
+
+Function RadGen_CreateCtl$(i As Long) As String
+    Dim s As String
+    s = "CreateWindowEx(" + g_riExStyle(i) + "," + RadQ$(RadEv_Class$(g_riType(i))) + "," + RadQ$(g_riCaption(i))
+    RadGen_CreateCtl$ = s + "," + g_riStyle(i) + "," + g_riRect(i) + ",hWnd," + g_riName(i) + " As HMENU,GetModuleHandle(0),0)"
+End Function
+
+' Destroy / QueryClose / Notify 以外の窓のイベントを、ソースの順に。
+' ノーマル ウィンドウの Create（WM_CREATE）もソースの順の位置（ダイアログの WM_INITDIALOG は先頭）
+Sub RadGen_WinEvents(w As Long)
+    Dim h As Long
+    For h = 0 To g_rhCount - 1
+        If g_rhWin(h) = w And g_rhKind(h) = 0 Then RadGen_WinEvent(w, h)
+    Next
+End Sub
+
+Sub RadGen_WinEvent(w As Long, h As Long)
+    Dim ev As String
+    ev = g_rhEv(h)
+    If ev = "Destroy" Or ev = "QueryClose" Or ev = "Notify" Then Exit Sub
+    If ev = "Create" Then
+        If RadGen_IsDlg(w) = 0 Then RadGen_CaseCreate(w, "WM_CREATE")
+        Exit Sub
+    End If
+    RadGen_WinCase(w, h, ev)
+End Sub
+
+Sub RadGen_WinCase(w As Long, h As Long, ev As String)
+    RadOut(RadT$(2) + "Case " + g_rhCode(h))
+    If ev = "Paint" Then
+        RadGen_Paint(w)
+    Else
+        RadGen_WinCall(w, ev)
+    End If
+End Sub
+
+Sub RadGen_WinCall(w As Long, ev As String)
+    Dim n As String
+    Dim info As String
+    info = RadEv_Look$(RadEv_WinTable$(), ev, n)
+    RadOut(RadT$(3) + g_rwName(w) + "_" + ev + "(" + RadEv_After$(info) + ")")
+End Sub
+
+Sub RadGen_Paint(w As Long)
+    RadOut(RadT$(3) + "Dim ps As PAINTSTRUCT")
+    RadOut(RadT$(3) + "Dim hDC As HDC")
+    RadOut(RadT$(3) + "hDC=BeginPaint(hWnd,ps)")
+    RadOut(RadT$(3) + g_rwName(w) + "_Paint(hDC)")
+    RadOut(RadT$(3) + "EndPaint(hWnd,ps)")
+End Sub
+
+Sub RadGen_CaseClose(w As Long)
+    RadOut(RadT$(2) + "Case WM_CLOSE")
+    RadOut(RadT$(3) + "Dim cancel=0 As Integer")
+    If RadSrc_Has(w, "QueryClose") <> 0 Then RadOut(RadT$(3) + g_rwName(w) + "_QueryClose(cancel)")
+    If g_rwType(w) = 1 Then
+        RadOut(RadT$(3) + "If cancel=0 Then EndDialog(hWnd,0)")
+    Else
+        RadOut(RadT$(3) + "If cancel=0 Then DestroyWindow(hWnd)")
+    End If
+End Sub
+
+Sub RadGen_CaseNotify(w As Long)
+    If RadSrc_Has(w, "Notify") = 0 And RadSrc_HasKind(w, 3) = 0 Then Exit Sub
+    RadOut(RadT$(2) + "Case WM_NOTIFY")
+    If RadSrc_Has(w, "Notify") <> 0 Then RadOut(RadT$(3) + g_rwName(w) + "_Notify(ByVal (lParam As *NMHDR))")
+    If RadSrc_HasKind(w, 3) <> 0 Then RadGen_NotifyCtls(w)
+End Sub
+
+Sub RadGen_NotifyCtls(w As Long)
+    RadOut(RadT$(3) + "Dim pnmHdr As *NMHDR")
+    RadOut(RadT$(3) + "pnmHdr=lParam As *NMHDR")
+    RadOut(RadT$(3) + "Select Case LOWORD(wParam)")
+    RadGen_CtlCases(w, 3, "pnmHdr->code")
+    RadOut(RadT$(3) + "End Select")
+End Sub
+
+Sub RadGen_CaseCommand(w As Long)
+    If RadSrc_HasKind(w, 1) = 0 And RadSrc_HasKind(w, 2) = 0 Then Exit Sub
+    RadOut(RadT$(2) + "Case WM_COMMAND")
+    RadOut(RadT$(3) + "Select Case LOWORD(wParam)")
+    RadGen_CtlCases(w, 1, "HIWORD(wParam)")
+    RadOut(RadT$(3) + "End Select")
+End Sub
+
+' kind の部品（とメニュー）を、ソースで最初に出た順に。同じ部品のイベントは 1 つの Case にまとめる
+Sub RadGen_CtlCases(w As Long, kind As Long, sel As String)
+    Dim h As Long
+    For h = 0 To g_rhCount - 1
+        If g_rhWin(h) = w Then RadGen_CtlCase(w, h, kind, sel)
+    Next
+End Sub
+
+Sub RadGen_CtlCase(w As Long, h As Long, kind As Long, sel As String)
+    If kind = 1 And g_rhKind(h) = 2 Then
+        RadOut(RadT$(4) + "Case " + g_rhItem(h))
+        RadOut(RadT$(5) + g_rwName(w) + "_" + g_rhItem(h) + "_MenuClick()")
+    ElseIf g_rhKind(h) = kind And RadGen_FirstOf(h) = h Then
+        RadGen_CtlBlock(w, h, sel)
+    End If
+End Sub
+
+Sub RadGen_CtlBlock(w As Long, h As Long, sel As String)
+    RadOut(RadT$(4) + "Case " + g_rhItem(h))
+    RadOut(RadT$(5) + "Select Case " + sel)
+    RadGen_CtlEvents(w, h)
+    RadOut(RadT$(5) + "End Select")
+End Sub
+
+' h と同じ窓・種類・部品で最初のもの
+Function RadGen_FirstOf(h As Long) As Long
+    Dim i As Long
+    For i = 0 To h
+        If g_rhWin(i) = g_rhWin(h) And g_rhKind(i) = g_rhKind(h) And g_rhItem(i) = g_rhItem(h) Then Exit For
+    Next
+    RadGen_FirstOf = i
+End Function
+
+Sub RadGen_CtlEvents(w As Long, h0 As Long)
+    Dim h As Long
+    For h = h0 To g_rhCount - 1
+        If RadGen_FirstOf(h) = h0 Then RadGen_CtlEvent(w, h)
+    Next
+End Sub
+
+' WM_NOTIFY の部品のイベントには NMHDR の場所を渡す
+Sub RadGen_CtlEvent(w As Long, h As Long)
+    Dim arg As String
+    arg = ""
+    If g_rhKind(h) = 3 Then arg = "ByVal (pnmHdr As VoidPtr)"
+    RadOut(RadT$(6) + "Case " + g_rhCode(h))
+    RadOut(RadT$(7) + g_rwName(w) + "_" + g_rhItem(h) + "_" + g_rhEv(h) + "(" + arg + ")")
+End Sub
