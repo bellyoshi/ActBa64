@@ -1,0 +1,262 @@
+' Forms/FormPaint.sbp - -linux の Form の部品を描く（FormsPaint）。
+' Forms.sbp が #include する（単独では include しない）。
+' 部品は子窓を作らず、Form の画素バッファ（LxBuf）に載せた順に描く（後に載せたものが上）。
+' 塗る・線・文字は Forms/X11Draw.sbp と Forms/X11Font.sbp。
+
+#ifdef _LINUX
+
+' 部品を描いて窓へ写す（p は *Form。窓が無ければ何もしない）
+Sub FormsPaint(p As VoidPtr)
+    Dim f As *Form
+    If p = 0 Or g_formsDpy = 0 Then Exit Sub
+    f = p As *Form
+    If f->Handle = 0 Then Exit Sub
+    FormsEnsureBuf(f)
+    If f->LxImg = 0 Then Exit Sub
+    FormsDrawAll(f)
+    FormsPutImage(f->Handle As VoidPtr, f->LxImg, f->LxBufW, f->LxBufH)
+End Sub
+
+' 部品の値が変わった（p は載っている Form。まだ載っていなければ 0）
+Sub FormsCtlChanged(p As VoidPtr)
+    FormsPaint(p)
+End Sub
+
+' 窓の大きさの画素バッファと XImage を用意する（大きさが変わったら作り直す）
+Sub FormsEnsureBuf(f As *Form)
+    Dim w As Long, h As Long
+    w = FormsMax(f->Width, 1)
+    h = FormsMax(f->Height, 1)
+    If f->LxBuf <> 0 And w = f->LxBufW And h = f->LxBufH Then Exit Sub
+    FormsFreeBuf(f)
+    FormsNewBuf(f, w, h)
+End Sub
+
+' w x h の画素バッファと、それを指す XImage を作る（作れなければ LxImg = 0）
+Sub FormsNewBuf(f As *Form, w As Long, h As Long)
+    f->LxBuf = malloc(w * h * 4)
+    f->LxBufW = w
+    f->LxBufH = h
+    f->LxStride = w * 4
+    f->LxImg = FormsNewImage(f->LxBuf, w, h)
+    If f->LxImg <> 0 Then f->LxStride = FormsL(f->LxImg, 44)      ' XImage.bytes_per_line
+End Sub
+
+' 地を塗って、載せた部品を順に描く
+Sub FormsDrawAll(f As *Form)
+    FormsTarget(f->LxBuf, f->LxBufW, f->LxBufH, f->LxStride)
+    FormsFill(0, 0, f->LxBufW, f->LxBufH, FORMS_C_FACE)
+    FormsPaintCtls(f)
+    FormsClipAll()
+End Sub
+
+' 載せた部品を載せた順に描く
+Sub FormsPaintCtls(f As *Form)
+    Dim c As *Control
+    c = f->FirstCtl()
+    While c <> 0
+        FormsPaintCtl(f, c)
+        c = c->NextControl
+    Wend
+End Sub
+
+' 部品 1 つ（部品の四角で切り抜く。使えない部品の文字は灰色）
+Sub FormsPaintCtl(f As *Form, c As *Control)
+    Dim tc As DWord
+    tc = FORMS_C_TEXT
+    If c->Enabled = False Then tc = FORMS_C_GRAY
+    FormsClipAll()
+    FormsClip(c->Left, c->Top, c->Left + c->Width, c->Top + c->Height)
+    FormsPaintKind(f, c, c->Left, c->Top, c->Left + c->Width, c->Top + c->Height, tc)
+    FormsClipAll()
+End Sub
+
+Sub FormsPaintKind(f As *Form, c As *Control, l As Long, t As Long, r As Long, b As Long, tc As DWord)
+    Dim k As Long
+    k = c->LxKind()
+    If k = FORMS_K_BUTTON Then FormsPaintButton(f, c, l, t, r, b, tc)
+    If k = FORMS_K_CHECK Or k = FORMS_K_RADIO Then FormsPaintMark(f, c, l, t, r, b, tc, k)
+    If k = FORMS_K_EDIT Then FormsPaintEdit(f, c, l, t, r, b, tc)
+    If k = FORMS_K_LABEL Then FormsText(c->Caption, l, t, tc)
+    If k = FORMS_K_PANEL Then FormsPaintPanel(c, l, t, r, b, tc)
+    If k = FORMS_K_GROUP Then FormsPaintGroup(c, l, t, r, b, tc)
+End Sub
+
+' 四角の真ん中に 1 行（d だけ右下へずらす）
+Sub FormsTextMid(s As String, l As Long, t As Long, r As Long, b As Long, c As DWord, d As Long)
+    FormsText(s, l + (r - l - FormsTextW(s)) \ 2 + d, t + (b - t - FormsFontH()) \ 2 + d, c)
+End Sub
+
+' 点線の枠（キーを受けている部品の印）
+Sub FormsFocusRect(l As Long, t As Long, r As Long, b As Long)
+    FormsDotsH(l, r, t)
+    FormsDotsH(l, r, b - 1)
+    FormsDotsV(l, t, b)
+    FormsDotsV(r - 1, t, b)
+End Sub
+
+' y の行の l から r の前まで、1 画素おきの点
+Sub FormsDotsH(l As Long, r As Long, y As Long)
+    Dim i As Long
+    i = l
+    While i < r
+        FormsFill(i, y, i + 1, y + 1, FORMS_C_TEXT)
+        i = i + 2
+    Wend
+End Sub
+
+' x の列の t から b の前まで、1 画素おきの点
+Sub FormsDotsV(x As Long, t As Long, b As Long)
+    Dim i As Long
+    i = t
+    While i < b
+        FormsFill(x, i, x + 1, i + 1, FORMS_C_TEXT)
+        i = i + 2
+    Wend
+End Sub
+
+' ==== 部品の種類ごと ====
+
+' ボタン。押している間はへこむ
+Sub FormsPaintButton(f As *Form, c As *Control, l As Long, t As Long, r As Long, b As Long, tc As DWord)
+    Dim dn As Long
+    dn = FormsPressed(f, c)
+    FormsFill(l, t, r, b, FORMS_C_FACE)
+    FormsButtonEdge(l, t, r, b, dn)
+    FormsClip(l + 2, t + 2, r - 2, b - 2)
+    FormsTextMid(c->Caption, l, t, r, b, tc, dn)
+    If f->LxFocus = c Then FormsFocusRect(l + 3, t + 3, r - 3, b - 3)
+End Sub
+
+' c を押していて、マウスがその上にあれば 1
+Function FormsPressed(f As *Form, c As *Control) As Long
+    FormsPressed = 0
+    If f->LxPress = c And f->LxPressIn <> 0 Then FormsPressed = 1
+End Function
+
+' ボタンの縁（dn <> 0 なら押してへこんだ縁）
+Sub FormsButtonEdge(l As Long, t As Long, r As Long, b As Long, dn As Long)
+    If dn = 0 Then
+        FormsRaised(l, t, r, b)
+        Exit Sub
+    End If
+    FormsBevel(l, t, r, b, FORMS_C_DKSHADOW, FORMS_C_WHITE)
+    FormsBevel(l + 1, t + 1, r - 1, b - 1, FORMS_C_SHADOW, FORMS_C_LIGHT)
+End Sub
+
+' チェックボックス（四角）とラジオボタン（丸）。左に 13 x 13 の印（上下は真ん中）、右に左寄せの 1 行
+Sub FormsPaintMark(f As *Form, c As *Control, l As Long, t As Long, r As Long, b As Long, tc As DWord, k As Long)
+    Dim y As Long, back As DWord
+    y = t + (b - t - 13) \ 2
+    back = FORMS_C_WHITE
+    If c->Enabled = False Or FormsPressed(f, c) <> 0 Then back = FORMS_C_FACE
+    If k = FORMS_K_CHECK Then FormsCheckBox(l, y, back, c->Checked, tc)
+    If k = FORMS_K_RADIO Then FormsRadioMark(l, y, back, c->Checked, tc)
+    FormsMarkCaption(f, c, l, t, b, tc)
+End Sub
+
+' チェックボックスの四角（左上 (l, y)）。chk <> False なら印
+Sub FormsCheckBox(l As Long, y As Long, back As DWord, chk As Long, tc As DWord)
+    FormsFill(l, y, l + 13, y + 13, back)
+    FormsSunken(l, y, l + 13, y + 13)
+    If chk <> False Then FormsCheckMark(l, y, tc)
+End Sub
+
+' チェックの印（左上から右下へ 3 画素、そこから右上へ 4 画素。太さ 3）
+Sub FormsCheckMark(l As Long, y As Long, tc As DWord)
+    Dim i As Long
+    For i = 0 To 2
+        FormsFill(l + 3 + i, y + 5 + i, l + 4 + i, y + 8 + i, tc)
+    Next
+    For i = 0 To 3
+        FormsFill(l + 6 + i, y + 7 - i, l + 7 + i, y + 10 - i, tc)
+    Next
+End Sub
+
+' ラジオボタンの丸（左上 (l, y)）。chk <> False なら真ん中の点
+Sub FormsRadioMark(l As Long, y As Long, back As DWord, chk As Long, tc As DWord)
+    Dim i As Long
+    For i = 0 To 12
+        FormsRoundRow(l, y, i, back)
+    Next
+    If chk = False Then Exit Sub
+    FormsFill(l + 4, y + 5, l + 9, y + 8, tc)
+    FormsFill(l + 5, y + 4, l + 8, y + 9, tc)
+End Sub
+
+' 丸の上から i 行目：縁の色と、中（上と下の端の行は縁だけ）
+Sub FormsRoundRow(l As Long, y As Long, i As Long, back As DWord)
+    Dim d As Long
+    d = FormsRoundW(i)
+    FormsFill(l + 6 - d, y + i, l + 7 + d, y + i + 1, FORMS_C_SHADOW)
+    If i > 0 And i < 12 Then FormsFill(l + 7 - d, y + i, l + 6 + d, y + i + 1, back)
+End Sub
+
+' 直径 13 の丸の、上から i 行目（0 から 12）の半分の幅
+Function FormsRoundW(i As Long) As Long
+    FormsRoundW = 6
+    If i = 0 Or i = 12 Then FormsRoundW = 2
+    If i = 1 Or i = 11 Then FormsRoundW = 4
+    If i = 2 Or i = 10 Then FormsRoundW = 5
+End Function
+
+' 印の右の左寄せの 1 行（上下は真ん中）と、キーを受けていれば点線の枠
+Sub FormsMarkCaption(f As *Form, c As *Control, l As Long, t As Long, b As Long, tc As DWord)
+    Dim ty As Long, fh As Long
+    fh = FormsFontH()
+    ty = t + (b - t - fh) \ 2
+    FormsText(c->Caption, l + 17, ty, tc)
+    If f->LxFocus = c Then FormsFocusRect(l + 15, ty - 1, l + 19 + FormsTextW(c->Caption), ty + fh + 1)
+End Sub
+
+' 白地にへこんだ縁、左寄せの 1 行。キーを受けていればキャレット。長い文字は横に流す
+Sub FormsPaintEdit(f As *Form, c As *Control, l As Long, t As Long, r As Long, b As Long, tc As DWord)
+    Dim x0 As Long, cx As Long, y As Long
+    FormsEditFrame(c, l, t, r, b)
+    y = t + (b - t - FormsFontH()) \ 2
+    cx = FormsEditScroll(c, r - l - 8)
+    x0 = l + 4 - c->LxScroll
+    FormsText(c->Caption, x0, y, tc)
+    If f->LxFocus = c Then FormsFill(x0 + cx, y, x0 + cx + 1, y + FormsFontH(), FORMS_C_TEXT)
+End Sub
+
+' EditBox の地（使えなければ灰色）とへこんだ縁。そのあとは縁の中だけに描く
+Sub FormsEditFrame(c As *Control, l As Long, t As Long, r As Long, b As Long)
+    Dim back As DWord
+    back = FORMS_C_WHITE
+    If c->Enabled = False Then back = FORMS_C_FACE
+    FormsFill(l, t, r, b, back)
+    FormsSunken(l, t, r, b)
+    FormsClip(l + 2, t + 2, r - 2, b - 2)
+End Sub
+
+' キャレットが幅 iw の中に見えるよう LxScroll を決める。戻り値はキャレットの x（文字の先頭から）
+Function FormsEditScroll(c As *Control, iw As Long) As Long
+    Dim cx As Long
+    If c->LxCaret > Len(c->Caption) Then c->LxCaret = Len(c->Caption)
+    cx = FormsTextW(Left$(c->Caption, c->LxCaret))
+    If iw < 1 Then iw = 1
+    If cx - c->LxScroll > iw Then c->LxScroll = cx - iw
+    If cx < c->LxScroll Then c->LxScroll = cx
+    FormsEditScroll = cx
+End Function
+
+' WS_EX_STATICEDGE: 1 画素のへこんだ縁、見出しは真ん中
+Sub FormsPaintPanel(c As *Control, l As Long, t As Long, r As Long, b As Long, tc As DWord)
+    FormsFill(l, t, r, b, FORMS_C_FACE)
+    FormsBevel(l, t, r, b, FORMS_C_SHADOW, FORMS_C_WHITE)
+    FormsTextMid(c->Caption, l, t, r, b, tc, 0)
+End Sub
+
+' 彫った線の枠（上辺は見出しの高さの真ん中）と、左上の見出し（下の線を消して）。中は塗らない
+Sub FormsPaintGroup(c As *Control, l As Long, t As Long, r As Long, b As Long, tc As DWord)
+    Dim fh As Long, tw As Long
+    fh = FormsFontH()
+    FormsEtched(l, t + fh \ 2, r, b)
+    If c->Caption = "" Then Exit Sub
+    tw = FormsTextW(c->Caption)
+    FormsFill(l + 6, t, l + 10 + tw, t + fh, FORMS_C_FACE)
+    FormsText(c->Caption, l + 8, t, tc)
+End Sub
+
+#endif

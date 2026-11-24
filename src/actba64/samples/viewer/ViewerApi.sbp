@@ -1,0 +1,72 @@
+' ============================================================
+' ViewerApi.sbp - 標準ヘッダに無い Win32 API と、UTF-8 / UTF-16 の変換
+' ============================================================
+
+Type MONITORINFO
+    cbSize As DWord
+    rcMonitor As RECT
+    rcWork As RECT
+    dwFlags As DWord
+End Type
+
+Declare Function CreateDIBSection Lib "gdi32.dll" (hdc As HDC, ByRef bmi As BITMAPINFO, usage As DWord, ByRef bits As VoidPtr, hSection As HANDLE, offset As DWord) As HBITMAP
+Declare Function GdiFlush Lib "gdi32.dll" () As Long
+Declare Function DragQueryFileW Lib "shell32.dll" (hDrop As HANDLE, iFile As DWord, lpszFile As *Word, cch As DWord) As DWord
+Declare Function MonitorFromWindow Lib "user32.dll" (hWnd As HWND, dwFlags As DWord) As HANDLE
+Declare Function GetMonitorInfoW Lib "user32.dll" (hMon As HANDLE, ByRef mi As MONITORINFO) As Long
+Declare Function EnumDisplayMonitors Lib "user32.dll" (hdc As HDC, lprcClip As VoidPtr, lpfnEnum As VoidPtr, dwData As LPARAM) As Long
+Declare Function GetMenuItemCount Lib "user32.dll" (hMenu As HMENU) As Long
+Declare Function IsDialogMessage Lib "user32.dll" Alias "IsDialogMessageW" (hDlg As HWND, ByRef msg As MSG) As Long
+Declare Function GetCommandLineW Lib "kernel32.dll" () As *Word
+Declare Function CommandLineToArgvW Lib "shell32.dll" (cmd As *Word, ByRef argc As Long) As *VoidPtr
+Declare Function GetOpenFileNameW Lib "comdlg32.dll" (ByRef ofn As OPENFILENAME) As Long
+
+Const CP_UTF8 = 65001
+Const GWL_STYLE = -16
+Const WS_POPUP = &H80000000
+Const WS_OVERLAPPEDWINDOW = &H00CF0000
+Const SWP_FRAMECHANGED = &H0020
+Const SWP_NOZORDER = &H0004
+Const SWP_SHOWWINDOW = &H0040
+Const MONITOR_DEFAULTTONEAREST = 2
+Const MONITORINFOF_PRIMARY = 1
+Const MK_CONTROL = &H0008
+Const VIEWER_WPATH = 32768          ' 複数選択の結果と、ドロップのパスを受けるワイド文字の数
+
+' s（UTF-8）を NUL 終端の UTF-16 にして buf（n 文字）へ
+Sub ViewerToWide(s As String, buf As *Word, n As Long)
+    Dim k As Long
+    k = MultiByteToWideChar(CP_UTF8, 0, StrPtr(s), Len(s), buf, n - 1)
+    buf[k] = 0
+End Sub
+
+' NUL 終端の UTF-16 を UTF-8 の String に
+Function ViewerFromWide(p As *Word) As String
+    Dim n As Long, s As String
+    ViewerFromWide = ""
+    n = WideCharToMultiByte(CP_UTF8, 0, p, -1, 0, 0, 0, 0)
+    If n <= 1 Then Exit Function
+    s = ZeroString(n - 1)
+    WideCharToMultiByte(CP_UTF8, 0, p, -1, StrPtr(s), n, 0, 0)
+    ViewerFromWide = s
+End Function
+
+' 32bit の上下逆でない DIB を作る。bits に画素の先頭が入る
+Function ViewerCreateDib(w As Long, h As Long, ByRef bits As VoidPtr) As HBITMAP
+    Dim bmi As BITMAPINFO
+    RtlFillMemory(VarPtr(bmi), SizeOf(BITMAPINFO), 0)
+    bmi.bmiHeader.biSize = SizeOf(BITMAPINFOHEADER)
+    bmi.bmiHeader.biWidth = w
+    bmi.bmiHeader.biHeight = -h
+    bmi.bmiHeader.biPlanes = 1
+    bmi.bmiHeader.biBitCount = 32
+    ViewerCreateDib = CreateDIBSection(0, bmi, 0, bits, 0, 0)
+End Function
+
+' 窓のクライアントの幅と高さ
+Sub ViewerClientSize(h As HWND, ByRef w As Long, ByRef ht As Long)
+    Dim rc As RECT
+    GetClientRect(h, rc)
+    w = rc.right - rc.left
+    ht = rc.bottom - rc.top
+End Sub

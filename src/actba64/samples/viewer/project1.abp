@@ -1,0 +1,90 @@
+' ============================================================
+' project1 - Viewer By 2nd Monitor（ViewerBy2nd の Viewer.lpr 相当）
+'
+' 操作画面で画像と PDF を選び、2 台目のモニターのスクリーンに映す。
+' モニターが 2 台以上あれば、スクリーンは初めからメインでないモニターの全画面になる。
+'
+' 要るもの: exe と同じフォルダに 64bit の pdfium.dll
+'   （ViewerBy2nd の x64\pdfium.dll。画像は Windows の GDI+ で読む）
+'
+' Build:
+'   actba64.exe samples\viewer\project1.abp -o samples\viewer\viewer.exe
+'   （Windows の 64bit のみ。GDI+ と pdfium を使うので -linux / -actba32 は通らない）
+'
+' Lazarus 版にあってまだ無いもの: 動画（libvlc）、設定の保存（settings.ini）、
+' 背景画像、操作画面の大きさの切り替え（スリム / 最小）。
+' ============================================================
+
+#include <Forms.sbp>
+#include "ViewerApi.sbp"
+#include "Gdip.sbp"
+#include "Pdfium.sbp"
+#include "FileTypes.sbp"
+#include "Zoom.sbp"
+#include "DocFile.sbp"
+#include "Model.sbp"
+#include "Monitors.sbp"
+#include "ListBox.sbp"
+#include "ScreenForm.abp"
+#include "InputForm.abp"
+#include "OperationMenu.sbp"
+#include "OperationForm.abp"
+
+Dim g_model As ViewerModel
+Dim g_screen As ScreenForm
+Dim g_op As OperationForm
+Dim g_input As InputForm
+
+#include "ModelOps.sbp"
+#include "OperationActions.sbp"
+#include "OpenFiles.sbp"
+
+AppStart()
+Application.Run(g_op)
+AppEnd()
+
+Sub AppStart()
+    Application.Initialize()
+    GdipInit()
+    FPDF_InitLibrary()
+    MonitorsLoad()
+    g_model.BgColor = RGB(0, 0, 0)
+    AppStartWindows()
+    OpOpenArgs()
+End Sub
+
+' スクリーンを出し（2 台目があればそこの全画面）、操作画面を前に出す
+Sub AppStartWindows()
+    g_screen.Monitor = MonitorDefault()
+    g_screen.Show()
+    If g_monCount > 1 Then g_screen.SetFullScreen(True)
+    g_op.Show()
+    MenuCheckMonitor(g_screen.Monitor)
+End Sub
+
+Sub AppEnd()
+    g_model.Clear()
+    FPDF_DestroyLibrary()
+    GdipDone()
+End Sub
+
+' Model が変わった。操作画面とスクリーンを合わせる（自動表示なら選んだものをスクリーンへ）
+Sub AppUpdate()
+    If g_op.IsAuto() Then
+        g_model.View()
+        If g_screen.IsShown() = 0 Then g_screen.Show()
+    End If
+    g_op.UpdateView()
+    g_screen.Refresh()
+End Sub
+
+' スクリーンの大きさが変わった（プレビューの縦横の比を合わせる）
+Sub AppScreenResized()
+    g_op.UpdateView()
+End Sub
+
+' 操作画面を前に出す
+Sub AppShowOperation()
+    ShowWindow(g_op.Handle, SW_RESTORE)
+    SetForegroundWindow(g_op.Handle)
+End Sub

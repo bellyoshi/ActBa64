@@ -1,0 +1,124 @@
+' Forms/FormEvent.sbp - -linux の Form の XEvent を WndProc のメッセージにする（FormsDispatch）。
+' Forms.sbp が #include する（単独では include しない）。
+' 部品の上の左ボタンと、部品が受けているキーは部品へ行き（Forms/FormInput.sbp）、WndProc には届かない。
+
+#ifdef _LINUX
+
+' 位置 → lParam（MAKELPARAM(x, y)）
+Function FormsXY(x As Long, y As Long) As LPARAM
+    FormsXY = ((y And &HFFFF) * &H10000 + (x And &HFFFF)) As LPARAM
+End Function
+
+' KeySym → 仮想キー（英数字・空白・Enter・Esc・BS・Tab・矢印・Home / End / PageUp / PageDown・
+' Insert / Delete・F1〜F12・Shift / Ctrl / Alt・テンキーの数字。ほかは KeySym のまま）
+Function FormsVk(ks As Long) As Long
+    FormsVk = ks
+    If ks >= &H61 And ks <= &H7A Then FormsVk = ks - &H20
+    If ks >= &HFE00 Then FormsVk = FormsVkFunc(FormsVkMove(FormsVkEdit(ks)))
+End Function
+
+' Enter・Esc・BS・Tab・Insert・Delete
+Function FormsVkEdit(ks As Long) As Long
+    FormsVkEdit = ks
+    If ks = &HFF0D Or ks = &HFF8D Then FormsVkEdit = 13       ' VK_RETURN（テンキーの Enter も）
+    If ks = &HFF1B Then FormsVkEdit = 27
+    If ks = &HFF08 Then FormsVkEdit = 8
+    If ks = &HFF09 Or ks = &HFE20 Then FormsVkEdit = 9        ' VK_TAB（Shift+Tab の ISO_Left_Tab も）
+    If ks = &HFF63 Then FormsVkEdit = &H2D                    ' VK_INSERT
+    If ks = &HFFFF Then FormsVkEdit = &H2E                    ' VK_DELETE
+End Function
+
+' 矢印・Home / End / PageUp / PageDown
+Function FormsVkMove(ks As Long) As Long
+    FormsVkMove = ks
+    If ks >= &HFF51 And ks <= &HFF54 Then FormsVkMove = ks - &HFF51 + 37
+    If ks = &HFF50 Then FormsVkMove = &H24                    ' VK_HOME
+    If ks = &HFF57 Then FormsVkMove = &H23                    ' VK_END
+    If ks = &HFF55 Then FormsVkMove = &H21                    ' VK_PRIOR
+    If ks = &HFF56 Then FormsVkMove = &H22                    ' VK_NEXT
+End Function
+
+' F1〜F12・Shift / Ctrl / Alt・テンキーの数字
+Function FormsVkFunc(ks As Long) As Long
+    FormsVkFunc = ks
+    If ks >= &HFFBE And ks <= &HFFC9 Then FormsVkFunc = ks - &HFFBE + &H70   ' VK_F1〜VK_F12
+    If ks = &HFFE1 Or ks = &HFFE2 Then FormsVkFunc = &H10     ' VK_SHIFT
+    If ks = &HFFE3 Or ks = &HFFE4 Then FormsVkFunc = &H11     ' VK_CONTROL
+    If ks = &HFFE9 Or ks = &HFFEA Then FormsVkFunc = &H12     ' VK_MENU（Alt）
+    If ks >= &HFFB0 And ks <= &HFFB9 Then FormsVkFunc = ks - &HFFB0 + &H60   ' VK_NUMPAD0〜9
+End Function
+
+' マウスのボタン → WM_?BUTTONDOWN（up = 1 なら UP）。ホイールなどは 0
+Function FormsButtonMsg(button As Long, up As Long) As DWord
+    FormsButtonMsg = 0
+    If button = 1 Then FormsButtonMsg = WM_LBUTTONDOWN + up
+    If button = 2 Then FormsButtonMsg = WM_MBUTTONDOWN + up
+    If button = 3 Then FormsButtonMsg = WM_RBUTTONDOWN + up
+End Function
+
+' XEvent 1 つ（g_formsEv）を、その窓の Form の WndProc へ
+Sub FormsDispatch()
+    Dim e As VoidPtr, f As *Form
+    e = VarPtr(g_formsEv(0))
+    f = FormsFind(FormsQ(e, 32))
+    If f = 0 Then Exit Sub
+    FormsDispatchTo(f, e, FormsL(e, 0))
+End Sub
+
+' 種類 t の XEvent e を Form f へ
+Sub FormsDispatchTo(f As *Form, e As VoidPtr, t As Long)
+    If t = 12 Then FormsOnExpose(f, e)
+    If t = 22 Then FormsOnConfigure(f, e)
+    If t = 4 Or t = 5 Then FormsOnButton(f, e, t - 4)
+    If t = 6 Then FormsOnMotion(f, e)
+    If t = 2 Then FormsOnKey(f, e)
+    If t = 33 Then FormsOnClient(f, e)
+End Sub
+
+' Expose（まとめの最後だけ）。部品を描いてから WM_PAINT
+Sub FormsOnExpose(f As *Form, e As VoidPtr)
+    If FormsL(e, 56) <> 0 Then Exit Sub
+    FormsPaint(f As VoidPtr)
+    f->WndProc(WM_PAINT, 0, 0)
+End Sub
+
+' ConfigureNotify。大きさが変わったら WM_SIZE
+Sub FormsOnConfigure(f As *Form, e As VoidPtr)
+    If FormsL(e, 56) = f->Width And FormsL(e, 60) = f->Height Then Exit Sub
+    f->Width = FormsL(e, 56)
+    f->Height = FormsL(e, 60)
+    f->WndProc(WM_SIZE, 0, FormsXY(f->Width, f->Height))
+End Sub
+
+' ButtonPress / ButtonRelease（up = 1）。部品の上の左ボタンは部品へ
+Sub FormsOnButton(f As *Form, e As VoidPtr, up As Long)
+    Dim msg As DWord
+    If FormsL(e, 84) = 1 Then
+        If FormsCtlButton(f, FormsL(e, 64), FormsL(e, 68), up) <> 0 Then Exit Sub
+    End If
+    msg = FormsButtonMsg(FormsL(e, 84), up)
+    If msg <> 0 Then f->WndProc(msg, 0, FormsXY(FormsL(e, 64), FormsL(e, 68)))
+End Sub
+
+' MotionNotify（部品を押している間は部品へ）
+Sub FormsOnMotion(f As *Form, e As VoidPtr)
+    If FormsCtlMove(f, FormsL(e, 64), FormsL(e, 68)) <> 0 Then Exit Sub
+    f->WndProc(WM_MOUSEMOVE, 0, FormsXY(FormsL(e, 64), FormsL(e, 68)))
+End Sub
+
+' KeyPress（キーを受ける部品があればそちらへ）
+Sub FormsOnKey(f As *Form, e As VoidPtr)
+    Dim n As Long, ks As Long
+    n = XLookupString(e, VarPtr(g_formsKey(0)), 16, VarPtr(g_formsSym(0)), 0)
+    ks = FormsL(VarPtr(g_formsSym(0)), 0)
+    If FormsCtlKey(f, ks, n, FormsL(e, 80)) <> 0 Then Exit Sub
+    f->WndProc(WM_KEYDOWN, FormsVk(ks) As WPARAM, 0)
+    If n >= 1 Then f->WndProc(WM_CHAR, g_formsKey(0) As WPARAM, 0)
+End Sub
+
+' ClientMessage（閉じるボタン）
+Sub FormsOnClient(f As *Form, e As VoidPtr)
+    If FormsQ(e, 56) = FormsAtom(0) Then f->WndProc(WM_CLOSE, 0, 0)
+End Sub
+
+#endif

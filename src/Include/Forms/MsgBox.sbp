@@ -1,10 +1,11 @@
-' Forms/MsgBox.sbp - -linux の MsgBox / MessageBox の窓。
+' Forms/MsgBox.sbp - -linux の MsgBox / MessageBox の窓（ボタンと本文を決めて窓を出し、閉じるまで待つ）。
 ' Forms.sbp が #include する（単独では include しない）。
 ' Include/linux の Lx_MessageBoxA は g_lxMsgBox があればそちらを呼ぶ（無ければ標準エラーへ 1 行）。
 ' Forms.sbp を使うプログラムでは、ここで g_lxMsgBox に FormsMsgBox を入れるので、窓が出る。
 ' 窓は閉じるまでほかの Form の入力を止める（Form の描き直しだけは続ける）。X につながらなければ 0 を返し、
 ' 標準エラーへ書く方になる。ボタンの文字は英語（OK / Cancel / Abort / Retry / Ignore / Yes / No）。
 ' 押した印: Enter は今のボタン、Esc と閉じるボタンは Cancel（MB_OK は OK）。Tab・←→ でボタンを移る。
+' 描くのと XEvent は Forms/MsgBoxEvent.sbp。
 
 #ifdef _LINUX
 
@@ -38,6 +39,53 @@ Dim g_mbCancel As Long              ' Esc・閉じるボタンの戻り値（0 �
 ' Lx_MessageBoxA から呼ばれる
 g_lxMsgBox = AddressOf(FormsMsgBox)
 
+' MessageBox の窓。戻り値は IDOK ほか。X につながらなければ 0（標準エラーへ書く方になる）
+Function FormsMsgBox(hWnd As VoidPtr, text As *Byte, caption As *Byte, typ As DWord) As Long
+    FormsMsgBox = 0
+    If g_mbWin <> 0 Then Exit Function         ' 入れ子は標準エラーへ
+    If FormsTryOpen() = 0 Then Exit Function
+    g_mbText = FormsMakeStr$(text)
+    FormsMbButtons(typ)
+    FormsMbCreate(FormsMbParent(hWnd), FormsMakeStr$(caption))
+    FormsMsgBox = FormsMbLoop()
+End Function
+
+' 0 で終わる文字列（p = 0 なら ""）
+Function FormsMakeStr$(p As *Byte) As String
+    FormsMakeStr$ = ""
+    If p <> 0 Then FormsMakeStr$ = MakeStr(p)
+End Function
+
+' hWnd が Form の窓なら、その上に出す
+Function FormsMbParent(hWnd As VoidPtr) As VoidPtr
+    FormsMbParent = 0
+    If FormsFind(hWnd) <> 0 Then FormsMbParent = hWnd
+End Function
+
+' 決まるまで XEvent を回してから窓を壊す。戻り値は決まった値
+Function FormsMbLoop() As Long
+    Dim r As Long
+    r = 0
+    While r = 0
+        XNextEvent(g_formsDpy, VarPtr(g_mbEv(0)))
+        r = FormsMbEvent()
+    Wend
+    FormsMbClose()
+    FormsMbLoop = r
+End Function
+
+Sub FormsMbClose()
+    XDestroyWindow(g_formsDpy, g_mbWin)
+    XFlush(g_formsDpy)
+    g_mbWin = 0
+    FormsFreeImage(g_mbImg)
+    g_mbImg = 0
+    If g_mbBuf <> 0 Then free(g_mbBuf)
+    g_mbBuf = 0
+End Sub
+
+' ==== ボタン ====
+
 Function FormsMbLabel$(id As Long) As String
     FormsMbLabel$ = "OK"
     If id = 2 Then FormsMbLabel$ = "Cancel"
@@ -48,284 +96,173 @@ Function FormsMbLabel$(id As Long) As String
     If id = 7 Then FormsMbLabel$ = "No"
 End Function
 
+' MB_OK など（typ の下 4 ビット）からボタンを決め、どれも押していない状態にする。
+' 最初のボタンが既定（MB_DEFBUTTON2 / 3 で変わる）
+Sub FormsMbButtons(typ As DWord)
+    Dim d As Long
+    FormsMbSet((typ And &HF) As Long)
+    d = ((typ >> 8) And &HF) As Long          ' MB_DEFBUTTON2 = &H100、3 = &H200
+    g_mbFocus = 0
+    If d >= 1 And d < g_mbN Then g_mbFocus = d
+    g_mbPress = -1
+    g_mbPressIn = 0
+End Sub
+
+' ボタンの組（MB_OKCANCEL = 1 ほか。0 と 6 以上は MB_OK）
+Sub FormsMbSet(k As Long)
+    If k = 1 Then FormsMbAdd3(1, 2, 0, 2)
+    If k = 2 Then FormsMbAdd3(3, 4, 5, 0)
+    If k = 3 Then FormsMbAdd3(6, 7, 2, 2)
+    If k = 4 Then FormsMbAdd3(6, 7, 0, 0)
+    If k = 5 Then FormsMbAdd3(4, 2, 0, 2)
+    If k < 1 Or k > 5 Then FormsMbAdd3(1, 0, 0, 1)
+End Sub
+
+' ボタンの戻り値を 3 つまで（0 は無し）と、Esc・閉じるボタンの戻り値
+Sub FormsMbAdd3(a As Long, b As Long, c As Long, cancel As Long)
+    g_mbN = 0
+    FormsMbAdd(a)
+    If b <> 0 Then FormsMbAdd(b)
+    If c <> 0 Then FormsMbAdd(c)
+    g_mbCancel = cancel
+End Sub
+
 Sub FormsMbAdd(id As Long)
     g_mbId(g_mbN) = id
     g_mbN = g_mbN + 1
 End Sub
 
-' MB_OK など（typ の下 4 ビット）からボタンを決める。最初のボタンが既定（MB_DEFBUTTON2 / 3 で変わる）
-Sub FormsMbButtons(typ As DWord)
-    Dim k As Long, d As Long
-    k = (typ And &HF) As Long
-    g_mbN = 0
-    g_mbCancel = 0
-    If k = 1 Then
-        FormsMbAdd(1)
-        FormsMbAdd(2)
-        g_mbCancel = 2
-    ElseIf k = 2 Then
-        FormsMbAdd(3)
-        FormsMbAdd(4)
-        FormsMbAdd(5)
-    ElseIf k = 3 Then
-        FormsMbAdd(6)
-        FormsMbAdd(7)
-        FormsMbAdd(2)
-        g_mbCancel = 2
-    ElseIf k = 4 Then
-        FormsMbAdd(6)
-        FormsMbAdd(7)
-    ElseIf k = 5 Then
-        FormsMbAdd(4)
-        FormsMbAdd(2)
-        g_mbCancel = 2
-    Else
-        FormsMbAdd(1)
-        g_mbCancel = 1
-    End If
-    d = ((typ >> 8) And &HF) As Long          ' MB_DEFBUTTON2 = &H100、3 = &H200
-    g_mbFocus = 0
-    If d >= 1 And d < g_mbN Then g_mbFocus = d
-End Sub
+' ==== 本文 ====
 
-' 本文の i 行目（0 から。CR は捨てる）。無ければ "" で、more = 0
+' 本文の i 行目（0 から。行の終わりの CR は捨てる）。無ければ "" で、more = 0
 Function FormsMbLine$(i As Long, ByRef more As Long) As String
-    Dim p As *Byte, n As Long, k As Long, row As Long, st As Long
-    Dim s As String
+    Dim st As Long
     FormsMbLine$ = ""
     more = 0
-    n = Len(g_mbText)
-    p = StrPtr(g_mbText)
-    row = 0
+    st = FormsMbLineStart(i)
+    If st < 0 Then Exit Function
+    more = 1
+    FormsMbLine$ = FormsMbCut$(st, FormsMbLineEnd(st))
+End Function
+
+' i 行目の先頭のバイト位置。無ければ -1
+Function FormsMbLineStart(i As Long) As Long
+    Dim st As Long, row As Long
     st = 0
-    For k = 0 To n
-        If k = n Or p[k] = &H0A Then
-            If row = i Then
-                more = 1
-                s = ""
-                If k > st Then s = Mid$(g_mbText, st + 1, k - st)
-                If Len(s) > 0 Then
-                    If p[k - 1] = &H0D Then s = Left$(s, Len(s) - 1)
-                End If
-                FormsMbLine$ = s
-                Exit Function
-            End If
-            row = row + 1
-            st = k + 1
-        End If
+    For row = 1 To i
+        If st >= 0 Then st = FormsMbNextLine(st)
     Next
+    FormsMbLineStart = st
+End Function
+
+' st から始まる行の、次の行の先頭。無ければ -1
+Function FormsMbNextLine(st As Long) As Long
+    Dim e As Long
+    e = FormsMbLineEnd(st)
+    FormsMbNextLine = -1
+    If e < Len(g_mbText) Then FormsMbNextLine = e + 1
+End Function
+
+' st から始まる行の終わり（LF の位置か、本文の長さ）
+Function FormsMbLineEnd(st As Long) As Long
+    Dim p As *Byte, k As Long
+    p = StrPtr(g_mbText)
+    k = st
+    While k < Len(g_mbText)
+        If p[k] = &H0A Then Exit While
+        k = k + 1
+    Wend
+    FormsMbLineEnd = k
+End Function
+
+' 本文の st から en の前まで（終わりの CR は捨てる）
+Function FormsMbCut$(st As Long, en As Long) As String
+    Dim s As String
+    s = ""
+    If en > st Then s = Mid$(g_mbText, st + 1, en - st)
+    If Len(s) > 0 Then
+        If Mid$(s, Len(s), 1) = Chr$(13) Then s = Left$(s, Len(s) - 1)
+    End If
+    FormsMbCut$ = s
+End Function
+
+' 本文の行の数（LF の数 + 1）
+Function FormsMbRows() As Long
+    Dim st As Long, n As Long
+    st = 0
+    n = 0
+    While st >= 0
+        n = n + 1
+        st = FormsMbNextLine(st)
+    Wend
+    FormsMbRows = n
 End Function
 
 ' 本文の幅と行の数
 Sub FormsMbMeasure(ByRef w As Long, ByRef rows As Long)
-    Dim s As String, more As Long, tw As Long
+    Dim i As Long, more As Long
+    rows = FormsMbRows()
     w = 0
-    rows = 0
-    s = FormsMbLine$(0, more)
-    While more <> 0
-        tw = FormsTextW(s)
-        If tw > w Then w = tw
-        rows = rows + 1
-        s = FormsMbLine$(rows, more)
-    Wend
-End Sub
-
-' ボタン i の四角（右寄せで並べる）
-Sub FormsMbBtnRect(i As Long, ByRef l As Long, ByRef t As Long, ByRef r As Long, ByRef b As Long)
-    l = g_mbW - FORMS_MB_PAD - (g_mbN - i) * FORMS_MB_BTN_W - (g_mbN - 1 - i) * FORMS_MB_GAP
-    t = g_mbH - FORMS_MB_PAD - FORMS_MB_BTN_H + 2
-    r = l + FORMS_MB_BTN_W
-    b = t + FORMS_MB_BTN_H
-End Sub
-
-Function FormsMbHit(x As Long, y As Long) As Long
-    Dim i As Long, l As Long, t As Long, r As Long, b As Long
-    FormsMbHit = -1
-    For i = 0 To g_mbN - 1
-        FormsMbBtnRect(i, l, t, r, b)
-        If x >= l And x < r And y >= t And y < b Then FormsMbHit = i
+    For i = 0 To rows - 1
+        w = FormsMax(w, FormsTextW(FormsMbLine$(i, more)))
     Next
-End Function
-
-Sub FormsMbPaint()
-    Dim i As Long, l As Long, t As Long, r As Long, b As Long, dn As Long
-    Dim more As Long, fh As Long, strip As Long
-    Dim s As String
-    If g_mbImg = 0 Then Exit Sub
-    FormsTarget(g_mbBuf, g_mbW, g_mbH, g_mbStride)
-    strip = g_mbH - FORMS_MB_BTN_H - FORMS_MB_PAD * 2 + 2
-    FormsFill(0, 0, g_mbW, strip, FORMS_C_WHITE)
-    FormsFill(0, strip, g_mbW, g_mbH, FORMS_C_FACE)
-    fh = FormsFontH()
-    i = 0
-    s = FormsMbLine$(0, more)
-    While more <> 0
-        FormsText(s, FORMS_MB_PAD + 4, FORMS_MB_PAD + 4 + i * fh, FORMS_C_TEXT)
-        i = i + 1
-        s = FormsMbLine$(i, more)
-    Wend
-    For i = 0 To g_mbN - 1
-        FormsMbBtnRect(i, l, t, r, b)
-        dn = 0
-        If g_mbPress = i And g_mbPressIn <> 0 Then dn = 1
-        FormsClipAll()
-        FormsFill(l, t, r, b, FORMS_C_FACE)
-        If dn <> 0 Then
-            FormsBevel(l, t, r, b, FORMS_C_DKSHADOW, FORMS_C_WHITE)
-            FormsBevel(l + 1, t + 1, r - 1, b - 1, FORMS_C_SHADOW, FORMS_C_LIGHT)
-        Else
-            FormsRaised(l, t, r, b)
-        End If
-        If i = g_mbFocus Then
-            ' 既定のボタンは青い縁
-            FormsBevel(l - 1, t - 1, r + 1, b + 1, &H0078D7, &H0078D7)
-            FormsFocusRect(l + 3, t + 3, r - 3, b - 3)
-        End If
-        FormsClip(l + 2, t + 2, r - 2, b - 2)
-        FormsTextMid(FormsMbLabel$(g_mbId(i)), l, t, r, b, FORMS_C_TEXT, dn)
-    Next
-    FormsClipAll()
-    XPutImage(g_formsDpy, g_mbWin, XDefaultGC(g_formsDpy, g_formsScr), g_mbImg, 0, 0, 0, 0, g_mbW, g_mbH)
-    XFlush(g_formsDpy)
 End Sub
 
-' 窓を作って出す
+' ==== 窓 ====
+
+' 窓を作って出す（画面の真ん中。parent があればその上）
 Sub FormsMbCreate(parent As VoidPtr, cap As String)
-    Dim tw As Long, rows As Long, bw As Long, x As Long, y As Long
+    Dim x As Long, y As Long
+    FormsMbSize()
+    x = FormsMax((XDisplayWidth(g_formsDpy, g_formsScr) - g_mbW) \ 2, 0)
+    y = FormsMax((XDisplayHeight(g_formsDpy, g_formsScr) - g_mbH) \ 2, 0)
+    FormsMbWindow(parent, cap, x, y)
+    FormsMbHints(x, y)
+    FormsMbShow()
+End Sub
+
+' 本文とボタンの数から窓の大きさ（g_mbW / g_mbH）を決める
+Sub FormsMbSize()
+    Dim tw As Long, rows As Long, bw As Long
     FormsMbMeasure(tw, rows)
     If rows < 1 Then rows = 1
     bw = g_mbN * FORMS_MB_BTN_W + (g_mbN - 1) * FORMS_MB_GAP
-    g_mbW = tw + FORMS_MB_PAD * 2 + 8
-    If g_mbW < bw + FORMS_MB_PAD * 2 Then g_mbW = bw + FORMS_MB_PAD * 2
-    If g_mbW < 180 Then g_mbW = 180
+    g_mbW = FormsMax(FormsMax(tw + FORMS_MB_PAD * 2 + 8, bw + FORMS_MB_PAD * 2), 180)
     g_mbH = FORMS_MB_PAD + 4 + rows * FormsFontH() + FORMS_MB_PAD + 4 + FORMS_MB_PAD * 2 + FORMS_MB_BTN_H
-    x = (XDisplayWidth(g_formsDpy, g_formsScr) - g_mbW) \ 2
-    y = (XDisplayHeight(g_formsDpy, g_formsScr) - g_mbH) \ 2
-    If x < 0 Then x = 0
-    If y < 0 Then y = 0
+End Sub
+
+Sub FormsMbWindow(parent As VoidPtr, cap As String, x As Long, y As Long)
     g_mbWin = XCreateSimpleWindow(g_formsDpy, XRootWindow(g_formsDpy, g_formsScr), x, y, g_mbW, g_mbH, 0, 0, &HF0F0F0)
     If parent <> 0 Then XSetTransientForHint(g_formsDpy, g_mbWin, parent)
     FormsTitle(g_mbWin, cap)
-    ' 位置と大きさ（大きさは変えられない）: USPosition | USSize | PMinSize | PMaxSize
-    RtlFillMemory(VarPtr(g_mbHint(0)), 80, 0)
-    FormsSetL(VarPtr(g_mbHint(0)), 0, 3 Or 16 Or 32)
-    FormsSetL(VarPtr(g_mbHint(0)), 8, x)
-    FormsSetL(VarPtr(g_mbHint(0)), 12, y)
-    FormsSetL(VarPtr(g_mbHint(0)), 16, g_mbW)
-    FormsSetL(VarPtr(g_mbHint(0)), 20, g_mbH)
-    FormsSetL(VarPtr(g_mbHint(0)), 24, g_mbW)
-    FormsSetL(VarPtr(g_mbHint(0)), 28, g_mbH)
-    FormsSetL(VarPtr(g_mbHint(0)), 32, g_mbW)
-    FormsSetL(VarPtr(g_mbHint(0)), 36, g_mbH)
-    XSetWMNormalHints(g_formsDpy, g_mbWin, VarPtr(g_mbHint(0)))
-    XSetWMProtocols(g_formsDpy, g_mbWin, VarPtr(g_formsAtom(0)), 1)
-    XSelectInput(g_formsDpy, g_mbWin, FORMS_X_MASK)
+End Sub
+
+' 位置と大きさ（大きさは変えられない）: USPosition | USSize | PMinSize | PMaxSize。閉じるボタンとイベントも
+Sub FormsMbHints(x As Long, y As Long)
+    Dim h As VoidPtr
+    h = VarPtr(g_mbHint(0))
+    FormsSizeHints(h, 3 Or 16 Or 32, x, y, g_mbW, g_mbH)
+    FormsMinMax(h, g_mbW, g_mbH)
+    XSetWMNormalHints(g_formsDpy, g_mbWin, h)
+    FormsWmInput(g_mbWin)
+End Sub
+
+' XSizeHints の min / max の大きさを cx x cy に
+Sub FormsMinMax(h As VoidPtr, cx As Long, cy As Long)
+    FormsSetL(h, 24, cx)
+    FormsSetL(h, 28, cy)
+    FormsSetL(h, 32, cx)
+    FormsSetL(h, 36, cy)
+End Sub
+
+' 画素バッファと XImage を作って、窓を出す
+Sub FormsMbShow()
     g_mbBuf = malloc(g_mbW * g_mbH * 4)
-    g_mbImg = 0
     g_mbStride = g_mbW * 4
-    If g_mbBuf <> 0 Then g_mbImg = XCreateImage(g_formsDpy, XDefaultVisual(g_formsDpy, g_formsScr), XDefaultDepth(g_formsDpy, g_formsScr), 2, 0, g_mbBuf, g_mbW, g_mbH, 32, 0)
+    g_mbImg = FormsNewImage(g_mbBuf, g_mbW, g_mbH)
     If g_mbImg <> 0 Then g_mbStride = FormsL(g_mbImg, 44)
     XMapWindow(g_formsDpy, g_mbWin)
     XFlush(g_formsDpy)
 End Sub
-
-' キー。決まったら戻り値（IDOK ほか）、まだなら 0
-Function FormsMbKey(ks As Long) As Long
-    FormsMbKey = 0
-    If ks = &HFF0D Or ks = &HFF8D Or ks = &H20 Then
-        FormsMbKey = g_mbId(g_mbFocus)
-    ElseIf ks = &HFF1B Then
-        FormsMbKey = g_mbCancel
-    ElseIf ks = &HFF09 Or ks = &HFF53 Then
-        g_mbFocus = (g_mbFocus + 1) Mod g_mbN
-        FormsMbPaint()
-    ElseIf ks = &HFE20 Or ks = &HFF51 Then
-        g_mbFocus = (g_mbFocus + g_mbN - 1) Mod g_mbN
-        FormsMbPaint()
-    End If
-End Function
-
-' 窓の XEvent 1 つ。決まったら戻り値、まだなら 0
-Function FormsMbEvent() As Long
-    Dim e As VoidPtr, t As Long, i As Long
-    Dim f As *Form
-    FormsMbEvent = 0
-    e = VarPtr(g_mbEv(0))
-    t = FormsL(e, 0)
-    If FormsQ(e, 32) <> g_mbWin Then
-        ' ほかの Form は描き直すだけ（入力は捨てる）
-        If t = 12 And FormsL(e, 56) = 0 Then
-            f = FormsFind(FormsQ(e, 32))
-            If f <> 0 Then FormsPaint(f As VoidPtr)
-        End If
-        Exit Function
-    End If
-    Select Case t
-        Case 12                     ' Expose
-            If FormsL(e, 56) = 0 Then FormsMbPaint()
-        Case 4                      ' ButtonPress
-            If FormsL(e, 84) = 1 Then
-                i = FormsMbHit(FormsL(e, 64), FormsL(e, 68))
-                If i >= 0 Then
-                    g_mbPress = i
-                    g_mbPressIn = 1
-                    g_mbFocus = i
-                    FormsMbPaint()
-                End If
-            End If
-        Case 6                      ' MotionNotify
-            If g_mbPress >= 0 Then
-                i = 0
-                If FormsMbHit(FormsL(e, 64), FormsL(e, 68)) = g_mbPress Then i = 1
-                If i <> g_mbPressIn Then
-                    g_mbPressIn = i
-                    FormsMbPaint()
-                End If
-            End If
-        Case 5                      ' ButtonRelease
-            If FormsL(e, 84) = 1 And g_mbPress >= 0 Then
-                i = g_mbPress
-                g_mbPress = -1
-                If FormsMbHit(FormsL(e, 64), FormsL(e, 68)) = i Then FormsMbEvent = g_mbId(i)
-                FormsMbPaint()
-            End If
-        Case 2                      ' KeyPress
-            XLookupString(e, VarPtr(g_mbKey(0)), 16, VarPtr(g_mbSym(0)), 0)
-            FormsMbEvent = FormsMbKey(FormsL(VarPtr(g_mbSym(0)), 0))
-        Case 33                     ' ClientMessage（閉じるボタン）
-            If FormsQ(e, 56) = FormsAtom(0) Then FormsMbEvent = g_mbCancel
-    End Select
-End Function
-
-' MessageBox の窓。戻り値は IDOK ほか。X につながらなければ 0（標準エラーへ書く方になる）
-Function FormsMsgBox(hWnd As VoidPtr, text As *Byte, caption As *Byte, typ As DWord) As Long
-    Dim r As Long, cap As String, parent As VoidPtr
-    FormsMsgBox = 0
-    If g_mbWin <> 0 Then Exit Function         ' 入れ子は標準エラーへ
-    If FormsTryOpen() = 0 Then Exit Function
-    g_mbText = ""
-    If text <> 0 Then g_mbText = MakeStr(text)
-    cap = ""
-    If caption <> 0 Then cap = MakeStr(caption)
-    parent = 0
-    If FormsFind(hWnd) <> 0 Then parent = hWnd
-    FormsMbButtons(typ)
-    g_mbPress = -1
-    g_mbPressIn = 0
-    FormsMbCreate(parent, cap)
-    r = 0
-    While r = 0
-        XNextEvent(g_formsDpy, VarPtr(g_mbEv(0)))
-        r = FormsMbEvent()
-    Wend
-    XDestroyWindow(g_formsDpy, g_mbWin)
-    XFlush(g_formsDpy)
-    g_mbWin = 0
-    FormsFreeImage(g_mbImg)
-    g_mbImg = 0
-    If g_mbBuf <> 0 Then free(g_mbBuf)
-    g_mbBuf = 0
-    FormsMsgBox = r
-End Function
 
 #endif

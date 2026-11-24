@@ -1,0 +1,163 @@
+' Forms/FormInput.sbp - -linux の Form の部品へマウスとキーを配る。
+' Forms.sbp が #include する（単独では include しない）。
+' 部品の上の左ボタンと、キーを受ける部品があるときのキーは部品へ行き、Form の WndProc には届かない
+' （Windows の子窓と同じ）。押せるのは Button / CheckBox / RadioButton / EditBox で Enabled のもの。
+' EditBox のキーは Forms/FormEdit.sbp。
+
+#ifdef _LINUX
+
+Function FormsCtlLive(c As *Control) As Long
+    Dim k As Long
+    FormsCtlLive = 0
+    If c = 0 Then Exit Function
+    If c->Enabled = False Then Exit Function
+    k = c->LxKind()
+    If k >= FORMS_K_BUTTON And k <= FORMS_K_EDIT Then FormsCtlLive = 1
+End Function
+
+Function FormsIn(c As *Control, x As Long, y As Long) As Long
+    FormsIn = 0
+    If x >= c->Left And x < c->Left + c->Width And y >= c->Top And y < c->Top + c->Height Then FormsIn = 1
+End Function
+
+' (x, y) の押せる部品（重なっていれば後に載せたもの）。無ければ 0
+Function FormsHit(f As *Form, x As Long, y As Long) As *Control
+    Dim c As *Control
+    FormsHit = 0
+    c = f->FirstCtl()
+    While c <> 0
+        If FormsCtlLive(c) <> 0 And FormsIn(c, x, y) <> 0 Then FormsHit = c
+        c = c->NextControl
+    Wend
+End Function
+
+' 親の WndProc へ WM_COMMAND（HIWORD(wParam) = code、lParam = 部品の Handle）
+Sub FormsNotify(f As *Form, c As *Control, code As Long)
+    f->WndProc(WM_COMMAND, ((code And &HFFFF) * &H10000) As WPARAM, c->Handle As LPARAM)
+End Sub
+
+' ==== マウス ====
+
+' 左ボタンを押した（up = 0）・離した（up = 1）。部品が受けたら 1
+Function FormsCtlButton(f As *Form, x As Long, y As Long, up As Long) As Long
+    If up = 0 Then
+        FormsCtlButton = FormsCtlDown(f, x, y)
+    Else
+        FormsCtlButton = FormsCtlUp(f, x, y)
+    End If
+End Function
+
+' 左ボタンを押した。押せる部品の上なら、キーを受ける部品にして 1
+Function FormsCtlDown(f As *Form, x As Long, y As Long) As Long
+    Dim c As *Control
+    FormsCtlDown = 0
+    c = FormsHit(f, x, y)
+    If c = 0 Then Exit Function
+    FormsCtlDown = 1
+    FormsPress(f, c, x)
+    FormsPaint(f As VoidPtr)
+End Function
+
+' c を押した（キーを受ける部品にする。EditBox は x の近くへキャレット）
+Sub FormsPress(f As *Form, c As *Control, x As Long)
+    f->LxFocus = c
+    f->LxPress = c
+    f->LxPressIn = 1
+    If c->LxKind() = FORMS_K_EDIT Then c->LxCaret = FormsEditPos(c, x)
+End Sub
+
+' 押している間のマウス。部品の上から出入りしたら描き直す
+Function FormsCtlMove(f As *Form, x As Long, y As Long) As Long
+    Dim inside As Long
+    FormsCtlMove = 0
+    If f->LxPress = 0 Then Exit Function
+    FormsCtlMove = 1
+    inside = FormsIn(f->LxPress, x, y)
+    If inside = f->LxPressIn Then Exit Function
+    f->LxPressIn = inside
+    FormsPaint(f As VoidPtr)
+End Function
+
+' 左ボタンを離した。部品の上で離したら押したことにする
+Function FormsCtlUp(f As *Form, x As Long, y As Long) As Long
+    Dim c As *Control
+    c = f->LxPress
+    FormsCtlUp = 0
+    If c = 0 Then Exit Function
+    FormsCtlUp = 1
+    FormsUnpress(f)
+    If FormsIn(c, x, y) <> 0 Then FormsCtlClick(f, c)
+    FormsPaint(f As VoidPtr)
+End Function
+
+Sub FormsUnpress(f As *Form)
+    f->LxPress = 0
+    f->LxPressIn = 0
+End Sub
+
+' 部品を押した。印を変えてから親へ BN_CLICKED（EditBox は何もしない）
+Sub FormsCtlClick(f As *Form, c As *Control)
+    Dim k As Long
+    k = c->LxKind()
+    If k = FORMS_K_EDIT Then Exit Sub
+    If k = FORMS_K_CHECK Then FormsToggle(c)
+    If k = FORMS_K_RADIO Then FormsRadioPick(f, c)
+    FormsNotify(f, c, BN_CLICKED)
+End Sub
+
+' チェックボックスの印を変える
+Sub FormsToggle(c As *Control)
+    If c->Checked <> False Then
+        c->Checked = False
+    Else
+        c->Checked = True
+    End If
+End Sub
+
+' ラジオボタン c に印を付け、ほかのラジオボタンの印を外す
+Sub FormsRadioPick(f As *Form, c As *Control)
+    FormsRadioClear(f As VoidPtr, c As VoidPtr)
+    c->Checked = True
+End Sub
+
+' 同じフォームの、keep のほかのラジオボタンの印を外す（フォームのラジオボタンはすべて 1 つの組）
+Sub FormsRadioClear(fp As VoidPtr, keep As VoidPtr)
+    Dim f As *Form, c As *Control
+    If fp = 0 Then Exit Sub
+    f = fp As *Form
+    c = f->FirstCtl()
+    While c <> 0
+        If (c As VoidPtr) <> keep And c->LxKind() = FORMS_K_RADIO Then c->Checked = False
+        c = c->NextControl
+    Wend
+End Sub
+
+' ==== キー ====
+
+' キーを受ける部品へ。扱ったら 1（Form の WndProc へは送らない）。n は XLookupString の文字数
+Function FormsCtlKey(f As *Form, ks As Long, n As Long, st As Long) As Long
+    Dim c As *Control
+    c = f->LxFocus
+    FormsCtlKey = 0
+    If FormsCtlLive(c) = 0 Then Exit Function
+    FormsCtlKey = FormsKeyTo(f, c, ks, n)
+End Function
+
+Function FormsKeyTo(f As *Form, c As *Control, ks As Long, n As Long) As Long
+    If c->LxKind() = FORMS_K_EDIT Then
+        FormsKeyTo = FormsEditKey(f, c, ks, n)
+    Else
+        FormsKeyTo = FormsSpaceKey(f, c, ks)
+    End If
+End Function
+
+' 押せる部品は空白キーで押す
+Function FormsSpaceKey(f As *Form, c As *Control, ks As Long) As Long
+    FormsSpaceKey = 0
+    If ks <> &H20 Then Exit Function
+    FormsSpaceKey = 1
+    FormsCtlClick(f, c)
+    FormsPaint(f As VoidPtr)
+End Function
+
+#endif

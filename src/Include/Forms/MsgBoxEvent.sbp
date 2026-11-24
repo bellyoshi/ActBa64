@@ -1,0 +1,166 @@
+' Forms/MsgBoxEvent.sbp - -linux の MsgBox の窓を描き、XEvent を受ける。
+' Forms.sbp が #include する（単独では include しない）。窓と状態は Forms/MsgBox.sbp。
+
+#ifdef _LINUX
+
+' ==== 描く ====
+
+' ボタン i の四角（右寄せで並べる）
+Sub FormsMbBtnRect(i As Long, ByRef l As Long, ByRef t As Long, ByRef r As Long, ByRef b As Long)
+    l = g_mbW - FORMS_MB_PAD - (g_mbN - i) * FORMS_MB_BTN_W - (g_mbN - 1 - i) * FORMS_MB_GAP
+    t = g_mbH - FORMS_MB_PAD - FORMS_MB_BTN_H + 2
+    r = l + FORMS_MB_BTN_W
+    b = t + FORMS_MB_BTN_H
+End Sub
+
+' (x, y) のボタン。無ければ -1
+Function FormsMbHit(x As Long, y As Long) As Long
+    Dim i As Long, l As Long, t As Long, r As Long, b As Long
+    FormsMbHit = -1
+    For i = 0 To g_mbN - 1
+        FormsMbBtnRect(i, l, t, r, b)
+        If x >= l And x < r And y >= t And y < b Then FormsMbHit = i
+    Next
+End Function
+
+Sub FormsMbPaint()
+    If g_mbImg = 0 Then Exit Sub
+    FormsTarget(g_mbBuf, g_mbW, g_mbH, g_mbStride)
+    FormsMbBack()
+    FormsMbLines()
+    FormsMbBtns()
+    FormsClipAll()
+    FormsPutImage(g_mbWin, g_mbImg, g_mbW, g_mbH)
+End Sub
+
+' 本文の白い地と、ボタンの帯の地
+Sub FormsMbBack()
+    Dim strip As Long
+    strip = g_mbH - FORMS_MB_BTN_H - FORMS_MB_PAD * 2 + 2
+    FormsFill(0, 0, g_mbW, strip, FORMS_C_WHITE)
+    FormsFill(0, strip, g_mbW, g_mbH, FORMS_C_FACE)
+End Sub
+
+Sub FormsMbLines()
+    Dim i As Long, more As Long
+    For i = 0 To FormsMbRows() - 1
+        FormsText(FormsMbLine$(i, more), FORMS_MB_PAD + 4, FORMS_MB_PAD + 4 + i * FormsFontH(), FORMS_C_TEXT)
+    Next
+End Sub
+
+Sub FormsMbBtns()
+    Dim i As Long
+    For i = 0 To g_mbN - 1
+        FormsMbBtn(i)
+    Next
+End Sub
+
+' ボタン i（押していればへこむ。今のボタンは青い縁と点線の枠）
+Sub FormsMbBtn(i As Long)
+    Dim l As Long, t As Long, r As Long, b As Long
+    FormsMbBtnRect(i, l, t, r, b)
+    FormsClipAll()
+    FormsFill(l, t, r, b, FORMS_C_FACE)
+    FormsButtonEdge(l, t, r, b, FormsMbSunk(i))
+    If i = g_mbFocus Then FormsMbFocus(l, t, r, b)
+    FormsClip(l + 2, t + 2, r - 2, b - 2)
+    FormsTextMid(FormsMbLabel$(g_mbId(i)), l, t, r, b, FORMS_C_TEXT, FormsMbSunk(i))
+End Sub
+
+' ボタン i を押していて、マウスがその上にあれば 1
+Function FormsMbSunk(i As Long) As Long
+    FormsMbSunk = 0
+    If g_mbPress = i And g_mbPressIn <> 0 Then FormsMbSunk = 1
+End Function
+
+' 既定のボタンの青い縁と、点線の枠
+Sub FormsMbFocus(l As Long, t As Long, r As Long, b As Long)
+    FormsBevel(l - 1, t - 1, r + 1, b + 1, &H0078D7, &H0078D7)
+    FormsFocusRect(l + 3, t + 3, r - 3, b - 3)
+End Sub
+
+' ==== XEvent ====
+
+' 窓の XEvent 1 つ（g_mbEv）。決まったら戻り値、まだなら 0
+Function FormsMbEvent() As Long
+    Dim e As VoidPtr
+    e = VarPtr(g_mbEv(0))
+    FormsMbEvent = 0
+    If FormsQ(e, 32) <> g_mbWin Then
+        FormsMbOther(e)
+        Exit Function
+    End If
+    FormsMbEvent = FormsMbOn(e, FormsL(e, 0))
+End Function
+
+' ほかの Form の XEvent。描き直すだけ（入力は捨てる）
+Sub FormsMbOther(e As VoidPtr)
+    Dim f As *Form
+    If FormsL(e, 0) <> 12 Or FormsL(e, 56) <> 0 Then Exit Sub
+    f = FormsFind(FormsQ(e, 32))
+    If f <> 0 Then FormsPaint(f As VoidPtr)
+End Sub
+
+' MsgBox の窓の、種類 t の XEvent e。決まったら戻り値、まだなら 0
+Function FormsMbOn(e As VoidPtr, t As Long) As Long
+    FormsMbOn = 0
+    If t = 12 And FormsL(e, 56) = 0 Then FormsMbPaint()       ' Expose
+    If t = 4 And FormsL(e, 84) = 1 Then FormsMbPress(FormsMbHit(FormsL(e, 64), FormsL(e, 68)))
+    If t = 6 Then FormsMbDrag(FormsMbHit(FormsL(e, 64), FormsL(e, 68)))
+    If t = 5 And FormsL(e, 84) = 1 Then FormsMbOn = FormsMbUp(FormsMbHit(FormsL(e, 64), FormsL(e, 68)))
+    If t = 2 Then FormsMbOn = FormsMbKeyEv(e)
+    If t = 33 And FormsQ(e, 56) = FormsAtom(0) Then FormsMbOn = g_mbCancel   ' 閉じるボタン
+End Function
+
+' ボタン i（-1 は無し）の上で左ボタンを押した
+Sub FormsMbPress(i As Long)
+    If i < 0 Then Exit Sub
+    g_mbPress = i
+    g_mbPressIn = 1
+    g_mbFocus = i
+    FormsMbPaint()
+End Sub
+
+' 押している間のマウス（i はマウスの下のボタン）。押したボタンの上から出入りしたら描き直す
+Sub FormsMbDrag(i As Long)
+    Dim inside As Long
+    If g_mbPress < 0 Then Exit Sub
+    inside = 0
+    If i = g_mbPress Then inside = 1
+    If inside = g_mbPressIn Then Exit Sub
+    g_mbPressIn = inside
+    FormsMbPaint()
+End Sub
+
+' 左ボタンを離した（i はマウスの下のボタン）。押したボタンの上ならその戻り値
+Function FormsMbUp(i As Long) As Long
+    Dim p As Long
+    FormsMbUp = 0
+    p = g_mbPress
+    If p < 0 Then Exit Function
+    g_mbPress = -1
+    If i = p Then FormsMbUp = g_mbId(p)
+    FormsMbPaint()
+End Function
+
+Function FormsMbKeyEv(e As VoidPtr) As Long
+    XLookupString(e, VarPtr(g_mbKey(0)), 16, VarPtr(g_mbSym(0)), 0)
+    FormsMbKeyEv = FormsMbKey(FormsL(VarPtr(g_mbSym(0)), 0))
+End Function
+
+' キー。決まったら戻り値（IDOK ほか）、まだなら 0
+Function FormsMbKey(ks As Long) As Long
+    FormsMbKey = 0
+    If ks = &HFF0D Or ks = &HFF8D Or ks = &H20 Then FormsMbKey = g_mbId(g_mbFocus)
+    If ks = &HFF1B Then FormsMbKey = g_mbCancel
+    If ks = &HFF09 Or ks = &HFF53 Then FormsMbMove(1)
+    If ks = &HFE20 Or ks = &HFF51 Then FormsMbMove(g_mbN - 1)
+End Function
+
+' 今のボタンを d だけ右へ（回る）
+Sub FormsMbMove(d As Long)
+    g_mbFocus = (g_mbFocus + d) Mod g_mbN
+    FormsMbPaint()
+End Sub
+
+#endif

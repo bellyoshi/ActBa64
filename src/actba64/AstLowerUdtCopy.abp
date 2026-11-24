@@ -1,0 +1,98 @@
+' AstLowerUdtCopy - Type の値どうしの代入（r = m.rc、g[i] = r、m.rc = g[i] など）
+' 左辺と右辺が同じ Type の値なら、右辺のアドレスから Type の大きさだけ RtlMoveMemory で写す。
+' Type の値は式としては先頭アドレスになるので、ふつうの代入の道に乗せるとアドレスや先頭 8 バイトだけが入る。
+
+' フィールドを持つ Type（Class でない）なら ti。それ以外は -1
+Function LowUdtTiOk(ctx As *LowerCtx, ti As Long) As Long
+    Dim ast As *Ast
+    ast = ctx->ast
+    LowUdtTiOk = -1
+    If LowTiIsStruct(ctx, ti) = 0 Then Exit Function
+    If TyIsClass(ast->types, ti) <> 0 Then Exit Function
+    LowUdtTiOk = ti
+End Function
+
+' 名前の変数の型が want（TY_UDT / TY_UDT_ARR）なら Type の ti。それ以外は -1
+Function LowUdtVarTi(ctx As *LowerCtx, name As *Byte, want As Long) As Long
+    Dim off As Long, ty As Long, ti As Long, br As Long, gl As Long
+    LowUdtVarTi = -1
+    If Not LowLookupVar(ctx, name, VarPtr(off), VarPtr(ty), VarPtr(ti), VarPtr(br), VarPtr(gl)) Then Exit Function
+    If ty <> want Then Exit Function
+    LowUdtVarTi = LowUdtTiOk(ctx, ti)
+End Function
+
+' 配列でない Type のメンバ（m.rc、p->rc、g[i].rc）なら Type の ti。それ以外は -1
+Function LowUdtMemTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim fo As Long, fs As Long, fc As Long, ft As Long
+    LowUdtMemTi = -1
+    If Not LowResolveMemberField(ctx, idx, fo, fs, fc, ft) Then Exit Function
+    If fc > 1 Then Exit Function
+    LowUdtMemTi = LowUdtTiOk(ctx, ft)
+End Function
+
+' Type の配列の要素（g[i]）なら Type の ti。それ以外は -1（m.arr[i] のような基底は扱わない）
+Function LowUdtElemTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowUdtElemTi = -1
+    If LowNodeKind(ctx, idx) = AST_INDEX And LowNodeKind(ctx, LowNodeLeft(ctx, idx)) <> AST_VAR Then Exit Function
+    LowIdxBaseName(ctx->ast, idx, VarPtr(name))
+    LowUdtElemTi = LowUdtVarTi(ctx, VarPtr(name), TY_UDT_ARR)
+End Function
+
+' 配列でない Type の変数（r）なら Type の ti。それ以外は -1
+Function LowUdtScalarTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    AstCopyName(ctx->ast, idx, VarPtr(name))
+    LowUdtScalarTi = LowUdtVarTi(ctx, VarPtr(name), TY_UDT)
+End Function
+
+' 式が置き場所のある Type の値なら ti。それ以外は -1
+Function LowUdtLvalTi(ctx As *LowerCtx, idx As Long) As Long
+    Dim k As Long
+    LowUdtLvalTi = -1
+    If idx < 0 Then Exit Function
+    k = LowNodeKind(ctx, idx)
+    If k = AST_MEMBER Then LowUdtLvalTi = LowUdtMemTi(ctx, idx)
+    If k = AST_INDEX Or k = AST_CALL Then LowUdtLvalTi = LowUdtElemTi(ctx, idx)
+    If k = AST_VAR Then LowUdtLvalTi = LowUdtScalarTi(ctx, idx)
+End Function
+
+' アドレスを rsp+disp（呼び出しの引数の場所）へ置く
+Function LowUdtAddrArg(ctx As *LowerCtx, idx As Long, disp As Long) As Long
+    LowUdtAddrArg = LowAddr(ctx, idx)
+    If LowUdtAddrArg = 0 Then Exit Function
+    IrEmit(ctx->list, OP_STORE_RSP_RAX, disp, 0)
+End Function
+
+' RtlMoveMemory(左辺のアドレス, 右辺のアドレス, sz)
+Function LowEmitUdtCopy(ctx As *LowerCtx, dst As Long, src As Long, sz As Long) As Long
+    Dim cb As Long
+    LowEmitUdtCopy = 0
+    cb = LowCallBytes(3)
+    If cb > 0 Then IrEmit(ctx->list, OP_SUB_RSP, cb, 0)
+    If LowUdtAddrArg(ctx, dst, 0) = 0 Then Exit Function
+    If LowUdtAddrArg(ctx, src, TyPtrSize()) = 0 Then Exit Function
+    LowEmitUdtCopyCall(ctx->list, sz, cb)
+    LowEmitUdtCopy = 1
+End Function
+
+' 第 3 引数に大きさを置いて呼ぶ
+Sub LowEmitUdtCopyCall(list As *IrList, sz As Long, cb As Long)
+    Dim api(KW_LEN - 1) As Byte
+    IrEmit(list, OP_MOV_EAX_IMM, sz, 0)
+    IrEmit(list, OP_STORE_RSP_RAX, TyPtrSize() * 2, 0)
+    lstrcpy(VarPtr(api), "RtlMoveMemory")
+    LowEmitLoadRegArgs(list, 3)
+    IrEmitStr(list, OP_CALL_API, IR_DLL_KERNEL32, VarPtr(api))
+    LowEmitCallFinish(list, cb)
+End Sub
+
+' 同じ Type の値どうしの代入なら写して 1（エラーなら 0）。そうでなければ -1
+Function LowTryUdtCopy(ctx As *LowerCtx, idx As Long) As Long
+    Dim ti As Long
+    LowTryUdtCopy = -1
+    ti = LowUdtLvalTi(ctx, LowNodeLeft(ctx, idx))
+    If ti < 0 Then Exit Function
+    If LowUdtLvalTi(ctx, LowNodeRight(ctx, idx)) <> ti Then Exit Function
+    LowTryUdtCopy = LowEmitUdtCopy(ctx, LowNodeLeft(ctx, idx), LowNodeRight(ctx, idx), LowNewSize(ctx, ti))
+End Function

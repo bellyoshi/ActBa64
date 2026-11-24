@@ -1,0 +1,109 @@
+' ============================================================
+' DocFile.sbp - 一覧の 1 ファイル（FilesParam + ImageCreator 相当）
+'
+' 画像は GDI+、PDF は pdfium で描く。ページ・回転・拡大はファイルごとに持つ。
+' ============================================================
+
+Class DocFile
+Private
+    img As VoidPtr              ' GDI+ の Image
+    doc As VoidPtr              ' FPDF_DOCUMENT
+    pgIndex As Long
+    pgCount As Long
+    rot As Long                 ' 0〜3（右回りに 90° ずつ）
+    imgRot As Long              ' img に今かけてある回転
+    baseRatio As Double         ' 回す前の 幅 / 高さ
+    pathBuf As *Byte            ' パス（UTF-8）。New したオブジェクトの String は GC に回収されるので malloc で持つ
+Public
+    Kind As Long                ' DOC_IMAGE / DOC_PDF
+    Selected As Long
+    Zoom As ZoomState
+
+    Sub ~DocFile()
+        CloseFile()
+    End Sub
+
+    ' path を開く。開けなければ False
+    Function OpenFile(p As String) As Long
+        SetPath(p)
+        Kind = DocKindOf(p)
+        If Kind = DOC_IMAGE Then img = GdipLoad(p)
+        If Kind = DOC_PDF Then doc = PdfOpen(p)
+        OpenFile = (img <> 0 Or doc <> 0)
+        If doc <> 0 Then pgCount = FPDF_GetPageCount(doc)
+        If img <> 0 Then pgCount = 1
+        LoadRatio()
+    End Function
+
+    Function Path() As String
+        Path = MakeStr(pathBuf)
+    End Function
+
+    Sub CloseFile()
+        If pathBuf <> 0 Then free(pathBuf)
+        pathBuf = 0
+        If img <> 0 Then GdipDisposeImage(img)
+        If doc <> 0 Then FPDF_CloseDocument(doc)
+        img = 0
+        doc = 0
+    End Sub
+
+    Function PageIndex() As Long
+        PageIndex = pgIndex
+    End Function
+
+    Function PageCount() As Long
+        PageCount = pgCount
+    End Function
+
+    ' ページを変える（範囲の外は端に寄せる）
+    Sub SetPage(i As Long)
+        If i > pgCount - 1 Then i = pgCount - 1
+        If i < 0 Then i = 0
+        If i = pgIndex Then Exit Sub
+        pgIndex = i
+        LoadRatio()
+    End Sub
+
+    ' 右回りの角度（0 / 90 / 180 / 270）にする
+    Sub Rotate(deg As Long)
+        rot = (deg \ 90) Mod 4
+        Zoom.CenterClear()
+    End Sub
+
+    ' 回したあとの 幅 / 高さ
+    Function Ratio() As Double
+        Ratio = baseRatio
+        If rot Mod 2 = 1 Then Ratio = 1 / baseRatio
+    End Function
+
+    ' 32bit の画素 bits（hdc に選んだ DIB、w x h）に描く
+    Sub Draw(hdc As HDC, bits As VoidPtr, w As Long, h As Long)
+        Dim lay As ViewLayout
+        Zoom.Layout(Ratio(), w, h, lay)
+        If doc <> 0 Then PdfDraw(doc, pgIndex, bits, w, h, lay.x, lay.y, lay.w, lay.h, rot)
+        If img <> 0 Then DrawImage(hdc, lay)
+    End Sub
+
+Private
+    Sub SetPath(p As String)
+        pathBuf = calloc(Len(p) + 1)
+        memcpy(pathBuf, StrPtr(p), Len(p))
+    End Sub
+
+    Sub LoadRatio()
+        baseRatio = 1
+        If doc <> 0 Then baseRatio = PdfPageRatio(doc, pgIndex)
+        If img <> 0 And imgRot = 0 Then baseRatio = GdipWidth(img) / GdipHeight(img)
+    End Sub
+
+    ' GDI+ の絵は回した絵そのものを描く（RotateFlip は差の分だけかける）
+    Sub DrawImage(hdc As HDC, ByRef lay As ViewLayout)
+        If imgRot <> rot Then
+            GdipImageRotateFlip(img, (rot - imgRot + 4) Mod 4)
+            imgRot = rot
+        End If
+        GdiFlush()
+        GdipDraw(hdc, img, lay.x, lay.y, lay.w, lay.h)
+    End Sub
+End Class

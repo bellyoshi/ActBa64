@@ -1,0 +1,74 @@
+' ============================================================
+' Gdip.sbp - GDI+（gdiplus.dll のフラット API）で JPEG / PNG / BMP を読んで描く
+' ============================================================
+
+Type GdiplusStartupInput
+    GdiplusVersion As DWord
+    DebugEventCallback As VoidPtr
+    SuppressBackgroundThread As Long
+    SuppressExternalCodecs As Long
+End Type
+
+Declare Function GdiplusStartup Lib "gdiplus.dll" (ByRef token As ULONG_PTR, ByRef input As GdiplusStartupInput, output As VoidPtr) As Long
+Declare Sub GdiplusShutdown Lib "gdiplus.dll" (token As ULONG_PTR)
+Declare Function GdipLoadImageFromFile Lib "gdiplus.dll" (filename As *Word, ByRef image As VoidPtr) As Long
+Declare Function GdipDisposeImage Lib "gdiplus.dll" (image As VoidPtr) As Long
+Declare Function GdipGetImageWidth Lib "gdiplus.dll" (image As VoidPtr, ByRef w As DWord) As Long
+Declare Function GdipGetImageHeight Lib "gdiplus.dll" (image As VoidPtr, ByRef h As DWord) As Long
+Declare Function GdipImageRotateFlip Lib "gdiplus.dll" (image As VoidPtr, rfType As Long) As Long
+Declare Function GdipCreateFromHDC Lib "gdiplus.dll" (hdc As HDC, ByRef graphics As VoidPtr) As Long
+Declare Function GdipDeleteGraphics Lib "gdiplus.dll" (graphics As VoidPtr) As Long
+Declare Function GdipSetInterpolationMode Lib "gdiplus.dll" (graphics As VoidPtr, mode As Long) As Long
+Declare Function GdipSetPixelOffsetMode Lib "gdiplus.dll" (graphics As VoidPtr, mode As Long) As Long
+Declare Function GdipDrawImageRectI Lib "gdiplus.dll" (graphics As VoidPtr, image As VoidPtr, x As Long, y As Long, w As Long, h As Long) As Long
+
+Const GDIP_INTERP_HQ_BICUBIC = 7
+Const GDIP_PIXOFF_HALF = 4
+
+Dim g_gdipToken As ULONG_PTR
+
+' GDI+ を使えるようにする（起動時に 1 度）
+Sub GdipInit()
+    Dim si As GdiplusStartupInput
+    RtlFillMemory(VarPtr(si), SizeOf(GdiplusStartupInput), 0)
+    si.GdiplusVersion = 1
+    GdiplusStartup(g_gdipToken, si, 0)
+End Sub
+
+Sub GdipDone()
+    If g_gdipToken <> 0 Then GdiplusShutdown(g_gdipToken)
+    g_gdipToken = 0
+End Sub
+
+' path（UTF-8）の絵を読む。読めなければ 0
+Function GdipLoad(path As String) As VoidPtr
+    Dim w As *Word, img As VoidPtr
+    w = calloc(VIEWER_WPATH * 2)
+    ViewerToWide(path, w, VIEWER_WPATH)
+    img = 0
+    If GdipLoadImageFromFile(w, img) <> 0 Then img = 0
+    free(w)
+    GdipLoad = img
+End Function
+
+Function GdipWidth(img As VoidPtr) As Long
+    Dim w As DWord
+    GdipGetImageWidth(img, w)
+    GdipWidth = w
+End Function
+
+Function GdipHeight(img As VoidPtr) As Long
+    Dim h As DWord
+    GdipGetImageHeight(img, h)
+    GdipHeight = h
+End Function
+
+' img を hdc の (x, y) に w x h で描く（はみ出たところは切れる）
+Sub GdipDraw(hdc As HDC, img As VoidPtr, x As Long, y As Long, w As Long, h As Long)
+    Dim g As VoidPtr
+    If GdipCreateFromHDC(hdc, g) <> 0 Then Exit Sub
+    GdipSetInterpolationMode(g, GDIP_INTERP_HQ_BICUBIC)
+    GdipSetPixelOffsetMode(g, GDIP_PIXOFF_HALF)
+    GdipDrawImageRectI(g, img, x, y, w, h)
+    GdipDeleteGraphics(g)
+End Sub

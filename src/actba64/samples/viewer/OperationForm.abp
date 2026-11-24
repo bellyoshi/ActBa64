@@ -1,0 +1,362 @@
+' ============================================================
+' OperationForm - 操作画面（frmOperation 相当）
+'
+' 左にファイルの一覧、真ん中にスクリーンのプレビュー、右にページ・拡大・回転のボタン。
+' プレビューは WM_PAINT で描き、つかんで動かす・ホイールで送る（Ctrl で拡大）。
+' ファイルは「開く」のほか、窓へのドロップでも足せる。
+' ============================================================
+
+Const PV_X = 240                    ' プレビューの場所（縦横の比はスクリーンに合わせる）
+Const PV_Y = 52
+Const PV_W = 360
+Const PV_HMAX = 270
+
+Class OperationForm
+    Inherits Form
+Private
+    FilesList As ListBox
+    SelectAllButton As Button
+    DeselectButton As Button
+    DeleteButton As Button
+    OpenButton As Button
+    PreviewLabel As Label
+    FileInfoLabel As Label
+    PageLabel As Label
+    ZoomRateLabel As Label
+    StatusLabel As Label
+    ScreenGroup As GroupBox
+    ShowButton As Button
+    CloseScreenButton As Button
+    BackgroundButton As Button
+    AutoCheck As CheckBox
+    Rot000Button As Button
+    Rot090Button As Button
+    Rot180Button As Button
+    Rot270Button As Button
+    ViewAllButton As Button
+    FitButton As Button
+    ZoomInButton As Button
+    ZoomOutButton As Button
+    FirstButton As Button
+    PrevButton As Button
+    NextButton As Button
+    LastButton As Button
+    dragging As Long
+    dragX As Long
+    dragY As Long
+Public
+    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+        WndProc = 0
+        If OnMessage(msg, wParam, lParam) Then Exit Function
+        If msg = WM_CREATE Then OnCreate()
+        WndProc = Super.WndProc(msg, wParam, lParam)
+    End Function
+
+    ' 一覧・ボタン・メニュー・プレビューを Model に合わせる
+    Sub UpdateView()
+        If Handle = 0 Then Exit Sub
+        LoadList()
+        SetLabels()
+        SetEnables()
+        MenuCheck(IDM_AUTO, IsAuto())
+        InvalidateRect(Handle, 0, FALSE)
+    End Sub
+
+    Function IsAuto() As Long
+        IsAuto = AutoCheck.GetChecked()
+    End Function
+
+    Sub ToggleAuto()
+        AutoCheck.SetChecked(IsAuto() = 0)
+        AppUpdate()
+    End Sub
+
+    ' プレビューの場所（クライアントの座標）
+    Sub PreviewRect(ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long)
+        Dim sw As Long, sh As Long
+        g_screen.ClientSize(sw, sh)
+        x = PV_X : y = PV_Y : w = PV_W
+        h = PV_W * sh \ sw
+        If h > PV_HMAX Then h = PV_HMAX : w = PV_HMAX * sw \ sh : x = PV_X + (PV_W - w) \ 2
+    End Sub
+
+Private
+    Override Sub InitializeComponent()
+        Left = 80 : Top = 80 : Width = 900 : Height = 600
+        Caption = "Viewer By 2nd Monitor 操作画面"
+        LayoutFiles()
+        LayoutPreview()
+        LayoutScreen()
+        LayoutRotate()
+        LayoutZoom()
+        LayoutPage()
+    End Sub
+
+    Sub Place(ByRef c As Control, x As Long, y As Long, w As Long, h As Long, s As String)
+        c.Left = x : c.Top = y : c.Width = w : c.Height = h
+        c.Caption = s
+        AddControl(c)
+    End Sub
+
+    Sub LayoutFiles()
+        Place(FilesList, 8, 8, 220, 420, "")
+        Place(SelectAllButton, 8, 436, 108, 28, "全選択")
+        Place(DeselectButton, 120, 436, 108, 28, "選択解除")
+        Place(DeleteButton, 8, 470, 108, 28, "リストから削除")
+        Place(OpenButton, 120, 470, 108, 28, "開く...")
+    End Sub
+
+    Sub LayoutPreview()
+        Place(PreviewLabel, PV_X, 8, PV_W, 18, "表示プレビュー")
+        Place(FileInfoLabel, PV_X, 28, PV_W, 18, "")
+        Place(PageLabel, PV_X, PV_Y + PV_HMAX + 6, PV_W, 18, "")
+        Place(StatusLabel, 8, 508, 860, 18, "")
+    End Sub
+
+    Sub LayoutScreen()
+        Place(ScreenGroup, PV_X, 360, PV_W, 96, "スクリーン操作")
+        Place(ShowButton, PV_X + 10, 382, 120, 30, "スクリーンに表示")
+        Place(CloseScreenButton, PV_X + 136, 382, 100, 30, "表示終了")
+        Place(BackgroundButton, PV_X + 242, 382, 100, 30, "背景表示")
+        Place(AutoCheck, PV_X + 12, 420, 200, 22, "操作中に自動表示")
+    End Sub
+
+    Sub LayoutRotate()
+        Place(Rot000Button, 680, 12, 110, 28, "元の位置")
+        Place(Rot270Button, 620, 44, 110, 28, "左回転")
+        Place(Rot090Button, 740, 44, 110, 28, "右回転")
+        Place(Rot180Button, 680, 76, 110, 28, "180°回転")
+    End Sub
+
+    Sub LayoutZoom()
+        Place(ViewAllButton, 620, 128, 100, 28, "全体を表示")
+        Place(FitButton, 724, 128, 150, 28, "ウインドウ幅に合わせる")
+        Place(ZoomRateLabel, 620, 164, 254, 18, "")
+        Place(ZoomInButton, 620, 186, 110, 28, "拡大")
+        Place(ZoomOutButton, 740, 186, 110, 28, "縮小")
+    End Sub
+
+    Sub LayoutPage()
+        Place(FirstButton, 620, 240, 58, 28, "最初")
+        Place(PrevButton, 682, 240, 58, 28, "前へ")
+        Place(NextButton, 744, 240, 58, 28, "次へ")
+        Place(LastButton, 806, 240, 58, 28, "最後")
+    End Sub
+
+    Sub OnCreate()
+        SetMenu(Handle, MenuCreateBar())
+        DragAcceptFiles(Handle, TRUE)
+        SetWindowLongPtr(ZoomRateLabel.Handle, GWL_STYLE, (WS_CHILD Or WS_VISIBLE Or SS_CENTER) As LONG_PTR)
+        SetWindowLongPtr(PageLabel.Handle, GWL_STYLE, (WS_CHILD Or WS_VISIBLE Or SS_CENTER) As LONG_PTR)
+    End Sub
+
+    ' 扱ったら True
+    Function OnMessage(msg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
+        OnMessage = True
+        Select Case msg
+            Case WM_PAINT : OnPaint()
+            Case WM_COMMAND : OnCommand(wParam, lParam)
+            Case WM_DROPFILES : OpDropFiles(wParam As HANDLE)
+            Case Else : OnMessage = OnMouseMessage(msg, wParam, lParam)
+        End Select
+    End Function
+
+    Function OnMouseMessage(msg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
+        OnMouseMessage = True
+        Select Case msg
+            Case WM_LBUTTONDOWN : OnMouseDown(LOWORD(lParam), HIWORD(lParam))
+            Case WM_MOUSEMOVE : OnMouseMove(WheelX(lParam), WheelY(lParam))
+            Case WM_LBUTTONUP : OnMouseUp()
+            Case WM_MOUSEWHEEL : OnWheel(wParam, lParam)
+            Case Else : OnMouseMessage = False
+        End Select
+    End Function
+
+    Sub OnPaint()
+        Dim ps As PAINTSTRUCT, hdc As HDC, x As Long, y As Long, w As Long, h As Long, hb As HBITMAP
+        hdc = BeginPaint(Handle, ps)
+        PreviewRect(x, y, w, h)
+        hb = RenderDoc(CurDoc(), w, h, g_model.BgColor)
+        BlitBitmap(hdc, hb, x, y, w, h)
+        DeleteObject(hb)
+        PaintPreviewFrame(hdc, x, y, w, h)
+        EndPaint(Handle, ps)
+    End Sub
+
+    ' プレビューの周りを消して、枠を描く（大きさが変わったときの残りを消す）
+    Sub PaintPreviewFrame(hdc As HDC, x As Long, y As Long, w As Long, h As Long)
+        Dim rc As RECT
+        rc.left = PV_X - 2 : rc.top = PV_Y - 2 : rc.right = PV_X + PV_W + 2 : rc.bottom = PV_Y + PV_HMAX + 2
+        ExcludeClipRect(hdc, x, y, x + w, y + h)
+        FillRect(hdc, rc, (COLOR_BTNFACE + 1) As HBRUSH)
+        SelectClipRgn(hdc, 0)
+        rc.left = x - 1 : rc.top = y - 1 : rc.right = x + w + 1 : rc.bottom = y + h + 1
+        FrameRect(hdc, rc, GetStockObject(GRAY_BRUSH) As HBRUSH)
+    End Sub
+
+    Sub OnCommand(wParam As WPARAM, lParam As LPARAM)
+        If lParam = 0 Then
+            OpMenuCommand(LOWORD(wParam))
+        ElseIf lParam = FilesList.Handle Then
+            If HIWORD(wParam) = LBN_SELCHANGE Then OnListChange()
+        ElseIf HIWORD(wParam) = BN_CLICKED Then
+            OnButton(lParam As HWND)
+        End If
+    End Sub
+
+    ' 一覧で選んだものを Model に
+    Sub OnListChange()
+        Dim i As Long
+        For i = 0 To FilesList.Count() - 1
+            g_model.SetSelected(i, FilesList.GetSelected(i))
+        Next
+        AppUpdate()
+    End Sub
+
+    Sub OnButton(h As HWND)
+        If FileButton(h) Then Exit Sub
+        If ScreenButton(h) Then Exit Sub
+        If PageButton(h) Then Exit Sub
+        If ZoomButton(h) Then Exit Sub
+        If RotateButton(h) Then Exit Sub
+    End Sub
+
+    Function FileButton(h As HWND) As Long
+        FileButton = True
+        If h = OpenButton.Handle Then OpOpenFiles(Handle) : Exit Function
+        If h = SelectAllButton.Handle Then g_model.SelectAll() : AppUpdate() : Exit Function
+        If h = DeselectButton.Handle Then g_model.DeselectAll() : AppUpdate() : Exit Function
+        If h = DeleteButton.Handle Then g_model.DeleteSelected() : AppUpdate() : Exit Function
+        FileButton = False
+    End Function
+
+    Function ScreenButton(h As HWND) As Long
+        ScreenButton = True
+        If h = ShowButton.Handle Then OpMenuCommand(IDM_SHOW) : Exit Function
+        If h = CloseScreenButton.Handle Then OpMenuCommand(IDM_CLOSESCREEN) : Exit Function
+        If h = BackgroundButton.Handle Then OpMenuCommand(IDM_BACKGROUND) : Exit Function
+        If h = AutoCheck.Handle Then AppUpdate() : Exit Function
+        ScreenButton = False
+    End Function
+
+    Function PageButton(h As HWND) As Long
+        PageButton = True
+        If h = FirstButton.Handle Then OpMenuCommand(IDM_FIRST) : Exit Function
+        If h = PrevButton.Handle Then OpMenuCommand(IDM_PREV) : Exit Function
+        If h = NextButton.Handle Then OpMenuCommand(IDM_NEXT) : Exit Function
+        If h = LastButton.Handle Then OpMenuCommand(IDM_LAST) : Exit Function
+        PageButton = False
+    End Function
+
+    Function ZoomButton(h As HWND) As Long
+        Dim x As Long, y As Long, w As Long, ht As Long
+        ZoomButton = True
+        PreviewRect(x, y, w, ht)
+        If h = ZoomInButton.Handle Then OpMenuCommand(IDM_ZOOMIN) : Exit Function
+        If h = ZoomOutButton.Handle Then OpMenuCommand(IDM_ZOOMOUT) : Exit Function
+        If h = FitButton.Handle Then DoFitWidth(w, ht) : AppUpdate() : Exit Function
+        If h = ViewAllButton.Handle Then DoSetRate(1.0) : AppUpdate() : Exit Function
+        ZoomButton = False
+    End Function
+
+    Function RotateButton(h As HWND) As Long
+        RotateButton = True
+        If h = Rot000Button.Handle Then OpMenuCommand(IDM_ROT000) : Exit Function
+        If h = Rot090Button.Handle Then OpMenuCommand(IDM_ROT090) : Exit Function
+        If h = Rot180Button.Handle Then OpMenuCommand(IDM_ROT180) : Exit Function
+        If h = Rot270Button.Handle Then OpMenuCommand(IDM_ROT270) : Exit Function
+        RotateButton = False
+    End Function
+
+    ' プレビューをつかむ
+    Sub OnMouseDown(mx As Long, my As Long)
+        Dim x As Long, y As Long, w As Long, h As Long
+        PreviewRect(x, y, w, h)
+        If HasDoc() = 0 Or mx < x Or my < y Or mx >= x + w Or my >= y + h Then Exit Sub
+        dragging = True
+        dragX = mx : dragY = my
+        SetCapture(Handle)
+    End Sub
+
+    Sub OnMouseMove(mx As Long, my As Long)
+        Dim x As Long, y As Long, w As Long, h As Long, d As *DocFile
+        d = CurDoc()
+        If dragging = 0 Or d = 0 Then Exit Sub
+        PreviewRect(x, y, w, h)
+        d->Zoom.DragBy(d->Ratio(), w, h, mx - dragX, my - dragY)
+        dragX = mx : dragY = my
+        AppUpdate()
+    End Sub
+
+    Sub OnMouseUp()
+        If dragging Then ReleaseCapture()
+        dragging = False
+    End Sub
+
+    ' プレビューの上でホイール
+    Sub OnWheel(wParam As WPARAM, lParam As LPARAM)
+        Dim pt As POINTAPI, x As Long, y As Long, w As Long, h As Long
+        pt.x = WheelX(lParam) : pt.y = WheelY(lParam)
+        ScreenToClient(Handle, pt)
+        PreviewRect(x, y, w, h)
+        If pt.x < x Or pt.y < y Or pt.x >= x + w Or pt.y >= y + h Then Exit Sub
+        DoWheel(CurDoc(), w, h, WheelDelta(wParam), pt.x - x, pt.y - y, (LOWORD(wParam) And MK_CONTROL) <> 0)
+        AppUpdate()
+    End Sub
+
+    ' 一覧の部品とメニューのリストを Model に合わせる（LB_SETSEL では LBN_SELCHANGE は来ない）
+    Sub LoadList()
+        Dim i As Long, d As *DocFile
+        FilesList.Clear()
+        For i = 0 To g_model.Count() - 1
+            d = g_model.FileAt(i)
+            FilesList.AddItem(ExtractFileName(d->Path()))
+            FilesList.SetSelected(i, d->Selected)
+        Next
+        MenuLoadList()
+    End Sub
+
+    Sub SetLabels()
+        Dim d As *DocFile, sw As Long, sh As Long
+        d = CurDoc()
+        FileInfoLabel.SetCaption("ファイル: なし")
+        If d <> 0 Then FileInfoLabel.SetCaption("ファイル: " + ExtractFileName(d->Path()))
+        PageLabel.SetCaption(PageText())
+        ZoomRateLabel.SetCaption(RateText())
+        g_screen.ClientSize(sw, sh)
+        StatusLabel.SetCaption("スクリーン: " + Str$(sw) + " x " + Str$(sh) + ScreenStateText())
+    End Sub
+
+    Sub SetEnables()
+        EnablePair(FirstButton, IDM_FIRST, CanPrevious())
+        EnablePair(PrevButton, IDM_PREV, CanPrevious())
+        EnablePair(NextButton, IDM_NEXT, CanNext())
+        EnablePair(LastButton, IDM_LAST, CanNext())
+        MenuEnable(IDM_PAGE, CanPrevious() Or CanNext())
+        EnablePair(ZoomInButton, IDM_ZOOMIN, CanZoomIn())
+        EnablePair(ZoomOutButton, IDM_ZOOMOUT, CanZoomOut())
+        SetEnablesDoc(HasDoc())
+    End Sub
+
+    Sub SetEnablesDoc(b As Long)
+        MenuEnable(IDM_ZOOMRATE, b)
+        FitButton.SetEnabled(b) : ViewAllButton.SetEnabled(b)
+        EnablePair(Rot000Button, IDM_ROT000, b)
+        EnablePair(Rot090Button, IDM_ROT090, b)
+        EnablePair(Rot180Button, IDM_ROT180, b)
+        EnablePair(Rot270Button, IDM_ROT270, b)
+    End Sub
+
+    Sub EnablePair(ByRef c As Control, id As Long, b As Long)
+        If c.Enabled <> b Then c.SetEnabled(b)
+        MenuEnable(id, b)
+    End Sub
+End Class
+
+' ステータスに出すスクリーンの様子
+Function ScreenStateText() As String
+    ScreenStateText = "（非表示）"
+    If g_screen.IsShown() = 0 Then Exit Function
+    ScreenStateText = "（ウインドウ）"
+    If g_screen.IsFullScreen() Then ScreenStateText = "（フルスクリーン: モニター " + Str$(g_screen.Monitor + 1) + "）"
+End Function

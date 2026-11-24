@@ -1,5 +1,64 @@
 # リリースノート
 
+## v0.1.2（v0.1.1 からの変更点）
+
+### ハイライト
+
+- **ProjectEditor が Linux（X11）で動きます。** 文書の編集・保存、メニュー、ファイル選択、検索、プロジェクトの欄、クリップボード、訳す・実行する、フォームデザイナまで使えます。Linux 版の一式は `release_build.sh` で作ります。詳しくは [projecteditor.md](./projecteditor.md) の「14. Linux 版」を見てください。
+- **`-linux` の Forms が窓に部品を描き、押せるようになりました。** フォームデザイナで作ったフォームを Linux でもそのまま動かせます。`MsgBox` も X の窓で出ます。
+- **フォームの部品が増えました。** `CheckBox` / `RadioButton` / `EditBox` / `GroupBox` を足し、デザイナのツールボックスから Label も含めて置けます。
+
+### コンパイラ
+
+- 同じ行で文の後ろに `:` なしで語が続くと `expected end of statement` のエラーにします（AB 4.20 と同じ）。`-pAB2` では AB 2.62 と同じく行の残りを捨て、`-pN88` では調べません。これまでエラーにならずに通っていたソースは、`:` を入れるか行を分けてください。
+- String の GC の表を伸ばせるようにしました。これまでは 4096 個を超えて確保した塊が表に載らず、二度と解放されませんでした。GC 領域は約 38KB から約 2KB になりました。
+- String の GC が大域変数・スタックの印を付けていなかったのを直しました。`Dim keep(1000) As String` の `keep(492)` 以降などが、生きているのに回収されていました。
+- 大文字小文字だけ違う `Const` が、同じ名前のローカル変数・引数・大域変数を置き換えていたのを直しました（変数が勝ちます）。
+- 手続きの中で足した大域変数も `.data` の大きさに入れるようにしました。
+- `unknown API` など低レベル化で出るエラーに `ファイル(行)` を付けました。ProjectEditor でエラーの行へ飛べます。
+- Linux で動くコンパイラは、出した ELF に実行の許可（`rwxr-xr-x` から umask を引いたもの）を付けます。
+
+### N88BASIC / ActiveBasic2
+
+- `-pN88` で `DATA` / `READ` を使えます。実行時の関数は `Include\Data` に移しました（`-pN88` / `-pAB2` のときだけ読みます）。
+- `-pAB2` で、最初の文が行番号で始まるソースは `-pN88` と同じく読みます（AB2 の `#N88BASIC` のプログラム）。
+- `-pN88` の `LINE ...,BF,color2` で中を `color2` で塗ります。`COLOR = (p, &Hgrb)` でパレット 0〜15 の色を変えられます。既定のパレットの 8 は灰、9〜15 は 1〜7 の少し暗い色です。
+
+### Include
+
+- `Forms.sbp` の中身をクラスごとに `Include\Forms\*.sbp` へ分けました（`Forms.sbp` を取り込むのはこれまでどおりです）。
+- `CheckBox`（`Checked` / `GetChecked` / `SetChecked`）、`RadioButton`（フォームのラジオボタンは 1 つの組）、`EditBox`（`GetText` / `SetText`）、`GroupBox` を足しました。押すと Button と同じく `WM_COMMAND`（`BN_CLICKED`）が届きます。
+
+### ProjectEditor
+
+- Linux 版を足しました（X11 + FreeType）。窓 1 枚にメニューの帯・文書のタブ・文書・メッセージ欄を並べます。
+  - メニューの帯と右クリックのメニューは自前で描きます。Alt+文字・矢印キー・Enter・Esc で選べます。
+  - ファイルを開く・保存のダイアログ、検索（Ctrl+F / F3 / Shift+F3）、設定（言語）を自前のダイアログで出します。
+  - X の CLIPBOARD でほかのアプリとコピー・貼り付けができます。
+  - `.pj` を開くと左に `#SOURCE` の一覧を出します。
+  - Basic メニューの訳し先に「Linux (ELF)」を足しました（Linux 版の既定）。コンソールのプログラムは端末（`$TERMINAL` か `x-terminal-emulator` など）で動かし、端末が無ければ出力と終了コードをメッセージ欄に出します。
+  - 実行はエディタと同じ OS の訳し先のときだけで、ほかは訳して「ここでは実行できない」と出します。
+- フォームデザイナのツールボックスを、見出し「Toolbox」と組「General」の下に Pointer と各部品をアイコン付きで並べる形にしました。Pointer を押すとツールの選びが外れます（Esc と同じ）。
+- ツールボックスに CheckBox / RadioButton / EditBox / Label / GroupBox を足し、デザイン画面でそれぞれの見た目を描きます。
+- 同梱していた UDEV Gothic をやめ、OS のフォントを使います。Windows 版は MS Gothic、Linux 版は IPA ゴシック・Takao ゴシック・DejaVu Sans Mono・Liberation Mono・FreeMono のうち最初に見つかったものです。
+- F1 ヘルプを language.md に合わせました（New / Delete / Super、Protected、GoTo / GoSub、Int64、`#resource` などを未対応としていたのを直しました）。
+
+### -linux
+
+- Forms の Button / CheckBox / RadioButton / EditBox / Label / Panel / GroupBox を窓に描きます（文字は `libfreetype.so.6` と OS のフォント）。押して離すと `WM_COMMAND`（`BN_CLICKED`）、EditBox は文字が変わると `EN_CHANGE` を送ります。部品の上のクリックと部品が受けたキーはフォームの `WndProc` に届きません（Windows の子窓と同じ）。
+- Forms を使うプログラムの `MsgBox` / `MessageBox` は X の窓になりました（`MB_OK` ほか 6 つのボタンの組、`MB_DEFBUTTON2` / `3`、Enter / Esc / Tab / ←→）。閉じるまでほかのフォームの入力を止めます。X につながらなければこれまでどおり標準エラーに書きます。
+- Forms の `WM_KEYDOWN` に F1〜F12、Home / End / PageUp / PageDown、Insert / Delete、Shift / Ctrl / Alt、テンキーを足しました。
+- 窓の大きさを変えたときと閉じたときに XImage を解放します。
+- `CreatePipe` / `CreateProcessA`（標準入出力のつなぎ替え・作業フォルダー）/ `GetEnvironmentVariableA` / `GetTempPathA` / `ShellExecuteA`（`xdg-open`）/ `lstrcmpiA` の Linux 版を足しました。
+
+### ビルド・その他
+
+- GitHub Actions の CI（Windows）を足しました。手元では `ci.ps1` で同じ手順を回せます。
+- Linux 版のリリースを作る `release_build.sh` を足しました（`--tar` で tar.gz も作ります）。
+- ANSI コードページが 932 でない機械では、CP932 のバイトを前提にしたユニットテストを飛ばします。
+- String の GC の配置が変わったので、stage0 が古いと `build.ps1` の stage1 / stage2 の比較が一致しません（stage2 → stage3 は一致します）。AB 4.20 で stage0 を作り直してください。
+- MIT の LICENSE を足しました。日本語訳と自作プログラムの配布条件は `docs/` にあります。README に非公式である旨を書きました。
+
 ## v0.1.1（v0.1.0 からの変更点）
 
 ### ハイライト

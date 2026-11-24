@@ -1,0 +1,150 @@
+' ============================================================
+' Model.sbp - ファイルの一覧と、スクリーンに出しているファイル（ViewerModel + Repogitory 相当）
+'
+' 操作の対象は「ちょうど 1 つだけ選んでいるファイル」（2 つ以上や 0 なら無し）。
+' スクリーンは ViewFile を出す（0 なら背景だけ）。同じ DocFile なので、
+' 表示中のファイルのページ送りや拡大はそのままスクリーンにも出る。
+' ============================================================
+
+Const MAX_FILES = 256
+
+Class ViewerModel
+Private
+    files[MAX_FILES - 1] As *DocFile
+    nFiles As Long
+    shownFile As *DocFile
+Public
+    BgColor As DWord            ' 背景の色（COLORREF）
+
+    Sub ~ViewerModel()
+        Clear()
+    End Sub
+
+    ' すべてのファイルを閉じて一覧を空にする（GDI+ と pdfium を止める前に呼ぶ）
+    Sub Clear()
+        While nFiles > 0
+            RemoveAt(nFiles - 1)
+        Wend
+    End Sub
+
+    Function Count() As Long
+        Count = nFiles
+    End Function
+
+    Function FileAt(i As Long) As *DocFile
+        FileAt = files[i]
+    End Function
+
+    ' path を開いて一覧の最後に足し、それだけを選ぶ。開けなければ False
+    Function AddFile(path As String) As Long
+        Dim p As *DocFile
+        AddFile = False
+        If CanOpen(path) = 0 Or nFiles >= MAX_FILES Then Exit Function
+        p = OpenDoc(path)
+        If p = 0 Then Exit Function
+        SelectOnly(AddEntry(p))
+        AddFile = True
+    End Function
+
+    Sub SetSelected(i As Long, b As Long)
+        Dim p As *DocFile
+        p = files[i]
+        p->Selected = b
+    End Sub
+
+    Function IsSelected(i As Long) As Long
+        Dim p As *DocFile
+        p = files[i]
+        IsSelected = p->Selected
+    End Function
+
+    Sub SelectOnly(i As Long)
+        DeselectAll()
+        SetSelected(i, True)
+    End Sub
+
+    Sub SelectAll()
+        Dim i As Long
+        For i = 0 To nFiles - 1
+            SetSelected(i, True)
+        Next
+    End Sub
+
+    ' 選択を外す（スクリーンは背景になる。Repogitory.Disselect と同じ）
+    Sub DeselectAll()
+        Dim i As Long
+        For i = 0 To nFiles - 1
+            SetSelected(i, False)
+        Next
+        shownFile = 0
+    End Sub
+
+    ' ちょうど 1 つ選んでいればその番号、そうでなければ -1
+    Function SelectedIndex() As Long
+        Dim i As Long
+        SelectedIndex = -1
+        For i = 0 To nFiles - 1
+            If IsSelected(i) Then
+                If SelectedIndex <> -1 Then SelectedIndex = -1 : Exit Function
+                SelectedIndex = i
+            End If
+        Next
+    End Function
+
+    ' 操作の対象のファイル（無ければ 0）
+    Function Current() As *DocFile
+        Current = 0
+        If SelectedIndex() >= 0 Then Current = files[SelectedIndex()]
+    End Function
+
+    ' 選んだファイルを一覧から消す
+    Sub DeleteSelected()
+        Dim i As Long, p As *DocFile
+        i = 0
+        While i < nFiles
+            If IsSelected(i) Then RemoveAt(i) Else i = i + 1
+        Wend
+    End Sub
+
+    Function ViewFile() As *DocFile
+        ViewFile = shownFile
+    End Function
+
+    ' 操作の対象をスクリーンに出す
+    Sub View()
+        shownFile = Current()
+    End Sub
+
+    Sub ShowBackground()
+        shownFile = 0
+    End Sub
+
+Private
+    ' path を開いた DocFile（開けなければ 0）
+    Function OpenDoc(path As String) As *DocFile
+        Dim p As *DocFile
+        p = New DocFile
+        If p->OpenFile(path) = 0 Then
+            Delete p
+            p = 0
+        End If
+        OpenDoc = p
+    End Function
+
+    Function AddEntry(p As *DocFile) As Long
+        files[nFiles] = p
+        AddEntry = nFiles
+        nFiles = nFiles + 1
+    End Function
+
+    Sub RemoveAt(i As Long)
+        Dim p As *DocFile, k As Long
+        p = files[i]
+        If p = shownFile Then shownFile = 0
+        Delete p
+        For k = i To nFiles - 2
+            files[k] = files[k + 1]
+        Next
+        nFiles = nFiles - 1
+    End Sub
+End Class

@@ -1,0 +1,144 @@
+' ============================================================
+' Form1 - 将棋のフォーム（Lazarus の unit1.pas + unit1.lfm 相当）
+'
+' 盤と駒台は WM_PAINT で描き（ShogiDraw.sbp）、WM_LBUTTONDOWN で
+' 押した場所を調べる。手番の表示だけ Label（StatusLabel）を使う。
+'
+' 操作:
+'   自分の駒を押す → 行き先を押す（同じ駒をもう一度押すとやめる）
+'   駒台の持ち駒を押す → 打つマスを押す
+'   敵陣に入る・出るときは「成りますか？」と聞く（行き所がなければ自動で成る）
+' ============================================================
+
+Class Form1
+    Inherits Form
+Public
+    Override Function WndProc(msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+        If msg = WM_PAINT Then
+            FormPaint()
+            WndProc = 0
+            Exit Function
+        End If
+        If msg = WM_LBUTTONDOWN Then FormClick(LOWORD(lParam), HIWORD(lParam))
+        If msg = WM_DESTROY Then ShogiFreeFonts()
+        WndProc = Super.WndProc(msg, wParam, lParam)
+    End Function
+
+Private
+    StatusLabel As Label
+    game As ShogiGame
+    selX As Long                ' 選んでいる盤の駒（0 なら無し）
+    selY As Long
+    selMochi As Long            ' 選んでいる持ち駒（KK_NONE なら無し）
+
+    ' ---- ここからフォームデザイナが生成する部分（unit1.lfm 相当） ----
+    Override Sub InitializeComponent()
+        Left = 316
+        Top = 185
+        Width = SHOGI_CLIENT_W + 16     ' 窓の縁と見出しの分
+        Height = SHOGI_CLIENT_H + 39
+        Caption = "将棋"
+        StatusLabel.Left = 10 : StatusLabel.Top = 12 : StatusLabel.Width = 200 : StatusLabel.Height = 20
+        StatusLabel.Caption = "手番: 先手"
+        AddControl(StatusLabel)
+    End Sub
+    ' ---- ここまで ----
+
+    Sub FormPaint()
+        Dim ps As PAINTSTRUCT, hdc As HDC
+        hdc = BeginPaint(Handle, ps)
+        ShogiMakeFonts()
+        SetBkMode(hdc, TRANSPARENT)
+        ShogiDrawBoard(hdc, game, selX, selY)
+        ShogiDrawDai(hdc, game, 1, DaiSel(1))
+        ShogiDrawDai(hdc, game, 0, DaiSel(0))
+        EndPaint(Handle, ps)
+    End Sub
+
+    ' 駒台 s で光らせる持ち駒（手番の側だけ）
+    Function DaiSel(s As Long) As Long
+        DaiSel = KK_NONE
+        If s = game.TurnIsSente() Then DaiSel = selMochi
+    End Function
+
+    Sub FormClick(px As Long, py As Long)
+        Dim x As Long, y As Long, s As Long
+        s = game.TurnIsSente()
+        If ShogiHitBoard(px, py, x, y) Then BoardCellClick(x, y)
+        If ShogiHitDai(s, px, py) <> KK_NONE Then MochigomaClick(ShogiHitDai(s, px, py))
+        InvalidateRect(Handle, 0, TRUE)
+    End Sub
+
+    ' 盤のマス (x, y) を押した（Lazarus の BoardCellClick）
+    Sub BoardCellClick(x As Long, y As Long)
+        If selMochi <> KK_NONE Then
+            If game.DropKoma(selMochi, x, y) Then EndTurn()
+        ElseIf selX > 0 Then
+            TryMove(x, y)
+        Else
+            SelectKoma(x, y)
+        End If
+    End Sub
+
+    ' 選んでいる駒を (x, y) へ。同じマスならやめ、動けなければそこにある自分の駒を選び直す
+    Sub TryMove(x As Long, y As Long)
+        If game.IsValidMove(selX, selY, x, y) Then
+            game.MoveKoma(selX, selY, x, y, AskNaru(y))
+            EndTurn()
+        ElseIf selX = x And selY = y Then
+            ClearSelection()
+        Else
+            ClearSelection()
+            SelectKoma(x, y)
+        End If
+    End Sub
+
+    ' 成るかを聞く（成れないとき・強制成りのときは聞かない）
+    Function AskNaru(y As Long) As Long
+        Dim k As Long, s As Long
+        k = game.KindAt(selX, selY)
+        s = game.SenteAt(selX, selY)
+        AskNaru = 0
+        If game.MustNaru(k, s, y) Or game.CanNaru(k, s, selY, y) = 0 Then Exit Function
+        If MessageBox(Handle, "成りますか？", "将棋", MB_YESNO Or MB_ICONQUESTION) = IDYES Then AskNaru = 1
+    End Function
+
+    ' 手番の駒なら選ぶ
+    Sub SelectKoma(x As Long, y As Long)
+        If game.KindAt(x, y) = KK_NONE Then Exit Sub
+        If game.SenteAt(x, y) <> game.TurnIsSente() Then Exit Sub
+        selX = x
+        selY = y
+    End Sub
+
+    ' 持ち駒 k を押した（Lazarus の MochigomaClick）。同じものをもう一度押すとやめる
+    Sub MochigomaClick(k As Long)
+        If game.HasMochigoma(k, game.TurnIsSente()) = 0 Then Exit Sub
+        If selMochi = k Then
+            selMochi = KK_NONE
+        Else
+            ClearSelection()
+            selMochi = k
+        End If
+    End Sub
+
+    Sub ClearSelection()
+        selX = 0
+        selY = 0
+        selMochi = KK_NONE
+    End Sub
+
+    Sub EndTurn()
+        game.ChangeTurn()
+        ClearSelection()
+        UpdateStatus()
+    End Sub
+
+    Sub UpdateStatus()
+        If game.GetTurn() = TT_SENTE Then
+            StatusLabel.SetCaption("手番: 先手")
+        Else
+            StatusLabel.SetCaption("手番: 後手")
+        End If
+    End Sub
+End Class

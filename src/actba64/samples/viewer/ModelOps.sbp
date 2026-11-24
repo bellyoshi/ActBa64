@@ -1,0 +1,156 @@
+' ============================================================
+' ModelOps.sbp - 操作の対象（Model.Current）へのページ・拡大・回転と、使えるかの判定
+'
+' g_model（ViewerModel）は project1.abp が Dim する。
+' ============================================================
+
+Function CurDoc() As *DocFile
+    CurDoc = g_model.Current()
+End Function
+
+Function CanNext() As Long
+    Dim d As *DocFile
+    d = CurDoc()
+    CanNext = False
+    If d <> 0 Then CanNext = (d->PageIndex() < d->PageCount() - 1)
+End Function
+
+Function CanPrevious() As Long
+    Dim d As *DocFile
+    d = CurDoc()
+    CanPrevious = False
+    If d <> 0 Then CanPrevious = (d->PageIndex() > 0)
+End Function
+
+Function CanZoomIn() As Long
+    Dim d As *DocFile
+    d = CurDoc()
+    CanZoomIn = False
+    If d <> 0 Then CanZoomIn = (d->Zoom.Rate < ZOOM_MAX - 0.0001)
+End Function
+
+Function CanZoomOut() As Long
+    Dim d As *DocFile
+    d = CurDoc()
+    CanZoomOut = False
+    If d <> 0 Then CanZoomOut = (d->Zoom.Rate > 1.0001)
+End Function
+
+Function HasDoc() As Long
+    HasDoc = (CurDoc() <> 0)
+End Function
+
+' ページを i（0 から）にする
+Sub DoSetPage(i As Long)
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->SetPage(i)
+End Sub
+
+' ページを n だけ進める（負なら戻す）
+Sub DoPageBy(n As Long)
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->SetPage(d->PageIndex() + n)
+End Sub
+
+Sub DoLastPage()
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->SetPage(d->PageCount() - 1)
+End Sub
+
+Sub DoZoomIn()
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->Zoom.ZoomIn()
+End Sub
+
+Sub DoZoomOut()
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->Zoom.ZoomOut()
+End Sub
+
+Sub DoSetRate(r As Double)
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->Zoom.SetRate(r)
+End Sub
+
+' w x h の窓の幅に合わせる
+Sub DoFitWidth(w As Long, h As Long)
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->Zoom.FitWidth(d->Ratio(), w, h)
+End Sub
+
+Sub DoRotate(deg As Long)
+    Dim d As *DocFile
+    d = CurDoc()
+    If d <> 0 Then d->Rotate(deg)
+End Sub
+
+' w x h の窓でホイールを回した（ctrl なら拡大・縮小、そうでなければ上下に送る）
+Sub DoWheel(d As *DocFile, w As Long, h As Long, delta As Long, mx As Long, my As Long, ctrl As Long)
+    If d = 0 Then Exit Sub
+    If ctrl Then
+        d->Zoom.WheelZoom(d->Ratio(), w, h, delta, mx, my)
+    Else
+        d->Zoom.WheelScroll(delta)
+    End If
+End Sub
+
+' 拡大率の表示（"150%"）。無ければ ""
+Function RateText() As String
+    Dim d As *DocFile
+    d = CurDoc()
+    RateText = ""
+    If d <> 0 Then RateText = Str$(DRound(d->Zoom.Rate * 100)) + "%"
+End Function
+
+' ページの表示（"3 / 10"）。1 ページだけなら ""
+Function PageText() As String
+    Dim d As *DocFile
+    d = CurDoc()
+    PageText = ""
+    If CanNext() Or CanPrevious() Then PageText = Str$(d->PageIndex() + 1) + " / " + Str$(d->PageCount())
+End Function
+
+' d を w x h に描いた絵（背景 bg）。d が 0 なら背景だけ。呼んだ側が DeleteObject する
+Function RenderDoc(d As *DocFile, w As Long, h As Long, bg As DWord) As HBITMAP
+    Dim bits As VoidPtr, hb As HBITMAP
+    hb = ViewerCreateDib(w, h, bits)
+    DrawOnDib(d, hb, bits, w, h, bg)
+    RenderDoc = hb
+End Function
+
+' DIB hb（画素 bits）に背景と d を描く
+Sub DrawOnDib(d As *DocFile, hb As HBITMAP, bits As VoidPtr, w As Long, h As Long, bg As DWord)
+    Dim dc As HDC, prevObj As HANDLE
+    dc = CreateCompatibleDC(0)
+    prevObj = SelectObject(dc, hb)
+    FillBg(dc, w, h, bg)
+    If d <> 0 Then d->Draw(dc, bits, w, h)
+    SelectObject(dc, prevObj)
+    DeleteDC(dc)
+End Sub
+
+Sub FillBg(dc As HDC, w As Long, h As Long, bg As DWord)
+    Dim rc As RECT, br As HBRUSH
+    rc.left = 0 : rc.top = 0 : rc.right = w : rc.bottom = h
+    br = CreateSolidBrush(bg)
+    FillRect(dc, rc, br)
+    DeleteObject(br)
+    GdiFlush()
+End Sub
+
+' hb（w x h）を hdc の (x, y) に写す
+Sub BlitBitmap(hdc As HDC, hb As HBITMAP, x As Long, y As Long, w As Long, h As Long)
+    Dim dc As HDC, prevObj As HANDLE
+    dc = CreateCompatibleDC(hdc)
+    prevObj = SelectObject(dc, hb)
+    BitBlt(hdc, x, y, w, h, dc, 0, 0, SRCCOPY)
+    SelectObject(dc, prevObj)
+    DeleteDC(dc)
+End Sub
