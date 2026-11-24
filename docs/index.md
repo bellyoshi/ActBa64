@@ -5,6 +5,11 @@ Actba64はActiveBasic 互換サブセットコンパイラ です。
 ActiveBasicでActiveBasicもどきをつくったらどうなるか？
 という実験プロジェクトです。完全に同じ動きをするわけではありませんのでご了承ください。
 
+## 重要
+
+ご自身のソースはバックアップとって確かめてください。
+CallBack.wbpとMakeWindow.wbpをProjectEditorが書き換えます。これらが完全になっていないため、ActiveBasicのコードを破壊する可能性があります。
+
 ダウンロードは[こちら](https://github.com/bellyoshi/ActBa64/releases)
 
 ## Hello World
