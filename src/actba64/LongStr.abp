@@ -1,0 +1,155 @@
+' LongStr - 255 バイトを超える文字列リテラルの置き場
+'
+' 字句（LEX_TEXT_LEN）・AST（AST_STR_LEN）・IR（IR_STR_LEN）・インポート表の文字列（IB_STR_LEN）は
+' どれも 256 バイトの決まった枠なので、長い文字列はここに 1 本ずつ置き、各段は番号だけを運ぶ。
+'   字句   : Tok.numHi = 番号 + 1（0 なら置いていない）、Tok.num = 全体の長さ
+'   AST    : AST_STRING の right = 番号（-1 なら置いていない）
+'   IR     : OP_LEA_RAX_STR の arg1 = 番号 + 1
+'   PE     : IbAddLongString が g_ibStrLong に番号を持ち、書き出すときここから写す
+
+Dim g_lsBuf As *Byte
+Dim g_lsCap As Long
+Dim g_lsUsed As Long
+Dim g_lsOff As *Long
+Dim g_lsLen As *Long
+Dim g_lsN As Long
+Dim g_lsNCap As Long
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LongStrGrowBuf(need As Long) As boolean
+    Dim newCap As Long
+    Dim p As *Byte
+    LongStrGrowBuf = true
+    If need <= g_lsCap Then Exit Function
+    LongStrGrowBuf = false
+    newCap = g_lsCap
+    If newCap < 4096 Then newCap = 4096
+    While newCap < need
+        newCap = newCap * 2
+    Wend
+    p = MemGrow(g_lsBuf, g_lsCap, newCap)
+    If p = NULL Then Exit Function
+    g_lsBuf = p
+    g_lsCap = newCap
+    LongStrGrowBuf = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LongStrGrowIdx() As boolean
+    Dim newCap As Long
+    Dim p As *Byte
+    LongStrGrowIdx = true
+    If g_lsN < g_lsNCap Then Exit Function
+    LongStrGrowIdx = false
+    newCap = g_lsNCap * 2
+    If newCap < 64 Then newCap = 64
+    p = MemGrow(g_lsOff As BytePtr, BytesN(g_lsNCap, SizeOf(Long)), BytesN(newCap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_lsOff = p As *Long
+    p = MemGrow(g_lsLen As BytePtr, BytesN(g_lsNCap, SizeOf(Long)), BytesN(newCap, SizeOf(Long)))
+    If p = NULL Then Exit Function
+    g_lsLen = p As *Long
+    g_lsNCap = newCap
+    LongStrGrowIdx = true
+End Function
+
+' s の先頭 n バイトで新しい文字列を始める。番号、失敗なら -1
+Function LongStrAdd(s As *Byte, n As Long) As Long
+    Dim i As Long
+    LongStrAdd = -1
+    If Not LongStrGrowIdx() Then Exit Function
+    If Not LongStrGrowBuf(g_lsUsed + n + 1) Then Exit Function
+    For i = 0 To n - 1
+        g_lsBuf[g_lsUsed + i] = s[i]
+    Next
+    g_lsBuf[g_lsUsed + n] = 0
+    g_lsOff[g_lsN] = g_lsUsed
+    g_lsLen[g_lsN] = n
+    g_lsUsed = g_lsUsed + n + 1
+    LongStrAdd = g_lsN
+    g_lsN = g_lsN + 1
+End Function
+
+' 最後に足した文字列 id の末尾へ 1 バイト足す。戻り値 true : 正常終了  false : エラーあり
+Function LongStrPush(id As Long, c As Long) As boolean
+    LongStrPush = false
+    If id <> g_lsN - 1 Then Exit Function
+    If Not LongStrGrowBuf(g_lsUsed + 1) Then Exit Function
+    g_lsBuf[g_lsUsed - 1] = c As Byte
+    g_lsBuf[g_lsUsed] = 0
+    g_lsUsed = g_lsUsed + 1
+    g_lsLen[id] = g_lsLen[id] + 1
+    LongStrPush = true
+End Function
+
+Function LongStrLen(id As Long) As Long
+    LongStrLen = 0
+    If id < 0 Or id >= g_lsN Then Exit Function
+    LongStrLen = g_lsLen[id]
+End Function
+
+' 文字列 id の先頭。番地は LongStrAdd / LongStrPush で変わるので、足し終わってから使う
+Function LongStrPtr(id As Long) As *Byte
+    LongStrPtr = NULL
+    If id < 0 Or id >= g_lsN Then Exit Function
+    LongStrPtr = VarPtr(g_lsBuf[g_lsOff[id]])
+End Function
+
+' 字句の文字列を 1 文字足す。buf（LEX_TEXT_MAXIDX まで）があふれたら置き場へ移す
+' 戻り値 true : 正常終了  false : エラーあり
+Function LongStrLexPut(buf As *Byte, ByRef i As Long, ByRef lid As Long, c As Long) As boolean
+    LongStrLexPut = true
+    If lid >= 0 Then
+        LongStrLexPut = LongStrPush(lid, c)
+        i = i + 1
+        Exit Function
+    End If
+    If i < LEX_TEXT_MAXIDX Then
+        buf[i] = c As Byte
+        i = i + 1
+        Exit Function
+    End If
+    lid = LongStrAdd(buf, i)
+    If lid < 0 Then
+        LongStrLexPut = false
+        Exit Function
+    End If
+    LongStrLexPut = LongStrPush(lid, c)
+    i = i + 1
+End Function
+
+' ---- 文字列の Const（constStrVals の番号 ci）→ 長い文字列の番号 ----
+Dim g_lsConst As *Long
+Dim g_lsConstCap As Long
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function LongStrConstSet(ci As Long, lid As Long) As boolean
+    Dim newCap As Long
+    Dim p As *Byte
+    Dim i As Long
+    LongStrConstSet = false
+    If ci < 0 Then Exit Function
+    If ci >= g_lsConstCap Then
+        newCap = g_lsConstCap * 2
+        If newCap < 64 Then newCap = 64
+        While newCap <= ci
+            newCap = newCap * 2
+        Wend
+        p = MemGrow(g_lsConst As BytePtr, BytesN(g_lsConstCap, SizeOf(Long)), BytesN(newCap, SizeOf(Long)))
+        If p = NULL Then Exit Function
+        g_lsConst = p As *Long
+        For i = g_lsConstCap To newCap - 1
+            g_lsConst[i] = -1
+        Next
+        g_lsConstCap = newCap
+    End If
+    g_lsConst[ci] = lid
+    LongStrConstSet = true
+End Function
+
+' 文字列の Const ci が長い文字列なら、その番号。違えば -1
+Function LongStrConstGet(ci As Long) As Long
+    LongStrConstGet = -1
+    If ci < 0 Or ci >= g_lsConstCap Then Exit Function
+    LongStrConstGet = g_lsConst[ci]
+End Function

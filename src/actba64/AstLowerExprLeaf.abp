@@ -58,6 +58,13 @@ Function LowExprString(ctx As *LowerCtx, idx As Long) As Long
     typeIdxs = ctx->typeIdxs
     byRefs = ctx->byRefs
 
+    ' 255 バイトを超える文字列は LongStr の番号を arg1 に（IrCollect が置き場から写す）
+    If AstLongStr(ast, idx) >= 0 Then
+        irIdx = IrEmit(list, OP_LEA_RAX_STR, AstLongStr(ast, idx) + 1, LongStrLen(AstLongStr(ast, idx)))
+        LowExprString = 1
+        If irIdx < 0 Then LowExprString = 0
+        Exit Function
+    End If
     slen = AstStrByteLen(ast, idx)
     If slen <= 0 Then
         AstCopyStr(ast, idx, VarPtr(buf))
@@ -100,6 +107,11 @@ Function LowExprVarConst(ctx As *LowerCtx, name As *Byte) As boolean
         Exit Function
     End If
     ci = LowFindStrConst(ctx, name)
+    If ci >= 0 And LongStrConstGet(ci) >= 0 Then
+        IrEmit(list, OP_LEA_RAX_STR, LongStrConstGet(ci) + 1, LongStrLen(LongStrConstGet(ci)))
+        LowExprVarConst = true
+        Exit Function
+    End If
     If ci >= 0 Then
         strs = ctx->constStrVals
         IrEmitStr(list, OP_LEA_RAX_STR, 0, VarPtr(strs[ci * AST_STR_LEN]))
