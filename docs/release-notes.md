@@ -1,5 +1,35 @@
 # リリースノート
 
+## v0.1.6（v0.1.5 からの変更点）
+
+AB4デザイナーのイベント処理ダイアログを AB 4.20 に近づけた、小さな更新です。
+
+### コンパイラ
+
+- 式の中の `x As QWord` / `x As Int64` を 64bit への変換として読みます。`-actba32` でも 64bit です。`Long` は符号で、`DWord` は 0 で広げ、64bit どうしはそのままです。`-actba32` ではこれまで `As DWord` / `As Long` として読んでいたので、`lo Or (hi As QWord) << 32` のような書き方（RGBALib の `lengthQWord` など）で上位 32 ビットが消えていました。
+
+### RAD（#USEWINDOW=1）
+
+- TrackBar のイベント `OutOfMemory`、`ReleasedCapture`、`CustomDraw`（`NM_*`）を、AB 4.20 と同じく `WM_NOTIFY` で受けるようにしました。`ProjectCmd -regen` が作る `Callback.wbp` にも入ります（[projecteditor.md](./projecteditor.md#71-ab4-互換の-radusewindow1)）。
+
+### ProjectEditor
+
+AB4デザイナーのイベント処理ダイアログ:
+
+- TreeView と ListView のイベントを AB 4.20 と同じ並びと概要で出します。ダイアログには `CustomDraw` と `ReleasedCapture` を出さず、ListView は `NM_` のものを先に、`LVN_` のものを後に並べます。
+- TrackBar のイベント（上の RAD）を出します。
+- HScrollBar / VScrollBar などのイベントの無い部品でも、音を鳴らすだけにせず、AB 4.20 と同じく空の一覧でダイアログを出します。
+- ラベルのイベントの概要を「スタティック テキストが…」にしました。
+
+不具合の修正:
+
+- プロジェクトツリーで、選んだままのノード（文書をすべて閉じた後の `.wnd` など）をクリックしても開けませんでした。ダブルクリックでも開くようにしました（開いていれば前に出すだけです）。
+
+### テスト
+
+- 回帰テスト `t_int64_cast` を足しました。
+- ユニットテスト `Ab4DesignTest` と `RadGenTest` に、TreeView / ListView / TrackBar / ラベルのイベントの確かめを足しました。
+
 ## v0.1.5（v0.1.4 からの変更点）
 
 ### ハイライト
