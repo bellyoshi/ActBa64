@@ -43,3 +43,40 @@ Function LowIndexFloatTy(ctx As *LowerCtx, idx As Long) As Long
     If ty = TY_DOUBLE_ARR Then LowIndexFloatTy = TY_DOUBLE
     If ty = TY_SINGLE_ARR Then LowIndexFloatTy = TY_SINGLE
 End Function
+
+' a[i][j] の a が BytePtr の配列なら 1（a[i] の指す先の j バイト目）。ほかは 0
+Function LowIdxOfBytePtrElem(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim base As Long, arr As Long
+    Dim nodes As *AstNode
+    LowIdxOfBytePtrElem = 0
+    If LowNodeKind(ctx, idx) <> AST_INDEX Then Exit Function
+    nodes = LowAstNodes(ctx)
+    If nodes[idx].extra >= 0 Then Exit Function
+    base = LowNodeLeft(ctx, idx)
+    If LowNodeKind(ctx, base) <> AST_INDEX Then Exit Function
+    If nodes[base].extra >= 0 Then Exit Function
+    arr = LowNodeLeft(ctx, base)
+    If LowNodeKind(ctx, arr) <> AST_VAR Then Exit Function
+    AstCopyName(ctx->ast, arr, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    If vTy <> TY_PTR_BYTE_ARR Then Exit Function
+    If ArrPtrTi(vGl, vOff) >= 0 Then Exit Function
+    LowIdxOfBytePtrElem = 1
+End Function
+
+' a[i][j] の番地（a[i] の値 + j）を rax へ。成功 1 / エラー 0
+Function LowAddrBytePtrElem(ctx As *LowerCtx, idx As Long) As Long
+    Dim list As *IrList
+    Dim nodes As *AstNode
+    LowAddrBytePtrElem = 0
+    list = ctx->list
+    nodes = LowAstNodes(ctx)
+    If LowIdxExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_RAX, 0, 0)
+    If LowExpr(ctx, LowNodeLeft(ctx, idx)) = 0 Then Exit Function
+    IrEmit(list, OP_POP_RCX, 0, 0)
+    IrEmit(list, OP_ADD_RAX_RCX, 0, 0)
+    LowAddrBytePtrElem = 1
+End Function
