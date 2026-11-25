@@ -1,4 +1,4 @@
-' PreprocPjOpt - #MODULETYPE / #OUTPUT_RELEASE
+' PreprocPjOpt - #MODULETYPE / #OUTPUT_RELEASE / #OUTPUT_DEBUG（-debug のとき）
 
 Function PpSkipHash(line As *Byte, n As Long) As Long
     Dim i As Long
@@ -110,25 +110,38 @@ Sub PpTakeOutputRel(line As *Byte, n As Long, dst As *Byte)
     PpKeyedPath(line, n, VarPtr(word), dst)
 End Sub
 
+' -debug のときの #OUTPUT_DEBUG。無ければ dst は空のまま
+Sub PpTakeOutputDbg(line As *Byte, n As Long, dst As *Byte)
+    Dim word(KW_LEN - 1) As Byte
+    If TyIsDebugBuild() = 0 Then Exit Sub
+    lstrcpy(VarPtr(word), "output_debug")
+    PpKeyedPath(line, n, VarPtr(word), dst)
+End Sub
+
 ' 戻り値 true : 正常終了  false : エラーあり
-Function PpScanPjStep(pj As *Byte, pjSize As Long, ByRef i As Long, line As *Byte, rel As *Byte) As boolean
+Function PpScanPjStep(pj As *Byte, pjSize As Long, ByRef i As Long, line As *Byte, rel As *Byte, dbg As *Byte) As boolean
     Dim n As Long
     PpScanPjStep = false
     While i < pjSize
         n = PpNextPjLine(pj, pjSize, i, line)
         If n < 0 Then Exit Function
         PpTakeOutputRel(line, n, rel)
+        PpTakeOutputDbg(line, n, dbg)
     Wend
     PpScanPjStep = true
 End Function
 
+' -debug で #OUTPUT_DEBUG があればそちら、無ければ #OUTPUT_RELEASE
 Function PpReadRel(pj As *Byte, pjSize As Long, rel As *Byte) As Long
     Dim i As Long
     Dim line(PP_LINE_MAX - 1) As Byte
+    Dim dbg(PJ_PATH_LEN - 1) As Byte
     PpReadRel = 0
     rel[0] = CH_NUL
+    dbg[0] = CH_NUL
     i = 0
-    If Not PpScanPjStep(pj, pjSize, i, VarPtr(line), rel) Then Exit Function
+    If Not PpScanPjStep(pj, pjSize, i, VarPtr(line), rel, VarPtr(dbg)) Then Exit Function
+    If dbg[0] <> CH_NUL Then lstrcpy(rel, VarPtr(dbg))
     If rel[0] <> CH_NUL Then PpReadRel = 1
 End Function
 
