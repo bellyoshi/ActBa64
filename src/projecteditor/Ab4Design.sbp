@@ -1,0 +1,116 @@
+' AB4 デザイナー（文書タブの 3 つ目、.wnd の文書だけ）。
+' 本文を RadWnd_Parse で読み、WINDOW: ごとに窓（SIZE の大きさ、CAPTION の見出し）を上から順に描き、
+' その中に ITEM の部品を種類ごとに描く（描き方は FormDesignCtlView.sbp の部品と同じ）。
+' 見るだけで、押しても引いても .wnd は変わらない。F12 かコードのタブでソースへ戻る。
+' g_fdOn / g_fdSlot の値: 0 = コード、FD_MODE_FORM = デザイナー、FD_MODE_AB4 = AB4 デザイナー。
+
+Const FD_MODE_FORM = 1
+Const FD_MODE_AB4 = 2
+Const AB4D_ORG_X = 16                       ' 最初の窓の左上
+Const AB4D_ORG_Y = DOCTAB_H + 16
+Const AB4D_GAP = 16                         ' 窓と窓のあいだ
+
+' hWnd の文書のパス（前面は g_docPath、ほかはスロット）
+Function Ab4D_DocPath$(hWnd As HWND) As String
+    Dim s As Long
+    Ab4D_DocPath$ = g_docPath
+    If hWnd = g_activeChild Then Exit Function
+    Ab4D_DocPath$ = ""
+    s = MdiSlotOf(hWnd)
+    If s >= 0 Then Ab4D_DocPath$ = g_docPathSlot(s)
+End Function
+
+' AB4 デザイナーにできる文書（.wnd）なら 1
+Function Ab4D_Can(hWnd As HWND) As Long
+    Ab4D_Can = Ab4D_IsWnd(Ab4D_DocPath$(hWnd))
+End Function
+
+Sub Ab4D_Enter(hWnd As HWND)
+    EditorUndo_EndCoalesce()
+    If Ab4D_Can(hWnd) = 0 Then
+        MessageBeep(0)
+        Exit Sub
+    End If
+    g_fdOn = FD_MODE_AB4
+    EditorCaret_Destroy()
+    FormDesign_Refresh(hWnd)
+End Sub
+
+' ---- 描画 ----
+
+' 窓の外枠と見出し（左上 x, y、大きさ w x h は枠を含む）
+Sub Ab4D_DrawFrame(hDC As HDC, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long, cap As String)
+    Dim rc As RECT, ch As Long
+    ch = Ui_CaptionH()
+    FormDesign_Fill(hDC, x, y, x + w, y + h, Ui_SysColor(COLOR_BTNFACE))
+    FormDesign_Rect(rc, x, y, x + w, y + h)
+    Ui_Edge(hDC, rc, EDGE_RAISED, BF_RECT)
+    FormDesign_Fill(hDC, x + 4, y + 4, x + w - 4, y + 4 + ch, Ui_SysColor(COLOR_ACTIVECAPTION))
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_CAPTIONTEXT))
+    Ui_Text(hDC, x + 10, y + 4 + (ch - 14) \ 2, cap)
+End Sub
+
+Sub Ab4D_DrawKind(hDC As HDC, ByRef rc As RECT, ByVal k As Long, cap As String, name As String)
+    If k = AB4K_BUTTON Then FormDesign_DrawButton(hDC, rc, cap)
+    If k = AB4K_CHECK Then FormDesign_DrawCheckBox(hDC, rc, cap)
+    If k = AB4K_RADIO Then FormDesign_DrawRadio(hDC, rc, cap)
+    If k = AB4K_EDIT Then FormDesign_DrawEdit(hDC, rc, cap)
+    If k = AB4K_GROUP Then FormDesign_DrawGroup(hDC, rc, cap)
+    If k = AB4K_LABEL Then FormDesign_DrawLabel(hDC, rc, cap)
+    If k = AB4K_BOX Then FormDesign_DrawImage(hDC, rc, name)
+End Sub
+
+' 部品 i（クライアントの左上 cx, cy からの位置）
+Sub Ab4D_DrawItem(hDC As HDC, ByVal i As Long, ByVal cx As Long, ByVal cy As Long)
+    Dim rc As RECT, r As String
+    r = g_riRect(i)
+    cx = cx + Ab4D_Part(r, 1)
+    cy = cy + Ab4D_Part(r, 2)
+    FormDesign_Rect(rc, cx, cy, cx + Ab4D_Part(r, 3), cy + Ab4D_Part(r, 4))
+    Ab4D_DrawKind(hDC, rc, Ab4D_Kind(g_riType(i)), g_riCaption(i), g_riName(i))
+End Sub
+
+' 窓 w を左上 x, y に描き、その高さを返す
+Function Ab4D_DrawWin(hDC As HDC, ByVal w As Long, ByVal x As Long, ByVal y As Long) As Long
+    Dim i As Long
+    Ab4D_DrawWin = Ab4D_SizeH(g_rwSize(w))
+    Ab4D_DrawFrame(hDC, x, y, Ab4D_SizeW(g_rwSize(w)), Ab4D_DrawWin, g_rwCaption(w))
+    For i = 0 To g_riCount - 1
+        If g_riWin(i) = w Then Ab4D_DrawItem(hDC, i, x + 4, y + 4 + Ui_CaptionH())
+    Next
+End Function
+
+' 左下に窓と部品の数と切り替えキー
+Sub Ab4D_DrawInfo(hDC As HDC, ByRef rc As RECT)
+    Dim s As String
+    s = "AB4: " & FormDesign_Num$(g_rwCount) & " window(s), " & FormDesign_Num$(g_riCount) & " item(s)    (F12: source)"
+    Ui_TextColor(hDC, RGB(255, 255, 255))
+    Ui_Text(hDC, AB4D_ORG_X, rc.bottom - 20, s)
+End Sub
+
+Sub Ab4D_DrawAll(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
+    Dim w As Long, y As Long
+    RadWnd_Parse(FormDesign_Text$(hWnd))
+    FormDesign_Fill(hDC, 0, 0, rc.right, rc.bottom, Ui_SysColor(COLOR_APPWORKSPACE))
+    y = AB4D_ORG_Y
+    For w = 0 To g_rwCount - 1
+        y = y + Ab4D_DrawWin(hDC, w, AB4D_ORG_X, y) + AB4D_GAP
+    Next
+    Ab4D_DrawInfo(hDC, rc)
+    DocTabs_Draw(hDC, hWnd)
+End Sub
+
+' ---- マウス ----
+
+' 押したら文書にフォーカスを移すだけ。カーソルはいつも矢印
+Function Ab4D_Mouse(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
+    Ab4D_Mouse = FormDesign_MouseIs(dwMsg)
+    If dwMsg = WM_LBUTTONDOWN Then SetFocus(hWnd)
+    If dwMsg <> WM_SETCURSOR Then Exit Function
+    If LOWORD(lParam) <> HTCLIENT Then
+        g_childRet = DefMDIChildProc(hWnd, WM_SETCURSOR, wParam, lParam)
+        Exit Function
+    End If
+    Ui_Cursor(IDC_ARROW)
+    g_childRet = 1
+End Function
