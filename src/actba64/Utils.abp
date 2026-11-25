@@ -122,22 +122,62 @@ Sub AddTo(ByRef dst As Long, b As Long)
 End Sub
 
 ' AB4.20 の p[off] は off が 16bit のことがある。256 未満の索引だけ使い、ポインタを進める。
+' 毎回 p から歩くと EmitByte / PutDword の出力全体が出力サイズの 2 乗になるので、
+' バッファごとに最後に求めた (off, ポインタ) を覚えておき、そこから先だけを歩く。
+Const PTRADD_CACHE = 4
+Dim g_paBase[PTRADD_CACHE] As *Byte
+Dim g_paOff[PTRADD_CACHE] As Long
+Dim g_paPtr[PTRADD_CACHE] As *Byte
+Dim g_paNext As Long
+
+Sub PtrStepTo(p As *Byte, n As Long, ByRef dst As *Byte)
+    Dim q As *Byte
+    Dim r As Long
+    q = p
+    r = n
+    While r >= 256
+        q = VarPtr(q[256])
+        r = r - 256
+    Wend
+    If r > 0 Then
+        q = VarPtr(q[r])
+    End If
+    dst = q
+End Sub
+
 Sub PtrAddTo(p As *Byte, off As Long, ByRef dst As *Byte)
     Dim q As *Byte
-    Dim n As Long
-    q = p
-    n = off
-    If n < 0 Then
+    Dim i As Long
+    Dim hit As Long
+    If off < 0 Then
         dst = p
         Exit Sub
     End If
-    While n >= 256
-        q = VarPtr(q[256])
-        n = n - 256
-    Wend
-    If n > 0 Then
-        q = VarPtr(q[n])
+    If off < 256 Then
+        PtrStepTo(p, off, dst)
+        Exit Sub
     End If
+    hit = -1
+    For i = 0 To PTRADD_CACHE - 1
+        If g_paBase[i] = p Then
+            hit = i
+        End If
+    Next
+    If hit >= 0 Then
+        If off >= g_paOff[hit] Then
+            PtrStepTo(g_paPtr[hit], off - g_paOff[hit], q)
+        Else
+            PtrStepTo(p, off, q)
+        End If
+    Else
+        PtrStepTo(p, off, q)
+        hit = g_paNext
+        g_paNext = g_paNext + 1
+        If g_paNext >= PTRADD_CACHE Then g_paNext = 0
+        g_paBase[hit] = p
+    End If
+    g_paOff[hit] = off
+    g_paPtr[hit] = q
     dst = q
 End Sub
 
