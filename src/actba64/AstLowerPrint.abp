@@ -48,7 +48,7 @@ Function LowEmitPrintLong(ctx As *LowerCtx, exprIdx As Long) As boolean
     Dim lab As Long
     ' Int64 / QWord は StrI64$ / StrU64$（Print # / Write # もここを通る）
     If LowExprWide(ctx, exprIdx) <> 0 Then
-        LowEmitPrintLong = LowEmitExprStrW(ctx, exprIdx)
+        LowEmitPrintLong = LowEmitExprStrW(ctx, exprIdx, 1)
         Exit Function
     End If
     lab = LowEnsureRtStr(ctx)
@@ -86,20 +86,22 @@ Function LowEmitPrintValue(ctx As *LowerCtx, exprIdx As Long, vTy As Long) As bo
 End Function
 
 ' Int64 / QWord は StrI64$ / StrU64$（Include\default\Int64Str.abp）
-Function LowStrWLab(ctx As *LowerCtx, e As Long) As Long
+' isPrint なら QWord も StrI64$（AB 4.20 の Print は QWord を符号付きで出す。18446744073709551615 は -1）
+Function LowStrWLab(ctx As *LowerCtx, e As Long, isPrint As Long) As Long
     Dim name(SYM_NAME_LEN - 1) As Byte
     lstrcpy(VarPtr(name), "StrI64$")
-    If LowExprWide(ctx, e) = LOW_PTI_U64 Then lstrcpy(VarPtr(name), "StrU64$")
+    If isPrint = 0 And LowExprWide(ctx, e) = LOW_PTI_U64 Then lstrcpy(VarPtr(name), "StrU64$")
     LowStrWLab = LowFindFunc(ctx, VarPtr(name))
     If LowStrWLab >= 0 Then Exit Function
     LowPrintErr("error: " + Tr1$(1062, "missing '{0}' (Include\default\Int64Str.abp)", MakeStr(VarPtr(name))))
     ctx->err = 1
 End Function
 
-Function LowEmitExprStrW(ctx As *LowerCtx, e As Long) As boolean
+' isPrint は Print / Print # / Write #（QWord を符号付きで出す）、Str$ は 0（符号なし）
+Function LowEmitExprStrW(ctx As *LowerCtx, e As Long, isPrint As Long) As boolean
     Dim lab As Long
     LowEmitExprStrW = false
-    lab = LowStrWLab(ctx, e)
+    lab = LowStrWLab(ctx, e, isPrint)
     If lab < 0 Then Exit Function
     If LowExpr(ctx, e) = 0 Then Exit Function
     LowEmitCall1Rax(ctx->list, 0, 0, 0, lab)
@@ -108,7 +110,7 @@ End Function
 
 Function LowEmitPrintNumW(ctx As *LowerCtx, exprIdx As Long) As boolean
     LowEmitPrintNumW = false
-    If Not LowEmitExprStrW(ctx, exprIdx) Then Exit Function
+    If Not LowEmitExprStrW(ctx, exprIdx, 1) Then Exit Function
     LowEmitPrintNumW = LowEmitPrintPad(ctx)
 End Function
 
@@ -149,7 +151,7 @@ Function LowExprBuiltinStrNum(ctx As *LowerCtx, e As Long) As Long
     ElseIf kind = 5 Then
         If LowEmitExprStrS(ctx, e) Then LowExprBuiltinStrNum = 1
     ElseIf kind = 6 Then
-        If LowEmitExprStrW(ctx, e) Then LowExprBuiltinStrNum = 1
+        If LowEmitExprStrW(ctx, e, 0) Then LowExprBuiltinStrNum = 1
     Else
         LowExprBuiltinStrNum = LowEmitExprStrL(ctx, e)
     End If
