@@ -147,6 +147,7 @@ ActBa64 の文字列バイトは UTF-8 です。
   - 6面立方体 + 行列変換: [`src/actba64/samples/dxcube2/`](../src/actba64/samples/dxcube2/)。
   - BasicHelp の DirectX 章の利用パターン（初期化 → メッセージループ内描画 → 終了）を D3D11 上で再現していく。
   - `dx_SetProjection` / `dx_SetCamera` は [`dx_camera.sbp`](../src/Include/d3d11/dx_camera.sbp)。ビューと射影は `g_dxView` / `g_dxProj`（デバイスの `SetTransform` はない）。`dx_SetCullMode` は [`dx_graphics.sbp`](../src/Include/d3d11/dx_graphics.sbp) がラスタライザステートへ渡す。
+  - シェーダー・入力レイアウト・バッファの作成は [`dx_shader.sbp`](../src/Include/d3d11/dx_shader.sbp)（`dx_graphics.sbp` が取り込む）。`dx_CreateShaders(hlsl, pVS, pPS, pVSBlob)` は入口 `VS` / `PS`（`vs_4_0` / `ps_4_0`）をコンパイルして両シェーダーを作る。`dx_PosColorHlsl$()` は位置 float3 + 色 float4（28 バイト）の頂点のシェーダーで、`dx_CreatePosColorLayout(pVSBlob, pLayout)` がその入力レイアウトを作る（`pVSBlob` はここで Release する）。`dx_CreateBuffer(byteWidth, bindFlags, pData, pBuf)` は `D3D11_USAGE_DEFAULT` のバッファ。どれも成功で 1 を返し、失敗は `dx_FailStep` が手順の名前と HRESULT を出す。`dx_ReleaseCom(p)` は 0 でなければ Release して 0 にする。
 
 ---
 
