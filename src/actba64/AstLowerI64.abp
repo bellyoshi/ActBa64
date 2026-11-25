@@ -225,6 +225,10 @@ Function LowExprBinopWide(ctx As *LowerCtx, idx As Long, op As Long) As Long
     ast = ctx->ast
     nodes = ast->nodes
     list = ctx->list
+    If TyIs32() <> 0 Then
+        LowExprBinopWide = LowExprBinopW32(ctx, idx, op)
+        Exit Function
+    End If
     If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
     LowEmitBinHold(list)
     If op = BOP_SHL Or op = BOP_SHR Then
@@ -316,6 +320,10 @@ Function LowEmitWideCmp(ctx As *LowerCtx, idx As Long) As Long
     ast = ctx->ast
     nodes = ast->nodes
     list = ctx->list
+    If TyIs32() <> 0 Then
+        LowEmitWideCmp = LowEmitWideCmpW32(ctx, idx)
+        Exit Function
+    End If
     If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
     LowEmitBinHold(list)
     If LowEmitWideExpr(ctx, nodes[idx].right) = 0 Then Exit Function
@@ -331,6 +339,12 @@ Function LowExprUnaryWide(ctx As *LowerCtx, idx As Long) As Long
     ast = ctx->ast
     nodes = ast->nodes
     If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    If TyIs32() <> 0 Then
+        If nodes[idx].num = UOP_NEG Then IrEmit(ctx->list, OP_W32_NEG, 0, 0)
+        If nodes[idx].num = UOP_NOT Then IrEmit(ctx->list, OP_W32_NOT, 0, 0)
+        LowExprUnaryWide = 1
+        Exit Function
+    End If
     If nodes[idx].num = UOP_NEG Then IrEmit(ctx->list, OP_NEG_RAX, 0, 0)
     If nodes[idx].num = UOP_NOT Then IrEmit(ctx->list, OP_NOT_RAX, 0, 0)
     LowExprUnaryWide = 1
@@ -374,6 +388,10 @@ End Function
 Sub LowEmitCvtToWide(ctx As *LowerCtx, rhsIdx As Long)
     Dim ty As Long
     If LowExprWide(ctx, rhsIdx) <> 0 Then Exit Sub
+    If TyIs32() <> 0 Then
+        LowEmitCvtToWideW32(ctx, rhsIdx, LOW_PTI_I64)
+        Exit Sub
+    End If
     ty = LowExprType(ctx, rhsIdx)
     If ty = TY_DOUBLE Then
         IrEmit(ctx->list, OP_CVT_SD_TO_I64, 0, 0)
@@ -408,6 +426,14 @@ End Function
 
 ' 64bit の式 e（rax）を Double へ。QWord は符号なしで（2^63 以上も）
 Sub LowEmitCvtWideToDouble(ctx As *LowerCtx, e As Long)
+    If TyIs32() <> 0 Then
+        If LowExprWide(ctx, e) = LOW_PTI_U64 Then
+            IrEmit(ctx->list, OP_W32_U64_TO_SD, 0, 0)
+        Else
+            IrEmit(ctx->list, OP_W32_I64_TO_SD, 0, 0)
+        End If
+        Exit Sub
+    End If
     If LowExprWide(ctx, e) = LOW_PTI_U64 Then
         IrEmit(ctx->list, OP_CVT_U64_TO_SD, 0, 0)
     Else
@@ -418,6 +444,10 @@ End Sub
 ' 入れる先が QWord のときの LowEmitCvtToWide（Double は 2^63 以上も符号なしで切り捨てる）
 Sub LowEmitCvtToWideT(ctx As *LowerCtx, rhsIdx As Long, dstMark As Long)
     Dim ty As Long
+    If TyIs32() <> 0 Then
+        If LowExprWide(ctx, rhsIdx) = 0 Then LowEmitCvtToWideW32(ctx, rhsIdx, dstMark)
+        Exit Sub
+    End If
     If dstMark = LOW_PTI_U64 And LowExprWide(ctx, rhsIdx) = 0 Then
         ty = LowExprType(ctx, rhsIdx)
         If ty = TY_DOUBLE Then
@@ -432,3 +462,131 @@ Sub LowEmitCvtToWideT(ctx As *LowerCtx, rhsIdx As Long, dstMark As Long)
     End If
     LowEmitCvtToWide(ctx, rhsIdx)
 End Sub
+
+' ---------------------------------------------------
+'  -actba32: 64bit の値は edx:eax（Double と同じ組。OP_W32_*）
+' ---------------------------------------------------
+
+' 評価済みの rhsIdx（eax、Double / Single は edx:eax）を edx:eax の 64bit 整数に。dstMark が QWord なら
+' Double は 2^63 以上も符号なしで切り捨てる
+Sub LowEmitCvtToWideW32(ctx As *LowerCtx, rhsIdx As Long, dstMark As Long)
+    Dim ty As Long
+    ty = LowExprType(ctx, rhsIdx)
+    If ty = TY_SINGLE Then
+        IrEmit(ctx->list, OP_CVT_SS_TO_SD, 0, 0)
+        ty = TY_DOUBLE
+    End If
+    If ty = TY_DOUBLE Then
+        If dstMark = LOW_PTI_U64 Then
+            IrEmit(ctx->list, OP_W32_SD_TO_U64, 0, 0)
+        Else
+            IrEmit(ctx->list, OP_W32_SD_TO_I64, 0, 0)
+        End If
+        Exit Sub
+    End If
+    ' ポインタ・DWord・整数のリテラルは 0 で、Long（Integer / Byte などもここで 32bit）は符号で広げる
+    If LowExprIsPtr(ctx, rhsIdx) <> 0 Or ty = TY_PTR_BYTE Or ty = TY_PTR_LONG Or ty = TY_PTR_UDT Or ty = TY_PTR_FUNC Then
+        IrEmit(ctx->list, OP_W32_ZX, 0, 0)
+        Exit Sub
+    End If
+    If LowExprIsU32(ctx, rhsIdx) <> 0 Or LowWideIsIntLit(ctx, rhsIdx) <> 0 Then
+        IrEmit(ctx->list, OP_W32_ZX, 0, 0)
+        Exit Sub
+    End If
+    IrEmit(ctx->list, OP_W32_SX, 0, 0)
+End Sub
+
+' 左を [esp] に積み、右を edx:eax（シフトは回数を eax）に置いて OP_W32_* を出す
+Function LowExprBinopW32(ctx As *LowerCtx, idx As Long, op As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim list As *IrList
+    Dim uns As Long
+    LowExprBinopW32 = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_DBL, 0, 0)
+    If op = BOP_SHL Or op = BOP_SHR Then
+        If LowExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+        LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, TY_LONG)
+    Else
+        If LowEmitWideExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    End If
+    uns = LowWideOpUnsigned(ctx, idx, op)
+    If op = BOP_IDIV Or op = BOP_MOD Then
+        LowEmitDivW32(list, op, uns)
+    Else
+        IrEmit(list, LowOpW32(op, uns), 0, 0)
+    End If
+    LowExprBinopW32 = 1
+End Function
+
+Function LowOpW32(op As Long, uns As Long) As Long
+    LowOpW32 = OP_W32_ADD
+    If op = BOP_SUB Then LowOpW32 = OP_W32_SUB
+    If op = BOP_MUL Then LowOpW32 = OP_W32_MUL
+    If op = BOP_AND Then LowOpW32 = OP_W32_AND
+    If op = BOP_OR Then LowOpW32 = OP_W32_OR
+    If op = BOP_XOR Then LowOpW32 = OP_W32_XOR
+    If op = BOP_SHL Then LowOpW32 = OP_W32_SHL
+    If op = BOP_SHR Then
+        LowOpW32 = OP_W32_SAR
+        If uns <> 0 Then LowOpW32 = OP_W32_SHR
+    End If
+End Function
+
+' \ Mod は ntdll の _alldiv / _allrem（符号なしは _aulldiv / _aullrem。16 バイトの引数は呼ばれた側が取る）
+Sub LowEmitDivW32(list As *IrList, op As Long, uns As Long)
+    Dim api(SYM_NAME_LEN - 1) As Byte
+    IrEmit(list, OP_W32_DIVPREP, 0, 0)
+    If uns <> 0 Then
+        lstrcpy(VarPtr(api), "ntdll.dll|_aulldiv")
+        If op = BOP_MOD Then lstrcpy(VarPtr(api), "ntdll.dll|_aullrem")
+    Else
+        lstrcpy(VarPtr(api), "ntdll.dll|_alldiv")
+        If op = BOP_MOD Then lstrcpy(VarPtr(api), "ntdll.dll|_allrem")
+    End If
+    IrEmitStr(list, OP_CALL_API, IR_DLL_BYNAME, VarPtr(api))
+End Sub
+
+' 64bit の比較（左を [esp]、右を edx:eax）。結果は cmp eax, 1 の flags なので、呼び出し側の jcc はそのまま
+Function LowEmitWideCmpW32(ctx As *LowerCtx, idx As Long) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim list As *IrList
+    LowEmitWideCmpW32 = 0
+    ast = ctx->ast
+    nodes = ast->nodes
+    list = ctx->list
+    If LowEmitWideExpr(ctx, nodes[idx].left) = 0 Then Exit Function
+    IrEmit(list, OP_PUSH_DBL, 0, 0)
+    If LowEmitWideExpr(ctx, nodes[idx].right) = 0 Then Exit Function
+    If LowCmpIsU64(ctx, idx) <> 0 Then
+        IrEmit(list, OP_W32_CMPU, 0, 0)
+    Else
+        IrEmit(list, OP_W32_CMP, 0, 0)
+    End If
+    LowEmitWideCmpW32 = 1
+End Function
+
+' -actba32 で 64bit の変数の値を動かすときは Double と同じ 8 バイトの組（TY_DOUBLE の道）を通す
+' Function の戻り値（retTy、flags の AST_FUNC_RET_I64 / U64）を取り出すときの型
+Function LowFuncRetMoveTy(retTy As Long, flags As Long) As Long
+    LowFuncRetMoveTy = retTy
+    If TyIs32() = 0 Then Exit Function
+    If LowTiWide(LowFuncRetTi(flags)) <> 0 Then LowFuncRetMoveTy = TY_DOUBLE
+End Function
+
+' 仮引数（型の欄が負なら Long）
+Function LowParamMoveTy(ty As Long, ti As Long) As Long
+    If ty < 0 Then ty = TY_LONG
+    LowParamMoveTy = LowMoveTy(ty, ti)
+End Function
+
+Function LowMoveTy(ty As Long, ti As Long) As Long
+    LowMoveTy = ty
+    If TyIs32() = 0 Or ty <> TY_LONG Then Exit Function
+    If LowTiWide(ti) <> 0 Then LowMoveTy = TY_DOUBLE
+End Function
