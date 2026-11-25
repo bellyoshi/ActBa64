@@ -135,15 +135,34 @@ Sub Ab4D_Grab(hWnd As HWND, ByVal kind As Long, ByVal w As Long, ByVal i As Long
 End Sub
 
 Sub Ab4D_Down(hWnd As HWND, ByVal lParam As LPARAM)
-    Dim x As Long, y As Long, w As Long, i As Long, kind As Long
+    Dim x As Long, y As Long
     SetFocus(hWnd)
     EditorSelect_XY(lParam, x, y)
     RadWnd_Parse(FormDesign_Text$(hWnd))
-    kind = Ab4D_HitAt(hWnd, x, y, w, i)
-    Ab4D_Grab(hWnd, kind, w, i)
-    g_a4Drag = kind : g_a4X0 = x : g_a4Y0 = y
-    If kind <> 0 Then SetCapture(hWnd)
+    If Ab4D_PanelDown(hWnd, x, y) = 0 Then Ab4D_CanvasDown(hWnd, x, y)
     InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 右の欄を押した。欄の上なら 1
+Function Ab4D_PanelDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim rc As RECT
+    Ui_ClientRect(hWnd, rc)
+    Ab4D_PanelDown = 0
+    If x < Ab4D_CanvasR(rc) Or y < DOCTAB_H Or y >= rc.bottom - AB4D_INFO_H Then Exit Function
+    Ab4D_PanelDown = 1
+    If Ab4D_ToolDown(hWnd, x, y) = 0 Then Ab4D_PropDown(hWnd, x, y)
+End Function
+
+' 窓を描く面を押した。道具を選んでいれば足し始め、そうでなければ掴んだ所を引き始める
+Sub Ab4D_CanvasDown(hWnd As HWND, ByVal x As Long, ByVal y As Long)
+    Dim w As Long, i As Long, kind As Long
+    If Ab4D_OnCanvas(hWnd, x, y) = 0 Then Exit Sub
+    kind = AB4D_DRAG_NEW
+    If Ab4D_NewDown(hWnd, x, y) = 0 Then kind = Ab4D_HitAt(hWnd, x, y, w, i)
+    If kind <> AB4D_DRAG_NEW Then Ab4D_Grab(hWnd, kind, w, i)
+    If kind <> AB4D_DRAG_NEW Then g_a4Drag = kind
+    g_a4X0 = x : g_a4Y0 = y
+    If g_a4Drag <> 0 Then SetCapture(hWnd)
 End Sub
 
 Sub Ab4D_Move(hWnd As HWND, ByVal lParam As LPARAM)
@@ -151,15 +170,19 @@ Sub Ab4D_Move(hWnd As HWND, ByVal lParam As LPARAM)
     If g_a4Drag = 0 Then Exit Sub
     EditorSelect_XY(lParam, x, y)
     dx = x - g_a4X0 : dy = y - g_a4Y0
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+    If g_a4Drag = AB4D_DRAG_NEW Then Ab4D_NewMove(dx, dy)
+    If g_a4Drag = AB4D_DRAG_NEW Then Exit Sub
     FormDesign_SetCursor(g_a4Drag)
     If g_a4Drag >= FD_KIND_MOVE Then FormDesign_CtlDrag(g_a4Drag, g_a4CX0, g_a4CY0, g_a4CW0, g_a4CH0, dx, dy, g_a4CX, g_a4CY, g_a4CW, g_a4CH)
     If g_a4Drag < FD_KIND_MOVE Then FormDesign_DragSize(g_a4Drag, g_a4CW0, g_a4CH0, dx, dy, g_a4CW, g_a4CH)
-    InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
 
 ' 引いた部品の四角か窓の大きさを書いた本文
 Function Ab4D_Changed$(t As String) As String
-    If g_a4Drag >= FD_KIND_MOVE Then
+    If g_a4Drag = AB4D_DRAG_NEW Then
+        Ab4D_Changed$ = Ab4D_NewText$(t)
+    ElseIf g_a4Drag >= FD_KIND_MOVE Then
         Ab4D_Changed$ = Ab4D_SetItemRect$(t, g_a4SelWin, g_a4SelName, g_a4CX, g_a4CY, g_a4CW, g_a4CH)
     Else
         Ab4D_Changed$ = Ab4D_SetWinSize$(t, g_a4Win, g_a4CW, g_a4CH)
@@ -168,13 +191,14 @@ End Function
 
 ' 離した。変わっていれば書き換える（1 回の編集）
 Sub Ab4D_Up(hWnd As HWND)
-    Dim t As String, u As String
+    Dim t As String, u As String, k As Long
     If g_a4Drag = 0 Then Exit Sub
     t = TextBuf_GetConfirmed$()
     u = Ab4D_Changed$(t)
-    g_a4Drag = 0
+    k = g_a4Drag : g_a4Drag = 0
     ReleaseCapture()
     If u <> t Then FormDesign_Replace(u)
+    If k = AB4D_DRAG_NEW And u <> t Then Ab4D_NewDone(hWnd)
     InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
 
@@ -195,6 +219,7 @@ Function Ab4D_OnSetCursor(hWnd As HWND, wParam As WPARAM, lParam As LPARAM) As L
     Ui_MousePos(hWnd, pt)
     RadWnd_Parse(FormDesign_Text$(hWnd))
     FormDesign_SetCursor(Ab4D_HitAt(hWnd, pt.x, pt.y, w, i))
+    If g_a4Tool <> 0 And Ab4D_OnCanvas(hWnd, pt.x, pt.y) <> 0 Then FormDesign_SetCursor(FD_KIND_TOOL)
     Ab4D_OnSetCursor = 1
 End Function
 

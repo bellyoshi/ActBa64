@@ -1,0 +1,189 @@
+' AB4 デザイナーの右の欄（幅 AB4D_PANEL_W）。上に「- コントロール -」の道具箱（AB 4.20 と同じ並び）、
+' その下に選んだ部品か窓のプロパティ（Ab4DesignProp.sbp）。
+' 道具を選んでから窓の中を押すと、その種類の部品を既定の大きさで足す。引けば引いた四角で足す。
+' 足したら道具はポインタに戻り、足した部品を選ぶ。Del で選んだ部品を消す。Esc で道具と選びをやめる。
+
+Const AB4D_PANEL_W = 214                    ' 右の欄の幅
+Const AB4D_TOOL_H = 21                      ' 道具の 1 段の高さ
+Const AB4D_TOOL_W = 101                     ' 道具 1 つの幅（2 列）
+Const AB4D_TOOL_N = 17                      ' 道具の数（ポインタ + 16 種類）
+Const AB4D_DRAG_NEW = 32                    ' g_a4Drag: 道具で部品の四角を引いている
+
+Dim g_a4Tool As Long                        ' 選んでいる道具の種類（0 はポインタ）
+
+' 表示言語が日本語なら ja、そうでなければ en
+Function Ab4D_L$(ja As String, en As String) As String
+    Ab4D_L$ = ja
+    If UiText$(UI_TAB_CODE) = "Code" Then Ab4D_L$ = en
+End Function
+
+Function Ab4D_PanelX(ByRef rc As RECT) As Long
+    Ab4D_PanelX = rc.right - AB4D_PANEL_W
+End Function
+
+' 道具 k（0..16）の種類。AB 4.20 の道具箱の並び
+Function Ab4D_ToolType(ByVal k As Long) As Long
+    Ab4D_ToolType = Val(Mid$("00 11 04 05 09 12 01 02 10 08 03 06 13 14 07 16 15 ", k * 3 + 1, 2))
+End Function
+
+Function Ab4D_ToolName$(ByVal k As Long) As String
+    Dim ja As String, en As String
+    ja = "ポインタ|テキスト|エディット|グループ|リストビュー|ツリービュー|ボタン|チェック|ラジオ|リスト|コンボ|横スクロール|縦スクロール|アップダウン|イメージ|トラックバー|プログレス"
+    en = "Pointer|Static|EditBox|GroupBox|ListView|TreeView|Button|CheckBox|Radio|ListBox|ComboBox|HScroll|VScroll|UpDown|ImageBox|TrackBar|Progress"
+    Ab4D_ToolName$ = Ab4D_Nth$(Ab4D_L$(ja, en), "|", k + 1)
+End Function
+
+Function Ab4D_ToolTop() As Long
+    Ab4D_ToolTop = DOCTAB_H + 24
+End Function
+
+' 道具箱の下端（プロパティはここから下）
+Function Ab4D_ToolBottom() As Long
+    Ab4D_ToolBottom = Ab4D_ToolTop() + ((AB4D_TOOL_N + 1) \ 2) * AB4D_TOOL_H
+End Function
+
+Sub Ab4D_ToolRect(ByRef rc As RECT, ByVal k As Long, ByRef r As RECT)
+    Dim x As Long, y As Long
+    x = Ab4D_PanelX(rc) + 4 + (k Mod 2) * AB4D_TOOL_W
+    y = Ab4D_ToolTop() + (k \ 2) * AB4D_TOOL_H
+    FormDesign_Rect(r, x, y, x + AB4D_TOOL_W - 2, y + AB4D_TOOL_H - 2)
+End Sub
+
+' 見出し（- 文字 -）を y に、欄の真ん中に
+Sub Ab4D_PanelHead(hDC As HDC, ByRef rc As RECT, ByVal y As Long, s As String)
+    Dim r As RECT
+    FormDesign_Rect(r, Ab4D_PanelX(rc), y, rc.right, y + 18)
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_BTNTEXT))
+    Ui_TextCenter(hDC, r, "- " & s & " -")
+End Sub
+
+Sub Ab4D_DrawTool(hDC As HDC, ByRef rc As RECT, ByVal k As Long)
+    Dim r As RECT
+    Ab4D_ToolRect(rc, k, r)
+    If Ab4D_ToolType(k) = g_a4Tool Then
+        FormDesign_Fill(hDC, r.left, r.top, r.right, r.bottom, RGB(255, 255, 255))
+        Ui_Edge(hDC, r, EDGE_SUNKEN, BF_RECT)
+    Else
+        Ui_ButtonFrame(hDC, r, DFCS_BUTTONPUSH)
+    End If
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_BTNTEXT))
+    Ui_TextCenter(hDC, r, Ab4D_ToolName$(k))
+End Sub
+
+Sub Ab4D_DrawPanel(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
+    Dim k As Long, x As Long
+    x = Ab4D_PanelX(rc)
+    FormDesign_Fill(hDC, x, DOCTAB_H, rc.right, rc.bottom - AB4D_INFO_H, Ui_SysColor(COLOR_BTNFACE))
+    FormDesign_Fill(hDC, x, DOCTAB_H, x + 1, rc.bottom - AB4D_INFO_H, RGB(160, 160, 170))
+    Ab4D_PanelHead(hDC, rc, DOCTAB_H + 4, Ab4D_L$("コントロール", "Controls"))
+    For k = 0 To AB4D_TOOL_N - 1
+        Ab4D_DrawTool(hDC, rc, k)
+    Next
+    Ab4D_DrawProps(hDC, hWnd, rc)
+End Sub
+
+' 道具箱を押した。道具の上なら選んで 1
+Function Ab4D_ToolDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim rc As RECT, r As RECT, k As Long
+    Ui_ClientRect(hWnd, rc)
+    Ab4D_ToolDown = 0
+    For k = 0 To AB4D_TOOL_N - 1
+        Ab4D_ToolRect(rc, k, r)
+        If FormDesign_In(x, y, r.left, r.top, r.right - r.left, r.bottom - r.top) <> 0 Then g_a4Tool = Ab4D_ToolType(k) : Ab4D_ToolDown = 1
+    Next
+End Function
+
+' ---- 道具で足す ----
+
+' 点が窓のクライアントの中なら 1。w に窓、cx, cy にクライアントの中の位置
+Function Ab4D_ClientAt(ByVal x As Long, ByVal y As Long, ByRef w As Long, ByRef cx As Long, ByRef cy As Long) As Long
+    Dim k As Long
+    Ab4D_ClientAt = 0
+    For k = g_rwCount - 1 To 0 Step -1
+        If Ab4D_InClient(k, x, y) <> 0 Then Exit For
+    Next
+    If k < 0 Then Exit Function
+    w = k
+    cx = x - Ab4D_ClientX(k)
+    cy = y - Ab4D_ClientY(k)
+    Ab4D_ClientAt = 1
+End Function
+
+' 点が窓 k のクライアント（枠と見出しの帯の内側）の中なら 1
+Function Ab4D_InClient(ByVal k As Long, ByVal x As Long, ByVal y As Long) As Long
+    Dim lx As Long, ly As Long, cw As Long, ch As Long
+    lx = x - Ab4D_ClientX(k)
+    ly = y - Ab4D_ClientY(k)
+    cw = Ab4D_WinW(k) - 8
+    ch = Ab4D_WinH(k) - 8 - Ui_CaptionH()
+    Ab4D_InClient = 0
+    If lx >= 0 And ly >= 0 And lx < cw And ly < ch Then Ab4D_InClient = 1
+End Function
+
+' 道具を選んで窓の中を押した。引き始める（離したときに足す）
+Function Ab4D_NewDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim w As Long, cx As Long, cy As Long
+    Ab4D_NewDown = 0
+    If g_a4Tool = 0 Then Exit Function
+    Ab4D_NewDown = 1
+    If Ab4D_ClientAt(x, y, w, cx, cy) = 0 Then Exit Function
+    Ab4D_Unselect()
+    g_a4Win = w : g_a4Drag = AB4D_DRAG_NEW
+    g_a4CX0 = cx : g_a4CY0 = cy : g_a4CX = cx : g_a4CY = cy : g_a4CW = 0 : g_a4CH = 0
+End Function
+
+' 引いている間の四角（左上と大きさにそろえる）
+Sub Ab4D_NewMove(ByVal dx As Long, ByVal dy As Long)
+    g_a4CX = g_a4CX0 : g_a4CY = g_a4CY0 : g_a4CW = dx : g_a4CH = dy
+    If dx < 0 Then g_a4CX = g_a4CX0 + dx : g_a4CW = -dx
+    If dy < 0 Then g_a4CY = g_a4CY0 + dy : g_a4CH = -dy
+End Sub
+
+' 離した。少ししか引いていなければ既定の大きさで足す
+Function Ab4D_NewText$(t As String) As String
+    If g_a4CW < 4 Or g_a4CH < 4 Then
+        Ab4D_NewText$ = Ab4D_AddItem$(t, g_a4Win, g_a4Tool, g_a4CX0, g_a4CY0)
+    Else
+        Ab4D_NewText$ = Ab4D_AddItemRect$(t, g_a4Win, g_a4Tool, g_a4CX, g_a4CY, g_a4CW, g_a4CH)
+    End If
+End Function
+
+' 足した部品を選び、道具をポインタに戻す
+Sub Ab4D_NewDone(hWnd As HWND)
+    g_a4SelDoc = hWnd
+    g_a4SelWin = g_a4Win
+    g_a4SelName = Ab4D_LastAdded$()
+    g_a4Tool = 0
+End Sub
+
+' 引いている四角の枠
+Sub Ab4D_DrawNew(hDC As HDC)
+    Dim r As RECT, x As Long, y As Long
+    If g_a4Drag <> AB4D_DRAG_NEW Then Exit Sub
+    x = Ab4D_ClientX(g_a4Win) + g_a4CX
+    y = Ab4D_ClientY(g_a4Win) + g_a4CY
+    FormDesign_Rect(r, x, y, x + g_a4CW + 1, y + g_a4CH + 1)
+    Ui_Frame(hDC, r, RGB(0, 0, 0))
+End Sub
+
+' ---- キー ----
+
+' 選んだ部品を消す（1 回の編集）
+Sub Ab4D_Delete(hWnd As HWND)
+    Dim t As String, u As String
+    If Ab4D_SelIndex(hWnd) < 0 Then Exit Sub
+    t = TextBuf_GetConfirmed$()
+    u = Ab4D_DelItem$(t, g_a4SelWin, g_a4SelName)
+    Ab4D_Unselect()
+    If u <> t Then FormDesign_Replace(u)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' AB4 デザイナーのキー: Del（消す）、Esc（道具と選びをやめる）
+Sub Ab4D_Key(hWnd As HWND, ByVal vk As Long)
+    If vk = VK_DELETE Then Ab4D_Delete(hWnd)
+    If vk <> VK_ESCAPE Then Exit Sub
+    g_a4Tool = 0
+    Ab4D_Unselect()
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub

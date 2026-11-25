@@ -86,9 +86,10 @@ Function Ab4D_LineHit(t As String, ByRef cur As Long, ByVal w As Long, ByVal kin
     If kind = 0 And Lower$(Left$(t, 7)) = "window:" Then Ab4D_LineHit = 1
     If kind = 1 And RadWnd_Key$(t) = "size" Then Ab4D_LineHit = 1
     If kind = 2 And RadWnd_Key$(t) = "item" Then Ab4D_LineHit = Ab4D_SameName(t, name)
+    If kind = 3 And Lower$(t) = "end" Then Ab4D_LineHit = 1
 End Function
 
-' 窓 w（0 始まり）の kind の行の始まり（0: WINDOW:、1: SIZE、2: name の ITEM）。無ければ 0
+' 窓 w（0 始まり）の kind の行の始まり（0: WINDOW:、1: SIZE、2: name の ITEM、3: END）。無ければ 0
 Function Ab4D_FindLine(text As String, ByVal w As Long, ByVal kind As Long, name As String) As Long
     Dim pos As Long, cur As Long
     Ab4D_FindLine = 0 : pos = 1 : cur = -1 : g_a4Wn = -1
@@ -147,4 +148,99 @@ Function Ab4D_AddSize$(text As String, ByVal pos As Long, v As String) As String
     If pos = 0 Then Exit Function
     e = FormDesign_LineEnd(text, pos)
     Ab4D_AddSize$ = Left$(text, e) & "    SIZE      = " & v & FormDesign_Nl$(text) & Mid$(text, e + 1)
+End Function
+
+' ---- 部品を足す・消す ----
+
+Dim g_a4Added As String         ' Ab4D_AddItem$ が足した部品の名前
+
+' 種類 1..16 の、名前の頭,文字の頭,様式,拡張様式,幅,高さ（AB 4.20 が新しい部品に付ける値）
+Function Ab4D_DefTable$() As String
+    Dim s As String
+    s = "|CommandButton,Button,&H50000000,&H00000000,75,24|CheckBox,Check,&H50000003,&H00000000,90,16"
+    s = s & "|ComboBox,,&H50200102,&H00000000,100,100|EditBox,,&H50000000,&H00000200,100,20"
+    s = s & "|GroupBox,Group,&H50000007,&H00000000,120,80|HScrollBar,,&H50000000,&H00000000,100,17"
+    s = s & "|ImageBox,,&H50000007,&H00000000,64,64|ListBox,,&H50200003,&H00000200,100,80"
+    s = s & "|ListView,,&H50000000,&H00000200,120,80|RadioButton,Radio,&H50000009,&H00000000,90,16"
+    s = s & "|Static,Text,&H50000000,&H00000000,50,12|TreeView,,&H50000000,&H00000200,120,80"
+    s = s & "|VScrollBar,,&H50000001,&H00000000,17,100|UpDown,,&H50000000,&H00000000,17,40"
+    Ab4D_DefTable$ = s & "|ProgressBar,,&H50000000,&H00020000,120,20|TrackBar,,&H50000018,&H00000000,120,24|"
+End Function
+
+' s を sep で区切った n 番目（1 始まり）。無ければ ""
+Function Ab4D_Nth$(s As String, sep As String, ByVal n As Long) As String
+    Dim p As Long, e As Long, i As Long
+    Ab4D_Nth$ = "" : p = 1
+    For i = 2 To n
+        p = InStr(p, s, sep)
+        If p = 0 Then Exit Function
+        p = p + Len(sep)
+    Next
+    e = InStr(p, s, sep)
+    If e = 0 Then e = Len(s) + 1
+    Ab4D_Nth$ = Mid$(s, p, e - p)
+End Function
+
+' 種類 t の k 番目の値（1 名前の頭、2 文字の頭、3 様式、4 拡張様式、5 幅、6 高さ）
+Function Ab4D_Def$(ByVal t As Long, ByVal k As Long) As String
+    Ab4D_Def$ = Ab4D_Nth$(Ab4D_Nth$(Ab4D_DefTable$(), "|", t + 1), ",", k)
+End Function
+
+Function Ab4D_DefW(ByVal t As Long) As Long
+    Ab4D_DefW = Val(Ab4D_Def$(t, 5))
+End Function
+
+Function Ab4D_DefH(ByVal t As Long) As Long
+    Ab4D_DefH = Val(Ab4D_Def$(t, 6))
+End Function
+
+' 窓 win（RadWnd_Parse 済み）に無い、種類 t の名前（頭 + 1 からの番号）
+Function Ab4D_NextName$(ByVal win As Long, ByVal t As Long) As String
+    Dim n As Long
+    n = 1
+    While RadWnd_FindItem(win, Ab4D_Def$(t, 1) & FormDesign_Num$(n)) >= 0
+        n = n + 1
+    Wend
+    Ab4D_NextName$ = Ab4D_Def$(t, 1) & FormDesign_Num$(n)
+End Function
+
+' 新しい部品の ITEM の行（改行なし）。文字は頭 + 名前と同じ番号。ImageBox は ,0,"" を足す
+Function Ab4D_ItemLine$(name As String, ByVal t As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As String
+    Dim cap As String, q As String, s As String
+    q = Chr$(34)
+    cap = Ab4D_Def$(t, 2)
+    If Len(cap) > 0 Then cap = cap & Mid$(name, Len(Ab4D_Def$(t, 1)) + 1)
+    s = "    ITEM      = " & name & "," & FormDesign_Num$(x) & "," & FormDesign_Num$(y) & "," & FormDesign_Num$(w) & "," & FormDesign_Num$(h)
+    s = s & "," & q & cap & q & "," & Ab4D_Def$(t, 3) & "," & Ab4D_Def$(t, 4) & "," & FormDesign_Num$(t)
+    If t = 7 Then s = s & ",0," & q & q
+    Ab4D_ItemLine$ = s
+End Function
+
+' 窓 win の END の前に、種類 t の部品（x, y に w x h）を足した本文。名前は Ab4D_LastAdded$
+Function Ab4D_AddItemRect$(text As String, ByVal win As Long, ByVal t As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As String
+    Dim pos As Long
+    Ab4D_AddItemRect$ = text
+    RadWnd_Parse(text)
+    g_a4Added = Ab4D_NextName$(win, t)
+    pos = Ab4D_FindLine(text, win, 3, "")
+    If pos = 0 Then Exit Function
+    Ab4D_AddItemRect$ = Left$(text, pos - 1) & Ab4D_ItemLine$(g_a4Added, t, x, y, w, h) & FormDesign_Nl$(text) & Mid$(text, pos)
+End Function
+
+' 既定の大きさで足す
+Function Ab4D_AddItem$(text As String, ByVal win As Long, ByVal t As Long, ByVal x As Long, ByVal y As Long) As String
+    Ab4D_AddItem$ = Ab4D_AddItemRect$(text, win, t, x, y, Ab4D_DefW(t), Ab4D_DefH(t))
+End Function
+
+Function Ab4D_LastAdded$() As String
+    Ab4D_LastAdded$ = g_a4Added
+End Function
+
+' 窓 win の部品 name の行を消した本文。無ければそのまま
+Function Ab4D_DelItem$(text As String, ByVal win As Long, name As String) As String
+    Dim pos As Long
+    Ab4D_DelItem$ = text
+    pos = Ab4D_FindLine(text, win, 2, name)
+    If pos = 0 Then Exit Function
+    Ab4D_DelItem$ = Left$(text, pos - 1) & Mid$(text, FormDesign_LineEnd(text, pos) + 1)
 End Function

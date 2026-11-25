@@ -38,7 +38,7 @@ Sub Ab4D_Enter(hWnd As HWND)
         Exit Sub
     End If
     Ab4D_Unselect()
-    g_a4ScrX = 0 : g_a4ScrY = 0
+    g_a4ScrX = 0 : g_a4ScrY = 0 : g_a4Tool = 0
     g_fdOn = FD_MODE_AB4
     EditorCaret_Destroy()
     FormDesign_Refresh(hWnd)
@@ -119,14 +119,34 @@ Sub Ab4D_DrawGrips(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long
     FormDesign_Grip(hDC, r, b)
 End Sub
 
+' 窓を描く面に絞る
+Sub Ab4D_ClipCanvas(hDC As HDC, ByRef rc As RECT)
+    Ui_ClipOff(hDC)
+    Ui_ClipTo(hDC, 0, DOCTAB_H, Ab4D_CanvasR(rc), rc.bottom - AB4D_INFO_H)
+End Sub
+
+' 窓 w のクライアントと、窓を描く面の重なりに絞る（部品は窓からはみ出して見えない）
+Sub Ab4D_ClipClient(hDC As HDC, ByVal w As Long, ByRef rc As RECT)
+    Dim l As Long, t As Long, r As Long, b As Long
+    l = Ab4D_ClientX(w) : t = Ab4D_ClientY(w)
+    r = Ab4D_OrgX() + Ab4D_WinW(w) - 4 : b = Ab4D_WinTop(w) + Ab4D_WinH(w) - 4
+    If t < DOCTAB_H Then t = DOCTAB_H
+    If r > Ab4D_CanvasR(rc) Then r = Ab4D_CanvasR(rc)
+    If b > rc.bottom - AB4D_INFO_H Then b = rc.bottom - AB4D_INFO_H
+    Ui_ClipOff(hDC)
+    Ui_ClipTo(hDC, l, t, r, b)
+End Sub
+
 ' 窓 w と、その中の部品
-Sub Ab4D_DrawWin(hDC As HDC, ByVal w As Long)
+Sub Ab4D_DrawWin(hDC As HDC, ByVal w As Long, ByRef rc As RECT)
     Dim i As Long, y As Long
     y = Ab4D_WinTop(w)
     Ab4D_DrawFrame(hDC, Ab4D_OrgX(), y, Ab4D_WinW(w), Ab4D_WinH(w), g_rwCaption(w))
+    Ab4D_ClipClient(hDC, w, rc)
     For i = 0 To g_riCount - 1
         If g_riWin(i) = w Then Ab4D_DrawItem(hDC, i)
     Next
+    Ab4D_ClipCanvas(hDC, rc)
     Ab4D_DrawGrips(hDC, Ab4D_OrgX(), y, Ab4D_OrgX() + Ab4D_WinW(w), y + Ab4D_WinH(w))
 End Sub
 
@@ -155,12 +175,14 @@ Sub Ab4D_DrawAll(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     RadWnd_Parse(FormDesign_Text$(hWnd))
     FormDesign_Fill(hDC, 0, 0, rc.right, rc.bottom, Ui_SysColor(COLOR_APPWORKSPACE))
     Ab4D_ClampScroll(rc)
-    Ui_ClipTo(hDC, 0, DOCTAB_H, Ab4D_CanvasR(rc), rc.bottom - AB4D_INFO_H)
+    Ab4D_ClipCanvas(hDC, rc)
     For w = 0 To g_rwCount - 1
-        Ab4D_DrawWin(hDC, w)
+        Ab4D_DrawWin(hDC, w, rc)
     Next
     Ab4D_DrawSel(hDC, hWnd)
+    Ab4D_DrawNew(hDC)
     Ui_ClipOff(hDC)
+    Ab4D_DrawPanel(hDC, hWnd, rc)
     Ab4D_DrawInfo(hDC, hWnd, rc)
     DocTabs_Draw(hDC, hWnd)
 End Sub
@@ -169,7 +191,7 @@ End Sub
 
 ' 窓を描く面の右端
 Function Ab4D_CanvasR(ByRef rc As RECT) As Long
-    Ab4D_CanvasR = rc.right
+    Ab4D_CanvasR = rc.right - AB4D_PANEL_W
 End Function
 
 ' 窓をすべて並べた幅と高さ（余白を含む。ずらしていないとき）
