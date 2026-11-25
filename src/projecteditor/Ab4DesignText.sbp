@@ -50,3 +50,92 @@ Function Ab4D_SizeH(s As String) As Long
     Ab4D_SizeH = Ab4D_Part(s, 2)
     If Ab4D_SizeH <= 0 Then Ab4D_SizeH = FD_DEF_H
 End Function
+
+' ---- 引いた結果を本文に書く ----
+
+Dim g_a4Wn As Long              ' Ab4D_FindLine が読んだ WINDOW: の数 - 1
+
+' pos の行（前後の空白と CR を除く）
+Function Ab4D_LineAt$(text As String, ByVal pos As Long) As String
+    Ab4D_LineAt$ = RadWnd_Strip$(Mid$(text, pos, FormDesign_LineEnd(text, pos) - pos))
+End Function
+
+' ITEM の行の名前（最初の欄）が name なら 1（大文字小文字は区別しない）
+Function Ab4D_SameName(t As String, name As String) As Long
+    Dim p As Long
+    p = 1
+    Ab4D_SameName = 0
+    If Lower$(RadWnd_Field$(RadWnd_Val$(t), p)) = Lower$(name) Then Ab4D_SameName = 1
+End Function
+
+' 行 t が窓 w の kind の行か。cur は今いる窓（WINDOW: で進み、MENU: で -1）
+Function Ab4D_LineHit(t As String, ByRef cur As Long, ByVal w As Long, ByVal kind As Long, name As String) As Long
+    Ab4D_LineHit = 0
+    If Lower$(Left$(t, 5)) = "menu:" Then cur = -1
+    If Lower$(Left$(t, 7)) = "window:" Then g_a4Wn = g_a4Wn + 1 : cur = g_a4Wn
+    If cur <> w Or cur < 0 Then Exit Function
+    If kind = 0 And Lower$(Left$(t, 7)) = "window:" Then Ab4D_LineHit = 1
+    If kind = 1 And RadWnd_Key$(t) = "size" Then Ab4D_LineHit = 1
+    If kind = 2 And RadWnd_Key$(t) = "item" Then Ab4D_LineHit = Ab4D_SameName(t, name)
+End Function
+
+' 窓 w（0 始まり）の kind の行の始まり（0: WINDOW:、1: SIZE、2: name の ITEM）。無ければ 0
+Function Ab4D_FindLine(text As String, ByVal w As Long, ByVal kind As Long, name As String) As Long
+    Dim pos As Long, cur As Long
+    Ab4D_FindLine = 0 : pos = 1 : cur = -1 : g_a4Wn = -1
+    While pos <= Len(text)
+        If Ab4D_LineHit(Ab4D_LineAt$(text, pos), cur, w, kind, name) <> 0 Then Ab4D_FindLine = pos
+        If Ab4D_FindLine <> 0 Then Exit Function
+        pos = FormDesign_LineEnd(text, pos) + 1
+    Wend
+End Function
+
+' pos の行の = のあとの値を v に置き換える（行末の CR は残す）
+Function Ab4D_ReplaceVal$(text As String, ByVal pos As Long, v As String) As String
+    Dim a As Long, e As Long
+    a = FormDesign_SkipBlank(text, InStr(pos, text, "=") + 1)
+    e = FormDesign_LineEnd(text, pos)
+    If e > a Then If Mid$(text, e - 1, 1) = Chr$(13) Then e = e - 1
+    Ab4D_ReplaceVal$ = Left$(text, a - 1) & v & Mid$(text, e)
+End Function
+
+' ITEM の値の、x,y,幅,高さ を書き換えたもの（名前と、文字から後ろはそのまま）
+Function Ab4D_ItemVal$(t As String, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As String
+    Dim v As String, p As Long, i As Long, name As String
+    v = RadWnd_Val$(t) : p = 1
+    name = RadWnd_Field$(v, p)
+    For i = 1 To 4
+        RadWnd_Field$(v, p)
+    Next
+    Ab4D_ItemVal$ = name & "," & FormDesign_Num$(x) & "," & FormDesign_Num$(y) & "," & FormDesign_Num$(w) & "," & FormDesign_Num$(h) & "," & Mid$(v, p)
+End Function
+
+' 窓 win の部品 name の位置と大きさを書いた本文。部品が無ければそのまま
+Function Ab4D_SetItemRect$(text As String, ByVal win As Long, name As String, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long) As String
+    Dim pos As Long
+    Ab4D_SetItemRect$ = text
+    pos = Ab4D_FindLine(text, win, 2, name)
+    If pos = 0 Then Exit Function
+    Ab4D_SetItemRect$ = Ab4D_ReplaceVal$(text, pos, Ab4D_ItemVal$(Ab4D_LineAt$(text, pos), x, y, w, h))
+End Function
+
+' 窓 win の SIZE を w,h にした本文。SIZE の行が無ければ WINDOW: の次の行に足す。窓が無ければそのまま
+Function Ab4D_SetWinSize$(text As String, ByVal win As Long, ByVal w As Long, ByVal h As Long) As String
+    Dim pos As Long, v As String
+    v = FormDesign_Num$(w) & "," & FormDesign_Num$(h)
+    pos = Ab4D_FindLine(text, win, 1, "")
+    If pos > 0 Then
+        Ab4D_SetWinSize$ = Ab4D_ReplaceVal$(text, pos, v)
+        Exit Function
+    End If
+    Ab4D_SetWinSize$ = Ab4D_AddSize$(text, Ab4D_FindLine(text, win, 0, ""), v)
+End Function
+
+' WINDOW: の行（pos）の次に「SIZE = v」の行を足す。pos が 0 ならそのまま
+Function Ab4D_AddSize$(text As String, ByVal pos As Long, v As String) As String
+    Dim e As Long
+    Ab4D_AddSize$ = text
+    If pos = 0 Then Exit Function
+    e = FormDesign_LineEnd(text, pos)
+    Ab4D_AddSize$ = Left$(text, e) & "    SIZE      = " & v & FormDesign_Nl$(text) & Mid$(text, e + 1)
+End Function
