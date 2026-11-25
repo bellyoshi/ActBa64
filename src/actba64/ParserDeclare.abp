@@ -1,7 +1,8 @@
 ' ParserDeclare - Declare と InsertMenu
 
 ' Declare Function|Sub Name [cdecl|stdcall] Lib "dll" [Alias "api"] (params) [As Type]
-' x64 では cdecl と stdcall の呼び出し側は同じなので、語は読み飛ばす。
+' x64 では cdecl と stdcall の呼び出し側は同じ。-actba32 の cdecl は呼んだ後に add esp で引数を片付ける
+' （AST_DECLARE.num の AST_DECL_CDECL）。
 ' 戻り値 true : 正常終了  false : エラーあり
 Function ParseDeclareIsKw(p As *Parser, kw As *Byte) As Long
     ParseDeclareIsKw = 0
@@ -43,10 +44,14 @@ Function ParseDeclareAlias(p As *Parser, name As *Byte, apiName As *Byte) As boo
     ParseDeclareAlias = true
 End Function
 
+' 直前の Declare に cdecl が付いていたら AST_DECL_CDECL、無ければ 0
+Dim g_parseDeclConv As Long
+
 Function ParseDeclareLib(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte) As boolean
     Dim kw(KW_LEN - 1) As Byte
     ParseDeclareLib = false
-    ParseDeclareConv(p)
+    g_parseDeclConv = 0
+    If ParseDeclareConv(p) <> 0 Then g_parseDeclConv = AST_DECL_CDECL
     lstrcpy(VarPtr(kw), "lib")
     If Not ParseDeclareNeedKw(p, VarPtr(kw)) Then Exit Function
     If Not ParseStringArg(p, libName) Then Exit Function
@@ -187,7 +192,7 @@ Function ParseDeclareStmt(p As *Parser) As Long
     nodes[nDecl].left = nFirst
     nodes[nDecl].right = nDll
     nodes[nDecl].extra = nApi
-    nodes[nDecl].num = nParams Or g_parseRetWide
+    nodes[nDecl].num = nParams Or g_parseRetWide Or g_parseDeclConv
     ParseDeclareStmt = nDecl
 End Function
 

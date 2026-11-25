@@ -977,7 +977,7 @@ Declare Function MyAdd Lib "mydll" Alias "MyAdd" (ByVal a As Long, ByVal b As Lo
 
 | 注意 | 内容 |
 |---|---|
-| 呼び出し規約 | 既定（64bit）は Microsoft x64、`-actba32` は stdcall。DLL 側も合わせる |
+| 呼び出し規約 | 既定（64bit）は Microsoft x64、`-actba32` は stdcall。DLL 側も合わせる。`Declare Function 名前 cdecl Lib ...` と書くと、`-actba32` では呼んだ側が引数を片付ける（`wsprintf` のような可変個引数の関数。64bit では書いても同じ呼び方） |
 | C++ 名前 | `extern "C"` でエクスポートするか、マングル名を `Alias` に書く |
 | 配置 | 実行時に OS の DLL 検索パスで見つかること（通常は exe と同ディレクトリ） |
 | 回帰 | `t_decl_any_lib.abp`（任意 Lib 登録）、`t_decl_lib_norm.abp`（拡張子正規化） |
