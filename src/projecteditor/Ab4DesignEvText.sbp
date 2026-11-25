@@ -1,0 +1,156 @@
+' AB4 デザイナーのイベント処理の値（Win32 を使わないので unittest でも読む）。
+' イベントの並びは RadEvent の表（ProjectCmd -regen が呼ぶものと同じ）。種類 0 は窓のイベント。
+' 概要は対応メッセージから引く。プロシージャは「窓_イベント」か「窓_部品_イベント」。
+' 足すプロシージャの引数は、Callback.wbp の EventCall_<窓> が渡すものに合わせる。
+
+' 種類 t のイベントの表（「|名前=メッセージ[=引数]|…|」）
+Function Ab4D_EvTable$(ByVal t As Long) As String
+    Dim n As String
+    Ab4D_EvTable$ = RadEv_WinTable$()
+    If t > 0 Then Ab4D_EvTable$ = RadEv_CtlTable$(RadEv_After$(RadEv_Look$(RadEv_TypeTable$(), Str$(t), n)))
+End Function
+
+Function Ab4D_EvCount(ByVal t As Long) As Long
+    Dim s As String, i As Long
+    s = Ab4D_EvTable$(t)
+    Ab4D_EvCount = -1
+    For i = 1 To Len(s)
+        If Mid$(s, i, 1) = "|" Then Ab4D_EvCount = Ab4D_EvCount + 1
+    Next
+    If Ab4D_EvCount < 0 Then Ab4D_EvCount = 0
+End Function
+
+Function Ab4D_EvEntry$(ByVal t As Long, ByVal k As Long) As String
+    Ab4D_EvEntry$ = Ab4D_Nth$(Ab4D_EvTable$(t), "|", k + 2)
+End Function
+
+Function Ab4D_EvName$(ByVal t As Long, ByVal k As Long) As String
+    Ab4D_EvName$ = RadEv_Before$(Ab4D_EvEntry$(t, k))
+End Function
+
+' 対応メッセージ（窓は WM_…、部品は通知コード）
+Function Ab4D_EvMsg$(ByVal t As Long, ByVal k As Long) As String
+    Ab4D_EvMsg$ = RadEv_Before$(RadEv_After$(Ab4D_EvEntry$(t, k)))
+End Function
+
+Function Ab4D_EvProc$(win As String, item As String, ev As String) As String
+    Ab4D_EvProc$ = win & "_" & ev
+    If Len(item) > 0 Then Ab4D_EvProc$ = win & "_" & item & "_" & ev
+End Function
+
+' 窓のイベントのプロシージャの引数（EventCall_<窓> が渡すもの）
+Function Ab4D_WinParamTable$() As String
+    Dim s As String
+    s = "|Create=ByRef CreateStruct As CREATESTRUCT|Destroy=|Paint=hDC As HDC|QueryClose=ByRef cancel As Integer"
+    s = s & "|Notify=ByRef nmHdr As NMHDR|Activate=nState As Long, bMinimized As Long|DropFiles=hDrop As HDROP"
+    s = s & "|HScroll=nScrollCode As Long, nPos As Long, hwndScrollBar As HWND|VScroll=nScrollCode As Long, nPos As Long, hwndScrollBar As HWND"
+    s = s & "|KeyDown=KeyCode As Long, flags As Long|KeyPress=KeyCode As Long, flags As Long|KeyUp=KeyCode As Long, flags As Long"
+    s = s & "|Move=x As Long, y As Long|Resize=SizeType As Long, cx As Long, cy As Long|SetFocus=|Timer=TimerID As DWord"
+    Ab4D_WinParamTable$ = s & "|MciNotify=wParam As WPARAM, lParam As LPARAM|"
+End Function
+
+' 種類 t のイベント ev のプロシージャの引数（括弧の中）
+Function Ab4D_EvParams$(ByVal t As Long, ev As String) As String
+    Dim n As String
+    Ab4D_EvParams$ = ""
+    If t > 0 And RadEv_IsNotify(t) <> 0 Then Ab4D_EvParams$ = "ByRef nmHdr As NMHDR"
+    If t > 0 Then Exit Function
+    Ab4D_EvParams$ = RadEv_Look$(Ab4D_WinParamTable$(), ev, n)
+    If InStr(1, ev, "Button") > 0 Or ev = "MouseMove" Then Ab4D_EvParams$ = "flags As Long, x As Long, y As Long"
+End Function
+
+' ---- 概要 ----
+
+' メッセージ全体で引く概要（日本語;英語）
+Function Ab4D_DescWin$() As String
+    Dim s As String
+    s = "|WM_CREATE=ウィンドウが作られた時;When the window is created|WM_DESTROY=ウィンドウが破棄される時;When the window is destroyed"
+    s = s & "|WM_PAINT=ウィンドウを描く時;When the window is painted|WM_CLOSE=ウィンドウを閉じようとした時;When the window is about to close"
+    s = s & "|WM_NOTIFY=コントロールから通知が来た時;When a control sends a notification|WM_ACTIVATE=アクティブが変わった時;When activated or deactivated"
+    s = s & "|WM_DROPFILES=ファイルがドロップされた時;When files are dropped|WM_HSCROLL=水平スクロール バーが操作された時;When the horizontal scroll bar is used"
+    s = s & "|WM_VSCROLL=垂直スクロール バーが操作された時;When the vertical scroll bar is used|WM_KEYDOWN=キーが押された時;When a key is pressed"
+    s = s & "|WM_CHAR=文字が入力された時;When a character is typed|WM_KEYUP=キーが離された時;When a key is released"
+    s = s & "|WM_MOUSEMOVE=マウスが動いた時;When the mouse moves|WM_MOVE=ウィンドウが動いた時;When the window moves"
+    s = s & "|WM_SIZE=ウィンドウの大きさが変わった時;When the window is resized|WM_SETFOCUS=フォーカスを得た時;When the window gets the focus"
+    s = s & "|WM_TIMER=タイマーの時間になった時;When a timer fires|MM_MCINOTIFY=MCI の通知が来た時;When MCI sends a notification"
+    Ab4D_DescWin$ = s & "|BN_CLICKED=ボタンがクリックされた時;When the button is clicked|BN_DBLCLK=ボタンがダブル クリックされた時;When the button is double-clicked|"
+End Function
+
+' 通知コードの _ の後ろで引く概要
+Function Ab4D_DescCode$() As String
+    Dim s As String
+    s = "|CLICKED=クリックされた時;When clicked|CLICK=クリックされた時;When clicked|DBLCLK=ダブル クリックされた時;When double-clicked"
+    s = s & "|ERRSPACE=メモリが足りない時;When out of memory|OUTOFMEMORY=メモリが足りない時;When out of memory"
+    s = s & "|KILLFOCUS=フォーカスを失った時;When the focus is lost|SETFOCUS=フォーカスを得た時;When the focus is gained"
+    s = s & "|SELCHANGE=選択が変わった時;When the selection changes|SELCANCEL=選択が取り消された時;When the selection is canceled"
+    s = s & "|CHANGE=文字が変わった時;When the text changes|UPDATE=文字が描き直される前;Before the text is redrawn|MAXTEXT=文字数の上限に達した時;When the text limit is hit"
+    s = s & "|HSCROLL=水平にスクロールした時;When scrolled horizontally|VSCROLL=垂直にスクロールした時;When scrolled vertically"
+    s = s & "|CLOSEUP=リストが閉じた時;When the list closes|DROPDOWN=リストが開く時;When the list opens|EDITCHANGE=文字が変わった時;When the text changes"
+    s = s & "|EDITUPDATE=文字が描き直される前;Before the text is redrawn|SELENDCANCEL=選択をやめた時;When the choice is canceled|SELENDOK=選択を決めた時;When the choice is made"
+    Ab4D_DescCode$ = s & Ab4D_DescCode2$()
+End Function
+
+Function Ab4D_DescCode2$() As String
+    Dim s As String
+    s = "|CUSTOMDRAW=描く時;When drawing|RCLICK=右クリックされた時;When right-clicked|RDBLCLK=右ダブル クリックされた時;When right-double-clicked"
+    s = s & "|RELEASEDCAPTURE=マウスを放した時;When the mouse capture is released|RETURN=Enter が押された時;When Enter is pressed|DELTAPOS=位置が変わる時;When the position changes"
+    s = s & "|BEGINDRAG=ドラッグを始めた時;When a drag starts|BEGINRDRAG=右ドラッグを始めた時;When a right drag starts|BEGINLABELEDIT=名前の編集を始めた時;When label editing starts"
+    s = s & "|ENDLABELEDIT=名前の編集を終えた時;When label editing ends|COLUMNCLICK=列の見出しがクリックされた時;When a column header is clicked"
+    s = s & "|DELETEALLITEMS=すべての項目が消される時;When all items are deleted|DELETEITEM=項目が消される時;When an item is deleted|INSERTITEM=項目が足された時;When an item is inserted"
+    s = s & "|ITEMCHANGED=項目が変わった時;When an item changed|ITEMCHANGING=項目が変わる時;When an item is changing|KEYDOWN=キーが押された時;When a key is pressed"
+    Ab4D_DescCode2$ = s & "|GETDISPINFO=表示する情報が要る時;When display info is needed|SETDISPINFO=表示する情報が変わった時;When display info changes|"
+End Function
+
+' マウスのボタン（WM_[LMR]BUTTON[DOWN|UP|DBLCLK]）の概要
+Function Ab4D_DescMouse$(msg As String, ByVal ja As Long) As String
+    Dim b As String, a As String
+    b = Ab4D_Nth$("左|中|右", "|", InStr(1, "LMR", Mid$(msg, 4, 1)))
+    a = "押された時"
+    If Right$(msg, 2) = "UP" Then a = "離された時"
+    If Right$(msg, 6) = "DBLCLK" Then a = "ダブル クリックされた時"
+    Ab4D_DescMouse$ = b & "ボタンが" & a
+    If ja = 0 Then Ab4D_DescMouse$ = "Mouse button " & Lower$(Mid$(msg, 4))
+End Function
+
+' 対応メッセージ msg の概要（ja <> 0 なら日本語）
+Function Ab4D_EvDesc$(msg As String, ByVal ja As Long) As String
+    Dim n As String, v As String
+    If Left$(msg, 3) = "WM_" And InStr(1, msg, "BUTTON") > 0 Then Ab4D_EvDesc$ = Ab4D_DescMouse$(msg, ja) : Exit Function
+    v = RadEv_Look$(Ab4D_DescWin$(), msg, n)
+    If Len(v) = 0 Then v = RadEv_Look$(Ab4D_DescCode$(), Mid$(msg, InStr(1, msg, "_") + 1), n)
+    Ab4D_EvDesc$ = Ab4D_Nth$(v, ";", 2 - ja)
+End Function
+
+' ---- ソース ----
+
+' 行 t が「Sub proc(」か「Sub proc」で始まれば 1（前後の空白を除き、大文字小文字は区別しない）
+Function Ab4D_IsProcLine(t As String, proc As String) As Long
+    Dim u As String
+    u = Lower$(Trim$(t))
+    Ab4D_IsProcLine = 0
+    If Left$(u, 4) <> "sub " Then Exit Function
+    u = Trim$(Mid$(u, 5))
+    If Left$(u, Len(proc)) <> Lower$(proc) Then Exit Function
+    u = Mid$(u, Len(proc) + 1)
+    If Len(u) = 0 Or Left$(Trim$(u), 1) = "(" Then Ab4D_IsProcLine = 1
+End Function
+
+' text の中の Sub proc の行の始まり（1 始まり）。無ければ 0
+Function Ab4D_FindProc(text As String, proc As String) As Long
+    Dim pos As Long
+    pos = 1
+    Ab4D_FindProc = 0
+    While pos <= Len(text)
+        If Ab4D_IsProcLine(Ab4D_LineAt$(text, pos), proc) <> 0 Then Ab4D_FindProc = pos : Exit Function
+        pos = FormDesign_LineEnd(text, pos) + 1
+    Wend
+End Function
+
+' 終わりに空の行と「Sub proc(params)」「（空の行）」「End Sub」を足した本文（改行は text に合わせる）
+Function Ab4D_AddProc$(text As String, proc As String, params As String) As String
+    Dim nl As String, t As String
+    nl = FormDesign_Nl$(text)
+    t = text
+    If Len(t) > 0 And Right$(t, 1) <> Chr$(10) Then t = t & nl
+    Ab4D_AddProc$ = t & nl & "Sub " & proc & "(" & params & ")" & nl & nl & "End Sub" & nl
+End Function
