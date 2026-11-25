@@ -1,0 +1,175 @@
+' Expect: 0
+' Target: actba64
+' Int64 / QWord の上位・下位 32 ビットにまたがる演算（-actba32 は edx:eax の組。64bit 出力でも同じ結果）
+' 繰り上がり・借り、シフトの 32 回前後、比較の上位が等しく下位で決まる場合、\ Mod の符号、
+' Long / DWord からの広げ方、Double との変換、引数・戻り値・ByRef、For
+#console
+Function Check(cond As Long, code As Long) As Long
+    Check = 0
+    If cond = 0 Then
+        Print "fail "; code
+        Check = 1
+    End If
+End Function
+
+Function Twice(v As Int64) As Int64
+    Twice = v + v
+End Function
+
+Function AddU(a As QWord, b As QWord) As QWord
+    AddU = a + b
+End Function
+
+Sub IncBy(ByRef v As Int64, n As Long)
+    v = v + n
+End Sub
+
+Function Mix(a As Long, b As Int64, c As Double) As Double
+    Mix = a + b + c
+End Function
+
+Dim g As Int64
+Dim x As Int64, y As Int64, u As QWord, v As QWord
+Dim l As Long, dw As DWord, d As Double, i As Long, n As Long
+Dim t As String
+Dim bad As Long
+bad = 0
+
+' 繰り上がり / 借り
+x = &HFFFFFFFF
+x = x + 1
+bad = bad + Check(Str$(x) = "4294967296", 1)
+x = x - 1
+bad = bad + Check(Str$(x) = "4294967295", 2)
+y = 0
+y = y - 1
+bad = bad + Check(Str$(y) = "-1", 3)
+' 積（上位どうしも）
+x = 123456789
+y = x * x
+bad = bad + Check(Str$(y) = "15241578750190521", 4)
+x = 3000000000
+x = -x
+y = x * 7
+bad = bad + Check(Str$(y) = "-21000000000", 5)
+' \ Mod は 0 方向へ切り捨て、余りは左辺の符号
+x = -21000000001
+bad = bad + Check(Str$(x \ 7) = "-3000000000", 6)
+bad = bad + Check(Str$(x Mod 7) = "-1", 7)
+u = &HFFFFFFFFFFFFFFFF
+bad = bad + Check(Str$(u \ 3) = "6148914691236517205", 8)
+' And Or Xor Not と単項の -
+x = &H123456789ABCDEF0
+bad = bad + Check(Hex$(x And &HFFFF0000FFFF0000) = "123400009abc0000", 9)
+bad = bad + Check(Hex$(x Or &HF) = "123456789abcdeff", 10)
+bad = bad + Check(Hex$(x Xor x) = "0", 11)
+bad = bad + Check(Hex$(Not x) = "edcba9876543210f", 12)
+y = -x
+bad = bad + Check(Hex$(y) = "edcba98765432110", 13)
+' シフト（31 / 32 / 33 / 63）
+x = 1
+bad = bad + Check(Str$(x << 31) = "2147483648", 14)
+bad = bad + Check(Str$(x << 32) = "4294967296", 15)
+bad = bad + Check(Str$(x << 33) = "8589934592", 16)
+bad = bad + Check(Hex$(x << 63) = "8000000000000000", 17)
+x = -8589934592
+bad = bad + Check(Str$(x >> 33) = "-1", 18)
+bad = bad + Check(Str$(x >> 32) = "-2", 19)
+u = &H8000000000000000
+bad = bad + Check(Hex$(u >> 32) = "80000000", 20)
+bad = bad + Check(Hex$(u >> 63) = "1", 21)
+n = 4
+bad = bad + Check(Hex$(u >> n) = "800000000000000", 22)
+' 比較（上位で決まる・下位で決まる・符号つきと符号なし）
+x = &H100000000
+y = &HFFFFFFFF
+bad = bad + Check(x > y, 23)
+bad = bad + Check(y < x, 24)
+x = &H1FFFFFFFF
+y = &H100000000
+bad = bad + Check(x > y And x >= y And x <> y, 25)
+x = -1
+y = 1
+bad = bad + Check(x < y, 26)
+u = &HFFFFFFFFFFFFFFFF
+v = 1
+bad = bad + Check(u > v, 27)
+x = &H700000000
+bad = bad + Check(x = &H700000000 And Not (x <> &H700000000), 28)
+bad = bad + Check((x = 7) = 0, 29)
+' 条件として（下位が 0 でも上位があれば真）
+x = &H100000000
+l = 0
+If x Then l = 1
+bad = bad + Check(l = 1, 30)
+' Long は符号で、DWord は 0 で広げる
+l = -5
+x = l
+bad = bad + Check(Str$(x) = "-5", 31)
+dw = &HFFFFFFFF
+x = dw
+bad = bad + Check(Str$(x) = "4294967295", 32)
+x = l + x
+bad = bad + Check(Str$(x) = "4294967290", 33)
+' 64bit から Long へは下位 32 ビット
+x = &H123456789
+l = x
+bad = bad + Check(l = &H23456789, 34)
+' Double との変換
+d = 1e15
+x = d
+bad = bad + Check(Str$(x) = "1000000000000000", 35)
+d = -2.5e10
+x = d
+bad = bad + Check(Str$(x) = "-25000000000", 36)
+x = 1234567890123
+d = x
+bad = bad + Check(d = 1234567890123.0, 37)
+u = &HFFFFF00000000000
+d = u
+bad = bad + Check(d = 18446726481523507200.0, 38)
+d = 18446726481523507200.0
+u = d
+bad = bad + Check(Hex$(u) = "fffff00000000000", 39)
+d = x / 2
+bad = bad + Check(d = 617283945061.5, 40)
+' 引数・戻り値・ByRef・大域
+g = 3000000000
+bad = bad + Check(Str$(Twice(g)) = "6000000000", 41)
+bad = bad + Check(Str$(AddU(&HFFFFFFFF, 1)) = "4294967296", 42)
+IncBy(g, 5)
+bad = bad + Check(Str$(g) = "3000000005", 43)
+bad = bad + Check(Mix(1, 5000000000, 0.5) = 5000000001.5, 44)
+' For（32 ビットの境を越える）
+t = ""
+For x = &HFFFFFFFE To &H100000001
+    t = t + Str$(x) + ","
+Next
+bad = bad + Check(t = "4294967294,4294967295,4294967296,4294967297,", 45)
+i = 0
+For x = 10000000000 To 0 Step -5000000000
+    i = i + 1
+Next
+bad = bad + Check(i = 3, 46)
+' 9223372036854775807 を超える十進は QWord
+u = 18446744073709551615
+bad = bad + Check(Hex$(u) = "ffffffffffffffff", 47)
+Dim z As Int64 = -7
+bad = bad + Check(Str$(z) = "-7", 48)
+' Print は AB 4.20 と同じく QWord を符号付きで出す（Str$ は符号なし）
+u = 18446744073709551615
+v = 18446744073709551615 + 18446744073709551615
+Open "t_int64_32.tmp" For Output As #1
+Print #1, u
+Print #1, v
+Close #1
+Open "t_int64_32.tmp" For Input As #1
+Input #1, t
+bad = bad + Check(t = "-1", 49)
+Input #1, t
+bad = bad + Check(t = "-2", 50)
+Close #1
+Kill "t_int64_32.tmp"
+bad = bad + Check(Str$(u) = "18446744073709551615", 51)
+If bad = 0 Then Print "ok"
+ExitProcess(bad)

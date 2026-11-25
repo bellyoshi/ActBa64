@@ -278,6 +278,14 @@ Function ParseTakeWide(p As *Parser) As Long
     ParseTakeWide = w
 End Function
 
+' ParseTakeWide と同じだが、-actba32 では印を使わない（まだ 64bit で読めない所。
+' 語は DWord / Long のまま読み、ParseWarnWide が 1102 を出す）
+Function ParseTakeWide64Only(p As *Parser) As Long
+    ParseTakeWide64Only = 0
+    If TyIs32() <> 0 Then Exit Function
+    ParseTakeWide64Only = ParseTakeWide(p)
+End Function
+
 ' 64bit の整数リテラルなら AST_NUM を Int64 に（lo = num、hi = left）
 Sub ParseNumLit64(p As *Parser, nodes As *AstNode, n As Long)
     Dim lx As *Lexer
@@ -286,8 +294,13 @@ Sub ParseNumLit64(p As *Parser, nodes As *AstNode, n As Long)
     lx = p->lx
     toks = lx->toks
     i = p->pos
-    If toks[i].wide <> LEX_NUM_I64 Then Exit Sub
-    nodes[n].extra = AST_NUM_EXTRA_I64
+    If toks[i].wide = LEX_NUM_I64 Then
+        nodes[n].extra = AST_NUM_EXTRA_I64
+    ElseIf toks[i].wide = LEX_NUM_U64 Then
+        nodes[n].extra = AST_NUM_EXTRA_U64
+    Else
+        Exit Sub
+    End If
     nodes[n].left = toks[i].numHi
 End Sub
 
@@ -297,16 +310,13 @@ Sub ParseWarnWide(p As *Parser)
     Dim toks As *Tok
     Dim i As Long
     Dim w As Long
-    Dim name(SYM_NAME_LEN - 1) As Byte
     lx = p->lx
     toks = lx->toks
     For i = 0 To lx->count - 1
         If toks[i].kind = TK_IDENT Then
             w = toks[i].wide
             If w = LEX_WIDE_I64 Or w = LEX_WIDE_U64 Then
-                lstrcpy(VarPtr(name), "Long")
-                If w = LEX_WIDE_U64 Then lstrcpy(VarPtr(name), "DWord")
-                DiagWarn(toks[i].srcLine, LexWideMsg$(VarPtr(name)))
+                DiagWarn(toks[i].srcLine, LexWideMsg$(w))
             End If
         End If
     Next

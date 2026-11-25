@@ -2,7 +2,7 @@
 # release_build.sh - Linux 版のリリース一式を release-linux/ に揃える（release_build.ps1 の Linux 版）
 #
 #   既定: ブートストラップ → stage1 → stage2 → stage3（stage2 = stage3 を確かめる）
-#         → rc → ProjectEditor → release-linux/ へコピー
+#         → rc → ProjectEditor → ProjectCmd → release-linux/ へコピー
 #
 # 使い方:
 #   ./release_build.sh                       # ブートストラップは下の順で探す
@@ -156,11 +156,17 @@ echo "=== ProjectEditor.pj -> ProjectEditor ==="
 compile "$STAGE2" "$EDITOR_DIR" ProjectEditor.pj -linux -o "$TMP/ProjectEditor"
 chmod +x "$TMP/ProjectEditor"
 
+echo ""
+echo "=== ProjectCmd.pj -> ProjectCmd ==="
+compile "$STAGE2" "$EDITOR_DIR" ProjectCmd.pj -linux -o "$TMP/ProjectCmd"
+chmod +x "$TMP/ProjectCmd"
+
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 cp "$STAGE2" "$RELEASE_DIR/actba64"
 mv "$TMP/rc" "$RELEASE_DIR/rc"
 mv "$TMP/ProjectEditor" "$RELEASE_DIR/ProjectEditor"
+mv "$TMP/ProjectCmd" "$RELEASE_DIR/ProjectCmd"
 rm -rf "$TMP"
 # actba64 の隣にあればメッセージを日本語で出す（消せば英語）
 cp "$CC_DIR/actba_lang_ja.csv" "$RELEASE_DIR/"
@@ -172,7 +178,7 @@ done
 for f in keywords.txt setting.ini; do
     [ -f "$EDITOR_DIR/$f" ] && cp "$EDITOR_DIR/$f" "$RELEASE_DIR/"
 done
-chmod +x "$RELEASE_DIR/actba64" "$RELEASE_DIR/rc" "$RELEASE_DIR/ProjectEditor"
+chmod +x "$RELEASE_DIR/actba64" "$RELEASE_DIR/rc" "$RELEASE_DIR/ProjectEditor" "$RELEASE_DIR/ProjectCmd"
 
 if [ "$MAKE_TAR" -eq 1 ]; then
     rm -f "$ROOT/$TAR_NAME"

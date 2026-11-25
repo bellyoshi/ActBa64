@@ -1,0 +1,141 @@
+' プロジェクト ウィンドウのツリー（WC_TREEVIEW、Windows 版だけ）。
+' ルートは .pj のファイル名、その下に #SOURCE のファイル。相対パスにフォルダーがあれば
+' フォルダーのノード（"..\common" など）にまとめる。文字は TVM_INSERTITEMW（UTF-8 → UTF-16）。
+' 各ノードの lParam は g_projRel / g_projFull の番号（ルートとフォルダーは -1）。
+' 選んだら（TVN_SELCHANGED）そのファイルを開くか前面にする（ProjOpenIndex）。
+' Linux 版は LxFrame.sbp の自前描画のリストのまま。
+
+#ifndef _LINUX
+Const PT_TVM_INSERTITEMW = &H1132   ' TV_FIRST + 50
+Const PT_TVM_GETITEMA = &H110C      ' TV_FIRST + 12
+Const PT_TVGN_CARET = 9
+Const PT_TVN_SELCHANGEDW = -451     ' TVN_FIRST - 51
+Const PT_STYLE = &H27               ' TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS
+
+Dim g_ptRoot As HTREEITEM
+Dim g_ptDirCount As Long
+Dim g_ptDirName(127) As String
+Dim g_ptDirItem(127) As VoidPtr
+Dim g_ptIns As TVINSERTSTRUCT
+Dim g_ptItem As TVITEM
+Dim g_ptInited As Long
+
+Sub ProjTree_InitCtl()
+    Dim icc As INITCOMMONCONTROLSEX
+    If g_ptInited <> 0 Then Exit Sub
+    g_ptInited = 1
+    icc.dwSize = SizeOf(INITCOMMONCONTROLSEX)
+    icc.dwICC = ICC_TREEVIEW_CLASSES
+    InitCommonControlsEx(icc)
+End Sub
+
+Sub ProjTree_Make(hWnd As HWND)
+    Dim style As DWord
+    ProjTree_InitCtl()
+    style = WS_CHILD Or WS_VISIBLE Or WS_BORDER Or PT_STYLE
+    g_hProjList = CreateWindowEx(0, "SysTreeView32", "", style, 0, 0, 100, 100, hWnd, ID_PROJLIST As HMENU, g_hInst, 0)
+    SendMessage(g_hProjList, WM_SETFONT, GetStockObject(DEFAULT_GUI_FONT) As WPARAM, 0)
+End Sub
+
+' 挿入の形を g_ptIns に作る（末尾に足す）
+Sub ProjTree_FillIns(parent As HTREEITEM, wide As *Byte, ByVal idx As Long)
+    Dim last As LONG_PTR
+    last = TVI_LAST As LONG_PTR
+    FillMemory(VarPtr(g_ptIns), SizeOf(TVINSERTSTRUCT), 0)
+    g_ptIns.hParent = parent
+    g_ptIns.hInsertAfter = last As HTREEITEM
+    g_ptIns.item.mask = TVIF_TEXT Or TVIF_PARAM
+    g_ptIns.item.pszText = wide
+    g_ptIns.item.lParam = idx As LPARAM
+End Sub
+
+Function ProjTree_Insert(parent As HTREEITEM, text As String, ByVal idx As Long) As HTREEITEM
+    Dim wide As *Byte, chars As Long
+    wide = Enc_Utf8ToWide(text, chars)
+    ProjTree_FillIns(parent, wide, idx)
+    ProjTree_Insert = SendMessage(g_hProjList, PT_TVM_INSERTITEMW, 0, VarPtr(g_ptIns) As LPARAM) As HTREEITEM
+    If wide <> 0 Then free(wide)
+End Function
+
+' フォルダーのノード（無ければルートの下に作る）
+Function ProjTree_DirNode(dir As String) As HTREEITEM
+    Dim i As Long
+    For i = 0 To g_ptDirCount - 1
+        If ProjTree_SameDir(g_ptDirName(i), dir) <> 0 Then ProjTree_DirNode = g_ptDirItem(i)
+        If ProjTree_SameDir(g_ptDirName(i), dir) <> 0 Then Exit Function
+    Next
+    ProjTree_DirNode = ProjTree_Insert(g_ptRoot, dir, -1)
+    If g_ptDirCount >= 128 Then Exit Function
+    g_ptDirName(g_ptDirCount) = dir
+    g_ptDirItem(g_ptDirCount) = ProjTree_DirNode
+    g_ptDirCount = g_ptDirCount + 1
+End Function
+
+Sub ProjTree_AddFile(ByVal i As Long)
+    Dim dir As String, parent As HTREEITEM
+    dir = ProjTree_Dir$(g_projRel(i))
+    parent = g_ptRoot
+    If Len(dir) > 0 Then parent = ProjTree_DirNode(dir)
+    ProjTree_Insert(parent, ProjTree_Name$(g_projRel(i)), i)
+End Sub
+
+Sub ProjTree_Expand(h As HTREEITEM)
+    If h <> 0 Then SendMessage(g_hProjList, TVM_EXPAND, TVE_EXPAND, h As LPARAM)
+End Sub
+
+Sub ProjTree_ExpandAll()
+    Dim i As Long
+    For i = 0 To g_ptDirCount - 1
+        ProjTree_Expand(g_ptDirItem(i))
+    Next
+    ProjTree_Expand(g_ptRoot)
+End Sub
+
+Sub ProjTree_Clear()
+    Dim root As LONG_PTR
+    root = TVI_ROOT As LONG_PTR
+    SendMessage(g_hProjList, TVM_DELETEITEM, 0, root As LPARAM)
+    g_ptDirCount = 0
+    g_ptRoot = 0
+End Sub
+
+' 一覧を作り直す
+Sub ProjFillList()
+    Dim i As Long
+    If g_hProjList = 0 Then Exit Sub
+    ProjTree_Clear()
+    g_ptRoot = ProjTree_Insert(0, ProjTree_Name$(g_projectPath), -1)
+    For i = 0 To g_projCount - 1
+        ProjTree_AddFile(i)
+    Next
+    ProjTree_ExpandAll()
+End Sub
+
+' 今選んでいるノードの番号（ルート・フォルダー・無しなら -1）
+Function ProjTree_SelIndex() As Long
+    Dim h As HTREEITEM
+    ProjTree_SelIndex = -1
+    h = SendMessage(g_hProjList, TVM_GETNEXTITEM, PT_TVGN_CARET, 0) As HTREEITEM
+    If h = 0 Then Exit Function
+    FillMemory(VarPtr(g_ptItem), SizeOf(TVITEM), 0)
+    g_ptItem.mask = TVIF_PARAM Or TVIF_HANDLE
+    g_ptItem.hItem = h
+    If SendMessage(g_hProjList, PT_TVM_GETITEMA, 0, VarPtr(g_ptItem) As LPARAM) = 0 Then Exit Function
+    ProjTree_SelIndex = g_ptItem.lParam As Long
+End Function
+
+Sub ProjOnSelect()
+    ProjOpenIndex(ProjTree_SelIndex())
+End Sub
+
+' WM_NOTIFY。ツリーで選んだノードが変わったらそのファイルを開く
+Sub ProjOnNotify(lParam As LPARAM)
+    Dim nm As *NMHDR
+    Dim code As Long
+    nm = lParam As *NMHDR
+    If nm = 0 Then Exit Sub
+    If nm->hwndFrom <> g_hProjList Then Exit Sub
+    code = nm->code As Long
+    If code = TVN_SELCHANGED Or code = PT_TVN_SELCHANGEDW Then ProjOnSelect()
+End Sub
+#endif

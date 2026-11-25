@@ -1,0 +1,59 @@
+' AB4ProjText（「AB4 プロジェクト作成」と ProjectCmd -createPj が書くファイルの中身）。
+' 期待する文は AB 4.20 の「EXE - ノーマル ウィンドウ ベース」が書いたもの（Desktop の noramlWnd）と同じ。
+
+Dim apN As String
+Dim apQ As String
+Dim apS As String
+apN = Chr$(13) & Chr$(10)
+apQ = Chr$(34)
+
+Sub AB4T_Ends(s As String, tail As String, msg As String)
+    Assert(-1, Right$(s, Len(tail)) = tail, msg)
+End Sub
+
+' 名前は識別子（<name>_DestroyObjects になる）
+Assert(1, AB4Proj_NameOk("noramlWnd"), "ab4 name ok")
+Assert(1, AB4Proj_NameOk("_a1"), "ab4 name underscore")
+Assert(0, AB4Proj_NameOk(""), "ab4 name empty")
+Assert(0, AB4Proj_NameOk("1a"), "ab4 name digit first")
+Assert(0, AB4Proj_NameOk("a b"), "ab4 name space")
+Assert(0, AB4Proj_NameOk("a:b"), "ab4 name colon")
+Assert(0, AB4Proj_NameOk("テスト"), "ab4 name kana")
+Assert(1, AB4Proj_CanMake(AB4PROJ_NORMAL), "ab4 can normal")
+Assert(0, AB4Proj_CanMake(AB4PROJ_DLL), "ab4 can dll")
+
+' .pj
+apS = AB4Proj_Pj$("nw", apN)
+Assert(-1, InStr(1, apS, "#NAME=nw" & apN & apN & "#PLATFORM=32" & apN & apN & "#USEWINDOW=1" & apN) > 0, "ab4 pj head")
+Assert(-1, InStr(1, apS, "#OPTION=&H00010000" & apN & apN & "#OUTPUT_RELEASE=.\nw.exe" & apN) > 0, "ab4 pj option")
+AB4T_Ends(apS, "#RESOURCE=0" & apN & apN & "#SOURCE" & apN & "nw.abp" & apN & "MainWnd.sbp" & apN, "ab4 pj source")
+
+' .abp / .idx
+apS = AB4Proj_Abp$("nw", apN)
+Assert(-1, Left$(apS, 21) = "#include " & apQ & "nw.idx" & apQ & apN & apN, "ab4 abp include")
+AB4T_Ends(apS, "' Call destructores and exit process" & apN & "End" & apN, "ab4 abp end")
+apS = AB4Proj_Idx$(apN)
+Assert(-1, InStr(1, apS, apN & "#strict" & apN) > 0, "ab4 idx strict")
+AB4T_Ends(apS, "#include " & apQ & "MakeWindow.wbp" & apQ & apN, "ab4 idx make")
+
+' .wnd は RadWnd で読める
+RadWnd_Parse(AB4Proj_Wnd$("nw", apN))
+Assert(1, g_rwCount, "ab4 wnd one window")
+Assert(-1, g_rwName(0) = "MainWnd" And g_rwCaption(0) = "nw", "ab4 wnd name")
+Assert(-1, g_rwSize(0) = "480,360" And g_rwStyle(0) = "&H10cf0000", "ab4 wnd size")
+Assert(-1, InStr(1, AB4Proj_Wnd$("nw", apN), apN & "    SIZE      = 480,360" & apN) > 0, "ab4 wnd key pad")
+
+' MainWnd.sbp と、そこから作る Callback.wbp
+apS = AB4Proj_MainWnd$("nw", 0, apN)
+AB4T_Ends(apS, "Sub MainWnd_Destroy()" & apN & Chr$(9) & "nw_DestroyObjects()" & apN & Chr$(9) & "PostQuitMessage(0)" & apN & "End Sub" & apN, "ab4 main destroy")
+Assert(0, InStr(1, apS, "MainWnd_Paint"), "ab4 main no paint")
+apS = AB4Proj_MainWnd$("nw", 1, apN)
+RadSrc_Reset()
+RadSrc_Scan(0, apS)
+RadSrc_ScanCb(apS)
+Assert(1, RadSrc_Has(0, "Paint"), "ab4 hello paint")
+Assert(-1, InStr(1, RadGen_Callback$("nw", &H10000), "Sub nw_DestroyObjects()" & apN) > 0, "ab4 cb destroy")
+Assert(-1, InStr(1, RadGen_Callback$("nw", &H10000), "MainWnd_Paint(hDC)") > 0, "ab4 cb paint")
+
+' .wrk は最後に改行が無い
+AB4T_Ends(AB4Proj_Wrk$(apN), apN & "0,0,0,0,0", "ab4 wrk tail")
