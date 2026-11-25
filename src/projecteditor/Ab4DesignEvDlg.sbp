@@ -36,7 +36,7 @@ Dim g_a4Lvc As LVCOLUMN
 Dim g_a4Lvi As LVITEM
 
 Function Ab4D_EvMake(cls As String, ByVal ex As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long, ByVal id As Long) As HWND
-    Ab4D_EvMake = EditorFind_Make(g_hA4Ev, cls, ex, style, x, y, w, h, id)
+    Ab4D_EvMake = Dlg_Make(g_hA4Ev, cls, ex, style, x, y, w, h, id)
 End Function
 
 Function Ab4D_EvList() As HWND
@@ -74,11 +74,15 @@ Sub Ab4D_LvText(ByVal k As Long, ByVal j As Long, s As String)
     If wide <> 0 Then free(wide)
 End Sub
 
-Sub Ab4D_EvFill()
-    Dim k As Long
+Sub Ab4D_EvColumns()
     Ab4D_LvColumn(0, Ab4D_L$("イベント", "Event"), 130)
     Ab4D_LvColumn(1, Ab4D_L$("対応メッセージ", "Message"), 150)
     Ab4D_LvColumn(2, Ab4D_L$("概要", "Description"), 240)
+End Sub
+
+Sub Ab4D_EvFill()
+    Dim k As Long
+    Ab4D_EvColumns()
     For k = 0 To Ab4D_EvCount(g_a4EvT) - 1
         Ab4D_LvText(k, 0, Ab4D_EvName$(g_a4EvT, k))
         Ab4D_LvText(k, 1, Ab4D_EvMsg$(g_a4EvT, k))
@@ -97,11 +101,15 @@ Sub Ab4D_EvToggles()
     Setting_SetUtf8Text(h, "MMSYS")
 End Sub
 
-Sub Ab4D_EvBuild()
+Sub Ab4D_EvMakeList()
     Ab4D_LvInit()
     Ab4D_EvMake("SysListView32", FIND_EDIT_EX, &H5001000D, 12, 12, 560, 160, AB4D_EV_LIST)
     SendMessage(Ab4D_EvList(), LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT)
     Ab4D_EvFill()
+End Sub
+
+Sub Ab4D_EvBuild()
+    Ab4D_EvMakeList()
     Ab4D_EvToggles()
     Setting_SetUtf8Text(Ab4D_EvMake("STATIC", 0, &H50000000, 12, 216, 200, 20, 0), Ab4D_L$("プロシージャ", "Procedure"))
     Ab4D_EvMake("EDIT", FIND_EDIT_EX, FIND_EDIT_STYLE Or &H800, 12, 238, 560, 24, AB4D_EV_PROC)
@@ -141,7 +149,7 @@ Function Ab4D_EvProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As L
     Ab4D_EvProc = 0
     If dwMsg = WM_CLOSE Then g_a4EvDone = 1 : Exit Function
     If dwMsg = WM_NOTIFY Then Ab4D_EvNotify(lParam) : Exit Function
-    If dwMsg <> WM_COMMAND Then Ab4D_EvProc = AB4_DefWindowProcW(hWnd, dwMsg, wParam, lParam) : Exit Function
+    If dwMsg <> WM_COMMAND Then Ab4D_EvProc = Dlg_DefWindowProcW(hWnd, dwMsg, wParam, lParam) : Exit Function
     If LOWORD(wParam) = AB4D_EV_CODE Then Ab4D_EvDecide()
     If LOWORD(wParam) = AB4D_EV_CANCEL Then g_a4EvDone = 1
 End Function
@@ -156,30 +164,29 @@ End Function
 
 Sub Ab4D_EvPump()
     Dim msg As MSG
-    If EditorFind_NextMsg(msg) = 0 Then g_a4EvDone = 1 : Exit Sub
-    If Ab4D_EvKey(msg) <> 0 Then Exit Sub
-    If EditorFind_IsDlgMsg(g_hA4Ev, msg) <> 0 Then Exit Sub
-    TranslateMessage(msg)
-    DispatchMessage(msg)
+    If Dlg_Next(msg) = 0 Then g_a4EvDone = 1 : Exit Sub
+    If Ab4D_EvKey(msg) = 0 Then Dlg_Dispatch(g_hA4Ev, msg)
 End Sub
 
-Function Ab4D_EvRun() As Long
-    g_hA4Ev = CreateWindowEx(0, "NORMALDLG", "", &H00C80000, -2147483648, -2147483648, 600, 352, hMainWnd, 0 As HMENU, GetModuleHandle(0), 0)
-    Ab4D_EvRun = -1
-    If g_hA4Ev = 0 Then Exit Function
-    AB4_SetWndProcW(g_hA4Ev, GWL_WNDPROC, AddressOf(Ab4D_EvProc) As LONG_PTR)
-    Setting_SetUtf8Text(g_hA4Ev, Ab4D_L$("イベント処理", "Event handling"))
-    Ab4D_EvBuild() : ShowWindow(g_hA4Ev, SW_SHOW) : SetFocus(Ab4D_EvList())
-    EnableWindow(hMainWnd, 0)
+Sub Ab4D_EvLoop()
     While g_a4EvDone = 0
         Ab4D_EvPump()
     Wend
+End Sub
+
+Function Ab4D_EvRun() As Long
+    Ab4D_EvRun = -1
+    g_hA4Ev = Dlg_Open(600, 352, AddressOf(Ab4D_EvProc) As LONG_PTR)
+    If g_hA4Ev = 0 Then Exit Function
+    Setting_SetUtf8Text(g_hA4Ev, Ab4D_L$("イベント処理", "Event handling"))
+    Ab4D_EvBuild()
+    Dlg_Show(g_hA4Ev, Ab4D_EvList())
+    Ab4D_EvLoop()
     Ab4D_EvRun = Ab4D_EvEnd()
 End Function
 
 Function Ab4D_EvEnd() As Long
-    EnableWindow(hMainWnd, 1)
-    DestroyWindow(g_hA4Ev) : g_hA4Ev = 0
+    Dlg_Close(g_hA4Ev) : g_hA4Ev = 0
     Ab4D_EvEnd = -1
     If g_a4EvDone = 2 Then Ab4D_EvEnd = g_a4EvSel
 End Function
@@ -197,15 +204,20 @@ End Function
 #else
 
 Function Ab4D_EvDialog(hWnd As HWND, ByVal t As Long, win As String, item As String) As Long
-    Dim k As Long
     g_a4EvT = t : g_a4EvWin = win : g_a4EvItem = item
     Ab4D_EvDialog = -1
     If Ab4D_EvCount(t) = 0 Then MessageBeep(0) : Exit Function
+    Ab4D_EvLxItems(t)
+    Ab4D_EvDialog = LxDlg_Choice(Ab4D_L$("イベント処理", "Event handling"), 0)
+End Function
+
+' Linux の一覧のダイアログの行（イベント・メッセージ・概要）
+Sub Ab4D_EvLxItems(ByVal t As Long)
+    Dim k As Long
     g_lxdN = Ab4D_EvCount(t)
     For k = 0 To g_lxdN - 1
         g_lxdItem(k) = Ab4D_EvName$(t, k) & "  " & Ab4D_EvMsg$(t, k) & "  " & Ab4D_EvDesc$(Ab4D_EvMsg$(t, k), Ab4D_Ja())
     Next
-    Ab4D_EvDialog = LxDlg_Choice(Ab4D_L$("イベント処理", "Event handling"), 0)
-End Function
+End Sub
 
 #endif

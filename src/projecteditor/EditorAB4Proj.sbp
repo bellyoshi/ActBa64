@@ -37,13 +37,6 @@ Declare Function AB4_SHBrowseForFolderW Lib "shell32.dll" Alias "SHBrowseForFold
 Declare Function AB4_SHGetPathFromIDListW Lib "shell32.dll" Alias "SHGetPathFromIDListW" (ByVal pidl As VoidPtr, ByVal pszPath As *Byte) As Long
 Declare Function AB4_SHGetSpecialFolderPathW Lib "shell32.dll" Alias "SHGetSpecialFolderPathW" (ByVal hWnd As HWND, ByVal pszPath As *Byte, ByVal csidl As Long, ByVal fCreate As Long) As Long
 Declare Function AB4_lstrlenW Lib "kernel32" Alias "lstrlenW" (ByVal lpString As *Byte) As Long
-' 窓を Unicode のまま差し替える（A 版で差し替えると、W で書いた見出しが化ける）
-#ifdef _WIN64
-Declare Function AB4_SetWndProcW Lib "user32.dll" Alias "SetWindowLongPtrW" (ByVal hWnd As HWND, ByVal nIndex As Long, ByVal newProc As LONG_PTR) As LONG_PTR
-#else
-Declare Function AB4_SetWndProcW Lib "user32.dll" Alias "SetWindowLongW" (ByVal hWnd As HWND, ByVal nIndex As Long, ByVal newProc As LONG_PTR) As LONG_PTR
-#endif
-Declare Function AB4_DefWindowProcW Lib "user32.dll" Alias "DefWindowProcW" (ByVal hWnd As HWND, ByVal Msg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
 Declare Sub AB4_CoTaskMemFree Lib "ole32.dll" Alias "CoTaskMemFree" (ByVal pv As VoidPtr)
 
 Dim g_hAB4 As HWND
@@ -76,7 +69,7 @@ Function EditorAB4_Make(cls As String, ByVal style As Long, ByVal x As Long, ByV
     Dim ex As Long
     ex = 0
     If cls = "EDIT" Then ex = FIND_EDIT_EX
-    EditorAB4_Make = EditorFind_Make(g_hAB4, cls, ex, style, x, y, w, ht, id)
+    EditorAB4_Make = Dlg_Make(g_hAB4, cls, ex, style, x, y, w, ht, id)
 End Function
 
 Sub EditorAB4_Label(ByVal uiId As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long)
@@ -180,7 +173,7 @@ Function EditorAB4_RunCmd(parent As String, name As String) As Long
 End Function
 
 Function EditorAB4_Text$(ByVal id As Long) As String
-    EditorAB4_Text$ = Trim$(EditorFind_EditText$(GetDlgItem(g_hAB4, id)))
+    EditorAB4_Text$ = Trim$(Dlg_EditText$(GetDlgItem(g_hAB4, id)))
 End Function
 
 Function EditorAB4_HelloOn() As Long
@@ -214,7 +207,7 @@ Function EditorAB4Proc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As
     If dwMsg = WM_CLOSE Then g_ab4Done = 1
     If dwMsg = WM_COMMAND Then EditorAB4_OnCmd(LOWORD(wParam), HIWORD(wParam))
     If dwMsg = WM_CLOSE Or dwMsg = WM_COMMAND Then EditorAB4Proc = 0
-    If dwMsg <> WM_CLOSE And dwMsg <> WM_COMMAND Then EditorAB4Proc = AB4_DefWindowProcW(hWnd, dwMsg, wParam, lParam)
+    If dwMsg <> WM_CLOSE And dwMsg <> WM_COMMAND Then EditorAB4Proc = Dlg_DefWindowProcW(hWnd, dwMsg, wParam, lParam)
 End Function
 
 ' Enter は「作成」、Esc は閉じる
@@ -230,40 +223,35 @@ End Function
 
 Function EditorAB4_Pump() As Long
     Dim msg As MSG
-    EditorAB4_Pump = EditorFind_NextMsg(msg)
+    EditorAB4_Pump = Dlg_Next(msg)
     If EditorAB4_Pump = 0 Then Exit Function
-    If EditorAB4_Key(msg) <> 0 Then Exit Function
-    If EditorFind_IsDlgMsg(g_hAB4, msg) <> 0 Then Exit Function
-    TranslateMessage(msg)
-    DispatchMessage(msg)
+    If EditorAB4_Key(msg) = 0 Then Dlg_Dispatch(g_hAB4, msg)
 End Function
 
-Sub EditorAB4_Run(hOwner As HWND)
-    EnableWindow(hOwner, 0)
+Sub EditorAB4_Run()
     While g_ab4Done = 0
         If EditorAB4_Pump() = 0 Then g_ab4Done = 1
     Wend
-    EnableWindow(hOwner, 1)
-    DestroyWindow(g_hAB4)
+    Dlg_Close(g_hAB4)
     g_hAB4 = 0
 End Sub
 
 ' ダイアログを出す。作ったら 1
-Function EditorAB4_Dialog(hOwner As HWND) As Long
+Function EditorAB4_Dialog() As Long
     EditorAB4_Dialog = 0
     g_ab4Done = 0
-    g_hAB4 = CreateWindowEx(0, "NORMALDLG", "", &H00C80000, -2147483648, -2147483648, 600, 440, hOwner, 0 As HMENU, GetModuleHandle(0), 0)
+    g_hAB4 = Dlg_Open(600, 440, AddressOf(EditorAB4Proc) As LONG_PTR)
     If g_hAB4 = 0 Then Exit Function
-    AB4_SetWndProcW(g_hAB4, GWL_WNDPROC, AddressOf(EditorAB4Proc) As LONG_PTR)
-    EditorAB4_Build() : ShowWindow(g_hAB4, SW_SHOW) : SetFocus(GetDlgItem(g_hAB4, IDC_AB4_NAME))
-    EditorAB4_Run(hOwner)
+    EditorAB4_Build()
+    Dlg_Show(g_hAB4, GetDlgItem(g_hAB4, IDC_AB4_NAME))
+    EditorAB4_Run()
     If g_ab4Done = 2 Then EditorAB4_Dialog = 1
 End Function
 
 ' メニューから。作ったプロジェクトを開いて MainWnd.sbp を出す
 Sub EditorAB4_Open()
     Dim pj As String
-    If EditorAB4_Dialog(hMainWnd) = 0 Then Exit Sub
+    If EditorAB4_Dialog() = 0 Then Exit Sub
     pj = g_ab4Pj
     ProjOpen(pj)
     If ProjSamePath(g_projectPath, pj) = 0 Then Exit Sub

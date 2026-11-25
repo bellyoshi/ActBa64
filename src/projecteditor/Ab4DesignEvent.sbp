@@ -16,17 +16,23 @@ Dim g_a4RDown As Long                       ' 窓を描く面で右ボタンを�
 
 ' 右ボタンを押した。部品の上ならそれを選び、そうでなければ選びを外してその窓を対象にする
 Sub Ab4D_RDown(hWnd As HWND, ByVal lParam As LPARAM)
-    Dim x As Long, y As Long, i As Long
+    Dim x As Long, y As Long
     SetFocus(hWnd)
     EditorSelect_XY(lParam, x, y)
     RadWnd_Parse(FormDesign_Text$(hWnd))
     If Ab4D_OnCanvas(hWnd, x, y) = 0 Then Exit Sub
     g_a4RDown = 1
+    Ab4D_RPick(hWnd, x, y)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 右クリックした窓と部品を選ぶ（部品が無ければ窓だけ）
+Sub Ab4D_RPick(hWnd As HWND, ByVal x As Long, ByVal y As Long)
+    Dim i As Long
     Ab4D_PickWin(hWnd, x, y)
     i = Ab4D_ItemAt(x, y)
     If i >= 0 Then Ab4D_GrabItem(hWnd, i) Else Ab4D_Unselect()
     g_a4Tool = 0
-    InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
 
 Sub Ab4D_MenuAdd(hPop As HMENU, ByVal flags As DWord, ByVal id As Long, s As String)
@@ -73,13 +79,12 @@ End Sub
 Sub Ab4D_EventCode(hWnd As HWND)
     Dim i As Long, t As Long, w As Long, item As String, k As Long
     RadWnd_Parse(FormDesign_Text$(hWnd))
+    If g_rwCount = 0 Then Exit Sub
     i = Ab4D_SelIndex(hWnd)
     t = 0 : w = Ab4D_WinNo() : item = ""
     If i >= 0 Then t = g_riType(i) : w = g_riWin(i) : item = g_riName(i)
-    If g_rwCount = 0 Then Exit Sub
     k = Ab4D_EvDialog(hWnd, t, g_rwName(w), item)
-    If k < 0 Then Exit Sub
-    Ab4D_Code(hWnd, t, w, item, k)
+    If k >= 0 Then Ab4D_Code(hWnd, t, w, item, k)
 End Sub
 
 ' .wnd の .pj（同じフォルダーの同じ名前。無ければ開いているプロジェクト）
@@ -92,11 +97,10 @@ End Function
 ' イベント k のプロシージャへ（無ければ足して ProjectCmd -regen）
 Sub Ab4D_Code(hWnd As HWND, ByVal t As Long, ByVal w As Long, item As String, ByVal k As Long)
     Dim ev As String, proc As String, src As String, pj As String
+    If Len(g_rwFile(w)) = 0 Then MessageBeep(0) : Exit Sub
     ev = Ab4D_EvName$(t, k)
     proc = Ab4D_EvProc$(g_rwName(w), item, ev)
-    src = ProjDirOf$(g_docPath) & g_rwFile(w)
-    pj = Ab4D_ProjOf$(g_docPath)
-    If Len(g_rwFile(w)) = 0 Then MessageBeep(0) : Exit Sub
+    src = ProjDirOf$(g_docPath) & g_rwFile(w) : pj = Ab4D_ProjOf$(g_docPath)
     If Ab4D_SaveIfDirty(hWnd) = 0 Then Exit Sub
     If Ab4D_OpenSrc(src) = 0 Then MessageBeep(0) : Exit Sub
     If Ab4D_GoProc(proc, Ab4D_EvParams$(t, ev)) <> 0 Then Ab4D_Regen(pj)
@@ -125,12 +129,15 @@ Function Ab4D_GoProc(proc As String, params As String) As Long
     t = TextBuf_GetConfirmed$()
     pos = Ab4D_FindProc(t, proc)
     Ab4D_GoProc = 0
-    If pos = 0 Then
-        FormDesign_Replace(Ab4D_AddProc$(t, proc, params))
-        t = TextBuf_GetConfirmed$() : pos = Ab4D_FindProc(t, proc)
-        Ab4D_GoProc = 1
-    End If
+    If pos = 0 Then pos = Ab4D_InsertProc(t, proc, params) : Ab4D_GoProc = 1
     Ab4D_SelectLine(t, pos)
+End Function
+
+' 末尾に足して（1 回の編集）、足した Sub の行の位置。t は足した後の全文になる
+Function Ab4D_InsertProc(ByRef t As String, proc As String, params As String) As Long
+    FormDesign_Replace(Ab4D_AddProc$(t, proc, params))
+    t = TextBuf_GetConfirmed$()
+    Ab4D_InsertProc = Ab4D_FindProc(t, proc)
 End Function
 
 ' 本文 t の pos の行（行末の改行を除く）を選んで見せる
@@ -141,6 +148,11 @@ Sub Ab4D_SelectLine(t As String, ByVal pos As Long)
     If n > 0 Then If Mid$(t, pos + n - 1, 1) = Chr$(13) Then n = n - 1
     g_selAnchor = pos - 1
     TextBuf_MoveCursorTo(pos - 1 + n)
+    Ab4D_ShowCaret()
+End Sub
+
+' キャレットが見えるようにして、ソースの子にフォーカスを移す
+Sub Ab4D_ShowCaret()
     TextBuf_SyncPreferredCol()
     VirtualScroll_EnsureCursorVisible(g_activeChild)
     InvalidateRect(g_activeChild, ByVal 0, FALSE)
