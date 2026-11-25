@@ -1,0 +1,43 @@
+' EditorProjCmd - エディタの隣の ProjectCmd を呼ぶ（AB4 の RAD とプロジェクト作成は ProjectCmd が受け持つ）。
+'   コンパイルの前:      ProjectCmd -regen <.pj>                    （<名前>.wnd があるときだけ）
+'   AB4 プロジェクト作成: ProjectCmd -createPj <名前> -dir <フォルダー> [-hello]（EditorAB4Proj.sbp）
+
+Function EditorProjCmd_Name$() As String
+#ifdef _LINUX
+    EditorProjCmd_Name$ = "ProjectCmd"
+#else
+    EditorProjCmd_Name$ = "ProjectCmd.exe"
+#endif
+End Function
+
+Function EditorProjCmd_Path$() As String
+    EditorProjCmd_Path$ = EditorBuild_ExeDir$() + EditorProjCmd_Name$()
+End Function
+
+' args を付けて動かし、出力と終了コードを受け取る。ProjectCmd が無いか動かせなければ outText に理由を置いて 0
+Function EditorProjCmd_Run(args As String, ByRef outText As String, ByRef exitCode As Long) As Long
+    Dim exe As String
+    EditorProjCmd_Run = 0
+    exe = EditorProjCmd_Path$()
+    outText = "Failed to find " + EditorProjCmd_Name$() + " (place it beside ProjectEditor)." + Chr$(13) + Chr$(10)
+    If GetFileAttributes(StrPtr(exe)) = -1 Then Exit Function
+    outText = "Failed to launch " + EditorProjCmd_Name$() + "." + Chr$(13) + Chr$(10)
+    EditorProjCmd_Run = EditorBuild_RunCapture(EditorBuild_QuoteArg$(exe) + " " + args, outText, exitCode)
+End Function
+
+' #USEWINDOW=1 で <名前>.wnd があれば、ProjectCmd -regen で Callback.wbp / MakeWindow.wbp を作ってから訳す
+Function EditorBuild_RadPrepare() As Long
+    Dim outText As String, code As Long
+    EditorBuild_RadPrepare = 1
+    If Len(g_projectPath) = 0 Or g_projUseWindow <> 1 Then Exit Function
+    If GetFileAttributes(StrPtr(EditorProjCmd_WndPath$(g_projectPath))) = -1 Then Exit Function
+    EditorBuild_RadPrepare = 0
+    If EditorProjCmd_Run("-regen " + EditorBuild_QuoteArg$(g_projectPath), outText, code) <> 0 And code = 0 Then EditorBuild_RadPrepare = 1
+    MessageWnd_Append(outText)
+End Function
+
+' .pj と同じフォルダーの <.pj の名前>.wnd
+Function EditorProjCmd_WndPath$(pj As String) As String
+    EditorProjCmd_WndPath$ = Left$(pj, Len(pj) - 3) + ".wnd"
+    If Lower$(Right$(pj, 3)) <> ".pj" Then EditorProjCmd_WndPath$ = pj + ".wnd"
+End Function

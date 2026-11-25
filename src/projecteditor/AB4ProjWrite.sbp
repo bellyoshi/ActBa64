@@ -1,0 +1,128 @@
+' AB4ProjWrite - AB4 形式のプロジェクトをフォルダーごと作る（ProjectCmd -createPj と、エディタの「AB4 プロジェクト作成」）。
+' parent\name\ を作り、AB4ProjText.sbp の中身と、RadGen で作った Callback.wbp / MakeWindow.wbp を
+' Shift_JIS・CRLF で書く（AB 4.20 が書くものと同じバイト列）。
+' 戻り値は AB4ERR_*（0 で成功）。成功すると g_ab4Pj に .pj のパス。
+
+Const AB4ERR_NONE = 0
+Const AB4ERR_NAME = 1          ' プロジェクト名に使えない文字
+Const AB4ERR_KIND = 2          ' まだ作れない種類
+Const AB4ERR_EXISTS = 3        ' parent\name\name.pj がもうある
+Const AB4ERR_DIR = 4           ' フォルダーを作れない
+Const AB4ERR_WRITE = 5         ' 書けない（g_ab4ErrPath）
+Const AB4PROJ_OPTION = &H00010000
+
+#ifdef _LINUX
+Declare Function AB4Proj_CreateDirectoryA Lib "kernel32" Alias "CreateDirectoryA" (ByVal lpPathName As *Byte, ByVal lpSecurityAttributes As VoidPtr) As Long
+#else
+Declare Function AB4Proj_CreateDirectoryW Lib "kernel32" Alias "CreateDirectoryW" (ByVal lpPathName As *Byte, ByVal lpSecurityAttributes As VoidPtr) As Long
+#endif
+
+Dim g_ab4Pj As String
+Dim g_ab4ErrPath As String
+
+Function AB4Proj_Nl$() As String
+    AB4Proj_Nl$ = Chr$(13) & Chr$(10)
+End Function
+
+' UTF-8 のパスでフォルダーを作る（もうあれば何もしない）。あれば 1
+Function AB4Proj_MakeDir(dir As String) As Long
+    AB4Proj_MakeDir = AB4Proj_Exists(dir)
+    If AB4Proj_MakeDir <> 0 Then Exit Function
+    AB4Proj_OsMkDir(dir)
+    AB4Proj_MakeDir = AB4Proj_Exists(dir)
+End Function
+
+#ifdef _LINUX
+Sub AB4Proj_OsMkDir(dir As String)
+    AB4Proj_CreateDirectoryA(StrPtr(dir), 0)
+End Sub
+#else
+Sub AB4Proj_OsMkDir(dir As String)
+    Dim wide As *Byte, chars As Long
+    wide = Enc_ToWide(ENC_CP_UTF8, StrPtr(dir), Len(dir), chars)
+    If wide = 0 Then Exit Sub
+    AB4Proj_CreateDirectoryW(wide, 0)
+    free(wide)
+End Sub
+#endif
+
+' text（UTF-8）を Shift_JIS にして書く。書けなければ g_ab4ErrPath に置いて 0
+Function AB4Proj_Save(path As String, text As String) As Long
+    Dim sj As *Byte, n As Long
+    AB4Proj_Save = 0
+    sj = Enc_Utf8AsCp932(StrPtr(text), Len(text), n)
+    If sj <> 0 Then AB4Proj_Save = WriteAll(StrPtr(path), sj, n)
+    If sj <> 0 Then free(sj)
+    If AB4Proj_Save = 0 Then g_ab4ErrPath = path
+End Function
+
+' .wnd と MainWnd.sbp から Callback.wbp / MakeWindow.wbp の中身を作る（RadGenRun と同じ手順）
+Sub AB4Proj_RadGen(name As String, mainWnd As String, ByRef cb As String, ByRef mk As String)
+    RadWnd_Parse(AB4Proj_Wnd$(name, AB4Proj_Nl$()))
+    RadSrc_Reset()
+    RadSrc_Scan(0, mainWnd)
+    RadSrc_ScanCb(mainWnd)
+    cb = RadGen_Callback$(name, AB4PROJ_OPTION)
+    mk = RadGen_MakeWindow$()
+End Sub
+
+Function AB4Proj_WriteSrc(dir As String, name As String, mainWnd As String) As Long
+    Dim nl As String
+    nl = AB4Proj_Nl$()
+    AB4Proj_WriteSrc = 0
+    If AB4Proj_Save(dir & name & ".abp", AB4Proj_Abp$(name, nl)) = 0 Then Exit Function
+    If AB4Proj_Save(dir & name & ".idx", AB4Proj_Idx$(nl)) = 0 Then Exit Function
+    If AB4Proj_Save(dir & name & ".wnd", AB4Proj_Wnd$(name, nl)) = 0 Then Exit Function
+    If AB4Proj_Save(dir & "MainWnd.sbp", mainWnd) = 0 Then Exit Function
+    AB4Proj_WriteSrc = AB4Proj_Save(dir & name & ".wrk", AB4Proj_Wrk$(nl))
+End Function
+
+Function AB4Proj_WriteRad(dir As String, name As String, mainWnd As String) As Long
+    Dim cb As String, mk As String
+    AB4Proj_WriteRad = 0
+    AB4Proj_RadGen(name, mainWnd, cb, mk)
+    If AB4Proj_Save(dir & "Callback.wbp", cb) = 0 Then Exit Function
+    AB4Proj_WriteRad = AB4Proj_Save(dir & "MakeWindow.wbp", mk)
+End Function
+
+' .pj は最後に書く（途中で失敗したら .pj は無い）
+Function AB4Proj_WriteAll(dir As String, name As String, ByVal hello As Long) As Long
+    Dim mainWnd As String
+    mainWnd = AB4Proj_MainWnd$(name, hello, AB4Proj_Nl$())
+    AB4Proj_WriteAll = AB4ERR_WRITE
+    If AB4Proj_WriteSrc(dir, name, mainWnd) = 0 Then Exit Function
+    If AB4Proj_WriteRad(dir, name, mainWnd) = 0 Then Exit Function
+    If AB4Proj_Save(dir & name & ".pj", AB4Proj_Pj$(name, AB4Proj_Nl$())) = 0 Then Exit Function
+    AB4Proj_WriteAll = AB4ERR_NONE
+End Function
+
+' 作る前に調べる（AB4ERR_NONE なら作ってよい）
+Function AB4Proj_Check(parent As String, name As String, ByVal kind As Long) As Long
+    AB4Proj_Check = AB4ERR_NAME
+    If AB4Proj_NameOk(name) = 0 Then Exit Function
+    AB4Proj_Check = AB4ERR_KIND
+    If AB4Proj_CanMake(kind) = 0 Then Exit Function
+    AB4Proj_Check = AB4ERR_EXISTS
+    If AB4Proj_Exists(AB4Proj_Folder$(parent, name) & name & ".pj") <> 0 Then Exit Function
+    AB4Proj_Check = AB4ERR_NONE
+End Function
+
+' parent\name\ にプロジェクトを作る。parent が無ければ作る
+Function AB4Proj_Create(parent As String, name As String, ByVal kind As Long, ByVal hello As Long) As Long
+    Dim dir As String
+    g_ab4Pj = "" : g_ab4ErrPath = ""
+    AB4Proj_Create = AB4Proj_Check(parent, name, kind)
+    If AB4Proj_Create <> AB4ERR_NONE Then Exit Function
+    dir = AB4Proj_Folder$(parent, name)
+    AB4Proj_MakeDir(AB4Proj_DirSlash$(parent))
+    AB4Proj_Create = AB4Proj_MakeOne(dir, name, hello)
+End Function
+
+Function AB4Proj_MakeOne(dir As String, name As String, ByVal hello As Long) As Long
+    AB4Proj_MakeOne = AB4ERR_DIR
+    g_ab4ErrPath = dir
+    If AB4Proj_MakeDir(dir) = 0 Then Exit Function
+    g_ab4ErrPath = ""
+    AB4Proj_MakeOne = AB4Proj_WriteAll(dir, name, hello)
+    If AB4Proj_MakeOne = AB4ERR_NONE Then g_ab4Pj = dir & name & ".pj"
+End Function

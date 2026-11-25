@@ -56,7 +56,7 @@ editor - C:\work\hello.sbp [32bit, Shift-JIS] *
 
 | メニュー | 項目 |
 |---|---|
-| ファイル(&F) | 新規(&N) / 新しいフォーム(&M)（N88BASIC構文・ActiveBasic2構文のときは灰色） / 開く(&O) / 名前を付けて保存(&A) / 上書き保存(&S) |
+| ファイル(&F) | 新規(&N) / 新しいフォーム(&M)（N88BASIC構文・ActiveBasic2構文のときは灰色） / AB4プロジェクト作成(&P)...（Windows 版だけ。[§7.2](#72-ab4-プロジェクト作成と-projectcmd)） / 開く(&O) / 名前を付けて保存(&A) / 上書き保存(&S) |
 | 編集(&E) | 元に戻す(&U) / やり直し(&R) / 切り取り(&T) / コピー(&C) / 貼り付け(&P) / すべて選択(&A) / 削除(&D) / 検索(&F) / 次を検索(&N) / 前を検索(&V) |
 | Basic | 64bit / 32bit（チェック） / N88BASIC構文(-pN88)（チェック） / ActiveBasic2構文(-pAB2)（チェック。-pN88 と同時には入らない） / 実行(&R) / 実行（終了後に待機）(&W) / コンパイル(&C) |
 | 設定(&S) | 設定 |
@@ -171,7 +171,7 @@ actba64 -actba32 <入力> -o <出力>
 
 ### 7.1 AB4 互換の RAD（#USEWINDOW=1）
 
-AB 4.20 の ProjectEditor で作ったウィンドウのプロジェクトを、そのままコンパイルできます。`.pj` が `#USEWINDOW=1` で、`.pj` と同じフォルダに `<.pj の名前>.wnd` があるときは、コンパイルの前にその `.wnd` から `Callback.wbp` と `MakeWindow.wbp` を作り直します。AB 4.20 と同じく毎回上書きするので、この 2 つは手で直さないでください。メッセージウィンドウには `Generated Callback.wbp and MakeWindow.wbp from <.wnd>` と出ます。`.wnd` が無いとき（`Form` クラスで窓を作るプロジェクトなど）は何もしません。`.wnd` が読めないときや書けないときはコンパイルしません。
+AB 4.20 の ProjectEditor で作ったウィンドウのプロジェクトを、そのままコンパイルできます。`.pj` が `#USEWINDOW=1` で、`.pj` と同じフォルダに `<.pj の名前>.wnd` があるときは、コンパイルの前にエディタの隣の `ProjectCmd -regen <.pj>`（[§7.2](#72-ab4-プロジェクト作成と-projectcmd)）を呼び、その `.wnd` から `Callback.wbp` と `MakeWindow.wbp` を作り直します。生成はエディタではなく ProjectCmd が受け持ちます。ProjectCmd が無いとき・失敗したときはコンパイルしません。AB 4.20 と同じく毎回上書きするので、この 2 つは手で直さないでください。メッセージウィンドウには `Generated Callback.wbp and MakeWindow.wbp from <.wnd>` と出ます。`.wnd` が無いとき（`Form` クラスで窓を作るプロジェクトなど）は何もしません。`.wnd` が読めないときや書けないときはコンパイルしません。
 
 [§12](#12-フォームデザイナ) のフォームデザイナ（`Form` クラスの `InitializeComponent`）とは別物です。`.wnd` を編集する画面はありません。
 
@@ -198,7 +198,47 @@ AB 4.20 の ProjectEditor で作ったウィンドウのプロジェクトを、
 | TreeView | `Click` `CustomDraw` `DblClick` `KillFocus` `OutOfMemory` `RClick` `RDblClick` `ReleasedCapture` `Return` `SetFocus`（`NM_*`） |
 | UpDown | `Deltapos` と上の NM_ のもの |
 
-まだ扱わないもの: `BGCOLOR` は 15（3D FACE）のときと同じ背景になります（白・黒・色・ビットマップの背景は作りません）。ImageBox の画像は読み込みません。`.idx` と `MainWnd.sbp` は作りません（AB 4.20 で作ったものを使います）。
+まだ扱わないもの: `BGCOLOR` は 15（3D FACE）のときと同じ背景になります（白・黒・色・ビットマップの背景は作りません）。ImageBox の画像は読み込みません。新しいプロジェクトの `.idx` と `MainWnd.sbp` は [§7.2](#72-ab4-プロジェクト作成と-projectcmd) で作れます。
+
+### 7.2 AB4 プロジェクト作成と ProjectCmd
+
+ファイル → AB4プロジェクト作成 で、AB 4.20 の「プロジェクトを作成」と同じ形のダイアログが出ます（Windows 版だけ）。
+
+- プロジェクト名: 英字・数字・`_`（先頭は数字以外）で 64 文字まで。`<名前>_DestroyObjects` などの識別子になるためです
+- ディレクトリ: 既定はデスクトップ（2 回目からは前に作ったところ）。参照でフォルダーを選べます。ここに `<名前>` のフォルダーを作ります
+- アプリケーション タイプ: 6 種類を出しますが、いま作れるのは「EXE - ノーマル ウィンドウ ベース」だけです。ほかを選ぶと説明に「まだ作れません」と出て、作成ボタンが灰色になります
+- "Hello world!" 表示: 入れると `MainWnd.sbp` に `MainWnd_Paint` を足し、窓に `Hello world!` を書きます
+
+作成すると `ProjectCmd -createPj` を呼んで `<ディレクトリ>\<名前>\` に次を Shift_JIS・CRLF で書き、その `.pj` を開いて `MainWnd.sbp` を出します。`<名前>.pj` がもうあるときは作りません。
+
+| ファイル | 中身 |
+|---|---|
+| `<名前>.pj` | `#USEWINDOW=1`、`#PLATFORM=32`、`#SOURCE` に `<名前>.abp` と `MainWnd.sbp` |
+| `<名前>.abp` | `<名前>.idx` を読み、メッセージループを回す |
+| `<名前>.idx` | `Callback.wbp`、`MainWnd.sbp`、`MakeWindow.wbp` を `#include` |
+| `<名前>.wnd` | 480×360 の `MainWnd`（`CALLBACK = MainWndProc`） |
+| `MainWnd.sbp` | `MainWndProc` と `MainWnd_Destroy` |
+| `<名前>.wrk` | AB 4.20 の作業状態 |
+| `Callback.wbp` / `MakeWindow.wbp` | [§7.1](#71-ab4-互換の-radusewindow1) と同じ生成器で作ったもの |
+
+中身は AB 4.20 で作ったノーマル ウィンドウ ベースのプロジェクトとバイト単位で同じです。
+
+同じものをコマンドラインで作るのが `ProjectCmd.exe`（`src/projecteditor/ProjectCmd.pj`）です。
+
+```
+ProjectCmd -createPj <名前> [-normalWnd] [-dir <フォルダー>] [-hello]
+ProjectCmd -regen <プロジェクト.pj>
+```
+
+| オプション | 意味 |
+|---|---|
+| `-createPj <名前>` | `<フォルダー>\<名前>\` にプロジェクトを作る |
+| `-normalWnd` | EXE - ノーマル ウィンドウ ベース（既定。`-nomalWnd` も同じ） |
+| `-dir <フォルダー>` | 作る場所。既定は今のフォルダー |
+| `-hello` | 窓に `Hello world!` を書く |
+| `-regen <.pj>` | `<.pj の名前>.wnd` から `Callback.wbp` / `MakeWindow.wbp` を作り直す（[§7.1](#71-ab4-互換の-radusewindow1)）。`.wnd` が無ければ何もしない |
+
+終了コードは、成功で 0、引数の誤りで 1（使い方を出す）、作れないとき（名前・既にある・書けない・`.wnd` が読めない）で 2 です。リリースでは `ProjectEditor` の隣に置きます（`release_build.ps1` / `release_build.sh` が作ります）。Linux 版は CP932 の変換表を持たないので、Shift_JIS ではなく UTF-8 で書きます。
 
 ## 8. メッセージからソースへ
 

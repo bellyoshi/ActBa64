@@ -1,6 +1,6 @@
 # release_build.ps1 - リリース一式を release\ に揃える
 #
-#   既定: actba64 ブートストラップ → rc.exe → ProjectEditor → コピー
+#   既定: actba64 ブートストラップ → rc.exe → ProjectEditor → ProjectCmd → コピー
 #   -SkipSelfHost: 既存 stage2 を使い、rc.exe と ProjectEditor の再コンパイルとコピーのみ
 #   -SkipCompare: 子スクリプトのバイナリ比較をスキップ
 #
@@ -120,6 +120,25 @@ if ($code -ne 0 -or -not (Test-Path -LiteralPath $tmpEditor)) {
     exit 1
 }
 
+$tmpCmd = Join-Path $EditorDir "_release_ProjectCmd.exe"
+if (Test-Path -LiteralPath $tmpCmd) {
+    Remove-Item -LiteralPath $tmpCmd -Force
+}
+Write-Host ""
+Write-Host "=== ProjectCmd.pj -> $tmpCmd ==="
+Push-Location $EditorDir
+try {
+    $log = & $Actba64Exe (Join-Path $EditorDir "ProjectCmd.pj") -o $tmpCmd 2>&1 | ForEach-Object { "$_" }
+    $code = [int]$LASTEXITCODE
+} finally {
+    Pop-Location
+}
+foreach ($line in $log) { Write-Host $line }
+if ($code -ne 0 -or -not (Test-Path -LiteralPath $tmpCmd)) {
+    Write-Error "ProjectCmd build failed exit=$code"
+    exit 1
+}
+
 try {
     if (Test-Path -LiteralPath $ReleaseDir) {
         Remove-Item -LiteralPath $ReleaseDir -Recurse -Force
@@ -132,6 +151,8 @@ try {
 
 Copy-LockedAware $tmpEditor (Join-Path $ReleaseDir "ProjectEditor.exe")
 Remove-Item -LiteralPath $tmpEditor -Force
+Copy-LockedAware $tmpCmd (Join-Path $ReleaseDir "ProjectCmd.exe")
+Remove-Item -LiteralPath $tmpCmd -Force
 
 Copy-Item -LiteralPath $Actba64Exe -Destination (Join-Path $ReleaseDir "actba64.exe") -Force
 # actba64.exe は #resource の .rc を隣の rc.exe で .res にする

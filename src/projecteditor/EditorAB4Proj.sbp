@@ -1,0 +1,281 @@
+' EditorAB4Proj - ファイルメニューの「AB4 プロジェクト作成」（Windows 版だけ）。
+' AB 4.20 の「プロジェクトを作成」と同じ形のダイアログ: プロジェクト名・ディレクトリ（参照）・
+' アプリケーション タイプ（6 種類。いまはノーマル ウィンドウ ベースだけ作れる）・"Hello world!" 表示・説明。
+' 「作成」で ProjectCmd -createPj を呼んで <ディレクトリ>\<名前>\ に作り（EditorProjCmd.sbp）、その .pj を開いて MainWnd.sbp を出す。
+
+Const IDM_AB4PROJ = 1331
+Const IDC_AB4_NAME = 1401
+Const IDC_AB4_DIR = 1402
+Const IDC_AB4_BROWSE = 1403
+Const IDC_AB4_HELLO = 1404
+Const IDC_AB4_DESC = 1405
+Const IDC_AB4_CREATE = 1406
+Const IDC_AB4_CANCEL = 1407
+Const IDC_AB4_KIND0 = 1410          ' IDC_AB4_KIND0 + k が種類 k のラジオボタン
+Const AB4_STATIC_STYLE = &H50000000
+Const AB4_RIGHT_STYLE = &H50000002
+Const AB4_DESC_STYLE = &H50001000   ' SS_SUNKEN
+Const AB4_GROUP_STYLE = &H50000007
+Const AB4_RADIO_STYLE = &H50000009
+Const AB4_FIRST_RADIO = &H50030009  ' WS_GROUP Or WS_TABSTOP
+Const AB4_CHECK_STYLE = &H50010003
+Const AB4_PUSH_STYLE = &H50010000
+Const AB4_DEFPUSH_STYLE = &H50010001
+
+Type AB4BrowseInfo
+    hwndOwner As HWND
+    pidlRoot As VoidPtr
+    pszDisplayName As *Byte
+    lpszTitle As *Byte
+    ulFlags As DWord
+    lpfn As VoidPtr
+    lParam As LPARAM
+    iImage As Long
+End Type
+
+Declare Function AB4_SHBrowseForFolderW Lib "shell32.dll" Alias "SHBrowseForFolderW" (ByRef lpbi As AB4BrowseInfo) As VoidPtr
+Declare Function AB4_SHGetPathFromIDListW Lib "shell32.dll" Alias "SHGetPathFromIDListW" (ByVal pidl As VoidPtr, ByVal pszPath As *Byte) As Long
+Declare Function AB4_SHGetSpecialFolderPathW Lib "shell32.dll" Alias "SHGetSpecialFolderPathW" (ByVal hWnd As HWND, ByVal pszPath As *Byte, ByVal csidl As Long, ByVal fCreate As Long) As Long
+Declare Function AB4_lstrlenW Lib "kernel32" Alias "lstrlenW" (ByVal lpString As *Byte) As Long
+' 窓を Unicode のまま差し替える（A 版で差し替えると、W で書いた見出しが化ける）
+#ifdef _WIN64
+Declare Function AB4_SetWndProcW Lib "user32.dll" Alias "SetWindowLongPtrW" (ByVal hWnd As HWND, ByVal nIndex As Long, ByVal newProc As LONG_PTR) As LONG_PTR
+#else
+Declare Function AB4_SetWndProcW Lib "user32.dll" Alias "SetWindowLongW" (ByVal hWnd As HWND, ByVal nIndex As Long, ByVal newProc As LONG_PTR) As LONG_PTR
+#endif
+Declare Function AB4_DefWindowProcW Lib "user32.dll" Alias "DefWindowProcW" (ByVal hWnd As HWND, ByVal Msg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+Declare Sub AB4_CoTaskMemFree Lib "ole32.dll" Alias "CoTaskMemFree" (ByVal pv As VoidPtr)
+
+Dim g_hAB4 As HWND
+Dim g_ab4Done As Long
+Dim g_ab4Kind As Long
+Dim g_ab4Hello As Long
+Dim g_ab4LastDir As String
+Dim g_ab4Menu As Long
+Dim g_ab4Pj As String             ' 作った .pj
+
+#ifndef _LINUX
+
+' ---- メニュー ----
+
+' 「新しいフォーム」の次（開くの前）に差し込む。2 回目からは表示名だけ更新
+Sub EditorAB4_ApplyMenu()
+    Dim wide As *Byte, chars As Long
+    If g_ab4Menu <> 0 Then EditorMenu_SetCmd(hMenu_M_MAIN_0, IDM_AB4PROJ, UI_MENU_AB4PROJ)
+    If g_ab4Menu <> 0 Then Exit Sub
+    wide = Enc_Utf8ToWide(UiText$(UI_MENU_AB4PROJ), chars)
+    If wide = 0 Then Exit Sub
+    InsertMenuW(hMenu_M_MAIN_0, IDM_FILEOPEN, MF_BYCOMMAND Or MF_STRING, IDM_AB4PROJ, wide)
+    free(wide)
+    g_ab4Menu = 1
+End Sub
+
+' ---- 部品 ----
+
+Function EditorAB4_Make(cls As String, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal ht As Long, ByVal id As Long) As HWND
+    Dim ex As Long
+    ex = 0
+    If cls = "EDIT" Then ex = FIND_EDIT_EX
+    EditorAB4_Make = EditorFind_Make(g_hAB4, cls, ex, style, x, y, w, ht, id)
+End Function
+
+Sub EditorAB4_Label(ByVal uiId As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long)
+    Setting_SetUtf8Text(EditorAB4_Make("STATIC", style, x, y, w, 20, 0), UiText$(uiId))
+End Sub
+
+Sub EditorAB4_Button(ByVal uiId As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal id As Long)
+    Setting_SetUtf8Text(EditorAB4_Make("BUTTON", style, x, y, w, 28, id), UiText$(uiId))
+End Sub
+
+' 既定のディレクトリ: 前に作ったところ、無ければデスクトップ
+Function EditorAB4_DefDir$() As String
+    Dim wide[1040] As Byte
+    EditorAB4_DefDir$ = g_ab4LastDir
+    If Len(g_ab4LastDir) > 0 Then Exit Function
+    wide[0] = 0 : wide[1] = 0
+    If AB4_SHGetSpecialFolderPathW(0, VarPtr(wide), &H10, 0) = 0 Then Exit Function
+    EditorAB4_DefDir$ = Enc_WideToUtf8$(VarPtr(wide), AB4_lstrlenW(VarPtr(wide)))
+End Function
+
+Sub EditorAB4_BuildTop()
+    EditorAB4_Label(UI_AB4_NAME, AB4_RIGHT_STYLE, 12, 19, 136)
+    EditorAB4_Make("EDIT", FIND_EDIT_STYLE, 152, 16, 200, 24, IDC_AB4_NAME)
+    EditorAB4_Label(UI_AB4_DIR, AB4_RIGHT_STYLE, 12, 51, 136)
+    Setting_SetUtf8Text(EditorAB4_Make("EDIT", FIND_EDIT_STYLE, 152, 48, 300, 24, IDC_AB4_DIR), EditorAB4_DefDir$())
+    EditorAB4_Button(UI_AB4_BROWSE, AB4_PUSH_STYLE, 462, 46, 110, IDC_AB4_BROWSE)
+End Sub
+
+Sub EditorAB4_BuildKinds()
+    Dim k As Long, style As Long
+    Setting_SetUtf8Text(EditorAB4_Make("BUTTON", AB4_GROUP_STYLE, 16, 84, 372, 186, 0), UiText$(UI_AB4_TYPE))
+    For k = 0 To 5
+        style = AB4_RADIO_STYLE
+        If k = 0 Then style = AB4_FIRST_RADIO
+        EditorAB4_Button(UI_AB4_KIND0 + k, style, 30, 108 + k * 26, 350, IDC_AB4_KIND0 + k)
+    Next
+End Sub
+
+Sub EditorAB4_BuildBottom()
+    EditorAB4_Button(UI_AB4_HELLO, AB4_CHECK_STYLE, 400, 106, 180, IDC_AB4_HELLO)
+    SendMessage(GetDlgItem(g_hAB4, IDC_AB4_HELLO), BM_SETCHECK, g_ab4Hello, 0)
+    EditorAB4_Label(UI_AB4_DESC, AB4_STATIC_STYLE, 16, 290, 60)
+    EditorAB4_Make("STATIC", AB4_DESC_STYLE, 80, 288, 492, 52, IDC_AB4_DESC)
+    EditorAB4_Button(UI_AB4_CREATE, AB4_DEFPUSH_STYLE, 344, 358, 110, IDC_AB4_CREATE)
+    EditorAB4_Button(UI_BTN_CANCEL, AB4_PUSH_STYLE, 462, 358, 110, IDC_AB4_CANCEL)
+End Sub
+
+' 種類 k を選んだときの説明と「作成」ボタン
+Sub EditorAB4_SetKind(ByVal k As Long)
+    g_ab4Kind = k
+    SendMessage(GetDlgItem(g_hAB4, IDC_AB4_KIND0 + k), BM_SETCHECK, BST_CHECKED, 0)
+    Setting_SetUtf8Text(GetDlgItem(g_hAB4, IDC_AB4_DESC), UiText$(UI_AB4_DESC0 + k))
+    EnableWindow(GetDlgItem(g_hAB4, IDC_AB4_CREATE), AB4Proj_CanMake(k))
+End Sub
+
+Sub EditorAB4_Build()
+    Setting_SetUtf8Text(g_hAB4, UiText$(UI_AB4_TITLE))
+    EditorAB4_BuildTop()
+    EditorAB4_BuildKinds()
+    EditorAB4_BuildBottom()
+    EditorAB4_SetKind(g_ab4Kind)
+End Sub
+
+' ---- 参照 ----
+
+Sub EditorAB4_BrowseSet(pidl As VoidPtr)
+    Dim wide[1040] As Byte
+    wide[0] = 0 : wide[1] = 0
+    If AB4_SHGetPathFromIDListW(pidl, VarPtr(wide)) <> 0 Then Setting_SetUtf8Text(GetDlgItem(g_hAB4, IDC_AB4_DIR), Enc_WideToUtf8$(VarPtr(wide), AB4_lstrlenW(VarPtr(wide))))
+    AB4_CoTaskMemFree(pidl)
+End Sub
+
+Sub EditorAB4_Browse()
+    Dim bi As AB4BrowseInfo, title As *Byte, chars As Long, pidl As VoidPtr
+    title = Enc_Utf8ToWide(UiText$(UI_AB4_BROWSE_TITLE), chars)
+    bi.hwndOwner = g_hAB4 : bi.lpszTitle = title : bi.ulFlags = &H41   ' BIF_RETURNONLYFSDIRS Or BIF_NEWDIALOGSTYLE
+    pidl = AB4_SHBrowseForFolderW(bi)
+    If title <> 0 Then free(title)
+    If pidl <> 0 Then EditorAB4_BrowseSet(pidl)
+End Sub
+
+' ---- 作成 ----
+
+' 作る前にエディタで調べる（言語パックのメッセージを出すため）。よければ ""
+Function EditorAB4_Check$(parent As String, name As String) As String
+    EditorAB4_Check$ = ""
+    If AB4Proj_NameOk(name) = 0 Then EditorAB4_Check$ = UiText$(UI_AB4_ERR_NAME) : Exit Function
+    If Len(parent) = 0 Then EditorAB4_Check$ = UiText$(UI_AB4_ERR_DIR) : Exit Function
+    If AB4Proj_Exists(AB4Proj_Folder$(parent, name) & name & ".pj") = 0 Then Exit Function
+    EditorAB4_Check$ = UiText$(UI_AB4_ERR_EXISTS) & Chr$(13) & Chr$(10) & AB4Proj_Folder$(parent, name) & name & ".pj"
+End Function
+
+' ProjectCmd -createPj で作る。できなければ ProjectCmd の出力を出して 0
+Function EditorAB4_RunCmd(parent As String, name As String) As Long
+    Dim args As String, outText As String, code As Long
+    args = "-createPj " & name & " -normalWnd -dir " & EditorBuild_QuoteArg$(AB4Proj_DirSlash$(parent))
+    If g_ab4Hello <> 0 Then args = args & " -hello"
+    EditorAB4_RunCmd = 0
+    If EditorProjCmd_Run(args, outText, code) <> 0 And code = 0 Then EditorAB4_RunCmd = 1
+    If EditorAB4_RunCmd = 0 Then UiMsgBox(g_hAB4, Trim$(outText), UiText$(UI_AB4_TITLE))
+End Function
+
+Function EditorAB4_Text$(ByVal id As Long) As String
+    EditorAB4_Text$ = Trim$(EditorFind_EditText$(GetDlgItem(g_hAB4, id)))
+End Function
+
+Function EditorAB4_HelloOn() As Long
+    EditorAB4_HelloOn = 0
+    If SendMessage(GetDlgItem(g_hAB4, IDC_AB4_HELLO), BM_GETCHECK, 0, 0) = BST_CHECKED Then EditorAB4_HelloOn = 1
+End Function
+
+' 作れたら閉じる（g_ab4Done = 2）。作れなければメッセージを出してそのまま
+Sub EditorAB4_Create()
+    Dim parent As String, name As String, msg As String
+    name = EditorAB4_Text$(IDC_AB4_NAME) : parent = EditorAB4_Text$(IDC_AB4_DIR)
+    g_ab4Hello = EditorAB4_HelloOn()
+    msg = EditorAB4_Check$(parent, name)
+    If Len(msg) > 0 Then UiMsgBox(g_hAB4, msg, UiText$(UI_AB4_TITLE)) : Exit Sub
+    If EditorAB4_RunCmd(parent, name) = 0 Then Exit Sub
+    g_ab4Pj = AB4Proj_Folder$(parent, name) & name & ".pj"
+    g_ab4LastDir = parent : g_ab4Done = 2
+End Sub
+
+' ---- ダイアログ ----
+
+Sub EditorAB4_OnCmd(ByVal id As Long, ByVal note As Long)
+    If note <> BN_CLICKED Then Exit Sub
+    If id >= IDC_AB4_KIND0 And id <= IDC_AB4_KIND0 + 5 Then EditorAB4_SetKind(id - IDC_AB4_KIND0)
+    If id = IDC_AB4_BROWSE Then EditorAB4_Browse()
+    If id = IDC_AB4_CREATE Then EditorAB4_Create()
+    If id = IDC_AB4_CANCEL Then g_ab4Done = 1
+End Sub
+
+Function EditorAB4Proc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
+    If dwMsg = WM_CLOSE Then g_ab4Done = 1
+    If dwMsg = WM_COMMAND Then EditorAB4_OnCmd(LOWORD(wParam), HIWORD(wParam))
+    If dwMsg = WM_CLOSE Or dwMsg = WM_COMMAND Then EditorAB4Proc = 0
+    If dwMsg <> WM_CLOSE And dwMsg <> WM_COMMAND Then EditorAB4Proc = AB4_DefWindowProcW(hWnd, dwMsg, wParam, lParam)
+End Function
+
+' Enter は「作成」、Esc は閉じる
+Function EditorAB4_Key(ByRef msg As MSG) As Long
+    EditorAB4_Key = 0
+    If msg.message <> WM_KEYDOWN Then Exit Function
+    If msg.wParam = VK_ESCAPE Then g_ab4Done = 1 : EditorAB4_Key = 1
+    If msg.wParam = VK_RETURN And GetFocus() <> GetDlgItem(g_hAB4, IDC_AB4_BROWSE) And GetFocus() <> GetDlgItem(g_hAB4, IDC_AB4_CANCEL) Then
+        EditorAB4_Key = 1
+        If IsWindowEnabled(GetDlgItem(g_hAB4, IDC_AB4_CREATE)) <> 0 Then EditorAB4_Create()
+    End If
+End Function
+
+Function EditorAB4_Pump() As Long
+    Dim msg As MSG
+    EditorAB4_Pump = EditorFind_NextMsg(msg)
+    If EditorAB4_Pump = 0 Then Exit Function
+    If EditorAB4_Key(msg) <> 0 Then Exit Function
+    If EditorFind_IsDlgMsg(g_hAB4, msg) <> 0 Then Exit Function
+    TranslateMessage(msg)
+    DispatchMessage(msg)
+End Function
+
+Sub EditorAB4_Run(hOwner As HWND)
+    EnableWindow(hOwner, 0)
+    While g_ab4Done = 0
+        If EditorAB4_Pump() = 0 Then g_ab4Done = 1
+    Wend
+    EnableWindow(hOwner, 1)
+    DestroyWindow(g_hAB4)
+    g_hAB4 = 0
+End Sub
+
+' ダイアログを出す。作ったら 1
+Function EditorAB4_Dialog(hOwner As HWND) As Long
+    EditorAB4_Dialog = 0
+    g_ab4Done = 0
+    g_hAB4 = CreateWindowEx(0, "NORMALDLG", "", &H00C80000, -2147483648, -2147483648, 600, 440, hOwner, 0 As HMENU, GetModuleHandle(0), 0)
+    If g_hAB4 = 0 Then Exit Function
+    AB4_SetWndProcW(g_hAB4, GWL_WNDPROC, AddressOf(EditorAB4Proc) As LONG_PTR)
+    EditorAB4_Build() : ShowWindow(g_hAB4, SW_SHOW) : SetFocus(GetDlgItem(g_hAB4, IDC_AB4_NAME))
+    EditorAB4_Run(hOwner)
+    If g_ab4Done = 2 Then EditorAB4_Dialog = 1
+End Function
+
+' メニューから。作ったプロジェクトを開いて MainWnd.sbp を出す
+Sub EditorAB4_Open()
+    Dim pj As String
+    If EditorAB4_Dialog(hMainWnd) = 0 Then Exit Sub
+    pj = g_ab4Pj
+    ProjOpen(pj)
+    If ProjSamePath(g_projectPath, pj) = 0 Then Exit Sub
+    MdiOpenPath(ProjDirOf$(pj) & "MainWnd.sbp")
+End Sub
+
+#else
+
+Sub EditorAB4_ApplyMenu()
+End Sub
+
+Sub EditorAB4_Open()
+End Sub
+
+#endif

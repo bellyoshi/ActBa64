@@ -1,0 +1,115 @@
+' ProjectCmdMain - ProjectCmd の引数を読んで動かす（#SOURCE の最後に置く）。
+
+Dim g_pcName As String
+Dim g_pcDir As String
+Dim g_pcKind As Long
+Dim g_pcHello As Long
+Dim g_pcCreate As Long
+Dim g_pcBad As String
+Dim g_pcRegen As String       ' -regen の .pj
+
+' GetCommandLineA / GetCurrentDirectoryA の CP932 を UTF-8 の文字列に
+Function ProjCmd_Utf8$(p As *Byte) As String
+    Dim u As *Byte, n As Long
+    ProjCmd_Utf8$ = ""
+    If p[0] = 0 Then Exit Function
+    u = Enc_Cp932AsUtf8(p, lstrlen(p), n)
+    If u = 0 Then ProjCmd_Utf8$ = MakeStr(p)
+    If u <> 0 Then ProjCmd_Utf8$ = MakeStr(u)
+    If u <> 0 Then free(u)
+End Function
+
+' i 番目の引数（無ければ "" で found = 0）
+Function ProjCmd_Arg$(ByVal i As Long, ByRef found As Long) As String
+    Dim buf[MAX_PATH] As Byte
+    found = GetCmd(i, VarPtr(buf))
+    ProjCmd_Arg$ = ProjCmd_Utf8$(VarPtr(buf))
+End Function
+
+Function ProjCmd_CurDir$() As String
+    Dim cur[1023] As Byte
+    cur[0] = 0
+    GetCurrentDirectory(1024, VarPtr(cur))
+    ProjCmd_CurDir$ = ProjCmd_Utf8$(VarPtr(cur))
+End Function
+
+' 値を取るオプション。i は値の位置まで進める
+Function ProjCmd_Value$(ByRef i As Long, opt As String) As String
+    Dim found As Long
+    i = i + 1
+    ProjCmd_Value$ = ProjCmd_Arg$(i, found)
+    If found = 0 Or Left$(ProjCmd_Value$, 1) = "-" Then g_pcBad = opt & " needs a value"
+End Function
+
+Sub ProjCmd_Opt(a As String, ByRef i As Long)
+    Dim k As String
+    k = Lower$(a)
+    If k = "-createpj" Then g_pcCreate = 1 : g_pcName = ProjCmd_Value$(i, a) : Exit Sub
+    If k = "-dir" Then g_pcDir = ProjCmd_Value$(i, a) : Exit Sub
+    If k = "-normalwnd" Or k = "-nomalwnd" Then g_pcKind = AB4PROJ_NORMAL : Exit Sub
+    If k = "-hello" Then g_pcHello = 1 : Exit Sub
+    If k = "-regen" Then g_pcRegen = ProjCmd_Value$(i, a) : Exit Sub
+    g_pcBad = "unknown option: " & a
+End Sub
+
+Sub ProjCmd_Parse()
+    Dim i As Long, found As Long, a As String
+    i = 1
+    a = ProjCmd_Arg$(i, found)
+    While found <> 0 And Len(g_pcBad) = 0
+        ProjCmd_Opt(a, i)
+        i = i + 1
+        a = ProjCmd_Arg$(i, found)
+    Wend
+End Sub
+
+Sub ProjCmd_Usage()
+    Print "ProjectCmd - ActBa64 ProjectEditor command line tool"
+    Print "usage: ProjectCmd -createPj <name> [-normalWnd] [-dir <folder>] [-hello]"
+    Print "       ProjectCmd -regen <project.pj>"
+    Print "  -createPj  make an AB4 project in <folder>\<name>\ (default folder: current)"
+    Print "  -normalWnd EXE - normal window base (default; -nomalWnd is the same)"
+    Print "  -hello     draw " & Chr$(34) & "Hello world!" & Chr$(34) & " in the window"
+    Print "  -regen     remake Callback.wbp and MakeWindow.wbp from <project>.wnd (AB4 RAD)"
+End Sub
+
+Function ProjCmd_ErrText$(ByVal e As Long) As String
+    ProjCmd_ErrText$ = "cannot write " & g_ab4ErrPath
+    If e = AB4ERR_NAME Then ProjCmd_ErrText$ = "bad project name: " & g_pcName
+    If e = AB4ERR_KIND Then ProjCmd_ErrText$ = "this application type cannot be made yet"
+    If e = AB4ERR_EXISTS Then ProjCmd_ErrText$ = "project already exists: " & AB4Proj_Folder$(g_pcDir, g_pcName) & g_pcName & ".pj"
+    If e = AB4ERR_DIR Then ProjCmd_ErrText$ = "cannot make folder " & g_ab4ErrPath
+End Function
+
+Function ProjCmd_Create() As Long
+    Dim e As Long
+    If Len(g_pcDir) = 0 Then g_pcDir = ProjCmd_CurDir$()
+    e = AB4Proj_Create(g_pcDir, g_pcName, g_pcKind, g_pcHello)
+    ProjCmd_Create = 0
+    If e = AB4ERR_NONE Then Print "created " & g_ab4Pj : Exit Function
+    Print "error: " & ProjCmd_ErrText$(e)
+    ProjCmd_Create = 2
+End Function
+
+' -regen: .wnd が無ければ何もしないで 0
+Function ProjCmd_Regen() As Long
+    Dim ok As Long
+    ProjCmd_Regen = 0
+    ok = RadGen_Run(g_pcRegen)
+    If ok <> 0 And Len(g_rgDone) > 0 Then Print "Generated Callback.wbp and MakeWindow.wbp from " & g_rgDone
+    If ok <> 0 Then Exit Function
+    Print "error: " & g_rgErr
+    ProjCmd_Regen = 2
+End Function
+
+Function ProjCmd_Main() As Long
+    g_pcKind = AB4PROJ_NORMAL
+    ProjCmd_Parse()
+    ProjCmd_Main = 1
+    If Len(g_pcBad) > 0 Then Print "error: " & g_pcBad
+    If Len(g_pcBad) > 0 Or (g_pcCreate = 0 And Len(g_pcRegen) = 0) Then ProjCmd_Usage() : Exit Function
+    If Len(g_pcRegen) > 0 Then ProjCmd_Main = ProjCmd_Regen() : Exit Function
+    ProjCmd_Main = ProjCmd_Create()
+End Function
+
+ExitProcess(ProjCmd_Main())
