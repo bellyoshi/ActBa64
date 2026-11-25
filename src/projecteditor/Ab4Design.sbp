@@ -11,6 +11,10 @@ Const FD_MODE_AB4 = 2
 Const AB4D_ORG_X = 16                       ' 窓の左端
 Const AB4D_ORG_Y = DOCTAB_H + 16            ' 最初の窓の上端
 Const AB4D_GAP = 16                         ' 窓と窓のあいだ
+Const AB4D_INFO_H = 22                      ' 下の、選んでいる部品を出す帯の高さ
+Const AB4D_WHEEL = 48                       ' ホイール 1 目盛りで動かす量
+
+Dim g_a4ScrX As Long, g_a4ScrY As Long      ' 窓を描く面をずらしている量（ホイールで動かす）
 
 ' hWnd の文書のパス（前面は g_docPath、ほかはスロット）
 Function Ab4D_DocPath$(hWnd As HWND) As String
@@ -34,6 +38,7 @@ Sub Ab4D_Enter(hWnd As HWND)
         Exit Sub
     End If
     Ab4D_Unselect()
+    g_a4ScrX = 0 : g_a4ScrY = 0
     g_fdOn = FD_MODE_AB4
     EditorCaret_Destroy()
     FormDesign_Refresh(hWnd)
@@ -51,10 +56,19 @@ Function Ab4D_WinH(ByVal w As Long) As Long
     If Ab4D_WinDragging(w) <> 0 Then Ab4D_WinH = g_a4CH
 End Function
 
+' 窓の左端と、最初の窓の上端（ずらした分を引く）
+Function Ab4D_OrgX() As Long
+    Ab4D_OrgX = AB4D_ORG_X - g_a4ScrX
+End Function
+
+Function Ab4D_OrgY() As Long
+    Ab4D_OrgY = AB4D_ORG_Y - g_a4ScrY
+End Function
+
 ' 窓 w の上端（前の窓の下に AB4D_GAP 空けて並べる）
 Function Ab4D_WinTop(ByVal w As Long) As Long
     Dim i As Long
-    Ab4D_WinTop = AB4D_ORG_Y
+    Ab4D_WinTop = Ab4D_OrgY()
     For i = 0 To w - 1
         Ab4D_WinTop = Ab4D_WinTop + Ab4D_WinH(i) + AB4D_GAP
     Next
@@ -62,7 +76,7 @@ End Function
 
 ' 窓 w のクライアントの左上（枠と見出しの帯の内側）
 Function Ab4D_ClientX(ByVal w As Long) As Long
-    Ab4D_ClientX = AB4D_ORG_X + 4
+    Ab4D_ClientX = Ab4D_OrgX() + 4
 End Function
 
 Function Ab4D_ClientY(ByVal w As Long) As Long
@@ -92,20 +106,10 @@ Sub Ab4D_DrawFrame(hDC As HDC, ByVal x As Long, ByVal y As Long, ByVal w As Long
     Ui_Text(hDC, x + 10, y + 4 + (ch - 14) \ 2, cap)
 End Sub
 
-Sub Ab4D_DrawKind(hDC As HDC, ByRef rc As RECT, ByVal k As Long, cap As String, name As String)
-    If k = AB4K_BUTTON Then FormDesign_DrawButton(hDC, rc, cap)
-    If k = AB4K_CHECK Then FormDesign_DrawCheckBox(hDC, rc, cap)
-    If k = AB4K_RADIO Then FormDesign_DrawRadio(hDC, rc, cap)
-    If k = AB4K_EDIT Then FormDesign_DrawEdit(hDC, rc, cap)
-    If k = AB4K_GROUP Then FormDesign_DrawGroup(hDC, rc, cap)
-    If k = AB4K_LABEL Then FormDesign_DrawLabel(hDC, rc, cap)
-    If k = AB4K_BOX Then FormDesign_DrawImage(hDC, rc, name)
-End Sub
-
 Sub Ab4D_DrawItem(hDC As HDC, ByVal i As Long)
     Dim rc As RECT
     Ab4D_ItemScreen(i, rc)
-    Ab4D_DrawKind(hDC, rc, Ab4D_Kind(g_riType(i)), g_riCaption(i), g_riName(i))
+    Ab4D_DrawPart(hDC, rc, i)
 End Sub
 
 ' 右辺・下辺・右下のつまみ
@@ -119,11 +123,11 @@ End Sub
 Sub Ab4D_DrawWin(hDC As HDC, ByVal w As Long)
     Dim i As Long, y As Long
     y = Ab4D_WinTop(w)
-    Ab4D_DrawFrame(hDC, AB4D_ORG_X, y, Ab4D_WinW(w), Ab4D_WinH(w), g_rwCaption(w))
+    Ab4D_DrawFrame(hDC, Ab4D_OrgX(), y, Ab4D_WinW(w), Ab4D_WinH(w), g_rwCaption(w))
     For i = 0 To g_riCount - 1
         If g_riWin(i) = w Then Ab4D_DrawItem(hDC, i)
     Next
-    Ab4D_DrawGrips(hDC, AB4D_ORG_X, y, AB4D_ORG_X + Ab4D_WinW(w), y + Ab4D_WinH(w))
+    Ab4D_DrawGrips(hDC, Ab4D_OrgX(), y, Ab4D_OrgX() + Ab4D_WinW(w), y + Ab4D_WinH(w))
 End Sub
 
 ' 選んでいる部品のつまみ
@@ -141,18 +145,67 @@ Sub Ab4D_DrawInfo(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     s = "AB4: " & FormDesign_Num$(g_rwCount) & " window(s), " & FormDesign_Num$(g_riCount) & " item(s)"
     i = Ab4D_SelIndex(hWnd)
     If i >= 0 Then s = g_riName(i) & " (" & Ab4D_SelRectText$(i) & ")"
-    Ui_TextColor(hDC, RGB(255, 255, 255))
-    Ui_Text(hDC, AB4D_ORG_X, rc.bottom - 20, s & "    (F12: source)")
+    FormDesign_Fill(hDC, 0, rc.bottom - AB4D_INFO_H, rc.right, rc.bottom, Ui_SysColor(COLOR_BTNFACE))
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_BTNTEXT))
+    Ui_Text(hDC, 8, rc.bottom - AB4D_INFO_H + 4, s & "    (F12: source)")
 End Sub
 
 Sub Ab4D_DrawAll(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     Dim w As Long
     RadWnd_Parse(FormDesign_Text$(hWnd))
     FormDesign_Fill(hDC, 0, 0, rc.right, rc.bottom, Ui_SysColor(COLOR_APPWORKSPACE))
+    Ab4D_ClampScroll(rc)
+    Ui_ClipTo(hDC, 0, DOCTAB_H, Ab4D_CanvasR(rc), rc.bottom - AB4D_INFO_H)
     For w = 0 To g_rwCount - 1
         Ab4D_DrawWin(hDC, w)
     Next
     Ab4D_DrawSel(hDC, hWnd)
+    Ui_ClipOff(hDC)
     Ab4D_DrawInfo(hDC, hWnd, rc)
     DocTabs_Draw(hDC, hWnd)
+End Sub
+
+' ---- ずらす ----
+
+' 窓を描く面の右端
+Function Ab4D_CanvasR(ByRef rc As RECT) As Long
+    Ab4D_CanvasR = rc.right
+End Function
+
+' 窓をすべて並べた幅と高さ（余白を含む。ずらしていないとき）
+Sub Ab4D_ContentSize(ByRef cw As Long, ByRef ch As Long)
+    Dim w As Long
+    cw = 0 : ch = AB4D_ORG_Y
+    For w = 0 To g_rwCount - 1
+        If Ab4D_WinW(w) > cw Then cw = Ab4D_WinW(w)
+        ch = ch + Ab4D_WinH(w) + AB4D_GAP
+    Next
+    cw = cw + AB4D_ORG_X * 2
+End Sub
+
+' ずらす量を、窓が見える範囲に収める
+Sub Ab4D_ClampScroll(ByRef rc As RECT)
+    Dim cw As Long, ch As Long
+    Ab4D_ContentSize(cw, ch)
+    g_a4ScrX = Ab4D_Clamp(g_a4ScrX, cw - Ab4D_CanvasR(rc))
+    g_a4ScrY = Ab4D_Clamp(g_a4ScrY, ch - (rc.bottom - AB4D_INFO_H))
+End Sub
+
+Function Ab4D_Clamp(ByVal v As Long, ByVal mx As Long) As Long
+    Ab4D_Clamp = v
+    If Ab4D_Clamp > mx Then Ab4D_Clamp = mx
+    If Ab4D_Clamp < 0 Then Ab4D_Clamp = 0
+End Function
+
+' ホイール。Shift を押していれば横に、そうでなければ縦にずらす
+Sub Ab4D_Wheel(hWnd As HWND, ByVal wParam As WPARAM)
+    Dim d As Long, rc As RECT
+    d = HIWORD(wParam)
+    If d >= &H8000 Then d = d - &H10000
+    d = -(d \ 120) * AB4D_WHEEL
+    If (LOWORD(wParam) And MK_SHIFT) <> 0 Then g_a4ScrX = g_a4ScrX + d Else g_a4ScrY = g_a4ScrY + d
+    Ui_ClientRect(hWnd, rc)
+    RadWnd_Parse(FormDesign_Text$(hWnd))
+    Ab4D_ClampScroll(rc)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
