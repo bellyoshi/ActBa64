@@ -30,7 +30,7 @@
 ### P2 — OOP・メディア・規模
 
 - **ネスト手続き**
-- **`Int64` / `QWord`** の `-actba32`（64bit 出力は済み）
+- **`Int64` / `QWord`** の `-actba32` の配列・Type のメンバ・Declare と関数ポインタの仮引数（スカラー・仮引数・戻り値・演算は済み）
 - **符号無し演算**の AB 4.20 ルール完全化
 - **DirectX 高レベル**: `CImage2D` / `CMeshModel` / `CRectPolygon`、`dx_input` / `dx_music` の D3D11・XAudio2 等への置き換え
 - **`InitProc` / `RenderProc` 雛形**: `.pj` テンプレート化（RAD 全面再現の前段）
@@ -52,14 +52,14 @@
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |
-| `Int64` / `QWord` | 4.20 基本型一覧。64bit 出力と `-linux` は済み。`-actba32`（edx:eax の組）は未で、32bit として読み警告を出す（`Char` は `Byte`） |
+| `Int64` / `QWord` | 4.20 基本型一覧。64bit 出力と `-linux` は済み。`-actba32`（edx:eax の組）はスカラー・仮引数・戻り値・演算が済み、配列・Type のメンバ・Declare と関数ポインタの仮引数は 32bit として読み警告を出す（`Char` は `Byte`） |
 
 ## 数値・型
 
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
 | 符号無し演算 | 4.20: 両オペランドが符号無し型なら符号無し演算 |
-| `LongLong` / `QWord` / `Int64` 算術 | 64bit 出力は済み。`-actba32` は未 |
+| `LongLong` / `QWord` / `Int64` 算術 | 64bit 出力と `-actba32` は済み |
 
 ## GUI・Win32・マルチメディア
 

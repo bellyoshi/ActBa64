@@ -1,0 +1,245 @@
+' Emitter32I64 - i386 の Int64 / QWord（-actba32）
+' 値は edx:eax（上位32:下位32。Double と同じ組）。二項演算の左は [esp] の 8 バイトで、
+' 命令がそれを取り除く（右は edx:eax）。使うのは eax / ecx / edx だけ
+
+Sub EmitBytes2(cb As *CodeBuffer, a As Long, b As Long)
+    EmitByte(cb, a As Byte)
+    EmitByte(cb, b As Byte)
+End Sub
+
+Sub EmitBytes3(cb As *CodeBuffer, a As Long, b As Long, c As Long)
+    EmitBytes2(cb, a, b)
+    EmitByte(cb, c As Byte)
+End Sub
+
+Sub EmitBytes4(cb As *CodeBuffer, a As Long, b As Long, c As Long, d As Long)
+    EmitBytes2(cb, a, b)
+    EmitBytes2(cb, c, d)
+End Sub
+
+' add esp, 8（83 C4 08）
+Sub Emit32W64Drop(cb As *CodeBuffer)
+    EmitBytes3(cb, &H83, &HC4, 8)
+End Sub
+
+' cdq（Long を符号で広げる）
+Sub Emit32W64Sx(cb As *CodeBuffer)
+    EmitByte(cb, &H99)
+End Sub
+
+' xor edx, edx（DWord を 0 で広げる）
+Sub Emit32W64Zx(cb As *CodeBuffer)
+    EmitBytes2(cb, &H31, &HD2)
+End Sub
+
+' add eax, [esp] / adc edx, [esp+4]
+Sub Emit32W64Add(cb As *CodeBuffer)
+    EmitBytes3(cb, &H03, &H04, &H24)
+    EmitBytes4(cb, &H13, &H54, &H24, 4)
+    Emit32W64Drop(cb)
+End Sub
+
+' 左 - 右: mov ecx, [esp] / sub ecx, eax / mov eax, ecx / mov ecx, [esp+4] / sbb ecx, edx / mov edx, ecx
+Sub Emit32W64Sub(cb As *CodeBuffer)
+    EmitBytes3(cb, &H8B, &H0C, &H24)
+    EmitBytes2(cb, &H29, &HC1)
+    EmitBytes2(cb, &H89, &HC8)
+    EmitBytes4(cb, &H8B, &H4C, &H24, 4)
+    EmitBytes2(cb, &H19, &HD1)
+    EmitBytes2(cb, &H89, &HCA)
+    Emit32W64Drop(cb)
+End Sub
+
+' opc は and = 23、or = 0B、xor = 33（op r32, r/m32）
+Sub Emit32W64Bit(cb As *CodeBuffer, opc As Long)
+    EmitBytes3(cb, opc, &H04, &H24)
+    EmitBytes4(cb, opc, &H54, &H24, 4)
+    Emit32W64Drop(cb)
+End Sub
+
+' 下位 64 ビットの積（符号の有無で同じ）
+' mov ecx, edx / imul ecx, [esp] / mov edx, [esp+4] / imul edx, eax / add ecx, edx / mul dword [esp] / add edx, ecx
+Sub Emit32W64Mul(cb As *CodeBuffer)
+    EmitBytes2(cb, &H89, &HD1)
+    EmitBytes4(cb, &H0F, &HAF, &H0C, &H24)
+    EmitBytes4(cb, &H8B, &H54, &H24, 4)
+    EmitBytes3(cb, &H0F, &HAF, &HD0)
+    EmitBytes2(cb, &H01, &HD1)
+    EmitBytes3(cb, &HF7, &H24, &H24)
+    EmitBytes2(cb, &H01, &HCA)
+    Emit32W64Drop(cb)
+End Sub
+
+' neg eax / adc edx, 0 / neg edx
+Sub Emit32W64Neg(cb As *CodeBuffer)
+    EmitBytes2(cb, &HF7, &HD8)
+    EmitBytes3(cb, &H83, &HD2, 0)
+    EmitBytes2(cb, &HF7, &HDA)
+End Sub
+
+' not eax / not edx
+Sub Emit32W64Not(cb As *CodeBuffer)
+    EmitBytes2(cb, &HF7, &HD0)
+    EmitBytes2(cb, &HF7, &HD2)
+End Sub
+
+' 真偽: mov ecx, eax / or ecx, edx（ZF）
+Sub Emit32W64Test(cb As *CodeBuffer)
+    EmitBytes2(cb, &H89, &HC1)
+    EmitBytes2(cb, &H09, &HD1)
+End Sub
+
+' シフト: 左は [esp]、回数は eax。mov ecx, eax / pop eax / pop edx の後に
+Sub Emit32W64ShiftLoad(cb As *CodeBuffer)
+    EmitBytes2(cb, &H89, &HC1)
+    EmitByte(cb, &H58)
+    EmitByte(cb, &H5A)
+End Sub
+
+' shld edx, eax, cl / shl eax, cl / test cl, 32 / jz +4 / mov edx, eax / xor eax, eax
+Sub Emit32W64Shl(cb As *CodeBuffer)
+    Emit32W64ShiftLoad(cb)
+    EmitBytes3(cb, &H0F, &HA5, &HC2)
+    EmitBytes2(cb, &HD3, &HE0)
+    EmitBytes3(cb, &HF6, &HC1, 32)
+    EmitBytes2(cb, &H74, 4)
+    EmitBytes2(cb, &H89, &HC2)
+    EmitBytes2(cb, &H31, &HC0)
+End Sub
+
+' shrd eax, edx, cl / sar edx, cl / test cl, 32 / jz +5 / mov eax, edx / sar edx, 31
+Sub Emit32W64Sar(cb As *CodeBuffer)
+    Emit32W64ShiftLoad(cb)
+    EmitBytes3(cb, &H0F, &HAD, &HD0)
+    EmitBytes2(cb, &HD3, &HFA)
+    EmitBytes3(cb, &HF6, &HC1, 32)
+    EmitBytes2(cb, &H74, 5)
+    EmitBytes2(cb, &H89, &HD0)
+    EmitBytes3(cb, &HC1, &HFA, 31)
+End Sub
+
+' shrd eax, edx, cl / shr edx, cl / test cl, 32 / jz +4 / mov eax, edx / xor edx, edx
+Sub Emit32W64Shr(cb As *CodeBuffer)
+    Emit32W64ShiftLoad(cb)
+    EmitBytes3(cb, &H0F, &HAD, &HD0)
+    EmitBytes2(cb, &HD3, &HEA)
+    EmitBytes3(cb, &HF6, &HC1, 32)
+    EmitBytes2(cb, &H74, 4)
+    EmitBytes2(cb, &H89, &HD0)
+    EmitBytes2(cb, &H31, &HD2)
+End Sub
+
+' 割り算の前: xchg eax, [esp] / xchg edx, [esp+4] / push edx / push eax
+' → [esp] = 左（被除数）、[esp+8] = 右（除数）。ntdll の _alldiv などがそのまま 16 バイトを取る
+Sub Emit32W64DivPrep(cb As *CodeBuffer)
+    EmitBytes3(cb, &H87, &H04, &H24)
+    EmitBytes4(cb, &H87, &H54, &H24, 4)
+    EmitByte(cb, &H52)
+    EmitByte(cb, &H50)
+End Sub
+
+' 比較: eax = 0（左 < 右）/ 1（等しい）/ 2（左 > 右）にして cmp eax, 1。
+' 呼び出し側の jcc / setcc は符号の有無どちらでもそのまま使える。isU なら上位も符号なしで比べる
+Sub Emit32W64Cmp(cb As *CodeBuffer, isU As Long)
+    ' cmp [esp+4], edx
+    EmitBytes4(cb, &H39, &H54, &H24, 4)
+    If isU <> 0 Then
+        EmitBytes2(cb, &H72, 16)
+        EmitBytes2(cb, &H77, 18)
+    Else
+        EmitBytes2(cb, &H7C, 16)
+        EmitBytes2(cb, &H7F, 18)
+    End If
+    ' cmp [esp], eax / jb LESS / ja GREATER
+    EmitBytes3(cb, &H39, &H04, &H24)
+    EmitBytes2(cb, &H72, 9)
+    EmitBytes2(cb, &H77, 11)
+    ' mov eax, 1 / jmp DONE
+    EmitByte(cb, &HB8)
+    EmitDword(cb, 1)
+    EmitBytes2(cb, &HEB, 9)
+    ' LESS: xor eax, eax / jmp DONE
+    EmitBytes2(cb, &H31, &HC0)
+    EmitBytes2(cb, &HEB, 5)
+    ' GREATER: mov eax, 2
+    EmitByte(cb, &HB8)
+    EmitDword(cb, 2)
+    ' DONE: lea esp, [esp+8] / cmp eax, 1
+    EmitBytes4(cb, &H8D, &H64, &H24, 8)
+    EmitBytes3(cb, &H83, &HF8, 1)
+End Sub
+
+' push edx / push eax / fild qword [esp]
+Sub Emit32W64Fild(cb As *CodeBuffer)
+    EmitByte(cb, &H52)
+    EmitByte(cb, &H50)
+    EmitBytes3(cb, &HDF, &H2C, &H24)
+End Sub
+
+' Int64 → Double（edx:eax）
+Sub Emit32W64ToSd(cb As *CodeBuffer)
+    Emit32W64Fild(cb)
+    Emit32FstpEspPair(cb)
+End Sub
+
+' QWord → Double: 最上位ビットが立っていれば 2^64 を足す
+' test edx, edx / jns +11 / push 5F800000h / fadd dword [esp] / add esp, 4
+Sub Emit32U64ToSd(cb As *CodeBuffer)
+    Emit32W64Fild(cb)
+    EmitBytes2(cb, &H85, &HD2)
+    EmitBytes2(cb, &H79, 11)
+    EmitByte(cb, &H68)
+    EmitDword(cb, &H5F800000)
+    EmitBytes3(cb, &HD8, &H04, &H24)
+    EmitBytes3(cb, &H83, &HC4, 4)
+    Emit32FstpEspPair(cb)
+End Sub
+
+' st0 を 0 へ切り捨てて [esp] の 8 バイトへ（rc を一時的に切り捨てに）、edx:eax に取り出す
+' sub esp, 4 / fnstcw [esp] / movzx eax, word [esp] / or eax, 0C00h / mov [esp+2], ax
+' fldcw [esp+2] / fistp qword [esp+4] / fldcw [esp] / add esp, 4 / pop eax / pop edx
+Sub Emit32W64FistpTrunc(cb As *CodeBuffer)
+    EmitBytes3(cb, &H83, &HEC, 4)
+    EmitBytes3(cb, &HD9, &H3C, &H24)
+    EmitBytes4(cb, &H0F, &HB7, &H04, &H24)
+    EmitByte(cb, &H0D)
+    EmitDword(cb, &H0C00)
+    EmitBytes3(cb, &H66, &H89, &H44)
+    EmitBytes2(cb, &H24, 2)
+    EmitBytes4(cb, &HD9, &H6C, &H24, 2)
+    EmitBytes4(cb, &HDF, &H7C, &H24, 4)
+    EmitBytes3(cb, &HD9, &H2C, &H24)
+    EmitBytes3(cb, &H83, &HC4, 4)
+    EmitByte(cb, &H58)
+    EmitByte(cb, &H5A)
+End Sub
+
+' Double（edx:eax）→ Int64: push edx / push eax / fld qword [esp] / 切り捨て
+Sub Emit32SdToW64(cb As *CodeBuffer)
+    EmitByte(cb, &H52)
+    EmitByte(cb, &H50)
+    EmitBytes3(cb, &HDD, &H04, &H24)
+    Emit32W64FistpTrunc(cb)
+End Sub
+
+' Double → QWord: 2^63 以上なら 2^63 を引いてから整数にし、最上位ビットを立て直す
+' push edx / push eax / fld qword [esp] / push 5F000000h / xor ecx, ecx / fld dword [esp]
+' fcomip st0, st1 / ja +8 / fsub dword [esp] / mov ecx, 80000000h / add esp, 4
+' 切り捨て / xor edx, ecx
+Sub Emit32SdToU64(cb As *CodeBuffer)
+    EmitByte(cb, &H52)
+    EmitByte(cb, &H50)
+    EmitBytes3(cb, &HDD, &H04, &H24)
+    EmitByte(cb, &H68)
+    EmitDword(cb, &H5F000000)
+    EmitBytes2(cb, &H31, &HC9)
+    EmitBytes3(cb, &HD9, &H04, &H24)
+    EmitBytes2(cb, &HDF, &HF1)
+    EmitBytes2(cb, &H77, 8)
+    EmitBytes3(cb, &HD8, &H24, &H24)
+    EmitByte(cb, &HB9)
+    EmitDword(cb, &H80000000)
+    EmitBytes3(cb, &H83, &HC4, 4)
+    Emit32W64FistpTrunc(cb)
+    EmitBytes2(cb, &H31, &HCA)
+End Sub

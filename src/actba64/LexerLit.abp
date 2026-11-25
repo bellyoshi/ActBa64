@@ -34,8 +34,8 @@ Function LexHexLit(lx As *Lexer) As Long
             lx->pos = lx->pos + 1
         Loop
         LexSkipLongSuffix(lx)
-        ' 9..16 桁の &H は、64bit 出力なら Int64 のリテラル
-        If nd > 8 And nd <= 16 And TyIs32() = 0 Then
+        ' 9..16 桁の &H は Int64 のリテラル
+        If nd > 8 And nd <= 16 Then
             LexHexLit = LexPushLit64(lx)
             Exit Function
         End If
@@ -124,7 +124,7 @@ Function LexNumber(lx As *Lexer) As Long
     isF = LexScanFrac(lx)
     If LexScanExp(lx) <> 0 Then isF = 1
     If isF = 0 Then isF = LexDecTooBig(lx->src, start, lx->pos)
-    ' 32bit に入らない十進の整数は、64bit 出力なら Int64 のリテラル（入らなければ Double）
+    ' 32bit に入らない十進の整数は Int64 / QWord のリテラル（入らなければ Double）
     If isF = 1 And LexDecIsInt(lx->src, start, lx->pos) <> 0 Then
         If LexPushDec64(lx, start) <> 0 Then
             LexNumber = 1
@@ -234,12 +234,11 @@ Function LexPushLit64(lx As *Lexer) As Long
 End Function
 
 ' 十進 start..pos を 64bit のリテラルに。9223372036854775807 までは Int64、
-' 18446744073709551615 までは QWord。-actba32 やそれを超えるときは 0（Double で読む）
+' 18446744073709551615 までは QWord。それを超えるときは 0（Double で読む）
 Function LexPushDec64(lx As *Lexer, start As Long) As Long
     Dim i As Long
     Dim toks As *Tok
     LexPushDec64 = 0
-    If TyIs32() <> 0 Then Exit Function
     LexLit64Clear()
     For i = start To lx->pos - 1
         If LexLit64MulAdd(LEX_RADIX_DEC, DigitValue(lx->src[i])) = 0 Then Exit Function
@@ -352,9 +351,9 @@ Function LexIdent(lx As *Lexer) As Long
 End Function
 
 ' QWord は DWord、Int64 は Long と読む。戻り値は新しい長さ
-' 64bit 出力では語に印（Tok.num の LEX_WIDE_I64 / LEX_WIDE_U64）を付け、64bit を読める所が
+' 語に印（Tok.num の LEX_WIDE_I64 / LEX_WIDE_U64）を付け、64bit を読める所が
 ' 印を使う（LEX_WIDE_USED）。使われなかった印は構文解析のあとで警告する（ParseWarnWide）。
-' -actba32 はこれまでどおりここで警告する
+' -actba32 はまだ配列・Type のメンバ・Declare の戻り値を 64bit で読まない（ParseTakeWide64Only）
 Const LEX_WIDE_I64 = 1
 Const LEX_WIDE_U64 = 2
 Const LEX_WIDE_USED = 256
@@ -373,10 +372,6 @@ Function LexNarrowWideInt(lx As *Lexer, buf As *Byte, n As Long) As Long
         Exit Function
     End If
     LexNarrowWideInt = lstrlen(buf)
-    If TyIs32() <> 0 Then
-        DiagWarn(lx->srcLine, LexWideMsg$(g_lexWide))
-        g_lexWide = 0
-    End If
 End Function
 
 ' w は LEX_WIDE_I64 / LEX_WIDE_U64。元の型名と置き換え先の両方を出す（「QWord は DWord（32 ビット）」）
