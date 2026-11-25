@@ -1,0 +1,125 @@
+' dx_shader.sbp - シェーダー・入力レイアウト・バッファの作成（D3D11 サンプル共通）
+' dx_graphics.sbp から読み込まれる。g_pDevice と g_dxHwnd を使う。
+
+' 失敗した手順の名前と HRESULT を出す。
+Sub dx_FailStep(stepName As String, hr As DWord)
+	Dim msg As String
+	msg = stepName + " hr=&H" + Hex$(hr)
+	MessageBox(g_dxHwnd, msg, "dx_fail", MB_OK or MB_ICONSTOP)
+End Sub
+
+' COM オブジェクトを Release して 0 にする。0 なら何もしない。
+Sub dx_ReleaseCom(ByRef p As VoidPtr)
+	Dim pu As *IUnknown
+	If p = 0 Then Exit Sub
+	pu = p
+	pu->Release()
+	p = 0
+End Sub
+
+' HLSL を 1 つの入口関数だけコンパイルする。0 で成功（HRESULT を返す）。
+Function dx_CompileShader(pSrc As BytePtr, srcLen As DWord, pEntry As BytePtr, pTarget As BytePtr, ByRef ppBlob As *ID3DBlob) As DWord
+	Dim pErr As *ID3DBlob
+	Dim hr As DWord
+	pErr = 0
+	hr = D3DCompile(pSrc, srcLen, "shader.hlsl", 0, 0, pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, VarPtr(ppBlob), VarPtr(pErr))
+	If hr Then
+		If pErr Then
+			MessageBox(g_dxHwnd, pErr->GetBufferPointer(), "D3DCompile", MB_OK or MB_ICONSTOP)
+			pErr->Release()
+		Else
+			MessageBox(g_dxHwnd, "D3DCompile failed. Check d3dcompiler_47.dll.", "dx_fail", MB_OK or MB_ICONSTOP)
+		End If
+	End If
+	dx_CompileShader = hr
+End Function
+
+' hlsl の VS と PS（入口は VS / PS、vs_4_0 / ps_4_0）から両シェーダーを作る。
+' 成功すると 1。pVSBlob は呼び出し側に残す（入力レイアウトに使い、使い終えたら Release する）。
+Function dx_CreateShaders(hlsl As String, ByRef pVS As *ID3D11VertexShader, ByRef pPS As *ID3D11PixelShader, ByRef pVSBlob As *ID3DBlob) As Long
+	Dim pPSBlob As *ID3DBlob
+	Dim srcLen As DWord
+	Dim hr As DWord
+	dx_CreateShaders = 0
+	pVSBlob = 0
+	pPSBlob = 0
+	srcLen = Len(hlsl)
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("VS"), StrPtr("vs_4_0"), pVSBlob) Then Exit Function
+	If dx_CompileShader(StrPtr(hlsl), srcLen, StrPtr("PS"), StrPtr("ps_4_0"), pPSBlob) Then
+		dx_ReleaseCom(pVSBlob)
+		Exit Function
+	End If
+	hr = g_pDevice->CreateVertexShader(pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), 0, VarPtr(pVS))
+	If hr = 0 Then
+		hr = g_pDevice->CreatePixelShader(pPSBlob->GetBufferPointer(), pPSBlob->GetBufferSize(), 0, VarPtr(pPS))
+		If hr Then dx_FailStep("CreatePixelShader", hr)
+	Else
+		dx_FailStep("CreateVertexShader", hr)
+	End If
+	dx_ReleaseCom(pPSBlob)
+	If hr Then
+		dx_ReleaseCom(pVSBlob)
+		Exit Function
+	End If
+	dx_CreateShaders = 1
+End Function
+
+' 頂点が float3 位置 + float4 色（28 バイト）のシェーダー。
+Function dx_PosColorHlsl$() As String
+	Dim u As String
+	Dim hlsl As String
+	u = Chr$(95)
+	hlsl = "struct VS" + u + "IN{float3 pos:POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "struct VS" + u + "OUT{float4 pos:SV" + u + "POSITION;float4 col:COLOR;};"
+	hlsl = hlsl + "VS" + u + "OUT VS(VS" + u + "IN i){VS" + u + "OUT o;o.pos=float4(i.pos,1);o.col=i.col;return o;}"
+	hlsl = hlsl + "float4 PS(VS" + u + "OUT i):SV" + u + "Target{return i.col;}"
+	dx_PosColorHlsl$ = hlsl
+End Function
+
+' dx_PosColorHlsl$ 用の入力レイアウト（POSITION float3 + COLOR float4）を作る。
+' pVSBlob は成否にかかわらず Release する。成功すると 1。
+Function dx_CreatePosColorLayout(pVSBlob As *ID3DBlob, ByRef pLayout As *ID3D11InputLayout) As Long
+	Dim namePos As String
+	Dim nameCol As String
+	Dim layout[1] As D3D11_INPUT_ELEMENT_DESC
+	Dim hr As DWord
+	dx_CreatePosColorLayout = 0
+	namePos = "POSITION"
+	nameCol = "COLOR"
+	ZeroMemory(VarPtr(layout[0]), Len(layout[0]) * 2)
+	layout[0].SemanticName = StrPtr(namePos)
+	layout[0].Format = DXGI_FORMAT_R32G32B32_FLOAT
+	layout[0].AlignedByteOffset = 0
+	layout[0].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	layout[1].SemanticName = StrPtr(nameCol)
+	layout[1].Format = DXGI_FORMAT_R32G32B32A32_FLOAT
+	layout[1].AlignedByteOffset = 12
+	layout[1].InputSlotClass = D3D11_INPUT_PER_VERTEX_DATA
+	hr = g_pDevice->CreateInputLayout(VarPtr(layout[0]), 2, pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), VarPtr(pLayout))
+	dx_ReleaseCom(pVSBlob)
+	If hr Then
+		dx_FailStep("CreateInputLayout", hr)
+		Exit Function
+	End If
+	dx_CreatePosColorLayout = 1
+End Function
+
+' 既定の使い方（D3D11_USAGE_DEFAULT）のバッファを pData の内容で作る。成功すると 1。
+Function dx_CreateBuffer(byteWidth As DWord, bindFlags As DWord, pData As VoidPtr, ByRef pBuf As *ID3D11Buffer) As Long
+	Dim bd As D3D11_BUFFER_DESC
+	Dim initData As D3D11_SUBRESOURCE_DATA
+	Dim hr As DWord
+	dx_CreateBuffer = 0
+	ZeroMemory(VarPtr(bd), Len(bd))
+	ZeroMemory(VarPtr(initData), Len(initData))
+	bd.ByteWidth = byteWidth
+	bd.Usage = D3D11_USAGE_DEFAULT
+	bd.BindFlags = bindFlags
+	initData.pSysMem = pData
+	hr = g_pDevice->CreateBuffer(VarPtr(bd), VarPtr(initData), VarPtr(pBuf))
+	If hr Then
+		dx_FailStep("CreateBuffer", hr)
+		Exit Function
+	End If
+	dx_CreateBuffer = 1
+End Function
