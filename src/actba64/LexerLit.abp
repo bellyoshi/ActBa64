@@ -186,6 +186,8 @@ End Function
 '  16 ビットずつ 4 つ（g_lit64(0) が最下位）に分けて積む
 ' ---------------------------------------------------
 Const LEX_NUM_I64 = 4
+' 2^63 .. 2^64-1 の十進（QWord のリテラル）
+Const LEX_NUM_U64 = 8
 Dim g_lit64(3) As Long
 
 Sub LexLit64Clear()
@@ -231,18 +233,24 @@ Function LexPushLit64(lx As *Lexer) As Long
     LexPushLit64 = 1
 End Function
 
-' 十進 start..pos を Int64 のリテラルに。-actba32 や 9223372036854775807 を超えるときは 0（Double で読む）
+' 十進 start..pos を 64bit のリテラルに。9223372036854775807 までは Int64、
+' 18446744073709551615 までは QWord。-actba32 やそれを超えるときは 0（Double で読む）
 Function LexPushDec64(lx As *Lexer, start As Long) As Long
     Dim i As Long
+    Dim toks As *Tok
     LexPushDec64 = 0
     If TyIs32() <> 0 Then Exit Function
     LexLit64Clear()
     For i = start To lx->pos - 1
         If LexLit64MulAdd(LEX_RADIX_DEC, DigitValue(lx->src[i])) = 0 Then Exit Function
     Next
-    ' 符号ビットが立つ（2^63 以上）なら Int64 に入らない
-    If g_lit64(3) >= &H8000 Then Exit Function
-    LexPushDec64 = LexPushLit64(lx)
+    If LexPushLit64(lx) = 0 Then Exit Function
+    ' 符号ビットが立つ（2^63 以上）なら Int64 に入らないので QWord
+    If g_lit64(3) >= &H8000 Then
+        toks = lx->toks
+        toks[lx->count - 1].wide = LEX_NUM_U64
+    End If
+    LexPushDec64 = 1
 End Function
 
 ' 整数が DWord（4294967295）に入らなければ 1。そのときは Double として読む（64bit 整数は無いので）
@@ -366,13 +374,18 @@ Function LexNarrowWideInt(lx As *Lexer, buf As *Byte, n As Long) As Long
     End If
     LexNarrowWideInt = lstrlen(buf)
     If TyIs32() <> 0 Then
+        DiagWarn(lx->srcLine, LexWideMsg$(g_lexWide))
         g_lexWide = 0
-        DiagWarn(lx->srcLine, LexWideMsg$(buf))
     End If
 End Function
 
-Function LexWideMsg$(buf As *Byte) As String
-    LexWideMsg$ = Tr1$(1102, "64-bit integers are not supported; {0} (32-bit) is used instead", MakeStr(buf))
+' w は LEX_WIDE_I64 / LEX_WIDE_U64。元の型名と置き換え先の両方を出す（「QWord は DWord（32 ビット）」）
+Function LexWideMsg$(w As Long) As String
+    If w = LEX_WIDE_U64 Then
+        LexWideMsg$ = Tr2$(1102, "64-bit integers are not supported; {0} is read as {1} (32-bit)", "QWord", "DWord")
+    Else
+        LexWideMsg$ = Tr2$(1102, "64-bit integers are not supported; {0} is read as {1} (32-bit)", "Int64", "Long")
+    End If
 End Function
 
 Sub LexMarkWide(lx As *Lexer, idx As Long)
