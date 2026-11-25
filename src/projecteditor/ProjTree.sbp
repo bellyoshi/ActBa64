@@ -3,7 +3,7 @@
 ' フォルダーのノード（"..\common" など）にまとめる。文字は TVM_INSERTITEMW（UTF-8 → UTF-16）。
 ' <.pj の名前>.wnd があれば、<.pj の名前>.abp のノードの下にぶら下げる（無ければルートの末尾）。
 ' 各ノードの lParam は g_projRel / g_projFull の番号（ルートとフォルダーは -1、.wnd は PT_WND）。
-' 選んだら（TVN_SELCHANGED）そのファイルを開くか前面にする（ProjOpenIndex）。
+' 選んだら（TVN_SELCHANGED）かダブルクリックしたら（NM_DBLCLK）、そのファイルを開くか前面にする（ProjOpenIndex）。
 ' Linux 版は LxFrame.sbp の自前描画のリストのまま。
 
 #ifndef _LINUX
@@ -157,21 +157,30 @@ Function ProjTree_ItemParam(h As HTREEITEM) As Long
     ProjTree_ItemParam = g_ptItem.lParam As Long
 End Function
 
-Sub ProjOnSelect()
+' 選んでいるノードのファイルを開く（開いていれば前面にする。ルートとフォルダーは何もしない）
+Sub ProjTree_OpenSel()
     Dim i As Long
     i = ProjTree_SelIndex()
-    If i = PT_WND Then ProjOpenPath(EditorProjCmd_WndPath$(g_projectPath))
-    If i <> PT_WND Then ProjOpenIndex(i)
+    If i = PT_WND Then
+        ProjOpenPath(EditorProjCmd_WndPath$(g_projectPath))
+    Else
+        ProjOpenIndex(i)
+    End If
 End Sub
 
-' WM_NOTIFY。ツリーで選んだノードが変わったらそのファイルを開く
+' ノードを開く通知なら 1。選んだノードが変わった時と、ダブルクリックの時
+' （選んだままのノードは選び直しても TVN_SELCHANGED が来ない。文書をすべて閉じた後など）
+Function ProjTree_IsOpenCode(ByVal code As Long) As Long
+    ProjTree_IsOpenCode = 0
+    If code = TVN_SELCHANGED Or code = PT_TVN_SELCHANGEDW Or code = NM_DBLCLK Then ProjTree_IsOpenCode = 1
+End Function
+
+' WM_NOTIFY
 Sub ProjOnNotify(lParam As LPARAM)
     Dim nm As *NMHDR
-    Dim code As Long
     nm = lParam As *NMHDR
     If nm = 0 Then Exit Sub
     If nm->hwndFrom <> g_hProjList Then Exit Sub
-    code = nm->code As Long
-    If code = TVN_SELCHANGED Or code = PT_TVN_SELCHANGEDW Then ProjOnSelect()
+    If ProjTree_IsOpenCode(nm->code As Long) <> 0 Then ProjTree_OpenSel()
 End Sub
 #endif

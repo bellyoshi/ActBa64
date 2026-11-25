@@ -200,6 +200,7 @@ AB 4.20 の ProjectEditor で作ったウィンドウのプロジェクトを、
 | ListView | `BeginDrag` `BeginLabelEdit` `BeginRDrag` `ColumnClick` `DeleteAllItems` `DeleteItem` `EndLabelEdit` `GetDispInfo` `InsertItem` `ItemChanged` `ItemChanging` `KeyDown` `SetDispInfo` と下の NM_ のもの |
 | TreeView | `Click` `CustomDraw` `DblClick` `KillFocus` `OutOfMemory` `RClick` `RDblClick` `ReleasedCapture` `Return` `SetFocus`（`NM_*`） |
 | UpDown | `Deltapos` と上の NM_ のもの |
+| TrackBar | `OutOfMemory` `ReleasedCapture` `CustomDraw`（`NM_*`） |
 
 まだ扱わないもの: `BGCOLOR` は 15（3D FACE）のときと同じ背景になります（白・黒・色・ビットマップの背景は作りません）。ImageBox の画像は読み込みません。新しいプロジェクトの `.idx` と `MainWnd.sbp` は [§7.2](#72-ab4-プロジェクト作成と-projectcmd) で作れます。
 
