@@ -1,0 +1,75 @@
+' For の整数の制御変数の読み書き（AstLowerStmtCtrl の LowStmtFor から使う）
+' ByRef 引数の制御変数は、引数の場所にあるポインタの指す先を宣言の幅で読み書きする
+' -actba32 の 64bit の For は edx:eax の組（Double と同じ置き方）
+
+' 制御変数が ByRef なら指す先のバイト数、そうでなければ 0（LowStmtFor が g_forWide と一緒に立て直す）
+Dim g_forByRef As Long
+
+Function LowForByRefW(ctx As *LowerCtx, idx As Long) As Long
+    Dim vOff As Long, vTy As Long, vTypeIdx As Long, vByRef As Long, vGlob As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowForCopyName(ctx, idx, VarPtr(name))
+    LowForByRefW = 0
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTypeIdx), VarPtr(vByRef), VarPtr(vGlob)) Then Exit Function
+    If vByRef <> 0 Then LowForByRefW = LowByRefWidth(vTy, vTypeIdx)
+End Function
+
+Function LowForIsRef() As Long
+    LowForIsRef = 0
+    If g_forByRef <> 0 Then LowForIsRef = 1
+End Function
+
+Sub LowForLoadVar(ctx As *LowerCtx, vOff As Long, vGlob As Long)
+    If g_forWide <> 0 And TyIs32() <> 0 Then
+        LowEmitLoadDbl(ctx->list, vOff, LowForIsRef(), vGlob)
+        Exit Sub
+    End If
+    LowEmitLoadOff(ctx->list, vOff, vGlob)
+    If g_forByRef <> 0 Then LowLoadSized(ctx->list, g_forByRef)
+End Sub
+
+' eax（rax）を ByRef の指す先へ書く
+Sub LowForStoreRef(ctx As *LowerCtx, vOff As Long, vGlob As Long)
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+    LowEmitLoadOff(ctx->list, vOff, vGlob)
+    IrEmit(ctx->list, OP_POP_RCX, 0, 0)
+    LowStoreSized(ctx->list, g_forByRef)
+End Sub
+
+Sub LowForStoreWide32(ctx As *LowerCtx, vOff As Long, vGlob As Long)
+    If g_forByRef <> 0 Then
+        LowEmitStoreByRefDbl(ctx->list, vOff, vGlob)
+    Else
+        LowEmitStoreDbl(ctx->list, vOff, vGlob)
+    End If
+End Sub
+
+Sub LowForStoreVar(ctx As *LowerCtx, vOff As Long, vGlob As Long)
+    If g_forWide <> 0 And TyIs32() <> 0 Then
+        LowForStoreWide32(ctx, vOff, vGlob)
+    ElseIf g_forByRef <> 0 Then
+        LowForStoreRef(ctx, vOff, vGlob)
+    Else
+        LowEmitStoreOff(ctx->list, vOff, vGlob)
+    End If
+End Sub
+
+Sub LowForPushVar(ctx As *LowerCtx)
+    If g_forWide <> 0 And TyIs32() <> 0 Then
+        IrEmit(ctx->list, OP_PUSH_DBL, 0, 0)
+        Exit Sub
+    End If
+    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
+End Sub
+
+' 変数 += 1。ByRef でもグローバルでもない 32bit の変数は inc 1 命令
+Sub LowForInc(ctx As *LowerCtx, vOff As Long, vGlob As Long)
+    If vGlob = 0 And g_forByRef = 0 Then
+        IrEmit(ctx->list, OP_INC_LOCAL, vOff, 0)
+        Exit Sub
+    End If
+    LowForLoadVar(ctx, vOff, vGlob)
+    IrEmit(ctx->list, OP_MOV_ECX, 1, 0)
+    IrEmit(ctx->list, OP_ADD_EAX_ECX, 0, 0)
+    LowForStoreVar(ctx, vOff, vGlob)
+End Sub

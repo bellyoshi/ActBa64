@@ -157,31 +157,6 @@ Function LowStmtForStepWide(ctx As *LowerCtx, vOff As Long, vGlob As Long, stepI
     LowStmtForStepWide = true
 End Function
 
-' 制御変数の読み書き。-actba32 の 64bit の For は edx:eax の組（Double と同じ置き方）
-Sub LowForLoadVar(ctx As *LowerCtx, vOff As Long, vGlob As Long)
-    If g_forWide <> 0 And TyIs32() <> 0 Then
-        LowEmitLoadDbl(ctx->list, vOff, 0, vGlob)
-        Exit Sub
-    End If
-    LowEmitLoadOff(ctx->list, vOff, vGlob)
-End Sub
-
-Sub LowForStoreVar(ctx As *LowerCtx, vOff As Long, vGlob As Long)
-    If g_forWide <> 0 And TyIs32() <> 0 Then
-        LowEmitStoreDbl(ctx->list, vOff, vGlob)
-        Exit Sub
-    End If
-    LowEmitStoreOff(ctx->list, vOff, vGlob)
-End Sub
-
-Sub LowForPushVar(ctx As *LowerCtx)
-    If g_forWide <> 0 And TyIs32() <> 0 Then
-        IrEmit(ctx->list, OP_PUSH_DBL, 0, 0)
-        Exit Sub
-    End If
-    IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
-End Sub
-
 ' 戻り値 true : 正常終了  false : エラーあり
 Function LowStmtForStep(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Long, stepIdx As Long, useInc As Long) As boolean
     Dim nodes As *AstNode
@@ -194,29 +169,15 @@ Function LowStmtForStep(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob As Lo
         LowStmtForStep = LowStmtForStepWide(ctx, vOff, vGlob, stepIdx)
         Exit Function
     End If
-    If useInc <> 0 And vGlob = 0 Then
-        IrEmit(ctx->list, OP_INC_LOCAL, vOff, 0)
-    ElseIf useInc <> 0 Then
-        LowEmitLoadOff(ctx->list, vOff, vGlob)
-        IrEmit(ctx->list, OP_MOV_ECX, 1, 0)
-        IrEmit(ctx->list, OP_ADD_EAX_ECX, 0, 0)
-        LowEmitStoreOff(ctx->list, vOff, vGlob)
-    ElseIf stepIdx >= 0 Then
-        LowEmitLoadOff(ctx->list, vOff, vGlob)
+    If useInc <> 0 Or stepIdx < 0 Then
+        LowForInc(ctx, vOff, vGlob)
+    Else
+        LowForLoadVar(ctx, vOff, vGlob)
         IrEmit(ctx->list, OP_PUSH_RAX, 0, 0)
         If LowForIntExpr(ctx, stepIdx) = 0 Then Exit Function
         IrEmit(ctx->list, OP_POP_RCX, 0, 0)
         IrEmit(ctx->list, OP_ADD_EAX_ECX, 0, 0)
-        LowEmitStoreOff(ctx->list, vOff, vGlob)
-    Else
-        If vGlob <> 0 Then
-            LowEmitLoadOff(ctx->list, vOff, vGlob)
-            IrEmit(ctx->list, OP_MOV_ECX, 1, 0)
-            IrEmit(ctx->list, OP_ADD_EAX_ECX, 0, 0)
-            LowEmitStoreOff(ctx->list, vOff, vGlob)
-        Else
-            IrEmit(ctx->list, OP_INC_LOCAL, vOff, 0)
-        End If
+        LowForStoreVar(ctx, vOff, vGlob)
     End If
     LowStmtForStep = true
 End Function
@@ -333,6 +294,7 @@ Function LowStmtFor(ctx As *LowerCtx, idx As Long) As Long
     Dim labForCont As Long
     Dim useInc As Long
     Dim wide As Long
+    Dim byW As Long
 
     LowStmtFor = 0
     ast = ctx->ast
@@ -342,19 +304,23 @@ Function LowStmtFor(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     wide = LowExprWide(ctx, nodes[idx].left)
+    byW = LowForByRefW(ctx, idx)
     saveFor = g_forEndLab
     saveForCont = g_forContLab
     g_forWide = wide
+    g_forByRef = byW
     If Not LowStmtForPrep(ctx, idx, vOff, vGlob, stepIdx, useInc, labTop, labEnd, labStepNeg, labStepCont, labForCont) Then Exit Function
     IrEmit(ctx->list, OP_LABEL, labTop, 0)
     LowMaybeLoopStrCollect(ctx, nodes[idx].extra, nodes[idx].num, stepIdx)
     g_forWide = wide
+    g_forByRef = byW
     If Not LowStmtForCmp(ctx, vOff, vGlob, nodes[idx].extra, stepIdx, labStepNeg, labStepCont, labEnd) Then Exit Function
     g_forWide = 0
     body = nodes[idx].num
     If LowStmtList(ctx, body) = 0 Then Exit Function
     IrEmit(ctx->list, OP_LABEL, labForCont, 0)
     g_forWide = wide
+    g_forByRef = byW
     If Not LowStmtForStep(ctx, idx, vOff, vGlob, stepIdx, useInc) Then Exit Function
     g_forWide = 0
     IrEmit(ctx->list, OP_JMP, labTop, 0)
