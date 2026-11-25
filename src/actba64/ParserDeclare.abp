@@ -20,12 +20,13 @@ Function ParseDeclareNeedKw(p As *Parser, kw As *Byte) As boolean
     ParseDeclareNeedKw = true
 End Function
 
+' cdecl なら AST_DECL_CDECL、stdcall か省略なら 0
 Function ParseDeclareConv(p As *Parser) As Long
     Dim kw(KW_LEN - 1) As Byte
     ParseDeclareConv = 0
     lstrcpy(VarPtr(kw), "cdecl")
     If ParseDeclareIsKw(p, VarPtr(kw)) <> 0 Then
-        ParseDeclareConv = 1
+        ParseDeclareConv = AST_DECL_CDECL
         Exit Function
     End If
     lstrcpy(VarPtr(kw), "stdcall")
@@ -44,21 +45,17 @@ Function ParseDeclareAlias(p As *Parser, name As *Byte, apiName As *Byte) As boo
     ParseDeclareAlias = true
 End Function
 
-' 直前の Declare に cdecl が付いていたら AST_DECL_CDECL、無ければ 0
-Dim g_parseDeclConv As Long
-
-Function ParseDeclareLib(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte) As boolean
+Function ParseDeclareLib(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte, ByRef conv As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
     ParseDeclareLib = false
-    g_parseDeclConv = 0
-    If ParseDeclareConv(p) <> 0 Then g_parseDeclConv = AST_DECL_CDECL
+    conv = ParseDeclareConv(p)
     lstrcpy(VarPtr(kw), "lib")
     If Not ParseDeclareNeedKw(p, VarPtr(kw)) Then Exit Function
     If Not ParseStringArg(p, libName) Then Exit Function
     ParseDeclareLib = ParseDeclareAlias(p, name, apiName)
 End Function
 
-Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte, ByRef isSub As Long) As boolean
+Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName As *Byte, ByRef isSub As Long, ByRef conv As Long) As boolean
     Dim kw(KW_LEN - 1) As Byte
 
     ParseDeclareHdr = false
@@ -77,7 +74,7 @@ Function ParseDeclareHdr(p As *Parser, name As *Byte, libName As *Byte, apiName 
         End If
     End If
     If Not ParseCopyIdent(p, name) Then Exit Function
-    If Not ParseDeclareLib(p, name, libName, apiName) Then Exit Function
+    If Not ParseDeclareLib(p, name, libName, apiName, conv) Then Exit Function
     If Not ParseExpect(p, TK_LPAREN) Then Exit Function
     ParseDeclareHdr = true
 End Function
@@ -164,11 +161,12 @@ Function ParseDeclareStmt(p As *Parser) As Long
     Dim libName(SYM_NAME_LEN - 1) As Byte
     Dim apiName(SYM_NAME_LEN - 1) As Byte
     Dim isSub As Long
+    Dim conv As Long
 
     ParseDeclareStmt = -1
     p->pos = p->pos + 1
     ast = p->ast
-    If Not ParseDeclareHdr(p, VarPtr(name), VarPtr(libName), VarPtr(apiName), isSub) Then Exit Function
+    If Not ParseDeclareHdr(p, VarPtr(name), VarPtr(libName), VarPtr(apiName), isSub, conv) Then Exit Function
     g_parseParam32Only = 1
     If Not ParseParamList(p, nFirst, nParams, 1, 1) Then
         g_parseParam32Only = 0
@@ -192,7 +190,7 @@ Function ParseDeclareStmt(p As *Parser) As Long
     nodes[nDecl].left = nFirst
     nodes[nDecl].right = nDll
     nodes[nDecl].extra = nApi
-    nodes[nDecl].num = nParams Or g_parseRetWide Or g_parseDeclConv
+    nodes[nDecl].num = nParams Or g_parseRetWide Or conv
     ParseDeclareStmt = nDecl
 End Function
 
