@@ -1,0 +1,172 @@
+' AB4 デザイナーの右クリックとイベントのコーディング（AB 4.20 と同じ流れ）。
+' 部品を右クリックすると、その部品を選んで「イベント コード(C)」「削除(D)」のメニューを出す。
+' 窓の空いた所なら、選びを外して窓のイベント（削除は灰色）。
+' 「イベント コード」でイベント処理のダイアログ（Ab4DesignEvDlg.sbp）を出し、選んだイベントについて:
+'   1. .wnd に変更があれば保存する（ProjectCmd は保存したファイルを読む）
+'   2. 窓の FILEPATH のソースを開くか前面にして、コードのタブにする（開いている文書なら、その未保存の中身を使う）
+'   3. プロシージャがまだ無ければ、終わりに空の行と「Sub 名前(引数)」「End Sub」を足す（1 回の編集、改行はそのまま）
+'   4. その Sub の行を選んで見せる
+'   5. 足したときは、ソースを保存して ProjectCmd -regen を動かし、出力をメッセージの欄に出す
+'      （Callback.wbp の EventCall_<窓> が新しいプロシージャを呼ぶようになる）
+
+Const AB4D_CM_EVENT = 1
+Const AB4D_CM_DELETE = 2
+
+Dim g_a4RDown As Long                       ' 窓を描く面で右ボタンを押した（離したときにメニューを出す）
+
+' 右ボタンを押した。部品の上ならそれを選び、そうでなければ選びを外してその窓を対象にする
+Sub Ab4D_RDown(hWnd As HWND, ByVal lParam As LPARAM)
+    Dim x As Long, y As Long
+    SetFocus(hWnd)
+    EditorSelect_XY(lParam, x, y)
+    RadWnd_Parse(FormDesign_Text$(hWnd))
+    If Ab4D_OnCanvas(hWnd, x, y) = 0 Then Exit Sub
+    g_a4RDown = 1
+    Ab4D_RPick(hWnd, x, y)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 右クリックした窓と部品を選ぶ（部品が無ければ窓だけ）
+Sub Ab4D_RPick(hWnd As HWND, ByVal x As Long, ByVal y As Long)
+    Dim i As Long
+    Ab4D_PickWin(hWnd, x, y)
+    i = Ab4D_ItemAt(x, y)
+    If i >= 0 Then Ab4D_GrabItem(hWnd, i) Else Ab4D_Unselect()
+    g_a4Tool = 0
+End Sub
+
+Sub Ab4D_MenuAdd(hPop As HMENU, ByVal flags As DWord, ByVal id As Long, s As String)
+    Dim wide As *Byte, chars As Long
+    wide = Enc_Utf8ToWide(s, chars)
+    If wide = 0 Then Exit Sub
+    AppendMenuW(hPop, flags, id, wide)
+    free(wide)
+End Sub
+
+' 右ボタンを離した。メニューを出して選んだものをする
+Sub Ab4D_RUp(hWnd As HWND, ByVal lParam As LPARAM)
+    Dim hPop As HMENU
+    If g_a4RDown = 0 Then Exit Sub
+    g_a4RDown = 0
+    hPop = CreatePopupMenu()
+    If hPop = 0 Then Exit Sub
+    Ab4D_MenuBuild(hWnd, hPop)
+    Ab4D_MenuRun(hWnd, hPop, lParam)
+End Sub
+
+' 「イベント コード(C)」、区切り、「削除(D)」（部品を選んでいなければ灰色）
+Sub Ab4D_MenuBuild(hWnd As HWND, hPop As HMENU)
+    Dim f As DWord
+    f = MF_STRING
+    If Ab4D_SelIndex(hWnd) < 0 Then f = MF_STRING Or MF_GRAYED
+    Ab4D_MenuAdd(hPop, MF_STRING, AB4D_CM_EVENT, Ab4D_L$("イベント コード(&C)", "Event code(&C)"))
+    AppendMenu(hPop, MF_SEPARATOR, 0, "")
+    Ab4D_MenuAdd(hPop, f, AB4D_CM_DELETE, Ab4D_L$("削除(&D)", "Delete(&D)"))
+End Sub
+
+Sub Ab4D_MenuRun(hWnd As HWND, hPop As HMENU, ByVal lParam As LPARAM)
+    Dim x As Long, y As Long, cmd As Long
+    EditorContext_GetPos(lParam, x, y)
+    cmd = TrackPopupMenu(hPop, TPM_LEFTALIGN Or TPM_RIGHTBUTTON Or TPM_RETURNCMD, x, y, 0, hWnd, ByVal 0)
+    DestroyMenu(hPop)
+    If cmd = AB4D_CM_EVENT Then Ab4D_EventCode(hWnd)
+    If cmd = AB4D_CM_DELETE Then Ab4D_Delete(hWnd)
+End Sub
+
+' ---- イベント コード ----
+
+' 選んでいる部品か窓のイベントを選んで、コーディングする
+Sub Ab4D_EventCode(hWnd As HWND)
+    Dim i As Long, t As Long, w As Long, item As String, k As Long
+    RadWnd_Parse(FormDesign_Text$(hWnd))
+    If g_rwCount = 0 Then Exit Sub
+    i = Ab4D_SelIndex(hWnd)
+    t = 0 : w = Ab4D_WinNo() : item = ""
+    If i >= 0 Then t = g_riType(i) : w = g_riWin(i) : item = g_riName(i)
+    k = Ab4D_EvDialog(hWnd, t, g_rwName(w), item)
+    If k >= 0 Then Ab4D_Code(hWnd, t, w, item, k)
+End Sub
+
+' .wnd の .pj（同じフォルダーの同じ名前。無ければ開いているプロジェクト）
+Function Ab4D_ProjOf$(wnd As String) As String
+    Ab4D_ProjOf$ = Left$(wnd, Len(wnd) - 4) & ".pj"
+    If EditorDoc_CmdExists(Ab4D_ProjOf$) <> 0 Then Exit Function
+    Ab4D_ProjOf$ = g_projectPath
+End Function
+
+' イベント k のプロシージャへ（無ければ足して ProjectCmd -regen）
+Sub Ab4D_Code(hWnd As HWND, ByVal t As Long, ByVal w As Long, item As String, ByVal k As Long)
+    Dim ev As String, proc As String, src As String, pj As String
+    If Len(g_rwFile(w)) = 0 Then MessageBeep(0) : Exit Sub
+    ev = Ab4D_EvName$(t, k)
+    proc = Ab4D_EvProc$(g_rwName(w), item, ev)
+    src = ProjDirOf$(g_docPath) & g_rwFile(w) : pj = Ab4D_ProjOf$(g_docPath)
+    If Ab4D_SaveIfDirty(hWnd) = 0 Then Exit Sub
+    If Ab4D_OpenSrc(src) = 0 Then MessageBeep(0) : Exit Sub
+    If Ab4D_GoProc(proc, Ab4D_EvParams$(t, ev)) <> 0 Then Ab4D_Regen(pj)
+End Sub
+
+' 文書 hWnd（前面）に変更があれば保存する。保存できなければ 0
+Function Ab4D_SaveIfDirty(hWnd As HWND) As Long
+    Ab4D_SaveIfDirty = 1
+    If g_docDirty = 0 Then Exit Function
+    Ab4D_SaveIfDirty = EditorDoc_Save(hWnd)
+End Function
+
+' ソースを開くか前面にして、コードのタブにする。できたら 1
+Function Ab4D_OpenSrc(src As String) As Long
+    Ab4D_OpenSrc = 0
+    If EditorDoc_CmdExists(src) = 0 Then Exit Function
+    ProjOpenPath(src)
+    If g_activeChild = 0 Or ProjSamePath(g_docPath, src) = 0 Then Exit Function
+    If g_fdOn <> 0 Then FormDesign_Leave(g_activeChild)
+    Ab4D_OpenSrc = 1
+End Function
+
+' 前面の文書の proc を選んで見せる。無ければ足す（足したら 1）
+Function Ab4D_GoProc(proc As String, params As String) As Long
+    Dim t As String, pos As Long
+    t = TextBuf_GetConfirmed$()
+    pos = Ab4D_FindProc(t, proc)
+    Ab4D_GoProc = 0
+    If pos = 0 Then pos = Ab4D_InsertProc(t, proc, params) : Ab4D_GoProc = 1
+    Ab4D_SelectLine(t, pos)
+End Function
+
+' 末尾に足して（1 回の編集）、足した Sub の行の位置。t は足した後の全文になる
+Function Ab4D_InsertProc(ByRef t As String, proc As String, params As String) As Long
+    FormDesign_Replace(Ab4D_AddProc$(t, proc, params))
+    t = TextBuf_GetConfirmed$()
+    Ab4D_InsertProc = Ab4D_FindProc(t, proc)
+End Function
+
+' 本文 t の pos の行（行末の改行を除く）を選んで見せる
+Sub Ab4D_SelectLine(t As String, ByVal pos As Long)
+    Dim n As Long
+    If pos = 0 Then Exit Sub
+    n = FormDesign_LineEnd(t, pos) - pos
+    If n > 0 Then If Mid$(t, pos + n - 1, 1) = Chr$(13) Then n = n - 1
+    g_selAnchor = pos - 1
+    TextBuf_MoveCursorTo(pos - 1 + n)
+    Ab4D_ShowCaret()
+End Sub
+
+' キャレットが見えるようにして、ソースの子にフォーカスを移す
+Sub Ab4D_ShowCaret()
+    TextBuf_SyncPreferredCol()
+    VirtualScroll_EnsureCursorVisible(g_activeChild)
+    InvalidateRect(g_activeChild, ByVal 0, FALSE)
+    SetFocus(g_activeChild)
+End Sub
+
+' ソースを保存して ProjectCmd -regen <.pj>。出力はメッセージの欄に
+Sub Ab4D_Regen(pj As String)
+    Dim outText As String, code As Long
+    If EditorDoc_Save(g_activeChild) = 0 Then Exit Sub
+    If Len(pj) = 0 Then Exit Sub
+    MessageWnd_Open(hMainWnd)
+    MessageWnd_SetText("ProjectCmd -regen " & pj & Chr$(13) & Chr$(10))
+    EditorProjCmd_Run("-regen " & EditorBuild_QuoteArg$(pj), outText, code)
+    MessageWnd_Append(outText)
+    SetFocus(g_activeChild)
+End Sub

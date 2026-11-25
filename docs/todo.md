@@ -48,7 +48,7 @@
 | 項目 | メモ（AB 4.20 参照） |
 |---|---|
 | `On Error` / `Resume` | エラートラップ（4.20 制御命令） |
-| プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` の自動定義は要確認 |
+| プリプロセス自動定義 | `_WIN64` / `_AB_VER4` 等は有。`_DEBUG` は `-debug` のときだけ定義（デバッガーは無い） |
 | `#resource` の MENU / DIALOG / VERSIONINFO | ICON / BITMAP は `src/rc` の `rc.exe`。その他の rc 文は未 |
 | ネスト手続き | 4.20 は Sub/Function 内定義可 |
 | 関数ポインタの厳密シグネチャ照合 | 引数型の照合は未 |

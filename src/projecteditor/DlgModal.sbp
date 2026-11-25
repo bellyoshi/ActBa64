@@ -1,0 +1,71 @@
+' DlgModal - 自前のモーダル ダイアログの共通部分。
+' 検索（EditorFind）・AB4 プロジェクト作成（EditorAB4Proj）・AB4 デザイナーのイベント処理と 1 行入力が使う。
+' 窓は NORMALDLG を W 版のプロシージャに差し替える（A 版で差し替えると W で書いた見出しが化ける）。
+' 使い方: h = Dlg_Open(幅, 高さ, AddressOf(proc)) → 部品を Dlg_Make で作る → Dlg_Show(h, 最初のフォーカス)
+'   → 終わりの印が立つまで Dlg_Next → 自分のキー処理 → Dlg_Dispatch → Dlg_Close(h)
+' Windows 版だけ（Linux は LxDialog.sbp）。
+
+Declare Function Dlg_IsDlgMsg Lib "user32.dll" Alias "IsDialogMessageA" (ByVal hDlg As HWND, ByRef lpMsg As MSG) As Long
+Declare Function Dlg_GetWindowTextW Lib "user32.dll" Alias "GetWindowTextW" (ByVal hWnd As HWND, ByVal lpString As *Byte, ByVal nMaxCount As Long) As Long
+Declare Function Dlg_GetWindowTextLengthW Lib "user32.dll" Alias "GetWindowTextLengthW" (ByVal hWnd As HWND) As Long
+#ifdef _WIN64
+Declare Function Dlg_SetWndProcW Lib "user32.dll" Alias "SetWindowLongPtrW" (ByVal hWnd As HWND, ByVal nIndex As Long, ByVal newProc As LONG_PTR) As LONG_PTR
+#else
+Declare Function Dlg_SetWndProcW Lib "user32.dll" Alias "SetWindowLongW" (ByVal hWnd As HWND, ByVal nIndex As Long, ByVal newProc As LONG_PTR) As LONG_PTR
+#endif
+Declare Function Dlg_DefWindowProcW Lib "user32.dll" Alias "DefWindowProcW" (ByVal hWnd As HWND, ByVal Msg As DWord, ByVal wParam As WPARAM, ByVal lParam As LPARAM) As LRESULT
+
+#ifndef _LINUX
+
+' 部品を作り、設定のフォントにする
+Function Dlg_Make(hWnd As HWND, cls As String, ByVal ex As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal ht As Long, ByVal id As Long) As HWND
+    Dlg_Make = CreateWindowEx(ex, cls, "", style, x, y, w, ht, hWnd, id As HMENU, GetModuleHandle(0), 0)
+    If Dlg_Make <> 0 Then SendMessage(Dlg_Make, WM_SETFONT, hFont_Setting As WPARAM, 1)
+End Function
+
+' 部品の文字（UTF-16 で読んで UTF-8 に）
+Function Dlg_EditText$(hEdit As HWND) As String
+    Dim chars As Long, wide As *Byte
+    Dlg_EditText$ = ""
+    If hEdit = 0 Then Exit Function
+    chars = Dlg_GetWindowTextLengthW(hEdit)
+    If chars <= 0 Then Exit Function
+    wide = malloc((chars + 1) * 2)
+    If wide <> 0 Then Dlg_GetWindowTextW(hEdit, wide, chars + 1) : Dlg_EditText$ = Enc_WideToUtf8$(wide, chars) : free(wide)
+End Function
+
+' 隠れたままのダイアログの窓（メインの窓が持ち主）。作れなければ 0
+Function Dlg_Open(ByVal w As Long, ByVal h As Long, ByVal proc As LONG_PTR) As HWND
+    Dlg_Open = CreateWindowEx(0, "NORMALDLG", "", &H00C80000, -2147483648, -2147483648, w, h, hMainWnd, 0 As HMENU, GetModuleHandle(0), 0)
+    If Dlg_Open <> 0 Then Dlg_SetWndProcW(Dlg_Open, GWL_WNDPROC, proc)
+End Function
+
+' 出して、メインの窓を止める
+Sub Dlg_Show(hDlg As HWND, hFocus As HWND)
+    ShowWindow(hDlg, SW_SHOW)
+    SetFocus(hFocus)
+    EnableWindow(hMainWnd, 0)
+End Sub
+
+' 次のメッセージ。WM_QUIT なら投げ直して 0
+Function Dlg_Next(ByRef msg As MSG) As Long
+    Dim r As Long
+    Dlg_Next = 1
+    r = GetMessage(msg, 0, 0, 0)
+    If r = 0 Then PostQuitMessage(msg.wParam)
+    If r = 0 Or r = -1 Then Dlg_Next = 0
+End Function
+
+' Tab などはダイアログの動き、ほかは普通に配る
+Sub Dlg_Dispatch(hDlg As HWND, ByRef msg As MSG)
+    If Dlg_IsDlgMsg(hDlg, msg) <> 0 Then Exit Sub
+    TranslateMessage(msg)
+    DispatchMessage(msg)
+End Sub
+
+Sub Dlg_Close(hDlg As HWND)
+    EnableWindow(hMainWnd, 1)
+    If hDlg <> 0 Then DestroyWindow(hDlg)
+End Sub
+
+#endif

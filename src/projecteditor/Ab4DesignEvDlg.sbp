@@ -1,0 +1,223 @@
+' AB4 デザイナーの「イベント処理」ダイアログ（AB 4.20 と同じ形）。
+' Windows: イベント / 対応メッセージ / 概要 の一覧（リストビューの詳細表示）、Default / Menu / MMSYS の切り替え
+' （Menu と MMSYS は使えない）、プロシージャの欄（見るだけ）、「コーディング」と「キャンセル」。
+' 行を選ぶとプロシージャの欄に名前が出て「コーディング」が押せる。行のダブルクリックか「コーディング」で決める。
+' Linux: 1 行ずつ「イベント  メッセージ  概要」を並べた選択の欄（LxDlg_Choice）。
+' Ab4D_EvDialog は選んだイベントの番号（やめたら -1）。
+
+Dim g_a4EvT As Long                         ' イベントを出している種類（0 は窓）
+Dim g_a4EvWin As String                     ' 窓の名前
+Dim g_a4EvItem As String                    ' 部品の名前（窓なら ""）
+Dim g_a4EvSel As Long
+
+' 選んだ行のプロシージャ（「名前(引数)」）
+Function Ab4D_EvProcText$(ByVal k As Long) As String
+    Dim ev As String
+    ev = Ab4D_EvName$(g_a4EvT, k)
+    Ab4D_EvProcText$ = Ab4D_EvProc$(g_a4EvWin, g_a4EvItem, ev) & "(" & Ab4D_EvParams$(g_a4EvT, ev) & ")"
+End Function
+
+#ifndef _LINUX
+
+Const AB4D_EV_LIST = 2201
+Const AB4D_EV_DEFAULT = 2202
+Const AB4D_EV_MENU = 2203
+Const AB4D_EV_MMSYS = 2204
+Const AB4D_EV_PROC = 2205
+Const AB4D_EV_CODE = 2206
+Const AB4D_EV_CANCEL = 2207
+Const AB4D_LVM_INSERTCOLUMNW = &H1061
+Const AB4D_LVM_INSERTITEMW = &H104D
+Const AB4D_LVM_SETITEMTEXTW = &H1074
+
+Dim g_hA4Ev As HWND
+Dim g_a4EvDone As Long                      ' 0 = 選んでいる、1 = やめた、2 = 決めた
+Dim g_a4Lvc As LVCOLUMN
+Dim g_a4Lvi As LVITEM
+
+Function Ab4D_EvMake(cls As String, ByVal ex As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal h As Long, ByVal id As Long) As HWND
+    Ab4D_EvMake = Dlg_Make(g_hA4Ev, cls, ex, style, x, y, w, h, id)
+End Function
+
+Function Ab4D_EvList() As HWND
+    Ab4D_EvList = GetDlgItem(g_hA4Ev, AB4D_EV_LIST)
+End Function
+
+Sub Ab4D_LvInit()
+    Dim icc As INITCOMMONCONTROLSEX
+    icc.dwSize = SizeOf(INITCOMMONCONTROLSEX)
+    icc.dwICC = ICC_LISTVIEW_CLASSES
+    InitCommonControlsEx(icc)
+End Sub
+
+' 列 j を見出し s、幅 cx で足す
+Sub Ab4D_LvColumn(ByVal j As Long, s As String, ByVal cx As Long)
+    Dim wide As *Byte, chars As Long
+    wide = Enc_Utf8ToWide(s, chars)
+    FillMemory(VarPtr(g_a4Lvc), SizeOf(LVCOLUMN), 0)
+    g_a4Lvc.mask = LVCF_TEXT Or LVCF_WIDTH
+    g_a4Lvc.cx = cx
+    g_a4Lvc.pszText = wide
+    SendMessage(Ab4D_EvList(), AB4D_LVM_INSERTCOLUMNW, j, VarPtr(g_a4Lvc) As LPARAM)
+    If wide <> 0 Then free(wide)
+End Sub
+
+' 行 k の列 j に s を書く（列 0 なら行を足す）
+Sub Ab4D_LvText(ByVal k As Long, ByVal j As Long, s As String)
+    Dim wide As *Byte, chars As Long, msg As DWord
+    wide = Enc_Utf8ToWide(s & " ", chars)
+    FillMemory(VarPtr(g_a4Lvi), SizeOf(LVITEM), 0)
+    g_a4Lvi.mask = LVIF_TEXT : g_a4Lvi.iItem = k : g_a4Lvi.iSubItem = j : g_a4Lvi.pszText = wide
+    msg = AB4D_LVM_SETITEMTEXTW
+    If j = 0 Then msg = AB4D_LVM_INSERTITEMW
+    SendMessage(Ab4D_EvList(), msg, k, VarPtr(g_a4Lvi) As LPARAM)
+    If wide <> 0 Then free(wide)
+End Sub
+
+Sub Ab4D_EvColumns()
+    Ab4D_LvColumn(0, Ab4D_L$("イベント", "Event"), 130)
+    Ab4D_LvColumn(1, Ab4D_L$("対応メッセージ", "Message"), 150)
+    Ab4D_LvColumn(2, Ab4D_L$("概要", "Description"), 240)
+End Sub
+
+Sub Ab4D_EvFill()
+    Dim k As Long
+    Ab4D_EvColumns()
+    For k = 0 To Ab4D_EvCount(g_a4EvT) - 1
+        Ab4D_LvText(k, 0, Ab4D_EvName$(g_a4EvT, k))
+        Ab4D_LvText(k, 1, Ab4D_EvMsg$(g_a4EvT, k))
+        Ab4D_LvText(k, 2, Ab4D_EvDesc$(Ab4D_EvMsg$(g_a4EvT, k), Ab4D_Ja()))
+    Next
+End Sub
+
+' Default / Menu / MMSYS の押しボタン型の切り替え（Default だけ押した形。Menu と MMSYS は使えない）
+Sub Ab4D_EvToggles()
+    Dim h As HWND
+    h = Ab4D_EvMake("BUTTON", 0, &H50011003, 12, 182, 80, 24, AB4D_EV_DEFAULT)
+    Setting_SetUtf8Text(h, "Default") : SendMessage(h, BM_SETCHECK, BST_CHECKED, 0)
+    h = Ab4D_EvMake("BUTTON", 0, &H58011003, 96, 182, 80, 24, AB4D_EV_MENU)
+    Setting_SetUtf8Text(h, "Menu")
+    h = Ab4D_EvMake("BUTTON", 0, &H58011003, 180, 182, 80, 24, AB4D_EV_MMSYS)
+    Setting_SetUtf8Text(h, "MMSYS")
+End Sub
+
+Sub Ab4D_EvMakeList()
+    Ab4D_LvInit()
+    Ab4D_EvMake("SysListView32", FIND_EDIT_EX, &H5001000D, 12, 12, 560, 160, AB4D_EV_LIST)
+    SendMessage(Ab4D_EvList(), LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT)
+    Ab4D_EvFill()
+End Sub
+
+Sub Ab4D_EvBuild()
+    Ab4D_EvMakeList()
+    Ab4D_EvToggles()
+    Setting_SetUtf8Text(Ab4D_EvMake("STATIC", 0, &H50000000, 12, 216, 200, 20, 0), Ab4D_L$("プロシージャ", "Procedure"))
+    Ab4D_EvMake("EDIT", FIND_EDIT_EX, FIND_EDIT_STYLE Or &H800, 12, 238, 560, 24, AB4D_EV_PROC)
+    Setting_SetUtf8Text(Ab4D_EvMake("BUTTON", 0, &H58010001, 382, 276, 92, 28, AB4D_EV_CODE), Ab4D_L$("コーディング", "Coding"))
+    Setting_SetUtf8Text(Ab4D_EvMake("BUTTON", 0, FIND_BTN_STYLE, 480, 276, 92, 28, AB4D_EV_CANCEL), Ab4D_L$("キャンセル", "Cancel"))
+End Sub
+
+' 選んでいる行（無ければ -1）
+Function Ab4D_EvCur() As Long
+    Ab4D_EvCur = SendMessage(Ab4D_EvList(), LVM_GETNEXTITEM, -1, LVNI_SELECTED) As Long
+End Function
+
+' 選んだ行が変わった。プロシージャの欄と「コーディング」を合わせる
+Sub Ab4D_EvSync()
+    Dim k As Long
+    k = Ab4D_EvCur()
+    EnableWindow(GetDlgItem(g_hA4Ev, AB4D_EV_CODE), k >= 0)
+    If k < 0 Then Setting_SetUtf8Text(GetDlgItem(g_hA4Ev, AB4D_EV_PROC), "") Else Setting_SetUtf8Text(GetDlgItem(g_hA4Ev, AB4D_EV_PROC), Ab4D_EvProcText$(k))
+End Sub
+
+Sub Ab4D_EvDecide()
+    g_a4EvSel = Ab4D_EvCur()
+    If g_a4EvSel >= 0 Then g_a4EvDone = 2
+End Sub
+
+Sub Ab4D_EvNotify(ByVal lParam As LPARAM)
+    Dim nm As *NMHDR, code As Long
+    nm = lParam As *NMHDR
+    If nm = 0 Then Exit Sub
+    If nm->idFrom <> AB4D_EV_LIST Then Exit Sub
+    code = nm->code As Long
+    If code = LVN_ITEMCHANGED Then Ab4D_EvSync()
+    If code = NM_DBLCLK Then Ab4D_EvDecide()
+End Sub
+
+Function Ab4D_EvProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
+    Ab4D_EvProc = 0
+    If dwMsg = WM_CLOSE Then g_a4EvDone = 1 : Exit Function
+    If dwMsg = WM_NOTIFY Then Ab4D_EvNotify(lParam) : Exit Function
+    If dwMsg <> WM_COMMAND Then Ab4D_EvProc = Dlg_DefWindowProcW(hWnd, dwMsg, wParam, lParam) : Exit Function
+    If LOWORD(wParam) = AB4D_EV_CODE Then Ab4D_EvDecide()
+    If LOWORD(wParam) = AB4D_EV_CANCEL Then g_a4EvDone = 1
+End Function
+
+' Esc はやめる、Enter は「コーディング」
+Function Ab4D_EvKey(ByRef msg As MSG) As Long
+    Ab4D_EvKey = 0
+    If msg.message <> WM_KEYDOWN Then Exit Function
+    If msg.wParam = VK_ESCAPE Then g_a4EvDone = 1 : Ab4D_EvKey = 1
+    If msg.wParam = VK_RETURN Then Ab4D_EvDecide() : Ab4D_EvKey = 1
+End Function
+
+Sub Ab4D_EvPump()
+    Dim msg As MSG
+    If Dlg_Next(msg) = 0 Then g_a4EvDone = 1 : Exit Sub
+    If Ab4D_EvKey(msg) = 0 Then Dlg_Dispatch(g_hA4Ev, msg)
+End Sub
+
+Sub Ab4D_EvLoop()
+    While g_a4EvDone = 0
+        Ab4D_EvPump()
+    Wend
+End Sub
+
+Function Ab4D_EvRun() As Long
+    Ab4D_EvRun = -1
+    g_hA4Ev = Dlg_Open(600, 352, AddressOf(Ab4D_EvProc) As LONG_PTR)
+    If g_hA4Ev = 0 Then Exit Function
+    Setting_SetUtf8Text(g_hA4Ev, Ab4D_L$("イベント処理", "Event handling"))
+    Ab4D_EvBuild()
+    Dlg_Show(g_hA4Ev, Ab4D_EvList())
+    Ab4D_EvLoop()
+    Ab4D_EvRun = Ab4D_EvEnd()
+End Function
+
+Function Ab4D_EvEnd() As Long
+    Dlg_Close(g_hA4Ev) : g_hA4Ev = 0
+    Ab4D_EvEnd = -1
+    If g_a4EvDone = 2 Then Ab4D_EvEnd = g_a4EvSel
+End Function
+
+' イベントを選ぶ。選んだイベントの番号（やめたら -1）
+Function Ab4D_EvDialog(hWnd As HWND, ByVal t As Long, win As String, item As String) As Long
+    g_a4EvT = t : g_a4EvWin = win : g_a4EvItem = item
+    g_a4EvDone = 0 : g_a4EvSel = -1
+    Ab4D_EvDialog = -1
+    If Ab4D_EvCount(t) = 0 Then MessageBeep(0) : Exit Function
+    Ab4D_EvDialog = Ab4D_EvRun()
+    SetFocus(hWnd)
+End Function
+
+#else
+
+Function Ab4D_EvDialog(hWnd As HWND, ByVal t As Long, win As String, item As String) As Long
+    g_a4EvT = t : g_a4EvWin = win : g_a4EvItem = item
+    Ab4D_EvDialog = -1
+    If Ab4D_EvCount(t) = 0 Then MessageBeep(0) : Exit Function
+    Ab4D_EvLxItems(t)
+    Ab4D_EvDialog = LxDlg_Choice(Ab4D_L$("イベント処理", "Event handling"), 0)
+End Function
+
+' Linux の一覧のダイアログの行（イベント・メッセージ・概要）
+Sub Ab4D_EvLxItems(ByVal t As Long)
+    Dim k As Long
+    g_lxdN = Ab4D_EvCount(t)
+    For k = 0 To g_lxdN - 1
+        g_lxdItem(k) = Ab4D_EvName$(t, k) & "  " & Ab4D_EvMsg$(t, k) & "  " & Ab4D_EvDesc$(Ab4D_EvMsg$(t, k), Ab4D_Ja())
+    Next
+End Sub
+
+#endif

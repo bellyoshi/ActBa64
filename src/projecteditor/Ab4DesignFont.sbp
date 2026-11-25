@@ -1,0 +1,87 @@
+' AB4 デザイナーの窓のフォント。
+' Windows: 窓のプロパティの「フォント」のボタンで ChooseFontW を出し、選んだフォントを FONT の値にする。
+'          部品は窓の FONT で描く（Ab4D_WinFontObj。同じ値なら作り直さない）。
+' Linux: フォントのダイアログが無いので、Ab4D_ChooseFont は -1（名前, 大きさ の入力で代える）。部品はいつもの文字で描く。
+' FONT の値の並びは CreateFont / LOGFONT と同じ（高さ,幅,傾き,向き,太さ,斜体,下線,打消し,文字セット,
+' 出力精度,切り取り精度,品質,ピッチとファミリ,"名前"）。
+
+#ifndef _LINUX
+
+Declare Function Ab4_ChooseFontW Lib "comdlg32.dll" Alias "ChooseFontW" (ByRef lpcf As CHOOSEFONT) As Long
+
+Dim g_a4Lf As LOGFONTW
+Dim g_a4Cf As CHOOSEFONT
+Dim g_a4FontSpec As String                  ' g_a4FontObj を作った FONT の値
+Dim g_a4FontObj As HFONT
+
+' FONT の数を g_a4Lf に
+Sub Ab4D_LfNums(v As String)
+    FillMemory(VarPtr(g_a4Lf), SizeOf(LOGFONTW), 0)
+    g_a4Lf.lfHeight = Ab4D_FontNum(v, 1) : g_a4Lf.lfWidth = Ab4D_FontNum(v, 2)
+    g_a4Lf.lfEscapement = Ab4D_FontNum(v, 3) : g_a4Lf.lfOrientation = Ab4D_FontNum(v, 4)
+    g_a4Lf.lfWeight = Ab4D_FontNum(v, 5) : g_a4Lf.lfItalic = Ab4D_FontNum(v, 6)
+    g_a4Lf.lfUnderline = Ab4D_FontNum(v, 7) : g_a4Lf.lfStrikeOut = Ab4D_FontNum(v, 8)
+    g_a4Lf.lfCharSet = Ab4D_FontNum(v, 9) : g_a4Lf.lfOutPrecision = Ab4D_FontNum(v, 10)
+    g_a4Lf.lfClipPrecision = Ab4D_FontNum(v, 11) : g_a4Lf.lfQuality = Ab4D_FontNum(v, 12)
+    g_a4Lf.lfPitchAndFamily = Ab4D_FontNum(v, 13)
+End Sub
+
+' FONT の値を g_a4Lf に（名前は UTF-16 で 31 字まで）
+Sub Ab4D_LfFrom(v As String)
+    Dim wide As *Byte, chars As Long
+    Ab4D_LfNums(v)
+    wide = Enc_Utf8ToWide(Ab4D_FontFace$(v), chars)
+    If wide = 0 Then Exit Sub
+    If chars > 31 Then chars = 31
+    memcpy(VarPtr(g_a4Lf.lfFaceName), wide, chars * 2)
+    free(wide)
+End Sub
+
+' g_a4Lf から FONT の値
+Function Ab4D_LfToFont$() As String
+    Dim face As String
+    face = Enc_WideToUtf8$(VarPtr(g_a4Lf.lfFaceName), AB4_lstrlenW(VarPtr(g_a4Lf.lfFaceName)))
+    Ab4D_LfToFont$ = Ab4D_FontFrom$(g_a4Lf.lfHeight, g_a4Lf.lfWidth, g_a4Lf.lfEscapement, g_a4Lf.lfOrientation, g_a4Lf.lfWeight, g_a4Lf.lfItalic, g_a4Lf.lfUnderline, g_a4Lf.lfStrikeOut, g_a4Lf.lfCharSet, g_a4Lf.lfOutPrecision, g_a4Lf.lfClipPrecision, g_a4Lf.lfQuality, g_a4Lf.lfPitchAndFamily, face)
+End Function
+
+' フォントを選ぶダイアログ。v（FONT の値）から始め、選んだら v を書き換えて 1。やめたら 0
+Sub Ab4D_CfInit()
+    FillMemory(VarPtr(g_a4Cf), SizeOf(CHOOSEFONT), 0)
+    g_a4Cf.lStructSize = SizeOf(CHOOSEFONT)
+    g_a4Cf.hwndOwner = hMainWnd
+    g_a4Cf.lpLogFont = VarPtr(g_a4Lf) As *LOGFONT
+    g_a4Cf.Flags = CF_SCREENFONTS Or CF_INITTOLOGFONTSTRUCT
+End Sub
+
+Function Ab4D_ChooseFont(hWnd As HWND, ByRef v As String) As Long
+    Ab4D_ChooseFont = 0
+    Ab4D_LfFrom(v)
+    Ab4D_CfInit()
+    If Ab4_ChooseFontW(g_a4Cf) = 0 Then Exit Function
+    v = Ab4D_LfToFont$()
+    Ab4D_ChooseFont = 1
+End Function
+
+' 窓の FONT の値のフォント（前と同じ値なら作ったものをそのまま使う）
+Function Ab4D_WinFontObj(v As String) As HFONT
+    If v <> g_a4FontSpec Or g_a4FontObj = 0 Then
+        If g_a4FontObj <> 0 Then DeleteObject(g_a4FontObj)
+        Ab4D_LfFrom(v)
+        g_a4FontObj = CreateFontIndirectW(g_a4Lf)
+        g_a4FontSpec = v
+    End If
+    Ab4D_WinFontObj = g_a4FontObj
+    If g_a4FontObj = 0 Then Ab4D_WinFontObj = Ui_GuiFont()
+End Function
+
+#else
+
+Function Ab4D_ChooseFont(hWnd As HWND, ByRef v As String) As Long
+    Ab4D_ChooseFont = -1
+End Function
+
+Function Ab4D_WinFontObj(v As String) As HFONT
+    Ab4D_WinFontObj = Ui_GuiFont()
+End Function
+
+#endif

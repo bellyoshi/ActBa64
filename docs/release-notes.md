@@ -1,5 +1,67 @@
 # リリースノート
 
+## v0.1.5（v0.1.4 からの変更点）
+
+### ハイライト
+
+- **ProjectEditor に AB4デザイナーが付きました。** AB 4.20 のウィンドウ定義ファイル（`.wnd`）を開くと、窓と部品を絵で出します。部品を道具箱から足す・動かす・大きさを変える・消すことができ、ID・キャプション・スタイル・窓のフォントなどのプロパティも変えられます。部品を右クリックすると、AB 4.20 と同じイベント処理のダイアログからイベントの `Sub` をソースに足せます。詳しくは [projecteditor.md の AB4デザイナー](./projecteditor.md#ab4デザイナー) を見てください（Windows 版。Linux 版は一部だけ）。
+- **AB 4.20 と同じ形のプロジェクトを作れます。** ファイル → AB4プロジェクト作成 で「EXE - ノーマル ウィンドウ ベース」のプロジェクトを作ります。できる 8 つのファイルは AB 4.20 で作ったものとバイト単位で同じです。作成と RAD の生成は、新しいコマンドラインの `ProjectCmd` が受け持ちます（[projecteditor.md §7.2](./projecteditor.md#72-ab4-プロジェクト作成と-projectcmd)）。
+- **`-actba32` でも `Int64` / `QWord` が 64bit の整数になりました。** これまで 32bit 出力では `Long` / `DWord` として読んでいました。
+- **コンパイルが速くなりました。** コードの出力が出力の大きさの 2 乗の時間をかけていたのを直し、セルフコンパイルが 16 秒から 2 秒になりました。
+
+### コンパイラ
+
+- `-debug` を足しました。`_DEBUG` を定義し、`-o` が無ければ `.pj` の `#OUTPUT_DEBUG` へ出します（無ければ `#OUTPUT_RELEASE`）。AB4 のデバッグ実行で入る `#IFDEF _DEBUG` の部分を入れるためのもので、**デバッガーは付きません**（[build.md](./build.md)）。
+- `-actba32` の `Int64` / `QWord`:
+  - 変数・仮引数・`ByRef`・戻り値（`Function` / メソッド / `Declare`）で 64bit のまま扱います。算術・比較・シフト・`Double` との変換も 64bit です。`\` と `Mod` は ntdll の `_alldiv` などを呼びます。
+  - 64bit のリテラルを読み、`_INT64` を定義します。
+  - 配列・`Type` のメンバ・`Declare` と関数ポインタの仮引数はまだ 32bit で、警告 1102 を出します。
+  - `Print` / `Print #` / `Write #` は AB 4.20 と同じく `QWord` を符号付きで出します（`Str$` は符号なし）。
+- 2^63 以上の十進の整数（18446744073709551615 まで）を `QWord` のリテラルとして読みます。これまでは `Double` で読んでいたので、`QWord` へ入れると 0 になっていました。`Const` も同じです。
+- 64bit 整数の警告に元の型名を出します（「QWord は DWord（32 ビット）として扱います」）。
+- `Input` の先がポインタの変数なら、整数として読みます（AB4 と同じ）。
+- メソッドの中で `a->b->M()`（`*Class` のフィールドの先の `*Class` のフィールドのメソッド）を呼べます。
+- `BytePtr` の配列の要素の先を添字で読めます（`LBL[i * 2][0]`）。これまでは「コード生成に失敗しました」になっていました。
+- この 3 つで、AB4 用の FT-GBDumper と FT-GBADumper をソースを変えずにコンパイルできるようになりました。
+
+不具合の修正:
+
+- `For` の制御変数が `ByRef` の仮引数のとき、64bit でも `-actba32` でも実行中に落ちていました。引数の場所ではなく、指す先を宣言の幅で読み書きするようにしました。
+
+### Include
+
+- `d3d11.sbp` の `ID3D11Device` を `IUnknown` の直下に戻しました。`ID3D11DeviceChild` を継承していたため vtable が 4 つずれ、`dx_Init` が「CreateRenderTargetView failed.」で止まっていました。DirectX のサンプルがまた動きます。
+- `d3d11/dx_shader.sbp` を足しました（`dx_graphics.sbp` から読みます）。シェーダーのコンパイルと作成（`dx_CompileShader`、`dx_CreateShaders`）、位置＋色の頂点のシェーダーと入力レイアウト（`dx_PosColorHlsl$`、`dx_CreatePosColorLayout`）、バッファ（`dx_CreateBuffer`）、解放（`dx_ReleaseCom`）、失敗の表示（`dx_FailStep`）があります。
+
+### RAD（#USEWINDOW=1）
+
+- `.wnd` の部品の種類 13 を VScrollBar、14 を UpDown として読みます（逆に読んでいました）。UpDown には AB 4.20 と同じく `WM_SETFONT` を送りません。全種類の部品を置いた `.wnd` で、`Callback.wbp` / `MakeWindow.wbp` が AB 4.20 の出力とバイト単位で同じになりました。
+- 生成はエディタから `ProjectCmd -regen <.pj>` に移りました。ProjectEditor はコンパイルの前にこれを呼びます。
+
+### ProjectEditor
+
+- AB4デザイナー（上のハイライト）。文書のタブは「コード」「デザイナー」「AB4デザイナー」の 3 つになり、`.wnd` は開くと初めから AB4デザイナーで出ます。F12 でコードと切り替えます。
+- ファイル → AB4プロジェクト作成（上のハイライト。Windows 版だけ）。
+- プロジェクト ウィンドウをツリーにしました。ルートは `.pj` のファイル名で、`..\common` などのフォルダーごとにまとめます。日本語のファイル名もそのまま出ます。`<名前>.wnd` は `<名前>.abp` の下に出ます（Linux 版はこれまでのリスト）。
+- 「表示」メニューを足し、「プロジェクトビュー」でプロジェクトの窓を出したり隠したりできます。隠してもプロジェクトは閉じません。
+- Basic メニューに「_DEBUG を定義・デバッガーなし(-debug)」を足しました。
+- 検索などのダイアログの共通部分をまとめました（動きは変わりません）。
+
+### 配布
+
+- `ProjectCmd.exe` を同梱します（`release_build.ps1` / `.sh` で作ります）。ProjectEditor の RAD の生成と AB4 プロジェクト作成に使います。
+
+### サンプル
+
+- DirectX の 5 つのサンプル（dxcube、dxcube2、dxsample、dxvertexcolor、dxxform）を `dx_shader.sbp` を使う形にし、合わせて約 670 行減らしました。64bit と `-actba32` の両方で動くことを確かめています。
+- dxsample の出力を 64bit にしました。
+- dxcube2 の `Callback.wbp` / `MakeWindow.wbp` を `.wnd` から作り直しました。Esc で窓を閉じる処理は無くなりました。
+
+### テスト
+
+- 回帰テスト `t_int64_32`、`t_for_byref`、`t_input_ptr`、`t_class_ptrfield_chain`、`t_byteptr_arr_elem_idx`、`t_ifdef_debug`、`t_ifdef_nodebug` を足しました。`t_int64_arith` / `fix` / `ret` / `unsigned` は `-actba32` でも動かします。
+- ユニットテスト `Ab4DesignTest`、`AB4ProjTest`、`ProjTreeTest` を足しました。
+
 ## v0.1.4（v0.1.3 からの変更点）
 
 ### ハイライト
@@ -40,8 +102,8 @@ AB 4 が通していた書き方を読むようにしました。
 
 ### ActiveBasic との違い
 
-- HongKongArduinoClone と RGBALib は、関数のアドレスやポインタを `DWord` で持つ 32bit 前提のソースです。64bit で作ると起動の後に落ちるので、`-actba32` で作ってください。
-- HongKongArduinoClone の進捗表示（`ProgressCallback`）は、AB 4 の vtable を書き換え、メソッドの先頭に `This` を受ける捨て引数 `_this As VoidPtr` を置いています。ActBa64 は `This` の渡し方が違うので、そのままでは引数が 1 つずれます。捨て引数を消してください（[different.md](./different.md#動作が異なるもの)）。
+- 関数のアドレスやポインタを `DWord` で持つ 32bit 前提のソースは64bit で作ると起動の後に落ちるので、`-actba32` で作ってください。
+- AB 4 の vtable を書き換えるプログラムは、メソッドの先頭に `This` を受ける捨て引数 `_this As VoidPtr` を置いています。ActBa64 は `This` の渡し方が違うので、そのままでは引数が 1 つずれます。捨て引数を消してください（[different.md](./different.md#動作が異なるもの)）。
 
 ### Include
 

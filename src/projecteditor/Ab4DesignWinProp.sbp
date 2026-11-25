@@ -5,6 +5,7 @@
 ' 対象の窓は g_a4CurWin（最後に押した窓。初めは 0）。
 
 Const AB4D_WROW_STYLE0 = 10                 ' 窓の様式の最初の行の番号
+Const AB4D_FONT_BTN_W = AB4D_PANEL_W - 78   ' フォントの名前を出すボタンの幅（AB 4.20 と同じく名前のボタン）
 
 Dim g_a4CurWin As Long
 
@@ -54,11 +55,22 @@ Sub Ab4D_DrawWinHead(hDC As HDC, ByRef rc As RECT, ByVal w As Long)
     Ab4D_WinRow(hDC, rc, 1, "識別名", "Name", g_rwName(w), 1)
     Ab4D_WinRow(hDC, rc, 2, "ハンドル", "Handle", g_rwHandle(w), 1)
     Ab4D_WinRow(hDC, rc, 3, "キャプション", "Caption", g_rwCaption(w), 1)
-    Ab4D_WinRow(hDC, rc, 4, "フォント", "Font", Ab4D_FontText$(w), 1)
+    Ab4D_DrawFontRow(hDC, rc, w)
+    Ab4D_DrawWinHead2(hDC, rc, w)
+End Sub
+
+' 背景・メニュー・アイコン・タイプの行
+Sub Ab4D_DrawWinHead2(hDC As HDC, ByRef rc As RECT, ByVal w As Long)
     Ab4D_WinRow(hDC, rc, 5, "背景", "Background", Ab4D_BgText$(w), 0)
     Ab4D_WinRow(hDC, rc, 6, "メニュー", "Menu", Ab4D_OrStd$(g_rwMenu(w), Ab4D_L$("(なし)", "(none)")) & " ▼", 0)
     Ab4D_WinRow(hDC, rc, 7, "アイコン", "Icon", Ab4D_OrStd$(g_rwIcon(w), Ab4D_L$("Windowsロゴ(標準)", "Windows logo (default)")), 1)
     Ab4D_WinRow(hDC, rc, 8, "タイプ", "Type", Ab4D_TypeText$(g_rwType(w)) & " ▼", 0)
+End Sub
+
+' フォントの行: 見出しと、名前のボタン（押すとフォントを選ぶ）
+Sub Ab4D_DrawFontRow(hDC As HDC, ByRef rc As RECT, ByVal w As Long)
+    Ab4D_RowText(hDC, rc, 4, Ab4D_L$("フォント", "Font"), "")
+    Ab4D_RowBtn(hDC, rc, 4, AB4D_FONT_BTN_W, Ab4D_FontFace$(g_rwFont(w)))
 End Sub
 
 Sub Ab4D_DrawWinStyleHead(hDC As HDC, ByRef rc As RECT)
@@ -125,7 +137,17 @@ Sub Ab4D_WinEditKey(hWnd As HWND, ByVal w As Long, title As String, key As Strin
 End Sub
 
 ' フォントを「名前, 大きさ」で入力する
+' フォントを選ぶ。Windows はフォントのダイアログ、ダイアログの無い Linux は「名前, 大きさ」の入力
 Sub Ab4D_WinEditFont(hWnd As HWND, ByVal w As Long)
+    Dim v As String, r As Long
+    v = g_rwFont(w)
+    r = Ab4D_ChooseFont(hWnd, v)
+    If r = 1 And v <> g_rwFont(w) Then Ab4D_WinApply(w, "FONT", v)
+    If r = -1 Then Ab4D_WinEditFontText(hWnd, w)
+    SetFocus(hWnd)
+End Sub
+
+Sub Ab4D_WinEditFontText(hWnd As HWND, ByVal w As Long)
     Dim s As String, c As Long, h As Long
     s = Ab4D_FontText$(w)
     If Ab4D_Input(hWnd, Ab4D_L$("フォント（名前, 大きさ）", "Font (name, size)"), s) = 0 Then Exit Sub
@@ -155,31 +177,31 @@ Sub Ab4D_WinNextMenu(ByVal w As Long)
 End Sub
 
 Sub Ab4D_WinStyleClick(ByVal w As Long, ByVal k As Long)
-    Dim row As String, st As Long, m As Long, v As Long, key As String
+    Dim row As String, key As String
     row = Ab4D_StyleRow$(Ab4D_WinRowsType(), k)
     If Len(row) = 0 Then Exit Sub
-    st = Ab4D_WinStyle(w) : m = Ab4D_RowMask(row)
-    v = m And (Not st)
-    If Ab4D_RowKind$(row) = "O" Then v = Ab4D_OptVal(row, (Ab4D_OptIndex(row, st) + 1) Mod Ab4D_OptCount(row))
     key = "STYLE"
     If g_a4ExMode <> 0 Then key = "EXSTYLE"
-    Ab4D_WinApply(w, key, RadHex$(Ab4D_StyleSet(st, m, v)))
+    Ab4D_WinApply(w, key, RadHex$(Ab4D_StyleToggle(row, Ab4D_WinStyle(w))))
 End Sub
 
-' 「変更」のある行（1 識別名、2 ハンドル、3 キャプション、4 フォント、7 アイコン）
+' 「変更」のある行（1 識別名、2 ハンドル、3 キャプション、7 アイコン。フォントは名前のボタン）
 Sub Ab4D_WinBtnRow(hWnd As HWND, ByVal w As Long, ByVal r As Long)
     If r = 1 Then Ab4D_WinEditName(hWnd, w)
     If r = 2 Then Ab4D_WinEditKey(hWnd, w, Ab4D_L$("ハンドル", "Handle"), "HANDLE", g_rwHandle(w), 2)
     If r = 3 Then Ab4D_WinEditKey(hWnd, w, Ab4D_L$("キャプション", "Caption"), "CAPTION", g_rwCaption(w), 1)
-    If r = 4 Then Ab4D_WinEditFont(hWnd, w)
     If r = 7 Then Ab4D_WinEditKey(hWnd, w, Ab4D_L$("アイコン（空なら標準）", "Icon (empty: default)"), "ICONID", g_rwIcon(w), 3)
 End Sub
 
 Sub Ab4D_WinPropDown(hWnd As HWND, ByVal x As Long, ByVal r As Long)
-    Dim w As Long
     If g_rwCount = 0 Then Exit Sub
-    w = Ab4D_WinNo()
+    Ab4D_WinRowDown(hWnd, Ab4D_WinNo(), x, r)
+End Sub
+
+' 窓のプロパティの r 行目を x で押した
+Sub Ab4D_WinRowDown(hWnd As HWND, ByVal w As Long, ByVal x As Long, ByVal r As Long)
     If Ab4D_OnRowBtn(hWnd, x, AB4D_BTN_W) <> 0 Then Ab4D_WinBtnRow(hWnd, w, r)
+    If r = 4 And Ab4D_OnRowBtn(hWnd, x, AB4D_FONT_BTN_W) <> 0 Then Ab4D_WinEditFont(hWnd, w)
     If r = 6 Then Ab4D_WinNextMenu(w)
     If r = 8 Then Ab4D_WinApply(w, "TYPE", FormDesign_Num$((g_rwType(w) + 1) Mod 3))
     If r = 9 And Ab4D_OnRowBtn(hWnd, x, 96) <> 0 Then g_a4ExMode = 1 - g_a4ExMode
