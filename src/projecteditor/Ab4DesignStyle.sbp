@@ -1,0 +1,298 @@
+' AB4 デザイナーのプロパティの値（Win32 を使わないので unittest でも読む）。
+' ITEM の名前・文字・様式・拡張様式の書き換えと、種類ごとの様式の行の表。
+'
+' 様式の行は「;」で区切った文字列:
+'   C;mask;日本語;英語                       チェック。mask のビットが立っていればチェック
+'   O;mask;日本語;英語;値:日本語:英語/...      選択肢。mask の中の値で選ぶ（押すと次の値へ）
+' 行どうしは「|」で区切る。種類 0 は拡張様式の行。
+
+Const AB4P_NAME = 0
+Const AB4P_CAPTION = 1
+Const AB4P_STYLE = 2
+Const AB4P_EXSTYLE = 3
+
+' ---- ITEM の値を書き換える ----
+
+' ITEM の値（= の後ろ）の、part を v にしたもの。値は「名前,x,y,w,h,"文字",様式,拡張様式,種類[,...]」
+Function Ab4D_ItemValSet$(v As String, ByVal part As Long, nv As String) As String
+    Dim a As Long, b As Long, head As String, cap As String, tail As String
+    a = InStr(1, v, Chr$(34))
+    b = InStr(a + 1, v, Chr$(34) & ",&")
+    Ab4D_ItemValSet$ = v
+    If a = 0 Or b = 0 Then Exit Function
+    head = Mid$(v, InStr(1, v, ","), a - InStr(1, v, ",")) : cap = Mid$(v, a + 1, b - a - 1) : tail = Mid$(v, b + 2)
+    Ab4D_ItemValSet$ = Ab4D_ItemJoin$(Left$(v, InStr(1, v, ",") - 1), head, cap, tail, part, nv)
+End Function
+
+' 名前・",x,y,w,h,"・文字・"様式,拡張様式,..." をつなぐ。part の所だけ nv にする
+Function Ab4D_ItemJoin$(name As String, head As String, cap As String, tail As String, ByVal part As Long, nv As String) As String
+    Dim q As String, p As Long, st As String, ex As String, rest As String
+    q = Chr$(34) : p = 1
+    st = RadWnd_Field$(tail, p) : ex = RadWnd_Field$(tail, p) : rest = Mid$(tail, p)
+    If part = AB4P_NAME Then name = nv
+    If part = AB4P_CAPTION Then cap = Ab4D_NoQuote$(nv)
+    If part = AB4P_STYLE Then st = nv
+    If part = AB4P_EXSTYLE Then ex = nv
+    Ab4D_ItemJoin$ = name & head & q & cap & q & "," & st & "," & ex & "," & rest
+End Function
+
+' .wnd の文字は " で囲むだけなので、中の " は ' にする
+Function Ab4D_NoQuote$(s As String) As String
+    Dim i As Long
+    Ab4D_NoQuote$ = s
+    i = InStr(1, Ab4D_NoQuote$, Chr$(34))
+    While i > 0
+        Ab4D_NoQuote$ = Left$(Ab4D_NoQuote$, i - 1) & "'" & Mid$(Ab4D_NoQuote$, i + 1)
+        i = InStr(1, Ab4D_NoQuote$, Chr$(34))
+    Wend
+End Function
+
+' 窓 win の部品 name の part（AB4P_*）を v にした本文。部品が無ければそのまま
+Function Ab4D_ItemSet$(text As String, ByVal win As Long, name As String, ByVal part As Long, v As String) As String
+    Dim pos As Long
+    Ab4D_ItemSet$ = text
+    pos = Ab4D_FindLine(text, win, 2, name)
+    If pos = 0 Then Exit Function
+    Ab4D_ItemSet$ = Ab4D_ReplaceVal$(text, pos, Ab4D_ItemValSet$(RadWnd_Val$(Ab4D_LineAt$(text, pos)), part, v))
+End Function
+
+' ---- 様式のビット ----
+
+' &H と 8 桁までの 16 進（上のビットが立っていても負の Long に。Val は &H80000000 以上で止まる）。ほかは Val
+Function Ab4D_HexNum(s As String) As Long
+    Dim t As String, hi As Long, lo As Long
+    t = Trim$(s)
+    Ab4D_HexNum = Val(t)
+    If Lower$(Left$(t, 2)) <> "&h" Then Exit Function
+    t = Right$("00000000" & Mid$(t, 3), 8)
+    hi = Val("&H" & Left$(t, 4)) : lo = Val("&H" & Right$(t, 4))
+    If hi >= &H8000 Then hi = hi - &H10000
+    Ab4D_HexNum = hi * &H10000 + lo
+End Function
+
+' mask の中を val にした様式
+Function Ab4D_StyleSet(ByVal st As Long, ByVal mask As Long, ByVal v As Long) As Long
+    Ab4D_StyleSet = (st And (Not mask)) Or (v And mask)
+End Function
+
+' mask の中が val なら 1
+Function Ab4D_StyleHas(ByVal st As Long, ByVal mask As Long, ByVal v As Long) As Long
+    Ab4D_StyleHas = 0
+    If (st And mask) = (v And mask) Then Ab4D_StyleHas = 1
+End Function
+
+' 名前（ID）に使えるか: 英字か _ で始まり、英数字と _ だけ
+Function Ab4D_NameOk(s As String) As Long
+    Dim i As Long
+    Ab4D_NameOk = 0
+    If Len(s) = 0 Then Exit Function
+    If Ab4D_IdChar(Mid$(s, 1, 1), 0) = 0 Then Exit Function
+    For i = 2 To Len(s)
+        If Ab4D_IdChar(Mid$(s, i, 1), 1) = 0 Then Exit Function
+    Next
+    Ab4D_NameOk = 1
+End Function
+
+Function Ab4D_IdChar(c As String, ByVal digitOk As Long) As Long
+    Ab4D_IdChar = 0
+    If (c >= "A" And c <= "Z") Or (c >= "a" And c <= "z") Or c = "_" Then Ab4D_IdChar = 1
+    If digitOk <> 0 And c >= "0" And c <= "9" Then Ab4D_IdChar = 1
+End Function
+
+' ---- 様式の行の表 ----
+
+' どの種類にもある行（無効・可視・グループ・タブ ストップ）
+Function Ab4D_CommonRows$() As String
+    Dim s As String
+    s = "C;&H08000000;無効 (使用不可);Disabled|C;&H10000000;可視;Visible"
+    Ab4D_CommonRows$ = s & "|C;&H00020000;グループ;Group|C;&H00010000;タブ ストップ;Tab stop"
+End Function
+
+' 拡張様式の行
+Function Ab4D_ExRows$() As String
+    Dim s As String
+    s = "C;&H00000200;くぼんだ枠 (CLIENTEDGE);Client edge|C;&H00020000;段差の枠 (STATICEDGE);Static edge"
+    s = s & "|C;&H00000001;ダイアログの枠;Dialog frame|C;&H00000020;透明;Transparent"
+    Ab4D_ExRows$ = s & "|C;&H00000010;ファイルのドロップを受ける;Accept files|C;&H00000004;親に知らせない;No parent notify"
+End Function
+
+' 押しボタン・チェック・ラジオ・グループに共通の配置と絵の行
+Function Ab4D_BtnRows$() As String
+    Dim s As String
+    s = "|C;&H00000040;アイコン;Icon|C;&H00000080;ビットマップ;Bitmap|C;&H00002000;複数行;Multiline|C;&H00004000;通知;Notify"
+    s = s & "|O;&H00000300;水平方向の配置;Horizontal;0:既定:Default/&H100:左:Left/&H300:中央:Center/&H200:右:Right"
+    Ab4D_BtnRows$ = s & "|O;&H00000C00;垂直方向の配置;Vertical;0:既定:Default/&H400:上:Top/&HC00:中央:Center/&H800:下:Bottom"
+End Function
+
+Function Ab4D_StaticRows$() As String
+    Dim s As String
+    s = "|O;&H0000001F;テキストの配置;Text align;0:左端:Left/1:中央:Center/2:右端:Right/&HC:左端 (折り返しなし):Left, no wrap"
+    Ab4D_StaticRows$ = s & "|C;&H00000080;プリフィックスなし;No prefix|C;&H00000100;通知;Notify"
+End Function
+
+Function Ab4D_EditRows$() As String
+    Dim s As String
+    s = "|C;&H00000004;複数行;Multiline|C;&H00002000;番号;Number|C;&H00100000;水平スクロール バー;H scroll bar"
+    s = s & "|C;&H00000080;水平オート スクロール;Auto H scroll|C;&H00200000;垂直スクロール バー;V scroll bar"
+    s = s & "|C;&H00000040;垂直オート スクロール;Auto V scroll|C;&H00000020;パスワード;Password|C;&H00000100;常に選択を表示;No hide sel"
+    s = s & "|C;&H00000400;OEM変換;OEM convert|C;&H00001000;改行を許可;Want return|C;&H00000008;大文字変換;Uppercase"
+    s = s & "|C;&H00000010;小文字変換;Lowercase|C;&H00000800;読み取り専用;Read only"
+    Ab4D_EditRows$ = s & "|O;&H00000003;テキストの配置;Text align;0:左:Left/1:中央:Center/2:右:Right"
+End Function
+
+Function Ab4D_ButtonRows$() As String
+    Ab4D_ButtonRows$ = "|O;&H0000000F;ボタンの種類;Button kind;0:標準のボタン:Push/1:既定のボタン:Default/&HB:オーナー描画:Owner draw" & Ab4D_BtnRows$()
+End Function
+
+Function Ab4D_CheckRows$() As String
+    Dim s As String
+    s = "|O;&H0000000F;種類;Kind;3:自動チェック:Auto check/2:チェック:Check/6:自動 3 ステート:Auto 3 state/5:3 ステート:3 state"
+    Ab4D_CheckRows$ = s & "|C;&H00001000;プッシュ ボタン型;Push like|C;&H00000020;左揃えテキスト;Left text" & Ab4D_BtnRows$()
+End Function
+
+Function Ab4D_RadioRows$() As String
+    Dim s As String
+    s = "|O;&H0000000F;種類;Kind;9:自動:Auto/4:手動:Manual"
+    Ab4D_RadioRows$ = s & "|C;&H00001000;プッシュ ボタン型;Push like|C;&H00000020;左揃えテキスト;Left text" & Ab4D_BtnRows$()
+End Function
+
+Function Ab4D_GroupRows$() As String
+    Dim s As String
+    s = "|O;&H00000300;水平方向の配置;Horizontal;0:既定:Default/&H100:左:Left/&H300:中央:Center/&H200:右:Right"
+    Ab4D_GroupRows$ = s & "|C;&H00000040;アイコン;Icon|C;&H00000080;ビットマップ;Bitmap|C;&H00004000;通知;Notify"
+End Function
+
+Function Ab4D_ListRows$() As String
+    Dim s As String
+    s = "|O;&H00000808;選択;Selection;0:シングル:Single/8:複数:Multiple/&H800:拡張:Extended"
+    s = s & "|O;&H00000030;オーナー描画;Owner draw;0:なし:No/&H10:固定:Fixed/&H20:可変:Variable"
+    s = s & "|C;&H00000040;文字列あり;Has strings|C;&H00000200;複数列;Multi column|C;&H00000002;ソート;Sort|C;&H00000001;通知;Notify"
+    s = s & "|C;&H00100000;水平スクロール バー;H scroll bar|C;&H00200000;垂直スクロール バー;V scroll bar"
+    s = s & "|C;&H00001000;スクロールバーを表示;Disable no scroll|C;&H00000004;再描画しない;No redraw"
+    Ab4D_ListRows$ = s & "|C;&H00000080;タブ ストップを使用;Use tab stops|C;&H00000400;キーボード入力を検出;Want keyboard input"
+End Function
+
+Function Ab4D_ComboRows$() As String
+    Dim s As String
+    s = "|O;&H00000003;タイプ;Type;1:シンプル:Simple/2:ドロップ ダウン:Drop down/3:ドロップ ダウン リスト:Drop down list"
+    s = s & "|O;&H00000030;オーナー描画;Owner draw;0:なし:No/&H10:固定:Fixed/&H20:可変:Variable"
+    s = s & "|C;&H00000200;文字列あり;Has strings|C;&H00000100;ソート;Sort|C;&H00000400;サイズ調整なし;No integral height"
+    s = s & "|C;&H00000080;OEM 変換;OEM convert|C;&H00200000;垂直スクロール バー;V scroll bar|C;&H00000040;水平オート スクロール;Auto H scroll"
+    Ab4D_ComboRows$ = s & "|C;&H00000800;スクロールバーを表示;Disable no scroll|C;&H00002000;大文字変換;Uppercase|C;&H00004000;小文字変換;Lowercase"
+End Function
+
+Function Ab4D_ScrollRows$() As String
+    Ab4D_ScrollRows$ = "|O;&H00000006;配置;Align;0:指定無し:None/2:上 (左):Top (left)/4:下 (右):Bottom (right)"
+End Function
+
+Function Ab4D_UpDownRows$() As String
+    Dim s As String
+    s = "|O;&H00000040;方向;Direction;0:垂直方向:Vertical/&H40:水平方向:Horizontal"
+    s = s & "|O;&H0000000C;アタッチ;Attach;0:なし:None/4:右:Right/8:左:Left"
+    s = s & "|C;&H00000010;自動関連付け;Auto buddy|C;&H00000002;数値の自動表示;Set buddy int|C;&H00000080;桁区切りなし;No thousands"
+    Ab4D_UpDownRows$ = s & "|C;&H00000001;ワードラップ;Wrap|C;&H00000020;方向キー;Arrow keys"
+End Function
+
+Function Ab4D_TrackRows$() As String
+    Dim s As String
+    s = "|O;&H00000002;方向;Direction;0:水平方向:Horizontal/2:垂直方向:Vertical"
+    s = s & "|O;&H0000000C;ポイント;Point;0:下 (右):Bottom (right)/4:上 (左):Top (left)/8:両方:Both"
+    Ab4D_TrackRows$ = s & "|C;&H00000010;マークなし;No ticks|C;&H00000001;マーク自動設定;Auto ticks|C;&H00000020;選択可能;Enable sel range"
+End Function
+
+Function Ab4D_ImageRows$() As String
+    Dim s As String
+    s = "|O;&H0000001F;タイプ;Type;7:フレーム(黒):Black frame/8:フレーム(灰):Gray frame/9:フレーム(白):White frame"
+    s = s & "/4:黒:Black/5:灰:Gray/6:白:White/&H12:エッチ:Etched"
+    Ab4D_ImageRows$ = s & "|C;&H00000100;通知;Notify|C;&H00000200;中央配置;Center image|C;&H00000400;右に揃える;Right just"
+End Function
+
+Function Ab4D_ViewRows$(ByVal t As Long) As String
+    Ab4D_ViewRows$ = "|O;&H00000003;表示;View;0:アイコン:Icon/1:詳細:Report/2:小さいアイコン:Small icon/3:一覧:List"
+    If t = 12 Then Ab4D_ViewRows$ = "|C;&H00000001;ボタン;Has buttons|C;&H00000002;線;Has lines|C;&H00000004;ルートに線;Lines at root"
+    If t = 15 Then Ab4D_ViewRows$ = "|C;&H00000004;垂直方向;Vertical|C;&H00000001;スムーズ;Smooth"
+End Function
+
+' 種類 t だけの行（先頭に |）
+Function Ab4D_TypeRows$(ByVal t As Long) As String
+    Ab4D_TypeRows$ = Ab4D_ViewRows$(t)
+    If t = 1 Then Ab4D_TypeRows$ = Ab4D_ButtonRows$()
+    If t = 2 Then Ab4D_TypeRows$ = Ab4D_CheckRows$()
+    If t = 3 Then Ab4D_TypeRows$ = Ab4D_ComboRows$()
+    If t = 4 Then Ab4D_TypeRows$ = Ab4D_EditRows$()
+    If t = 5 Then Ab4D_TypeRows$ = Ab4D_GroupRows$()
+    If t = 6 Or t = 13 Then Ab4D_TypeRows$ = Ab4D_ScrollRows$()
+    If t = 7 Then Ab4D_TypeRows$ = Ab4D_ImageRows$()
+    Ab4D_TypeRows$ = Ab4D_TypeRows2$(t, Ab4D_TypeRows$)
+End Function
+
+Function Ab4D_TypeRows2$(ByVal t As Long, s As String) As String
+    Ab4D_TypeRows2$ = s
+    If t = 8 Then Ab4D_TypeRows2$ = Ab4D_ListRows$()
+    If t = 10 Then Ab4D_TypeRows2$ = Ab4D_RadioRows$()
+    If t = 11 Then Ab4D_TypeRows2$ = Ab4D_StaticRows$()
+    If t = 14 Then Ab4D_TypeRows2$ = Ab4D_UpDownRows$()
+    If t = 16 Then Ab4D_TypeRows2$ = Ab4D_TrackRows$()
+End Function
+
+' 種類 t の行すべて（t = 0 は部品の拡張様式、-1 は窓の様式、-2 は窓の拡張様式）
+Function Ab4D_AllRows$(ByVal t As Long) As String
+    Ab4D_AllRows$ = Ab4D_ExRows$()
+    If t = -1 Then Ab4D_AllRows$ = Ab4D_WinRows$()
+    If t = -2 Then Ab4D_AllRows$ = Ab4D_WinExRows$()
+    If t > 0 Then Ab4D_AllRows$ = Ab4D_CommonRows$() & Ab4D_TypeRows$(t)
+End Function
+
+Function Ab4D_StyleCount(ByVal t As Long) As Long
+    Dim s As String, i As Long
+    s = Ab4D_AllRows$(t)
+    Ab4D_StyleCount = 1
+    For i = 1 To Len(s)
+        If Mid$(s, i, 1) = "|" Then Ab4D_StyleCount = Ab4D_StyleCount + 1
+    Next
+End Function
+
+' 種類 t の k 番目（0 始まり）の行。無ければ ""
+Function Ab4D_StyleRow$(ByVal t As Long, ByVal k As Long) As String
+    Ab4D_StyleRow$ = Ab4D_Nth$(Ab4D_AllRows$(t), "|", k + 1)
+End Function
+
+Function Ab4D_RowKind$(row As String) As String
+    Ab4D_RowKind$ = Ab4D_Nth$(row, ";", 1)
+End Function
+
+Function Ab4D_RowMask(row As String) As Long
+    Ab4D_RowMask = Ab4D_HexNum(Ab4D_Nth$(row, ";", 2))
+End Function
+
+' 行の見出し（ja <> 0 なら日本語）
+Function Ab4D_RowLabel$(row As String, ByVal ja As Long) As String
+    Ab4D_RowLabel$ = Ab4D_Nth$(row, ";", 4 - ja)
+End Function
+
+' 選択肢 j（0 始まり）の値と見出し
+Function Ab4D_OptVal(row As String, ByVal j As Long) As Long
+    Ab4D_OptVal = Ab4D_HexNum(Ab4D_Nth$(Ab4D_Nth$(Ab4D_Nth$(row, ";", 5), "/", j + 1), ":", 1))
+End Function
+
+Function Ab4D_OptLabel$(row As String, ByVal j As Long, ByVal ja As Long) As String
+    Ab4D_OptLabel$ = Ab4D_Nth$(Ab4D_Nth$(Ab4D_Nth$(row, ";", 5), "/", j + 1), ":", 3 - ja)
+End Function
+
+Function Ab4D_OptCount(row As String) As Long
+    Dim j As Long
+    j = 0
+    While Len(Ab4D_Nth$(Ab4D_Nth$(row, ";", 5), "/", j + 1)) > 0
+        j = j + 1
+    Wend
+    Ab4D_OptCount = j
+End Function
+
+' 様式 st で選ばれている選択肢の番号（どれでもなければ -1）
+Function Ab4D_OptIndex(row As String, ByVal st As Long) As Long
+    Dim j As Long
+    For j = Ab4D_OptCount(row) - 1 To 0 Step -1
+        If Ab4D_StyleHas(st, Ab4D_RowMask(row), Ab4D_OptVal(row, j)) <> 0 Then Exit For
+    Next
+    Ab4D_OptIndex = j
+End Function

@@ -1,0 +1,202 @@
+' AB4 デザイナーの右の欄の下半分: 選んだ部品のプロパティ（選んでいなければ窓のプロパティ。Ab4DesignWinProp.sbp）。
+' 行（高さ AB4D_ROW_H）を上から: 見出し「- 種類 プロパティ -」、ID と「変更」、キャプションと「変更」、
+' 「スタイル」と「拡張スタイル」の切り替え、そのあと様式の行（Ab4DesignStyle.sbp の表）。
+' チェックの行を押すとビットを入れ替え、選択肢の行を押すと次の値にする。どれも ITEM の行を書き換える
+' （1 回の編集）。行が欄に入らなければ、欄の上のホイールでずらす。
+
+Const AB4D_ROW_H = 20
+Const AB4D_BTN_W = 48                       ' 「変更」ボタンの幅
+Const AB4D_ROW_STYLE0 = 4                   ' 様式の最初の行の番号
+
+Dim g_a4ExMode As Long                      ' 1 なら様式の行の代わりに拡張様式の行を出す
+Dim g_a4PropScr As Long                     ' プロパティの行をずらしている量
+
+Function Ab4D_Ja() As Long
+    Ab4D_Ja = 1
+    If UiText$(UI_TAB_CODE) = "Code" Then Ab4D_Ja = 0
+End Function
+
+Function Ab4D_PropTop() As Long
+    Ab4D_PropTop = Ab4D_ToolBottom() + 6
+End Function
+
+' 行 r の上端
+Function Ab4D_RowY(ByVal r As Long) As Long
+    Ab4D_RowY = Ab4D_PropTop() + r * AB4D_ROW_H - g_a4PropScr
+End Function
+
+' 点の行（無ければ -1）
+Function Ab4D_RowAt(ByVal y As Long) As Long
+    Ab4D_RowAt = -1
+    If y < Ab4D_PropTop() Then Exit Function
+    Ab4D_RowAt = (y - Ab4D_PropTop() + g_a4PropScr) \ AB4D_ROW_H
+End Function
+
+' キャプションのある種類（押しボタン・チェック・エディット・グループ・ラジオ・テキスト）
+Function Ab4D_HasCaption(ByVal t As Long) As Long
+    Ab4D_HasCaption = 0
+    If t = 1 Or t = 2 Or t = 4 Or t = 5 Or t = 10 Or t = 11 Then Ab4D_HasCaption = 1
+End Function
+
+' 様式の行の表の種類（拡張様式なら 0）
+Function Ab4D_RowsType(ByVal i As Long) As Long
+    Ab4D_RowsType = g_riType(i)
+    If g_a4ExMode <> 0 Then Ab4D_RowsType = 0
+End Function
+
+' 今の様式の値（拡張様式の行なら拡張様式）
+Function Ab4D_CurStyle(ByVal i As Long) As Long
+    Ab4D_CurStyle = Ab4D_HexNum(g_riStyle(i))
+    If g_a4ExMode <> 0 Then Ab4D_CurStyle = Ab4D_HexNum(g_riExStyle(i))
+End Function
+
+' ---- 描画 ----
+
+' 行 r の右端の押しボタン
+Sub Ab4D_RowBtn(hDC As HDC, ByRef rc As RECT, ByVal r As Long, ByVal w As Long, cap As String)
+    Dim y As Long
+    y = Ab4D_RowY(r)
+    Ab4D_Btn(hDC, rc.right - 4 - w, y + 1, rc.right - 4, y + AB4D_ROW_H - 1, cap)
+End Sub
+
+' 行 r に見出しと値
+Sub Ab4D_RowText(hDC As HDC, ByRef rc As RECT, ByVal r As Long, k As String, v As String)
+    Dim y As Long, x As Long
+    y = Ab4D_RowY(r) + 3 : x = Ab4D_PanelX(rc) + 8
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_BTNTEXT))
+    Ui_Text(hDC, x, y, k)
+    Ui_Text(hDC, x + 70, y, v)
+End Sub
+
+Sub Ab4D_DrawHead(hDC As HDC, ByRef rc As RECT, ByVal i As Long)
+    Ab4D_PanelHead(hDC, rc, Ab4D_RowY(0) + 1, Ab4D_Def$(g_riType(i), 1) & " " & Ab4D_L$("プロパティ", "Properties"))
+    Ab4D_RowText(hDC, rc, 1, "ID", g_riName(i))
+    Ab4D_RowBtn(hDC, rc, 1, AB4D_BTN_W, Ab4D_L$("変更", "Edit"))
+    If Ab4D_HasCaption(g_riType(i)) = 0 Then Exit Sub
+    Ab4D_RowText(hDC, rc, 2, Ab4D_L$("キャプション", "Caption"), g_riCaption(i))
+    Ab4D_RowBtn(hDC, rc, 2, AB4D_BTN_W, Ab4D_L$("変更", "Edit"))
+End Sub
+
+Sub Ab4D_DrawStyleHead(hDC As HDC, ByRef rc As RECT)
+    Dim s As String
+    s = Ab4D_L$("スタイル", "Style")
+    If g_a4ExMode <> 0 Then s = Ab4D_L$("拡張スタイル", "Extended style")
+    Ab4D_RowText(hDC, rc, 3, s, "")
+    s = Ab4D_L$("拡張スタイル", "Ex style")
+    If g_a4ExMode <> 0 Then s = Ab4D_L$("スタイル", "Style")
+    Ab4D_RowBtn(hDC, rc, 3, 96, s)
+End Sub
+
+' チェックの行: 13 x 13 の四角と見出し
+Sub Ab4D_DrawCheckRow(hDC As HDC, ByRef rc As RECT, ByVal y As Long, row As String, ByVal st As Long)
+    Dim r As RECT, f As DWord
+    f = DFCS_BUTTONCHECK
+    If Ab4D_StyleHas(st, Ab4D_RowMask(row), Ab4D_RowMask(row)) <> 0 Then f = f Or DFCS_CHECKED
+    FormDesign_Rect(r, Ab4D_PanelX(rc) + 10, y + 3, Ab4D_PanelX(rc) + 23, y + 16)
+    Ui_ButtonFrame(hDC, r, f)
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_BTNTEXT))
+    Ui_Text(hDC, Ab4D_PanelX(rc) + 28, y + 3, Ab4D_RowLabel$(row, Ab4D_Ja()))
+End Sub
+
+' 選択肢の行: 「見出し: 今の値 ▼」（押すと次の値）
+Sub Ab4D_DrawOptRow(hDC As HDC, ByRef rc As RECT, ByVal y As Long, row As String, ByVal st As Long)
+    Dim j As Long, v As String
+    j = Ab4D_OptIndex(row, st)
+    v = "?"
+    If j >= 0 Then v = Ab4D_OptLabel$(row, j, Ab4D_Ja())
+    Ui_TextColor(hDC, Ui_SysColor(COLOR_BTNTEXT))
+    Ui_Text(hDC, Ab4D_PanelX(rc) + 10, y + 3, Ab4D_RowLabel$(row, Ab4D_Ja()) & ": " & v & " ▼")
+End Sub
+
+Sub Ab4D_DrawStyleRows(hDC As HDC, ByRef rc As RECT, ByVal i As Long)
+    Dim k As Long, row As String, st As Long, y As Long
+    st = Ab4D_CurStyle(i)
+    For k = 0 To Ab4D_StyleCount(Ab4D_RowsType(i)) - 1
+        row = Ab4D_StyleRow$(Ab4D_RowsType(i), k)
+        y = Ab4D_RowY(AB4D_ROW_STYLE0 + k)
+        If Ab4D_RowKind$(row) = "C" Then Ab4D_DrawCheckRow(hDC, rc, y, row, st)
+        If Ab4D_RowKind$(row) = "O" Then Ab4D_DrawOptRow(hDC, rc, y, row, st)
+    Next
+End Sub
+
+Sub Ab4D_DrawProps(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
+    Dim i As Long
+    Ui_ClipTo(hDC, Ab4D_PanelX(rc) + 1, Ab4D_PropTop(), rc.right, rc.bottom - AB4D_INFO_H)
+    i = Ab4D_SelIndex(hWnd)
+    If i < 0 Then Ab4D_DrawWinProps(hDC, rc)
+    If i >= 0 Then Ab4D_DrawHead(hDC, rc, i)
+    If i >= 0 Then Ab4D_DrawStyleHead(hDC, rc)
+    If i >= 0 Then Ab4D_DrawStyleRows(hDC, rc, i)
+    Ui_ClipOff(hDC)
+End Sub
+
+' ---- 押す ----
+
+' 本文を u に（変わっていれば 1 回の編集）
+Sub Ab4D_Apply(u As String)
+    If u <> TextBuf_GetConfirmed$() Then FormDesign_Replace(u)
+End Sub
+
+' 部品 i の part を v に書き換える
+Sub Ab4D_SetPart(ByVal i As Long, ByVal part As Long, v As String)
+    Ab4D_Apply(Ab4D_ItemSet$(TextBuf_GetConfirmed$(), g_riWin(i), g_riName(i), part, v))
+End Sub
+
+' ID を変える。名前に使えないか、同じ窓にもうあれば音を鳴らしてやめる
+Sub Ab4D_EditName(hWnd As HWND, ByVal i As Long)
+    Dim s As String, w As Long
+    s = g_riName(i) : w = g_riWin(i)
+    If Ab4D_Input(hWnd, "ID", s) = 0 Or s = g_riName(i) Then Exit Sub
+    If Ab4D_NameOk(s) = 0 Or RadWnd_FindItem(w, s) >= 0 Then MessageBeep(0) : Exit Sub
+    Ab4D_SetPart(i, AB4P_NAME, s)
+    g_a4SelName = s
+End Sub
+
+Sub Ab4D_EditCaption(hWnd As HWND, ByVal i As Long)
+    Dim s As String
+    s = g_riCaption(i)
+    If Ab4D_Input(hWnd, Ab4D_L$("キャプション", "Caption"), s) = 0 Then Exit Sub
+    Ab4D_SetPart(i, AB4P_CAPTION, s)
+End Sub
+
+' 様式の行 k を押した。チェックなら入れ替え、選択肢なら次の値
+Sub Ab4D_StyleClick(ByVal i As Long, ByVal k As Long)
+    Dim row As String, st As Long, m As Long, v As Long, part As Long
+    row = Ab4D_StyleRow$(Ab4D_RowsType(i), k)
+    If Len(row) = 0 Then Exit Sub
+    st = Ab4D_CurStyle(i) : m = Ab4D_RowMask(row)
+    v = m And (Not st)
+    If Ab4D_RowKind$(row) = "O" Then v = Ab4D_OptVal(row, (Ab4D_OptIndex(row, st) + 1) Mod Ab4D_OptCount(row))
+    part = AB4P_STYLE
+    If g_a4ExMode <> 0 Then part = AB4P_EXSTYLE
+    Ab4D_SetPart(i, part, RadHex$(Ab4D_StyleSet(st, m, v)))
+End Sub
+
+' 行 r の右端のボタンの上なら 1
+Function Ab4D_OnRowBtn(hWnd As HWND, ByVal x As Long, ByVal w As Long) As Long
+    Dim rc As RECT
+    Ui_ClientRect(hWnd, rc)
+    Ab4D_OnRowBtn = 0
+    If x >= rc.right - 4 - w And x < rc.right - 4 Then Ab4D_OnRowBtn = 1
+End Function
+
+' プロパティの欄を押した。扱ったら 1
+Function Ab4D_PropDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim i As Long, r As Long
+    Ab4D_PropDown = 1
+    r = Ab4D_RowAt(y) : i = Ab4D_SelIndex(hWnd)
+    If i < 0 Then Ab4D_WinPropDown(hWnd, x, r) : Exit Function
+    If r = 1 And Ab4D_OnRowBtn(hWnd, x, AB4D_BTN_W) <> 0 Then Ab4D_EditName(hWnd, i)
+    If r = 2 And Ab4D_OnRowBtn(hWnd, x, AB4D_BTN_W) <> 0 And Ab4D_HasCaption(g_riType(i)) <> 0 Then Ab4D_EditCaption(hWnd, i)
+    If r = 3 And Ab4D_OnRowBtn(hWnd, x, 96) <> 0 Then g_a4ExMode = 1 - g_a4ExMode
+    If r >= AB4D_ROW_STYLE0 Then Ab4D_StyleClick(i, r - AB4D_ROW_STYLE0)
+End Function
+
+' 欄の上のホイール。行をずらす（0 から、行の終わりが見えるまで）
+Sub Ab4D_PropWheel(hWnd As HWND, ByVal d As Long)
+    Dim rc As RECT, n As Long, mx As Long
+    Ui_ClientRect(hWnd, rc)
+    n = AB4D_ROW_STYLE0 + 24
+    mx = Ab4D_PropTop() + n * AB4D_ROW_H - (rc.bottom - AB4D_INFO_H)
+    g_a4PropScr = Ab4D_Clamp(g_a4PropScr + d, mx)
+End Sub

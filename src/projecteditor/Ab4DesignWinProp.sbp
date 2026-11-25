@@ -1,0 +1,187 @@
+' AB4 デザイナーの窓のプロパティ（部品を選んでいないとき。右の欄の下半分）。
+' 行: 見出し、識別名・ハンドル・キャプション・フォント（「変更」で入力）、背景（見るだけ）、
+' メニュー・タイプ（押すと次の値）、アイコン（「変更」。空なら標準）、スタイル / 拡張スタイルの切り替え、
+' 窓の様式の行（Ab4DesignWinText.sbp の表）。どれも WINDOW: の中の行だけを書き換える（1 回の編集）。
+' 対象の窓は g_a4CurWin（最後に押した窓。初めは 0）。
+
+Const AB4D_WROW_STYLE0 = 10                 ' 窓の様式の最初の行の番号
+
+Dim g_a4CurWin As Long
+
+Function Ab4D_WinNo() As Long
+    Ab4D_WinNo = g_a4CurWin
+    If Ab4D_WinNo >= g_rwCount Then Ab4D_WinNo = 0
+End Function
+
+Function Ab4D_WinRowsType() As Long
+    Ab4D_WinRowsType = -1
+    If g_a4ExMode <> 0 Then Ab4D_WinRowsType = -2
+End Function
+
+Function Ab4D_WinStyle(ByVal w As Long) As Long
+    Ab4D_WinStyle = Ab4D_HexNum(g_rwStyle(w))
+    If g_a4ExMode <> 0 Then Ab4D_WinStyle = Ab4D_HexNum(g_rwExStyle(w))
+End Function
+
+' FONT の「名前, 大きさ」
+Function Ab4D_FontText$(ByVal w As Long) As String
+    Ab4D_FontText$ = Ab4D_FontFace$(g_rwFont(w)) & ", " & FormDesign_Num$(Abs(Ab4D_FontH(g_rwFont(w))))
+End Function
+
+Function Ab4D_OrStd$(s As String, std As String) As String
+    Ab4D_OrStd$ = s
+    If Len(s) = 0 Then Ab4D_OrStd$ = std
+End Function
+
+Function Ab4D_TypeText$(ByVal t As Long) As String
+    Ab4D_TypeText$ = Ab4D_Nth$(Ab4D_L$("通常ウィンドウ|モーダル ダイアログ|モードレス ダイアログ", "Normal window|Modal dialog|Modeless dialog"), "|", t + 1)
+End Function
+
+Function Ab4D_BgText$(ByVal w As Long) As String
+    Ab4D_BgText$ = FormDesign_Num$(RadWnd_Num(g_rwBgColor(w)))
+    If RadWnd_Num(g_rwBgColor(w)) = 15 Then Ab4D_BgText$ = Ab4D_L$("3D FACE(標準)", "3D face (default)")
+End Function
+
+' ---- 描画 ----
+
+Sub Ab4D_WinRow(hDC As HDC, ByRef rc As RECT, ByVal r As Long, ja As String, en As String, v As String, ByVal btn As Long)
+    Ab4D_RowText(hDC, rc, r, Ab4D_L$(ja, en), v)
+    If btn <> 0 Then Ab4D_RowBtn(hDC, rc, r, AB4D_BTN_W, Ab4D_L$("変更", "Edit"))
+End Sub
+
+Sub Ab4D_DrawWinHead(hDC As HDC, ByRef rc As RECT, ByVal w As Long)
+    Ab4D_PanelHead(hDC, rc, Ab4D_RowY(0) + 1, Ab4D_L$("ウィンドウ プロパティ", "Window properties"))
+    Ab4D_WinRow(hDC, rc, 1, "識別名", "Name", g_rwName(w), 1)
+    Ab4D_WinRow(hDC, rc, 2, "ハンドル", "Handle", g_rwHandle(w), 1)
+    Ab4D_WinRow(hDC, rc, 3, "キャプション", "Caption", g_rwCaption(w), 1)
+    Ab4D_WinRow(hDC, rc, 4, "フォント", "Font", Ab4D_FontText$(w), 1)
+    Ab4D_WinRow(hDC, rc, 5, "背景", "Background", Ab4D_BgText$(w), 0)
+    Ab4D_WinRow(hDC, rc, 6, "メニュー", "Menu", Ab4D_OrStd$(g_rwMenu(w), Ab4D_L$("(なし)", "(none)")) & " ▼", 0)
+    Ab4D_WinRow(hDC, rc, 7, "アイコン", "Icon", Ab4D_OrStd$(g_rwIcon(w), Ab4D_L$("Windowsロゴ(標準)", "Windows logo (default)")), 1)
+    Ab4D_WinRow(hDC, rc, 8, "タイプ", "Type", Ab4D_TypeText$(g_rwType(w)) & " ▼", 0)
+End Sub
+
+Sub Ab4D_DrawWinStyleHead(hDC As HDC, ByRef rc As RECT)
+    Dim s As String
+    s = Ab4D_L$("スタイル", "Style")
+    If g_a4ExMode <> 0 Then s = Ab4D_L$("拡張スタイル", "Extended style")
+    Ab4D_RowText(hDC, rc, 9, s, "")
+    s = Ab4D_L$("拡張スタイル", "Ex style")
+    If g_a4ExMode <> 0 Then s = Ab4D_L$("スタイル", "Style")
+    Ab4D_RowBtn(hDC, rc, 9, 96, s)
+End Sub
+
+Sub Ab4D_DrawWinStyleRows(hDC As HDC, ByRef rc As RECT, ByVal w As Long)
+    Dim k As Long, row As String, st As Long, y As Long
+    st = Ab4D_WinStyle(w)
+    For k = 0 To Ab4D_StyleCount(Ab4D_WinRowsType()) - 1
+        row = Ab4D_StyleRow$(Ab4D_WinRowsType(), k)
+        y = Ab4D_RowY(AB4D_WROW_STYLE0 + k)
+        If Ab4D_RowKind$(row) = "C" Then Ab4D_DrawCheckRow(hDC, rc, y, row, st)
+        If Ab4D_RowKind$(row) = "O" Then Ab4D_DrawOptRow(hDC, rc, y, row, st)
+    Next
+End Sub
+
+Sub Ab4D_DrawWinProps(hDC As HDC, ByRef rc As RECT)
+    Dim w As Long
+    If g_rwCount = 0 Then Exit Sub
+    w = Ab4D_WinNo()
+    Ab4D_DrawWinHead(hDC, rc, w)
+    Ab4D_DrawWinStyleHead(hDC, rc)
+    Ab4D_DrawWinStyleRows(hDC, rc, w)
+End Sub
+
+' ---- 押す ----
+
+Sub Ab4D_WinApply(ByVal w As Long, key As String, v As String)
+    Ab4D_Apply(Ab4D_WinSet$(TextBuf_GetConfirmed$(), w, key, v))
+End Sub
+
+' 空なら行を消し、そうでなければ書く（MENUID / ICONID）
+Sub Ab4D_WinApplyOpt(ByVal w As Long, key As String, v As String)
+    If Len(v) = 0 Then Ab4D_Apply(Ab4D_WinDel$(TextBuf_GetConfirmed$(), w, key)) Else Ab4D_WinApply(w, key, v)
+End Sub
+
+' 識別名を変える（名前に使えないか、ほかの窓にもうあれば音だけ）
+Sub Ab4D_WinEditName(hWnd As HWND, ByVal w As Long)
+    Dim s As String, k As Long
+    s = g_rwName(w)
+    If Ab4D_Input(hWnd, Ab4D_L$("識別名", "Name"), s) = 0 Or s = g_rwName(w) Then Exit Sub
+    For k = 0 To g_rwCount - 1
+        If Lower$(g_rwName(k)) = Lower$(s) Then MessageBeep(0) : Exit Sub
+    Next
+    If Ab4D_NameOk(s) = 0 Then MessageBeep(0) : Exit Sub
+    Ab4D_Apply(Ab4D_WinRename$(TextBuf_GetConfirmed$(), w, s))
+End Sub
+
+' 1 行の入力で key を書き換える。kind 0: そのまま、1: " で囲む、2: 名前に使えるものだけ、3: 空なら消す
+Sub Ab4D_WinEditKey(hWnd As HWND, ByVal w As Long, title As String, key As String, cur As String, ByVal kind As Long)
+    Dim s As String
+    s = cur
+    If Ab4D_Input(hWnd, title, s) = 0 Or s = cur Then Exit Sub
+    If kind = 2 And Ab4D_NameOk(s) = 0 Then MessageBeep(0) : Exit Sub
+    If kind = 1 Then s = Chr$(34) & Ab4D_NoQuote$(s) & Chr$(34)
+    If kind = 3 Then Ab4D_WinApplyOpt(w, key, s) Else Ab4D_WinApply(w, key, s)
+End Sub
+
+' フォントを「名前, 大きさ」で入力する
+Sub Ab4D_WinEditFont(hWnd As HWND, ByVal w As Long)
+    Dim s As String, c As Long, h As Long
+    s = Ab4D_FontText$(w)
+    If Ab4D_Input(hWnd, Ab4D_L$("フォント（名前, 大きさ）", "Font (name, size)"), s) = 0 Then Exit Sub
+    c = Ab4D_LastComma(s)
+    If c = 0 Then MessageBeep(0) : Exit Sub
+    h = Val(Mid$(s, c + 1))
+    If h <= 0 Then MessageBeep(0) : Exit Sub
+    Ab4D_WinApply(w, "FONT", Ab4D_FontVal$(g_rwFont(w), -h, Trim$(Left$(s, c - 1))))
+End Sub
+
+Function Ab4D_LastComma(s As String) As Long
+    Dim i As Long
+    Ab4D_LastComma = 0
+    For i = 1 To Len(s)
+        If Mid$(s, i, 1) = "," Then Ab4D_LastComma = i
+    Next
+End Function
+
+' メニューを次へ（なし → ファイルのメニュー → … → なし）
+Sub Ab4D_WinNextMenu(ByVal w As Long)
+    Dim k As Long, j As Long
+    j = -1
+    For k = 0 To g_rmCount - 1
+        If Lower$(g_rmName(k)) = Lower$(g_rwMenu(w)) Then j = k
+    Next
+    If j + 1 >= g_rmCount Then Ab4D_WinApplyOpt(w, "MENUID", "") Else Ab4D_WinApplyOpt(w, "MENUID", g_rmName(j + 1))
+End Sub
+
+Sub Ab4D_WinStyleClick(ByVal w As Long, ByVal k As Long)
+    Dim row As String, st As Long, m As Long, v As Long, key As String
+    row = Ab4D_StyleRow$(Ab4D_WinRowsType(), k)
+    If Len(row) = 0 Then Exit Sub
+    st = Ab4D_WinStyle(w) : m = Ab4D_RowMask(row)
+    v = m And (Not st)
+    If Ab4D_RowKind$(row) = "O" Then v = Ab4D_OptVal(row, (Ab4D_OptIndex(row, st) + 1) Mod Ab4D_OptCount(row))
+    key = "STYLE"
+    If g_a4ExMode <> 0 Then key = "EXSTYLE"
+    Ab4D_WinApply(w, key, RadHex$(Ab4D_StyleSet(st, m, v)))
+End Sub
+
+' 「変更」のある行（1 識別名、2 ハンドル、3 キャプション、4 フォント、7 アイコン）
+Sub Ab4D_WinBtnRow(hWnd As HWND, ByVal w As Long, ByVal r As Long)
+    If r = 1 Then Ab4D_WinEditName(hWnd, w)
+    If r = 2 Then Ab4D_WinEditKey(hWnd, w, Ab4D_L$("ハンドル", "Handle"), "HANDLE", g_rwHandle(w), 2)
+    If r = 3 Then Ab4D_WinEditKey(hWnd, w, Ab4D_L$("キャプション", "Caption"), "CAPTION", g_rwCaption(w), 1)
+    If r = 4 Then Ab4D_WinEditFont(hWnd, w)
+    If r = 7 Then Ab4D_WinEditKey(hWnd, w, Ab4D_L$("アイコン（空なら標準）", "Icon (empty: default)"), "ICONID", g_rwIcon(w), 3)
+End Sub
+
+Sub Ab4D_WinPropDown(hWnd As HWND, ByVal x As Long, ByVal r As Long)
+    Dim w As Long
+    If g_rwCount = 0 Then Exit Sub
+    w = Ab4D_WinNo()
+    If Ab4D_OnRowBtn(hWnd, x, AB4D_BTN_W) <> 0 Then Ab4D_WinBtnRow(hWnd, w, r)
+    If r = 6 Then Ab4D_WinNextMenu(w)
+    If r = 8 Then Ab4D_WinApply(w, "TYPE", FormDesign_Num$((g_rwType(w) + 1) Mod 3))
+    If r = 9 And Ab4D_OnRowBtn(hWnd, x, 96) <> 0 Then g_a4ExMode = 1 - g_a4ExMode
+    If r >= AB4D_WROW_STYLE0 Then Ab4D_WinStyleClick(w, r - AB4D_WROW_STYLE0)
+End Sub

@@ -1,0 +1,87 @@
+' AB4 デザイナーの 1 行の入力（プロパティの「変更」）。
+' Windows: 見出しと欄と OK / キャンセルの小さなダイアログ（EditorAB4Proj.sbp と同じ作り。UTF-16 で読み書き）。
+' Linux: LxDlg_Input。
+
+Const AB4D_IN_EDIT = 2101
+Const AB4D_IN_OK = 2102
+Const AB4D_IN_CANCEL = 2103
+
+Dim g_hA4In As HWND
+Dim g_a4InDone As Long              ' 0 = 入力中、1 = やめた、2 = OK
+Dim g_a4InText As String
+
+#ifndef _LINUX
+
+Function Ab4D_InMake(cls As String, ByVal ex As Long, ByVal style As Long, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal id As Long) As HWND
+    Ab4D_InMake = EditorFind_Make(g_hA4In, cls, ex, style, x, y, w, 24, id)
+End Function
+
+Sub Ab4D_InBuild(title As String, text As String)
+    Setting_SetUtf8Text(Ab4D_InMake("STATIC", 0, &H50000000, 12, 12, 360, 0), title)
+    Setting_SetUtf8Text(Ab4D_InMake("EDIT", FIND_EDIT_EX, FIND_EDIT_STYLE, 12, 40, 360, AB4D_IN_EDIT), text)
+    Setting_SetUtf8Text(Ab4D_InMake("BUTTON", 0, FIND_BTN_STYLE Or 1, 192, 76, 86, AB4D_IN_OK), "OK")
+    Setting_SetUtf8Text(Ab4D_InMake("BUTTON", 0, FIND_BTN_STYLE, 286, 76, 86, AB4D_IN_CANCEL), Ab4D_L$("キャンセル", "Cancel"))
+    SendMessage(GetDlgItem(g_hA4In, AB4D_IN_EDIT), EM_SETSEL, 0, -1)
+End Sub
+
+Sub Ab4D_InOk()
+    g_a4InText = EditorFind_EditText$(GetDlgItem(g_hA4In, AB4D_IN_EDIT))
+    g_a4InDone = 2
+End Sub
+
+Function Ab4D_InProc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
+    Ab4D_InProc = 0
+    If dwMsg = WM_CLOSE Then g_a4InDone = 1 : Exit Function
+    If dwMsg <> WM_COMMAND Then Ab4D_InProc = AB4_DefWindowProcW(hWnd, dwMsg, wParam, lParam) : Exit Function
+    If LOWORD(wParam) = AB4D_IN_OK Then Ab4D_InOk()
+    If LOWORD(wParam) = AB4D_IN_CANCEL Then g_a4InDone = 1
+End Function
+
+' Enter は OK、Esc はやめる
+Function Ab4D_InKey(ByRef msg As MSG) As Long
+    Ab4D_InKey = 0
+    If msg.message <> WM_KEYDOWN Then Exit Function
+    If msg.wParam = VK_ESCAPE Then g_a4InDone = 1 : Ab4D_InKey = 1
+    If msg.wParam = VK_RETURN Then Ab4D_InOk() : Ab4D_InKey = 1
+End Function
+
+Sub Ab4D_InPump()
+    Dim msg As MSG
+    If EditorFind_NextMsg(msg) = 0 Then g_a4InDone = 1 : Exit Sub
+    If Ab4D_InKey(msg) <> 0 Then Exit Sub
+    If EditorFind_IsDlgMsg(g_hA4In, msg) <> 0 Then Exit Sub
+    TranslateMessage(msg)
+    DispatchMessage(msg)
+End Sub
+
+' 1 行の入力。OK なら 1 で text に入れる
+Function Ab4D_Input(hOwner As HWND, title As String, ByRef text As String) As Long
+    Ab4D_Input = 0 : g_a4InDone = 0
+    g_hA4In = CreateWindowEx(0, "NORMALDLG", "", &H00C80000, -2147483648, -2147483648, 400, 150, hMainWnd, 0 As HMENU, GetModuleHandle(0), 0)
+    If g_hA4In = 0 Then Exit Function
+    AB4_SetWndProcW(g_hA4In, GWL_WNDPROC, AddressOf(Ab4D_InProc) As LONG_PTR)
+    Ab4D_InBuild(title, text) : ShowWindow(g_hA4In, SW_SHOW) : SetFocus(GetDlgItem(g_hA4In, AB4D_IN_EDIT))
+    EnableWindow(hMainWnd, 0)
+    While g_a4InDone = 0
+        Ab4D_InPump()
+    Wend
+    Ab4D_Input = Ab4D_InEnd(hOwner, text)
+End Function
+
+Function Ab4D_InEnd(hOwner As HWND, ByRef text As String) As Long
+    EnableWindow(hMainWnd, 1)
+    DestroyWindow(g_hA4In) : g_hA4In = 0
+    SetFocus(hOwner)
+    Ab4D_InEnd = 0
+    If g_a4InDone <> 2 Then Exit Function
+    text = g_a4InText
+    Ab4D_InEnd = 1
+End Function
+
+#else
+
+Function Ab4D_Input(hOwner As HWND, title As String, ByRef text As String) As Long
+    Ab4D_Input = LxDlg_Input(title, text)
+End Function
+
+#endif

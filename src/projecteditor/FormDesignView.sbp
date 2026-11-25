@@ -61,14 +61,41 @@ Sub FormDesign_Refresh(hWnd As HWND)
     InvalidateRect(hWnd, ByVal 0, FALSE)
 End Sub
 
-' InitializeComponent が無い文書はデザインにしない（音だけ鳴らす）
+' F12 でデザインへ。.wnd なら AB4 デザイナー（Ab4Design.sbp）、ほかはデザイナー
 Sub FormDesign_Enter(hWnd As HWND)
+    If Ab4D_Can(hWnd) <> 0 Then
+        Ab4D_Enter(hWnd)
+        Exit Sub
+    End If
+    FormDesign_EnterForm(hWnd)
+End Sub
+
+' 画面 m にできるか（灰色のタブを押したら今の画面のまま）
+Function FormDesign_CanMode(hWnd As HWND, ByVal m As Long) As Long
+    FormDesign_CanMode = 1
+    If m = FD_MODE_FORM Then FormDesign_CanMode = FormDesign_IsForm(TextBuf_GetConfirmed$())
+    If m = FD_MODE_AB4 Then FormDesign_CanMode = Ab4D_Can(hWnd)
+End Function
+
+' 文書タブで画面 m（0 コード、FD_MODE_FORM、FD_MODE_AB4）を選んだ
+Sub FormDesign_SetMode(hWnd As HWND, ByVal m As Long)
+    If FormDesign_CanMode(hWnd, m) = 0 Then
+        MessageBeep(0)
+        Exit Sub
+    End If
+    If g_fdOn <> 0 Then FormDesign_Leave(hWnd)
+    If m = FD_MODE_FORM Then FormDesign_EnterForm(hWnd)
+    If m = FD_MODE_AB4 Then Ab4D_Enter(hWnd)
+End Sub
+
+' InitializeComponent が無い文書はデザインにしない（音だけ鳴らす）
+Sub FormDesign_EnterForm(hWnd As HWND)
     EditorUndo_EndCoalesce()
     If FormDesign_IsForm(TextBuf_GetConfirmed$()) = 0 Then
         MessageBeep(0)
         Exit Sub
     End If
-    g_fdOn = 1
+    g_fdOn = FD_MODE_FORM
     EditorCaret_Destroy()
     FormDesign_Refresh(hWnd)
 End Sub
@@ -159,7 +186,8 @@ Sub FormDesign_Draw(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     Dim old As HFONT
     Ui_Transparent(hDC)
     old = Ui_SelectFont(hDC, Ui_GuiFont())
-    FormDesign_DrawAll(hDC, hWnd, rc)
+    If FormDesign_IsOn(hWnd) = FD_MODE_AB4 Then Ab4D_DrawAll(hDC, hWnd, rc)
+    If FormDesign_IsOn(hWnd) <> FD_MODE_AB4 Then FormDesign_DrawAll(hDC, hWnd, rc)
     Ui_SelectFont(hDC, old)
 End Sub
 
@@ -322,6 +350,7 @@ End Function
 ' デザイン中に効くキー: F12（ソースへ）、Esc（ツールをやめる）、Ctrl+S、Ctrl+Z / Ctrl+Y
 Sub FormDesign_Key(hWnd As HWND, ByVal vk As Long)
     If vk = VK_F12 Then FormDesign_Toggle(hWnd)
+    If g_fdOn = FD_MODE_AB4 Then Ab4D_Key(hWnd, vk)
     If vk = VK_ESCAPE Then g_fdTool = 0
     If vk = VK_ESCAPE Then InvalidateRect(hWnd, ByVal 0, FALSE)
     If EditorKeys_Ctrl() = 0 Then Exit Sub
@@ -350,7 +379,8 @@ End Function
 Function FormDesign_Handle(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
     FormDesign_Handle = 0
     If FormDesign_IsOn(hWnd) = 0 Then Exit Function
-    FormDesign_Handle = FormDesign_Mouse(hWnd, dwMsg, wParam, lParam)
+    If FormDesign_IsOn(hWnd) = FD_MODE_AB4 Then FormDesign_Handle = Ab4D_Mouse(hWnd, dwMsg, wParam, lParam)
+    If FormDesign_IsOn(hWnd) <> FD_MODE_AB4 Then FormDesign_Handle = FormDesign_Mouse(hWnd, dwMsg, wParam, lParam)
     If FormDesign_Handle <> 0 Then Exit Function
     FormDesign_Handle = FormDesign_Other(hWnd, dwMsg, wParam)
 End Function

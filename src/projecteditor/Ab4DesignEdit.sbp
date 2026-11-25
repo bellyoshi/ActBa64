@@ -1,0 +1,246 @@
+' AB4 デザイナーのマウス（Ab4Design.sbp の続き）。
+' 部品を押すと選び（g_a4Sel*）、そのまま引くと動かす。選んだ部品の右辺・下辺・右下を引くと大きさを変える。
+' 窓の右辺・下辺・右下を引くと窓の大きさを変える。動きと大きさは FormDesign と同じ計算
+' （FormDesign_CtlDrag / FormDesign_DragSize）。離したときに ITEM の x,y,幅,高さ か SIZE を書き換える
+' （Ab4D_SetItemRect$ / Ab4D_SetWinSize$。1 回の編集として元に戻せる）。
+' g_a4Drag: 0 = 引いていない、1 / 2 / 3 = 窓 g_a4Win の右辺・下辺・右下、FD_KIND_MOVE + 0..3 = 部品。
+
+Dim g_a4SelDoc As HWND              ' 選んでいる部品のある文書（ほかの文書では選んでいない）
+Dim g_a4SelWin As Long              ' 選んでいる部品の窓の番号
+Dim g_a4SelName As String           ' 選んでいる部品の名前。"" は選んでいない
+Dim g_a4Drag As Long
+Dim g_a4Win As Long                 ' 大きさを変えている窓
+Dim g_a4X0 As Long, g_a4Y0 As Long  ' 押した位置
+Dim g_a4CX0 As Long, g_a4CY0 As Long, g_a4CW0 As Long, g_a4CH0 As Long ' 押したときの四角
+Dim g_a4CX As Long, g_a4CY As Long, g_a4CW As Long, g_a4CH As Long     ' 引いている間の四角
+
+Sub Ab4D_Unselect()
+    g_a4SelName = ""
+    g_a4SelDoc = 0
+    g_a4Drag = 0
+End Sub
+
+' hWnd の文書で選んでいる部品の番号（g_ri*）。無ければ -1
+Function Ab4D_SelIndex(hWnd As HWND) As Long
+    Ab4D_SelIndex = -1
+    If Len(g_a4SelName) = 0 Or hWnd <> g_a4SelDoc Then Exit Function
+    Ab4D_SelIndex = RadWnd_FindItem(g_a4SelWin, g_a4SelName)
+End Function
+
+Function Ab4D_WinDragging(ByVal w As Long) As Long
+    Ab4D_WinDragging = 0
+    If g_a4Drag >= 1 And g_a4Drag <= 3 And w = g_a4Win Then Ab4D_WinDragging = 1
+End Function
+
+Function Ab4D_ItemDragging(ByVal i As Long) As Long
+    Ab4D_ItemDragging = 0
+    If g_a4Drag < FD_KIND_MOVE Then Exit Function
+    If g_riWin(i) <> g_a4SelWin Then Exit Function
+    If Lower$(g_riName(i)) = Lower$(g_a4SelName) Then Ab4D_ItemDragging = 1
+End Function
+
+' 部品 i の位置と大きさ（クライアントの左上から）。引いている部品は引いている間の値
+Sub Ab4D_ItemNow(ByVal i As Long, ByRef x As Long, ByRef y As Long, ByRef w As Long, ByRef h As Long)
+    x = Ab4D_Part(g_riRect(i), 1) : y = Ab4D_Part(g_riRect(i), 2)
+    w = Ab4D_Part(g_riRect(i), 3) : h = Ab4D_Part(g_riRect(i), 4)
+    If Ab4D_ItemDragging(i) = 0 Then Exit Sub
+    x = g_a4CX : y = g_a4CY : w = g_a4CW : h = g_a4CH
+End Sub
+
+Function Ab4D_SelRectText$(ByVal i As Long) As String
+    Dim x As Long, y As Long, w As Long, h As Long
+    Ab4D_ItemNow(i, x, y, w, h)
+    Ab4D_SelRectText$ = FormDesign_Num$(x) & ", " & FormDesign_Num$(y) & ", " & FormDesign_Num$(w) & " x " & FormDesign_Num$(h)
+End Function
+
+' ---- 押した所 ----
+
+' 選んでいる部品の辺なら FD_KIND_MOVE + 1..3
+Function Ab4D_HitSelEdge(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim i As Long, rc As RECT, e As Long
+    Ab4D_HitSelEdge = 0
+    i = Ab4D_SelIndex(hWnd)
+    If i < 0 Then Exit Function
+    Ab4D_ItemScreen(i, rc)
+    e = FormDesign_EdgeHit(x, y, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top)
+    If e <> 0 Then Ab4D_HitSelEdge = FD_KIND_MOVE + e
+End Function
+
+' 点の上の部品（後に書いたものが上）。無ければ -1
+Function Ab4D_ItemAt(ByVal x As Long, ByVal y As Long) As Long
+    Dim i As Long, rc As RECT
+    For i = g_riCount - 1 To 0 Step -1
+        Ab4D_ItemScreen(i, rc)
+        If FormDesign_In(x, y, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top) <> 0 Then Exit For
+    Next
+    Ab4D_ItemAt = i
+End Function
+
+' 点の上の窓の辺（1..3）。w に窓の番号
+Function Ab4D_WinEdgeAt(ByVal x As Long, ByVal y As Long, ByRef w As Long) As Long
+    Dim k As Long
+    Ab4D_WinEdgeAt = 0
+    For k = 0 To g_rwCount - 1
+        Ab4D_WinEdgeAt = FormDesign_EdgeHit(x, y, Ab4D_OrgX(), Ab4D_WinTop(k), Ab4D_WinW(k), Ab4D_WinH(k))
+        w = k
+        If Ab4D_WinEdgeAt <> 0 Then Exit Function
+    Next
+End Function
+
+' 窓を描く面（タブの帯・下の帯・右の欄の外）の上なら 1
+Function Ab4D_OnCanvas(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim rc As RECT
+    Ui_ClientRect(hWnd, rc)
+    Ab4D_OnCanvas = 0
+    If y < DOCTAB_H Or y >= rc.bottom - AB4D_INFO_H Or x >= Ab4D_CanvasR(rc) Then Exit Function
+    Ab4D_OnCanvas = 1
+End Function
+
+' 掴める所。選んだ部品の辺、部品（i に番号）、窓の辺（w に番号）の順に見る
+Function Ab4D_HitAt(hWnd As HWND, ByVal x As Long, ByVal y As Long, ByRef w As Long, ByRef i As Long) As Long
+    i = -1
+    Ab4D_HitAt = 0
+    If Ab4D_OnCanvas(hWnd, x, y) = 0 Then Exit Function
+    Ab4D_HitAt = Ab4D_HitSelEdge(hWnd, x, y)
+    If Ab4D_HitAt <> 0 Then Exit Function
+    i = Ab4D_ItemAt(x, y)
+    If i >= 0 Then Ab4D_HitAt = FD_KIND_MOVE
+    If i >= 0 Then Exit Function
+    Ab4D_HitAt = Ab4D_WinEdgeAt(x, y, w)
+End Function
+
+' ---- 引く ----
+
+' 部品 i を選び、今の四角を覚える
+Sub Ab4D_GrabItem(hWnd As HWND, ByVal i As Long)
+    g_a4SelDoc = hWnd
+    g_a4SelWin = g_riWin(i) : g_a4CurWin = g_riWin(i)
+    g_a4SelName = g_riName(i)
+    Ab4D_ItemNow(i, g_a4CX0, g_a4CY0, g_a4CW0, g_a4CH0)
+End Sub
+
+Sub Ab4D_GrabWin(ByVal w As Long)
+    g_a4Win = w
+    g_a4CW0 = Ab4D_SizeW(g_rwSize(w))
+    g_a4CH0 = Ab4D_SizeH(g_rwSize(w))
+End Sub
+
+' kind の所を掴む（選んでいる部品の辺は、選んだまま）
+Sub Ab4D_Grab(hWnd As HWND, ByVal kind As Long, ByVal w As Long, ByVal i As Long)
+    If kind = 0 Then Ab4D_Unselect()
+    If i >= 0 Then Ab4D_GrabItem(hWnd, i)
+    If kind > FD_KIND_MOVE Then Ab4D_GrabItem(hWnd, Ab4D_SelIndex(hWnd))
+    If kind >= 1 And kind <= 3 Then Ab4D_GrabWin(w)
+    g_a4CX = g_a4CX0 : g_a4CY = g_a4CY0 : g_a4CW = g_a4CW0 : g_a4CH = g_a4CH0
+End Sub
+
+Sub Ab4D_Down(hWnd As HWND, ByVal lParam As LPARAM)
+    Dim x As Long, y As Long
+    SetFocus(hWnd)
+    EditorSelect_XY(lParam, x, y)
+    RadWnd_Parse(FormDesign_Text$(hWnd))
+    Ab4D_PickWin(hWnd, x, y)
+    If Ab4D_PanelDown(hWnd, x, y) = 0 Then Ab4D_CanvasDown(hWnd, x, y)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 窓を描く面の上で押した窓を、窓のプロパティの対象にする
+Sub Ab4D_PickWin(hWnd As HWND, ByVal x As Long, ByVal y As Long)
+    Dim w As Long, k As Long
+    If Ab4D_OnCanvas(hWnd, x, y) = 0 Then Exit Sub
+    For k = 0 To g_rwCount - 1
+        If FormDesign_In(x, y, Ab4D_OrgX(), Ab4D_WinTop(k), Ab4D_WinW(k), Ab4D_WinH(k)) <> 0 Then w = k + 1
+    Next
+    If w > 0 Then g_a4CurWin = w - 1
+End Sub
+
+' 右の欄を押した。欄の上なら 1
+Function Ab4D_PanelDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim rc As RECT
+    Ui_ClientRect(hWnd, rc)
+    Ab4D_PanelDown = 0
+    If x < Ab4D_CanvasR(rc) Or y < DOCTAB_H Or y >= rc.bottom - AB4D_INFO_H Then Exit Function
+    Ab4D_PanelDown = 1
+    If Ab4D_ToolDown(hWnd, x, y) = 0 Then Ab4D_PropDown(hWnd, x, y)
+End Function
+
+' 窓を描く面を押した。道具を選んでいれば足し始め、そうでなければ掴んだ所を引き始める
+Sub Ab4D_CanvasDown(hWnd As HWND, ByVal x As Long, ByVal y As Long)
+    Dim w As Long, i As Long, kind As Long
+    If Ab4D_OnCanvas(hWnd, x, y) = 0 Then Exit Sub
+    kind = AB4D_DRAG_NEW
+    If Ab4D_NewDown(hWnd, x, y) = 0 Then kind = Ab4D_HitAt(hWnd, x, y, w, i)
+    If kind <> AB4D_DRAG_NEW Then Ab4D_Grab(hWnd, kind, w, i)
+    If kind <> AB4D_DRAG_NEW Then g_a4Drag = kind
+    g_a4X0 = x : g_a4Y0 = y
+    If g_a4Drag <> 0 Then SetCapture(hWnd)
+End Sub
+
+Sub Ab4D_Move(hWnd As HWND, ByVal lParam As LPARAM)
+    Dim x As Long, y As Long, dx As Long, dy As Long
+    If g_a4Drag = 0 Then Exit Sub
+    EditorSelect_XY(lParam, x, y)
+    dx = x - g_a4X0 : dy = y - g_a4Y0
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+    If g_a4Drag = AB4D_DRAG_NEW Then Ab4D_NewMove(dx, dy)
+    If g_a4Drag = AB4D_DRAG_NEW Then Exit Sub
+    FormDesign_SetCursor(g_a4Drag)
+    If g_a4Drag >= FD_KIND_MOVE Then FormDesign_CtlDrag(g_a4Drag, g_a4CX0, g_a4CY0, g_a4CW0, g_a4CH0, dx, dy, g_a4CX, g_a4CY, g_a4CW, g_a4CH)
+    If g_a4Drag < FD_KIND_MOVE Then FormDesign_DragSize(g_a4Drag, g_a4CW0, g_a4CH0, dx, dy, g_a4CW, g_a4CH)
+End Sub
+
+' 引いた部品の四角か窓の大きさを書いた本文
+Function Ab4D_Changed$(t As String) As String
+    If g_a4Drag = AB4D_DRAG_NEW Then
+        Ab4D_Changed$ = Ab4D_NewText$(t)
+    ElseIf g_a4Drag >= FD_KIND_MOVE Then
+        Ab4D_Changed$ = Ab4D_SetItemRect$(t, g_a4SelWin, g_a4SelName, g_a4CX, g_a4CY, g_a4CW, g_a4CH)
+    Else
+        Ab4D_Changed$ = Ab4D_SetWinSize$(t, g_a4Win, g_a4CW, g_a4CH)
+    End If
+End Function
+
+' 離した。変わっていれば書き換える（1 回の編集）
+Sub Ab4D_Up(hWnd As HWND)
+    Dim t As String, u As String, k As Long
+    If g_a4Drag = 0 Then Exit Sub
+    t = TextBuf_GetConfirmed$()
+    u = Ab4D_Changed$(t)
+    k = g_a4Drag : g_a4Drag = 0
+    ReleaseCapture()
+    If u <> t Then FormDesign_Replace(u)
+    If k = AB4D_DRAG_NEW And u <> t Then Ab4D_NewDone(hWnd)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' ほかの窓にマウスを取られたら、書き換えずにやめる
+Sub Ab4D_Lost(hWnd As HWND)
+    If g_a4Drag = 0 Then Exit Sub
+    g_a4Drag = 0
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 辺の上では大きさを変える矢印、部品の上では動かす矢印
+Function Ab4D_OnSetCursor(hWnd As HWND, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    Dim pt As POINT, w As Long, i As Long
+    If LOWORD(lParam) <> HTCLIENT Then
+        Ab4D_OnSetCursor = DefMDIChildProc(hWnd, WM_SETCURSOR, wParam, lParam)
+        Exit Function
+    End If
+    Ui_MousePos(hWnd, pt)
+    RadWnd_Parse(FormDesign_Text$(hWnd))
+    FormDesign_SetCursor(Ab4D_HitAt(hWnd, pt.x, pt.y, w, i))
+    If g_a4Tool <> 0 And Ab4D_OnCanvas(hWnd, pt.x, pt.y) <> 0 Then FormDesign_SetCursor(FD_KIND_TOOL)
+    Ab4D_OnSetCursor = 1
+End Function
+
+Function Ab4D_Mouse(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As Long
+    Ab4D_Mouse = FormDesign_MouseIs(dwMsg)
+    If dwMsg = WM_LBUTTONDOWN Then Ab4D_Down(hWnd, lParam)
+    If dwMsg = WM_MOUSEMOVE Then Ab4D_Move(hWnd, lParam)
+    If dwMsg = WM_LBUTTONUP Then Ab4D_Up(hWnd)
+    If dwMsg = WM_CAPTURECHANGED Then Ab4D_Lost(hWnd)
+    If dwMsg = WM_SETCURSOR Then g_childRet = Ab4D_OnSetCursor(hWnd, wParam, lParam)
+    If dwMsg = WM_MOUSEWHEEL Then Ab4D_WheelAt(hWnd, wParam)
+    If dwMsg = WM_MOUSEWHEEL Then Ab4D_Mouse = 1
+End Function
