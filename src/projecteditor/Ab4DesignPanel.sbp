@@ -4,12 +4,13 @@
 ' 足したら道具はポインタに戻り、足した部品を選ぶ。Del で選んだ部品を消す。Esc で道具と選びをやめる。
 
 Const AB4D_PANEL_W = 214                    ' 右の欄の幅
-Const AB4D_TOOL_H = 21                      ' 道具の 1 段の高さ
-Const AB4D_TOOL_W = 101                     ' 道具 1 つの幅（2 列）
+Const AB4D_TOOL_CELL = 31                   ' 道具の絵のボタン 1 つ分（30 x 30 と 1 の隙間）
+Const AB4D_TOOL_GAP = 16                    ' 左の 3 列と右の 2 列のあいだ
 Const AB4D_TOOL_N = 17                      ' 道具の数（ポインタ + 16 種類）
 Const AB4D_DRAG_NEW = 32                    ' g_a4Drag: 道具で部品の四角を引いている
 
 Dim g_a4Tool As Long                        ' 選んでいる道具の種類（0 はポインタ）
+Dim g_a4Hover As Long                       ' マウスの下の道具（-1 は無し。下の帯に名前を出す）
 
 ' 表示言語が日本語なら ja、そうでなければ en
 Function Ab4D_L$(ja As String, en As String) As String
@@ -21,15 +22,30 @@ Function Ab4D_PanelX(ByRef rc As RECT) As Long
     Ab4D_PanelX = rc.right - AB4D_PANEL_W
 End Function
 
-' 道具 k（0..16）の種類。AB 4.20 の道具箱の並び
+' 道具 k（0..16）の種類と、道具箱の中の列（0..4）・段（0..4）。AB 4.20 と同じく左に 3 列、右に 2 列
+'   段 0: ポインタ / 1: テキスト エディット グループ | リストビュー リスト / 2: ボタン チェック ラジオ | コンボ ツリー
+'   段 3: 横スクロール 縦スクロール アップダウン | イメージ / 4: トラックバー プログレス
+Function Ab4D_ToolPos$() As String
+    Ab4D_ToolPos$ = "00 0 0 11 0 1 04 1 1 05 2 1 09 3 1 08 4 1 01 0 2 02 1 2 10 2 2 03 3 2 12 4 2 06 0 3 13 1 3 14 2 3 07 3 3 16 0 4 15 1 4 "
+End Function
+
 Function Ab4D_ToolType(ByVal k As Long) As Long
-    Ab4D_ToolType = Val(Mid$("00 11 04 05 09 12 01 02 10 08 03 06 13 14 07 16 15 ", k * 3 + 1, 2))
+    Ab4D_ToolType = Val(Mid$(Ab4D_ToolPos$(), k * 7 + 1, 2))
+End Function
+
+' 種類 t の道具の名前
+Function Ab4D_ToolLabel$(ByVal t As Long) As String
+    Dim k As Long
+    Ab4D_ToolLabel$ = ""
+    For k = 0 To AB4D_TOOL_N - 1
+        If Ab4D_ToolType(k) = t Then Ab4D_ToolLabel$ = Ab4D_ToolName$(k)
+    Next
 End Function
 
 Function Ab4D_ToolName$(ByVal k As Long) As String
     Dim ja As String, en As String
-    ja = "ポインタ|テキスト|エディット|グループ|リストビュー|ツリービュー|ボタン|チェック|ラジオ|リスト|コンボ|横スクロール|縦スクロール|アップダウン|イメージ|トラックバー|プログレス"
-    en = "Pointer|Static|EditBox|GroupBox|ListView|TreeView|Button|CheckBox|Radio|ListBox|ComboBox|HScroll|VScroll|UpDown|ImageBox|TrackBar|Progress"
+    ja = "ポインタ|テキスト|エディット|グループ|リストビュー|リスト|ボタン|チェック|ラジオ|コンボ|ツリービュー|横スクロール|縦スクロール|アップダウン|イメージ|トラックバー|プログレス"
+    en = "Pointer|Static|EditBox|GroupBox|ListView|ListBox|Button|CheckBox|Radio|ComboBox|TreeView|HScrollBar|VScrollBar|UpDown|ImageBox|TrackBar|ProgressBar"
     Ab4D_ToolName$ = Ab4D_Nth$(Ab4D_L$(ja, en), "|", k + 1)
 End Function
 
@@ -39,14 +55,17 @@ End Function
 
 ' 道具箱の下端（プロパティはここから下）
 Function Ab4D_ToolBottom() As Long
-    Ab4D_ToolBottom = Ab4D_ToolTop() + ((AB4D_TOOL_N + 1) \ 2) * AB4D_TOOL_H
+    Ab4D_ToolBottom = Ab4D_ToolTop() + 5 * AB4D_TOOL_CELL
 End Function
 
 Sub Ab4D_ToolRect(ByRef rc As RECT, ByVal k As Long, ByRef r As RECT)
     Dim x As Long, y As Long
-    x = Ab4D_PanelX(rc) + 4 + (k Mod 2) * AB4D_TOOL_W
-    y = Ab4D_ToolTop() + (k \ 2) * AB4D_TOOL_H
-    FormDesign_Rect(r, x, y, x + AB4D_TOOL_W - 2, y + AB4D_TOOL_H - 2)
+    Dim c As Long
+    c = Val(Mid$(Ab4D_ToolPos$(), k * 7 + 4, 1))
+    x = Ab4D_PanelX(rc) + 8 + c * AB4D_TOOL_CELL
+    If c >= 3 Then x = x + AB4D_TOOL_GAP
+    y = Ab4D_ToolTop() + Val(Mid$(Ab4D_ToolPos$(), k * 7 + 6, 1)) * AB4D_TOOL_CELL
+    FormDesign_Rect(r, x, y, x + AB4D_TOOL_CELL - 1, y + AB4D_TOOL_CELL - 1)
 End Sub
 
 ' 見出し（- 文字 -）を y に、欄の真ん中に
@@ -60,14 +79,16 @@ End Sub
 Sub Ab4D_DrawTool(hDC As HDC, ByRef rc As RECT, ByVal k As Long)
     Dim r As RECT
     Ab4D_ToolRect(rc, k, r)
+    Dim d As Long
+    d = 0
     If Ab4D_ToolType(k) = g_a4Tool Then
-        FormDesign_Fill(hDC, r.left, r.top, r.right, r.bottom, RGB(255, 255, 255))
+        FormDesign_Fill(hDC, r.left, r.top, r.right, r.bottom, RGB(232, 232, 236))
         Ui_Edge(hDC, r, EDGE_SUNKEN, BF_RECT)
+        d = 1
     Else
         Ui_ButtonFrame(hDC, r, DFCS_BUTTONPUSH)
     End If
-    Ui_TextColor(hDC, Ui_SysColor(COLOR_BTNTEXT))
-    Ui_TextCenter(hDC, r, Ab4D_ToolName$(k))
+    Ab4D_DrawIcon(hDC, r.left + 5 + d, r.top + 5 + d, Ab4D_ToolType(k))
 End Sub
 
 Sub Ab4D_DrawPanel(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
@@ -82,15 +103,43 @@ Sub Ab4D_DrawPanel(hDC As HDC, hWnd As HWND, ByRef rc As RECT)
     Ab4D_DrawProps(hDC, hWnd, rc)
 End Sub
 
-' 道具箱を押した。道具の上なら選んで 1
-Function Ab4D_ToolDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+' 点の上の道具（無ければ -1）
+Function Ab4D_ToolAt(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
     Dim rc As RECT, r As RECT, k As Long
     Ui_ClientRect(hWnd, rc)
-    Ab4D_ToolDown = 0
+    Ab4D_ToolAt = -1
     For k = 0 To AB4D_TOOL_N - 1
         Ab4D_ToolRect(rc, k, r)
-        If FormDesign_In(x, y, r.left, r.top, r.right - r.left, r.bottom - r.top) <> 0 Then g_a4Tool = Ab4D_ToolType(k) : Ab4D_ToolDown = 1
+        If FormDesign_In(x, y, r.left, r.top, r.right - r.left, r.bottom - r.top) <> 0 Then Ab4D_ToolAt = k
     Next
+End Function
+
+' 道具箱を押した。道具の上なら選んで 1
+Function Ab4D_ToolDown(hWnd As HWND, ByVal x As Long, ByVal y As Long) As Long
+    Dim k As Long
+    k = Ab4D_ToolAt(hWnd, x, y)
+    Ab4D_ToolDown = 0
+    If k < 0 Then Exit Function
+    g_a4Tool = Ab4D_ToolType(k)
+    Ab4D_ToolDown = 1
+End Function
+
+' 引いていないときのマウスの動き。道具の上に来たら、下の帯にその名前を出す
+Sub Ab4D_Hover(hWnd As HWND, ByVal lParam As LPARAM)
+    Dim x As Long, y As Long, k As Long
+    EditorSelect_XY(lParam, x, y)
+    k = Ab4D_ToolAt(hWnd, x, y)
+    If k = g_a4Hover Then Exit Sub
+    g_a4Hover = k
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' 下の帯の文字: 道具の上なら道具の名前、道具を選んでいればその名前と使い方。どちらでもなければ ""
+Function Ab4D_ToolInfo$() As String
+    Ab4D_ToolInfo$ = ""
+    If g_a4Hover >= 0 Then Ab4D_ToolInfo$ = Ab4D_ToolName$(g_a4Hover)
+    If g_a4Hover >= 0 Or g_a4Tool = 0 Then Exit Function
+    Ab4D_ToolInfo$ = Ab4D_ToolLabel$(g_a4Tool) & Ab4D_L$(": 窓の中を押すか引いて足す", ": click or drag in a window to add")
 End Function
 
 ' ---- 道具で足す ----
