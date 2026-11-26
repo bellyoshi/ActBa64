@@ -19,6 +19,7 @@ ActBa64 is an unofficial project and is not affiliated with Discoversoft, the de
 - **Linux without libc.** `-linux` writes a static ELF that talks to the kernel directly: console, files, heap, time, command line and child processes. A `Declare` whose `Lib` is a `.so` turns the output into a dynamically linked ELF, so you can call libc or libm.
 - **DirectX 11** through COM vtables (DirectX 9 is not supported). See the samples under `src/actba64/samples/dx*`.
 - **ProjectEditor.** A 64-bit MDI editor with project (`.pj`) support, compile / run, jump-to-error, find, syntax highlighting, F1 help, and English / Japanese UI.
+- **Debugger.** `-debug` writes line and variable info to a `.abdbg` file next to the exe. `abdbg.exe` (also written in ActiveBasic) runs it with breakpoints (conditional too), step over / in / out, a call stack and a variable tree; ProjectEditor drives it with F5 / F9 / F10 / F11. Windows 64-bit and 32-bit exes.
 - **Readable diagnostics.** Errors and warnings use the form `error: file(line): message`, and several are reported per run.
 
 ## Download
@@ -30,6 +31,7 @@ Get the latest build from [GitHub Releases](https://github.com/bellyoshi/ActBa64
 | `ProjectEditor.exe` | Editor. Calls `actba64.exe` in the same folder |
 | `actba64.exe` | Compiler |
 | `rc.exe` | Resource compiler. Started by `actba64.exe`. |
+| `abdbg.exe` | Debugger. Started by ProjectEditor (F5) |
 | `Include\` | Standard headers. Must be in the same folder as `actba64.exe` |
 | `help\` | HTML reference opened with F1 |
 | `ProjectEditor_lang_*.csv`, `keywords.txt`, `setting.ini` | UI languages, highlight keywords, settings |
@@ -108,8 +110,10 @@ cd src\actba64
 | `src/Include` | Standard headers shared by the compiler and the editor (`default`, `console`, `N88BASIC`, `d3d11`, `linux`) |
 | `src/rc` | Resource compiler (`rc.exe`) |
 | `src/projecteditor` | ProjectEditor source, help and language files |
+| `src/abdbg` | Debugger (`abdbg.exe`) and its tests |
 | `src/common` | Utilities shared by the compiler and the editor |
 | `src/unittest` | Unit tests |
+| `src/dbgtest` | Unit tests for the debugger parts of abdbg and ProjectEditor |
 | `src/prototype*` | Early prototypes (old assembler / linker). Not part of the current toolchain |
 | `docs/` | Documentation |
 
@@ -122,6 +126,7 @@ The documentation is written in Japanese and is also published at [docs.actba64.
 - [Known issues](docs/known.md) (behaviors kept from ActiveBasic 4.20)
 - [Build and tests](docs/build.md)
 - [ProjectEditor](docs/projecteditor.md)
+- [Debugger](docs/debugger.md)
 - [String GC design](docs/string-gc.md)
 - [Coding conventions](docs/coding.md)
 - [Release notes](docs/release-notes.md)
