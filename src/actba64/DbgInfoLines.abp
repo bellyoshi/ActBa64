@@ -1,0 +1,231 @@
+' ===================================================
+'  DbgInfoLines - .abdbg の file / line（結合したソースの行 → ファイルと行）と書き出し
+' ===================================================
+
+Dim g_dbgMapF As *Long
+Dim g_dbgMapL As *Long
+
+Dim g_dbgFile As *Byte
+Dim g_dbgFileN As Long
+Dim g_dbgFileCap As Long
+' 直前に引いた PpMapFind のファイル名（g_mapOut と同じ大きさ）とその番号
+Dim g_dbgLastRaw(259) As Byte
+Dim g_dbgLastIdx As Long
+
+' buf の off バイト目から s を写す（lim バイトまで。末尾 0 を含む）
+Sub DbgCopyAt(buf As *Byte, off As Long, s As *Byte, lim As Long)
+    Dim j As Long
+    j = 0
+    While s[j] <> 0 And j < lim - 1
+        buf[off + j] = s[j]
+        j = j + 1
+    Wend
+    buf[off + j] = 0
+End Sub
+
+' ---- ファイルの表 ----
+
+Function DbgFullPath$(raw As *Byte) As String
+    Dim buf(DBG_PATH_LEN - 1) As Byte
+    Dim n As DWord
+    DbgFullPath$ = PpUtf8Path$(MakeStr(raw))
+    n = PpGetFullPathA(raw, DBG_PATH_LEN, VarPtr(buf), 0)
+    If n = 0 Or n >= DBG_PATH_LEN Then Exit Function
+    DbgFullPath$ = PpUtf8Path$(MakeStr(VarPtr(buf)))
+End Function
+
+Function DbgFileFind(full As String) As Long
+    Dim i As Long
+    DbgFileFind = -1
+    For i = 0 To g_dbgFileN - 1
+        If ByteStrEqCI(full, VarPtr(g_dbgFile[BytesN(i, DBG_PATH_LEN)])) Then
+            DbgFileFind = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgFileReserve() As boolean
+    Dim nc As Long
+    DbgFileReserve = true
+    If g_dbgFileN < g_dbgFileCap Then Exit Function
+    nc = DbgNextCap(g_dbgFileCap)
+    g_dbgFile = DbgGrowB(g_dbgFile, g_dbgFileCap, nc, DBG_PATH_LEN)
+    g_dbgFileCap = nc
+    If g_dbgFile = NULL Then DbgFileReserve = false
+End Function
+
+Function DbgFileAdd(full As String) As Long
+    DbgFileAdd = -1
+    If Not DbgFileReserve() Then g_dbgBad = 1
+    If g_dbgBad <> 0 Then Exit Function
+    DbgCopyAt(g_dbgFile, BytesN(g_dbgFileN, DBG_PATH_LEN), StrPtr(full), DBG_PATH_LEN)
+    DbgFileAdd = g_dbgFileN
+    g_dbgFileN = g_dbgFileN + 1
+End Function
+
+Function DbgFileLookup(full As String) As Long
+    DbgFileLookup = DbgFileFind(full)
+    If DbgFileLookup < 0 Then DbgFileLookup = DbgFileAdd(full)
+End Function
+
+' raw が直前のファイル名と同じなら 1
+Function DbgRawSame(raw As *Byte) As Long
+    Dim j As Long
+    DbgRawSame = 0
+    j = 0
+    While raw[j] = g_dbgLastRaw[j]
+        If raw[j] = 0 Then DbgRawSame = 1
+        If raw[j] = 0 Then Exit Function
+        j = j + 1
+    Wend
+End Function
+
+' PpMapFind が置いたファイル名の番号。名前が無ければ -1
+Function DbgFileIdx(raw As *Byte) As Long
+    DbgFileIdx = -1
+    If raw[0] = 0 Then Exit Function
+    If g_dbgLastIdx < 0 Or DbgRawSame(raw) = 0 Then
+        g_dbgLastIdx = DbgFileLookup(DbgFullPath$(raw))
+        DbgCopyAt(VarPtr(g_dbgLastRaw), 0, raw, 260)
+    End If
+    DbgFileIdx = g_dbgLastIdx
+End Function
+
+' ---- 行 → ファイル・行 ----
+
+Function DbgMaxLine() As Long
+    Dim k As Long
+    DbgMaxLine = 0
+    For k = 0 To g_dbgLnN - 1
+        If g_dbgLnLine[k] > DbgMaxLine Then DbgMaxLine = g_dbgLnLine[k]
+    Next
+End Function
+
+Sub DbgMapOne(src As *Byte, ln As Long)
+    PpMapFind(src, ln)
+    g_dbgMapL[ln] = g_mapLocal
+    g_dbgMapF[ln] = DbgFileIdx(VarPtr(g_mapOut(0)))
+End Sub
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgMapAlloc(n As Long) As boolean
+    DbgMapAlloc = false
+    g_dbgMapF = calloc(BytesN(n, SizeOf(Long)))
+    g_dbgMapL = calloc(BytesN(n, SizeOf(Long)))
+    If g_dbgMapF = NULL Or g_dbgMapL = NULL Then Exit Function
+    DbgMapAlloc = true
+End Function
+
+' 行の表に出てくる行に印（1）
+Sub DbgMapMark()
+    Dim k As Long
+    For k = 0 To g_dbgLnN - 1
+        g_dbgMapF[g_dbgLnLine[k]] = 1
+    Next
+End Sub
+
+' 使った行だけを小さい順に（PpMapFind は前から順に読むと速い）
+Sub DbgMapUsed(src As *Byte, n As Long)
+    Dim k As Long
+    For k = 1 To n
+        If g_dbgMapF[k] <> 0 Then DbgMapOne(src, k)
+    Next
+End Sub
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgMapLines(src As *Byte) As boolean
+    Dim n As Long
+    DbgMapLines = false
+    n = DbgMaxLine()
+    If Not DbgMapAlloc(n + 1) Then Exit Function
+    DbgMapMark()
+    DbgMapUsed(src, n)
+    DbgMapLines = true
+End Function
+
+Sub DbgFreeMap()
+    If g_dbgMapF <> NULL Then free(g_dbgMapF)
+    If g_dbgMapL <> NULL Then free(g_dbgMapL)
+    g_dbgMapF = NULL
+    g_dbgMapL = NULL
+End Sub
+
+' ---- 書き出し ----
+
+Sub DbgOutFiles()
+    Dim i As Long
+    For i = 0 To g_dbgFileN - 1
+        DbgOutZ("file")
+        DbgOutSN(i)
+        DbgOutZ(" ")
+        DbgOutZ(VarPtr(g_dbgFile[BytesN(i, DBG_PATH_LEN)]))
+        DbgOutNL()
+    Next
+End Sub
+
+' 結合したソースの行 ln のファイルの番号（無ければ -1）と、その中の行（無ければ 0）
+Function DbgLnFile(ln As Long) As Long
+    DbgLnFile = -1
+    If ln > 0 Then DbgLnFile = g_dbgMapF[ln]
+End Function
+
+Function DbgLnLocal(ln As Long) As Long
+    DbgLnLocal = 0
+    If DbgLnFile(ln) >= 0 Then DbgLnLocal = g_dbgMapL[ln]
+End Function
+
+Sub DbgOutLine(k As Long)
+    Dim ln As Long
+    ln = g_dbgLnLine[k]
+    DbgOutZ("line")
+    DbgOutRva(g_dbgLnOff[k])
+    DbgOutSN(DbgLnFile(ln))
+    DbgOutSN(DbgLnLocal(ln))
+    DbgOutSN(g_dbgLnFlag[k])
+    DbgOutNL()
+End Sub
+
+Sub DbgOutLines()
+    Dim k As Long
+    For k = 0 To g_dbgLnN - 1
+        DbgOutLine(k)
+    Next
+End Sub
+
+Function DbgBuildLines(src As *Byte) As boolean
+    DbgBuildLines = DbgMapLines(src)
+    If DbgBuildLines Then DbgOutFiles()
+    If DbgBuildLines Then DbgOutLines()
+    DbgFreeMap()
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgBuild(src As *Byte) As boolean
+    g_dbgOutN = 0
+    g_dbgFileN = 0
+    g_dbgLastIdx = -1
+    DbgOutHeader()
+    DbgOutFuncs()
+    DbgOutVars()
+    DbgBuild = DbgBuildLines(src)
+    If g_dbgBad <> 0 Then DbgBuild = false
+End Function
+
+Function DbgWriteFile(path As String) As Long
+    DbgWriteFile = WriteAll(StrPtr(path), g_dbgOut, g_dbgOutN)
+    If DbgWriteFile = 0 Then Print "error: " + Tr1$(1083, "cannot write: {0} (is the program still running?)", PpUtf8Path$(path))
+End Function
+
+' CompileSource が exe を書いた後で呼ぶ。-debug でなければ何もしないで 1
+Function DbgWrite(src As *Byte, outPath As *Byte) As Long
+    DbgWrite = 1
+    If DbgEnabled() = 0 Then Exit Function
+    DbgWrite = 0
+    If DbgBuild(src) Then
+        DbgWrite = DbgWriteFile(DbgPathOf$(outPath))
+    Else
+        Print "error: " + Tr$(1176, "out of memory (debug info)")
+    End If
+End Function

@@ -1,0 +1,109 @@
+' ===================================================
+'  DbgInfoVar - .abdbg の変数（ローカル・仮引数・グローバル）を写しておく
+' ===================================================
+
+Sub DbgVarGrowL(nc As Long)
+    g_dbgVarFn = DbgGrowL(g_dbgVarFn, g_dbgVarCap, nc)
+    g_dbgVarOff = DbgGrowL(g_dbgVarOff, g_dbgVarCap, nc)
+    g_dbgVarRef = DbgGrowL(g_dbgVarRef, g_dbgVarCap, nc)
+    g_dbgVarKind = DbgGrowL(g_dbgVarKind, g_dbgVarCap, nc)
+    g_dbgVarTi = DbgGrowL(g_dbgVarTi, g_dbgVarCap, nc)
+End Sub
+
+Function DbgVarOk() As boolean
+    DbgVarOk = false
+    If g_dbgVarName = NULL Or g_dbgVarType = NULL Or g_dbgVarFn = NULL Then Exit Function
+    If g_dbgVarOff = NULL Or g_dbgVarRef = NULL Then Exit Function
+    If g_dbgVarKind = NULL Or g_dbgVarTi = NULL Then Exit Function
+    DbgVarOk = true
+End Function
+
+Function DbgVarGrow(nc As Long) As boolean
+    g_dbgVarName = DbgGrowB(g_dbgVarName, g_dbgVarCap, nc, SYM_NAME_LEN)
+    g_dbgVarType = DbgGrowB(g_dbgVarType, g_dbgVarCap, nc, SYM_NAME_LEN)
+    DbgVarGrowL(nc)
+    DbgVarGrow = DbgVarOk()
+    If DbgVarGrow Then g_dbgVarCap = nc
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgVarReserve() As boolean
+    DbgVarReserve = true
+    If g_dbgVarN < g_dbgVarCap Then Exit Function
+    DbgVarReserve = DbgVarGrow(DbgNextCap(g_dbgVarCap))
+End Function
+
+Sub DbgSetVarNums(v As Long, fid As Long, off As Long, isRef As Long, kind As Long, ti As Long)
+    g_dbgVarFn[v] = fid
+    g_dbgVarOff[v] = off
+    g_dbgVarRef[v] = isRef
+    g_dbgVarKind[v] = kind
+    g_dbgVarTi[v] = ti
+End Sub
+
+' fid = -1 はグローバル（off は .data の先頭から）。ほかは手続きの [rbp+off]。
+' udt は Type / Class の名前（無ければ NULL）。型の名前は書くときに kind から作る（String を作らない）
+Sub DbgPutVar(fid As Long, name As *Byte, off As Long, isRef As Long, kind As Long, ti As Long, udt As *Byte)
+    If Not DbgVarReserve() Then
+        g_dbgBad = 1
+        Exit Sub
+    End If
+    DbgCopyName(g_dbgVarName, g_dbgVarN, name)
+    DbgPutUdt(g_dbgVarN, udt)
+    DbgSetVarNums(g_dbgVarN, fid, off, isRef, kind, ti)
+    g_dbgVarN = g_dbgVarN + 1
+End Sub
+
+Sub DbgPutUdt(v As Long, udt As *Byte)
+    If udt = NULL Then
+        g_dbgVarType[BytesN(v, SYM_NAME_LEN)] = 0
+    Else
+        DbgCopyName(g_dbgVarType, v, udt)
+    End If
+End Sub
+
+' TY_UDT / TY_PTR_UDT / TY_UDT_ARR の型表の名前。ほかの型や番号の外は NULL
+Function DbgUdtPtr(ctx As *LowerCtx, kind As Long, ti As Long) As *Byte
+    Dim t As *TypeTable
+    Dim names As *Byte
+    DbgUdtPtr = NULL
+    If kind <> TY_UDT And kind <> TY_PTR_UDT And kind <> TY_UDT_ARR Then Exit Function
+    t = ctx->ast->types
+    If t = NULL Or ti < 0 Or ti >= t->nTypes Then Exit Function
+    names = t->typeNames
+    DbgUdtPtr = VarPtr(names[BytesN(ti, TYNAME_LEN)])
+End Function
+
+Sub DbgAddLocal(ctx As *LowerCtx, i As Long)
+    Dim kind As Long
+    Dim ti As Long
+    Dim names As *Byte
+    kind = ctx->types[i]
+    ti = ctx->typeIdxs[i]
+    names = ctx->names
+    DbgPutVar(g_dbgCurFn, VarPtr(names[BytesN(i, SYM_NAME_LEN)]), ctx->offs[i], ctx->byRefs[i], kind, ti, DbgUdtPtr(ctx, kind, ti))
+End Sub
+
+' g_globOffs などの *Byte の表の i 番目の Long
+Function DbgLongAt(tbl As *Byte, i As Long) As Long
+    Dim p As *Long
+    p = tbl As *Long
+    DbgLongAt = p[i]
+End Function
+
+Sub DbgAddGlobal(ctx As *LowerCtx, i As Long)
+    Dim kind As Long
+    Dim ti As Long
+    kind = DbgLongAt(g_globTypes, i)
+    ti = DbgLongAt(g_globTypeIdxs, i)
+    DbgPutVar(-1, VarPtr(g_globNames[BytesN(i, SYM_NAME_LEN)]), DbgLongAt(g_globOffs, i), 0, kind, ti, DbgUdtPtr(ctx, kind, ti))
+End Sub
+
+' AstToIr の終わり（大域の表を捨てる前）で呼ぶ
+Sub DbgAddGlobals(ctx As *LowerCtx)
+    Dim i As Long
+    If DbgActive() = 0 Then Exit Sub
+    For i = 0 To g_globCount - 1
+        DbgAddGlobal(ctx, i)
+    Next
+End Sub

@@ -1,0 +1,82 @@
+' Expect: 0
+' Target: actba64
+' Option: -debug
+' -debug は exe の隣に .abdbg（デバッグ情報）を書く。自分の .abdbg を読んで中身を確かめる
+#console
+
+Function DiAdd(a As Long, b As Long) As Long
+    Dim t As Long
+    t = a + b
+    DiAdd = t
+End Function
+
+Dim g As Long
+Dim txt As String
+Dim LF As String
+g = DiAdd(1, 2)
+
+' pos を含む 1 行（LF は含まない）
+Function DiLineAt$(pos As Long) As String
+    Dim s As Long
+    Dim e As Long
+    s = pos
+    While s > 1 And Mid$(txt, s - 1, 1) <> LF
+        s = s - 1
+    Wend
+    e = InStr(pos, txt, LF)
+    DiLineAt$ = Mid$(txt, s, e - s)
+End Function
+
+' head で始まり tail で終わる行（無ければ ""）
+Function DiFind$(head As String, tail As String) As String
+    Dim p As Long
+    Dim ln As String
+    DiFind$ = ""
+    p = InStr(1, txt, tail + LF)
+    While p > 0
+        ln = DiLineAt$(p)
+        If Left$(ln, Len(head)) = head Then
+            DiFind$ = ln
+            Exit Function
+        End If
+        p = InStr(p + 1, txt, tail + LF)
+    Wend
+End Function
+
+' 空白で区切った k 番目（1 から）
+Function DiField$(ln As String, k As Long) As String
+    Dim s As String
+    Dim i As Long
+    s = ln + " "
+    For i = 2 To k
+        s = Mid$(s, InStr(1, s, " ") + 1)
+    Next
+    DiField$ = Left$(s, InStr(1, s, " ") - 1)
+End Function
+
+Function DiDbgPath$() As String
+    Dim buf(259) As Byte
+    Dim s As String
+    GetModuleFileNameA(0, VarPtr(buf), 260)
+    s = MakeStr(VarPtr(buf))
+    DiDbgPath$ = Left$(s, Len(s) - 3) + "abdbg"
+End Function
+
+Dim f As String
+Dim fid As String
+LF = Chr$(10)
+If g <> 3 Then ExitProcess(1)
+txt = BaFileLoadBuf(DiDbgPath$())
+If Left$(txt, 8) <> "ABDBG 1" + LF Then ExitProcess(2)
+f = DiField$(DiFind$("file ", "t_debug_info.abp"), 2)
+If f = "" Then ExitProcess(3)
+fid = DiField$(DiFind$("func ", " DiAdd"), 2)
+If fid = "" Then ExitProcess(4)
+If DiFind$("var " + fid + " ", " Long a") = "" Then ExitProcess(5)
+If DiFind$("var " + fid + " ", " Long t") = "" Then ExitProcess(6)
+If DiFind$("line ", " " + f + " 9 1") = "" Then ExitProcess(7)
+If DiFind$("line ", " " + f + " 16 1") = "" Then ExitProcess(8)
+If DiFind$("line ", " " + f + " 8 1") <> "" Then ExitProcess(9)
+If DiFind$("var -1 ", " Long g") = "" Then ExitProcess(10)
+If DiFind$("var -1 ", " String txt") = "" Then ExitProcess(11)
+ExitProcess(0)

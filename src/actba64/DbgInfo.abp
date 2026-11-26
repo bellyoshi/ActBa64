@@ -1,0 +1,133 @@
+' ===================================================
+'  DbgInfo - -debug のデバッグ情報（.abdbg）を集める
+'  下ろすとき: 文・手続きの始まりと終わりに OP_DBG_* を IR に入れ、
+'  手続きの変数（名前・[rbp+off]・型）を写しておく。
+'  機械語にするとき（DbgInfoEmit）: OP_DBG_* の位置のコードの offset を覚える。
+'  書くとき（DbgInfoWrite）: exe の隣に .abdbg を書く。-linux では集めない。
+'  -debug は stage1 以降（64bit）でだけ使うので、AB4.20 の 16bit 索引には気を付けていない
+' ===================================================
+
+' 行の印の種類（OP_DBG_LINE の arg2）。STMT は文の始まり（止まれる）、TAIL は入れ子の後ろの残り
+Const DBG_LN_TAIL = 0
+Const DBG_LN_STMT = 1
+
+Dim g_dbgBad As Long
+Dim g_dbgCurFn As Long
+
+Dim g_dbgFnName As *Byte
+Dim g_dbgFnStart As *Long
+Dim g_dbgFnEnd As *Long
+Dim g_dbgFnN As Long
+Dim g_dbgFnCap As Long
+
+Dim g_dbgVarName As *Byte
+Dim g_dbgVarType As *Byte
+Dim g_dbgVarFn As *Long
+Dim g_dbgVarOff As *Long
+Dim g_dbgVarRef As *Long
+Dim g_dbgVarKind As *Long
+Dim g_dbgVarTi As *Long
+Dim g_dbgVarN As Long
+Dim g_dbgVarCap As Long
+
+' -debug で、-linux でないとき 1
+Function DbgEnabled() As Long
+    DbgEnabled = 0
+    If TyIsDebugBuild() = 0 Then Exit Function
+    If TyIsLinux() <> 0 Then Exit Function
+    DbgEnabled = 1
+End Function
+
+' 集めている（メモリが足りなくなっていない）とき 1
+Function DbgActive() As Long
+    DbgActive = 0
+    If g_dbgBad <> 0 Then Exit Function
+    DbgActive = DbgEnabled()
+End Function
+
+Sub DbgReset()
+    g_dbgBad = 0
+    g_dbgCurFn = -1
+    g_dbgFnN = 0
+    g_dbgVarN = 0
+End Sub
+
+Function DbgNextCap(cap As Long) As Long
+    DbgNextCap = cap * 2
+    If DbgNextCap < DYN_INIT Then DbgNextCap = DYN_INIT
+End Function
+
+Function DbgGrowB(old As *Byte, oldCap As Long, newCap As Long, elem As Long) As *Byte
+    DbgGrowB = MemGrow(old, BytesN(oldCap, elem), BytesN(newCap, elem))
+End Function
+
+Function DbgGrowL(old As *Long, oldCap As Long, newCap As Long) As *Long
+    Dim p As *Byte
+    p = MemGrow(old As BytePtr, BytesN(oldCap, SizeOf(Long)), BytesN(newCap, SizeOf(Long)))
+    DbgGrowL = p As *Long
+End Function
+
+' 名前の表（SYM_NAME_LEN ごと）の idx 番目へ写す
+Sub DbgCopyName(buf As *Byte, idx As Long, s As *Byte)
+    DbgCopyAt(buf, BytesN(idx, SYM_NAME_LEN), s, SYM_NAME_LEN)
+End Sub
+
+' ---- 手続き ----
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgFnGrow(nc As Long) As boolean
+    g_dbgFnName = DbgGrowB(g_dbgFnName, g_dbgFnCap, nc, SYM_NAME_LEN)
+    g_dbgFnStart = DbgGrowL(g_dbgFnStart, g_dbgFnCap, nc)
+    g_dbgFnEnd = DbgGrowL(g_dbgFnEnd, g_dbgFnCap, nc)
+    DbgFnGrow = false
+    If g_dbgFnName = NULL Or g_dbgFnStart = NULL Or g_dbgFnEnd = NULL Then Exit Function
+    g_dbgFnCap = nc
+    DbgFnGrow = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgFnReserve() As boolean
+    DbgFnReserve = true
+    If g_dbgFnN < g_dbgFnCap Then Exit Function
+    DbgFnReserve = DbgFnGrow(DbgNextCap(g_dbgFnCap))
+End Function
+
+' 手続きを 1 つ足して番号を返す。足せなければ -1
+Function DbgFnAdd(name As *Byte) As Long
+    DbgFnAdd = -1
+    If Not DbgFnReserve() Then g_dbgBad = 1
+    If g_dbgBad <> 0 Then Exit Function
+    DbgFnAdd = g_dbgFnN
+    DbgCopyName(g_dbgFnName, g_dbgFnN, name)
+    g_dbgFnStart[g_dbgFnN] = -1
+    g_dbgFnEnd[g_dbgFnN] = -1
+    g_dbgFnN = g_dbgFnN + 1
+End Function
+
+' 手続きの OP_ENTER の後で呼ぶ
+Sub DbgFuncBegin(list As *IrList, name As *Byte)
+    Dim fid As Long
+    If DbgActive() = 0 Then Exit Sub
+    fid = DbgFnAdd(name)
+    g_dbgCurFn = fid
+    If fid < 0 Then Exit Sub
+    IrEmit(list, OP_DBG_FUNC, fid, 0)
+End Sub
+
+' 手続きの最後（leave / ret の後）で呼ぶ。今の手続きの変数を写す
+Sub DbgFuncEnd(ctx As *LowerCtx)
+    Dim i As Long
+    If DbgActive() = 0 Or g_dbgCurFn < 0 Then Exit Sub
+    For i = 0 To ctx->symCount - 1
+        DbgAddLocal(ctx, i)
+    Next
+    IrEmit(ctx->list, OP_DBG_FEND, g_dbgCurFn, 0)
+    g_dbgCurFn = -1
+End Sub
+
+' 文の始まり（STMT）と、入れ子の文の後ろ（TAIL）の印
+Sub DbgLine(list As *IrList, srcLine As Long, flag As Long)
+    If srcLine <= 0 Or g_dbgCurFn < 0 Then Exit Sub
+    If DbgActive() = 0 Then Exit Sub
+    IrEmit(list, OP_DBG_LINE, srcLine, flag)
+End Sub
