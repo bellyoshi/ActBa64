@@ -370,19 +370,37 @@ Function ParseEatExport(p As *Parser) As Long
     ParseEatExport = 1
 End Function
 
+' 名前の後ろの cdecl / stdcall（直後が "(" のときだけ）。cdecl なら 2、stdcall か無ければ 0
+Function ParseProcConv(p As *Parser) As Long
+    Dim kw(KW_LEN - 1) As Byte
+    ParseProcConv = 0
+    If ParseTokKindAt(p, p->pos + 1) <> TK_LPAREN Then Exit Function
+    lstrcpy(VarPtr(kw), "cdecl")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then
+        p->pos = p->pos + 1
+        ParseProcConv = 2
+        Exit Function
+    End If
+    lstrcpy(VarPtr(kw), "stdcall")
+    If ParseIdentIs(p, VarPtr(kw)) <> 0 Then p->pos = p->pos + 1
+End Function
+
+' 戻り値: 負ならエラー。1 の位は Export、2 の位は cdecl
 Function ParseBeginProc(p As *Parser, name As *Byte) As Long
     Dim exp As Long
     ParseBeginProc = -1
     p->pos = p->pos + 1
     exp = ParseEatExport(p)
     If Not ParseCopyIdent(p, name) Then Exit Function
-    ParseBeginProc = exp
+    ParseBeginProc = exp Or ParseProcConv(p)
 End Function
 
+' Export と cdecl の印を AST_FUNC.num に付ける
 Function ParseApplyExport(ast As *Ast, nFunc As Long, exp As Long) As Long
     Dim nodes As *AstNode
     ParseApplyExport = nFunc
     If nFunc < 0 Or exp = 0 Then Exit Function
     nodes = ast->nodes
-    nodes[nFunc].num = nodes[nFunc].num Or AST_FUNC_EXPORT
+    If (exp And 1) <> 0 Then nodes[nFunc].num = nodes[nFunc].num Or AST_FUNC_EXPORT
+    If (exp And 2) <> 0 Then nodes[nFunc].num = nodes[nFunc].num Or AST_DECL_CDECL
 End Function

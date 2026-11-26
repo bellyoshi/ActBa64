@@ -1,0 +1,119 @@
+' Expect: 0
+' Target: actba64
+' Function / Sub 名前 cdecl(...) と *Function cdecl(...)（-actba32 は呼んだ側が引数を片付ける。x64 は同じ呼び方）
+' - cdecl の手続きを直接何十万回も呼んでも esp がずれない
+' - msvcrt の qsort に cdecl の比較関数を渡せる
+' - 関数ポインタ（変数・構造体のフィールド・メソッドの中のフィールド）の呼び出しは、
+'   呼ばれた側が stdcall でも cdecl でも、引数の数が型と違っても esp が元に戻る
+#console
+Declare Sub qsortC cdecl Lib "msvcrt.dll" Alias "qsort" (base As VoidPtr, num As DWord, width As DWord, cmp As VoidPtr)
+
+Typedef InitFn = *Function cdecl(h As Long) As Long
+Typedef ExitFn = *Sub cdecl(h As Long, p As VoidPtr)
+Typedef StdFn = *Function(h As Long) As Long
+
+Dim g_sum As Long
+
+Function Add3 cdecl(a As Long, b As Long, c As Long) As Long
+    Add3 = a + b + c
+End Function
+
+Sub Note cdecl(v As Long)
+    g_sum = g_sum + v
+End Sub
+
+Function Half cdecl(d As Double) As Long
+    Half = Int(d / 2)
+End Function
+
+Function CmpLong cdecl(a As *Long, b As *Long) As Long
+    CmpLong = 0
+    If a[0] < b[0] Then CmpLong = -1
+    If a[0] > b[0] Then CmpLong = 1
+End Function
+
+' 型（引数 1 つ）より引数が多い。HongKongArduinoClone の init_cb / exit_cb と同じ形
+Function InitWide cdecl(h As Long, info As VoidPtr) As Long
+    InitWide = h + 1
+End Function
+
+Sub ExitWide cdecl(h As Long, info As VoidPtr, p As VoidPtr)
+    g_sum = g_sum + h
+End Sub
+
+' stdcall（ret 8）を、引数 1 つの型の関数ポインタで呼ぶ
+Function StdWide(h As Long, info As VoidPtr) As Long
+    StdWide = h * 2
+End Function
+
+Type Model
+    init_cb As InitFn
+    exit_cb As ExitFn
+End Type
+
+Class Holder
+Public
+    cb As InitFn
+    Function Run(v As Long) As Long
+        Run = cb(v)
+    End Function
+End Class
+
+Function DirectCalls() As Long
+    Dim i As Long, n As Long
+    DirectCalls = 0
+    For i = 1 To 300000
+        n = Add3(i, 1, 2)
+        Note(1)
+    Next
+    If n <> 300003 Then DirectCalls = 1
+    If g_sum <> 300000 Then DirectCalls = 2
+    If Half(9.0) <> 4 Then DirectCalls = 3
+End Function
+
+Function SortCalls() As Long
+    Dim a[5] As Long
+    SortCalls = 0
+    a[0] = 5 : a[1] = 3 : a[2] = 9 : a[3] = 1 : a[4] = 7 : a[5] = 2
+    qsortC(VarPtr(a[0]), 6, SizeOf(Long), AddressOf(CmpLong))
+    If a[0] <> 1 Or a[1] <> 2 Or a[2] <> 3 Or a[3] <> 5 Or a[4] <> 7 Or a[5] <> 9 Then SortCalls = 1
+End Function
+
+Function PtrCalls() As Long
+    Dim f As InitFn, s As StdFn, i As Long, n As Long, k As Long
+    Dim m As Model, pm As *Model
+    Dim h As *Holder
+    PtrCalls = 0
+    f = AddressOf(InitWide)
+    s = AddressOf(StdWide)
+    pm = VarPtr(m)
+    m.init_cb = AddressOf(InitWide)
+    m.exit_cb = AddressOf(ExitWide)
+    h = New Holder
+    h->cb = AddressOf(InitWide)
+    g_sum = 0
+    For i = 1 To 200000
+        n = f(i)
+        k = s(i)
+        n = n + pm->init_cb(1) + h->Run(1)
+        pm->exit_cb(1, NULL)
+    Next
+    Delete h
+    If n <> 200005 Then PtrCalls = 1
+    If k <> 400000 Then PtrCalls = 2
+    If g_sum <> 200000 Then PtrCalls = 3
+End Function
+
+Function Run() As Long
+    Run = DirectCalls()
+    If Run <> 0 Then Exit Function
+    Run = SortCalls()
+    If Run <> 0 Then
+        Run = Run + 10
+        Exit Function
+    End If
+    Run = PtrCalls()
+    If Run <> 0 Then Run = Run + 20
+End Function
+
+ExitProcess(Run())
