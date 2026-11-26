@@ -4,8 +4,31 @@
 Function LowPtrTyIs(ty As Long, ti As Long) As Long
     LowPtrTyIs = 0
     If ty = TY_PTR_BYTE Or ty = TY_PTR_LONG Or ty = TY_PTR_UDT Then LowPtrTyIs = 1
-    If ty = TY_LONG And ti = LOW_PTI_VOID Then LowPtrTyIs = 1
+    If ty = TY_LONG And (ti = LOW_PTI_VOID Or ti = LOW_PTI_PW) Then LowPtrTyIs = 1
 End Function
+
+' ポインタ幅の整数の印（VoidPtr / HANDLE など）なら 1
+Function LowTiPtrW(ti As Long) As Long
+    LowTiPtrW = 0
+    If ti = LOW_PTI_VOID Or ti = LOW_PTI_PW Then LowTiPtrW = 1
+End Function
+
+' ポインタ幅の所（VoidPtr / HANDLE の変数・メンバ・要素・仮引数、As HANDLE）へ 32bit の負の定数
+' （-1、INVALID_HANDLE_VALUE、HWND_TOPMOST など）を入れるときは符号で広げる
+' （mov eax, imm の上位は 0。C の (HANDLE)(LONG)-1 と同じ値にする）。
+' 変数・式は今までどおり rax の 64bit のまま（Long の変数の 8 バイトの枠にポインタを持ち回るコードがある）。
+' 文字列・Int64 / QWord・-actba32 は何もしない
+Sub LowEmitCvtToPtrW(ctx As *LowerCtx, rhs As Long)
+    Dim v As Long
+    If TyIs32() <> 0 Then Exit Sub
+    If LowIsStringExpr(ctx, rhs) <> 0 Then Exit Sub
+    If LowExprWide(ctx, rhs) <> 0 Then Exit Sub
+    ' -1 や Const の名前（単項・二項の整数式）も畳む。畳めなければ（変数など）何もしない
+    LowCFoldTakeBad()
+    v = LowCFold(ctx, rhs)
+    If LowCFoldTakeBad() <> 0 Then Exit Sub
+    If v < 0 Then IrEmit(ctx->list, OP_MOVSXD_RAX_EAX, 0, 0)
+End Sub
 
 ' v = off, ty, ti, byRef, glob
 Function LowPtrVarIs(ctx As *LowerCtx, idx As Long) As Long
@@ -17,6 +40,8 @@ Function LowPtrVarIs(ctx As *LowerCtx, idx As Long) As Long
     AstCopyName(ast, idx, VarPtr(name))
     If Not LowLookupVar(ctx, VarPtr(name), VarPtr(v), VarPtr(v) + 4, VarPtr(v) + 8, VarPtr(v) + 12, VarPtr(v) + 16) Then Exit Function
     LowPtrVarIs = LowPtrTyIs(v[1], v[2])
+    ' SIZE_T / ULONG_PTR などフィールドの無いポインタ幅の TypeDef の変数
+    If v[1] = TY_UDT Then LowPtrVarIs = LowUdtIsPtr(ctx, v[2])
 End Function
 
 ' ポインタを返す関数の呼び出し（strstr(...) + 1 など）
@@ -28,6 +53,7 @@ Function LowPtrCallIs(ctx As *LowerCtx, idx As Long) As Long
     AstCopyName(ast, idx, VarPtr(name))
     If LowFuncIndex(ctx, VarPtr(name)) < 0 Then Exit Function
     LowPtrCallIs = LowPtrTyIs(LowFindFuncRetTy(ctx, VarPtr(name)), -1)
+    If LowFuncRetPtrAt(LowFuncIndex(ctx, VarPtr(name))) <> 0 Then LowPtrCallIs = 1
 End Function
 
 Function LowPtrBiIs(nodes As *AstNode, idx As Long) As Long
@@ -57,6 +83,34 @@ Function LowExprIsPtr(ctx As *LowerCtx, idx As Long) As Long
     If nodes[idx].kind = AST_BUILTIN Then LowExprIsPtr = LowPtrBiIs(nodes, idx)
     If nodes[idx].kind = AST_BINOP Then LowExprIsPtr = LowPtrBinIs(ctx, idx)
     If nodes[idx].kind = AST_CALL Then LowExprIsPtr = LowPtrCallIs(ctx, idx)
+    If nodes[idx].kind = AST_MEMBER Then LowExprIsPtr = LowPtrMemberIs(ctx, idx)
+    If nodes[idx].kind = AST_INDEX Then LowExprIsPtr = LowPtrIndexIs(ctx, idx)
+    If nodes[idx].kind = AST_CAST Then
+        If nodes[idx].extra = LOW_PTI_PTRV Then LowExprIsPtr = 1
+    End If
+End Function
+
+' t.p（*T のメンバ、または VoidPtr などフィールドの無いポインタ幅の TypeDef。配列のメンバは除く）
+Function LowPtrMemberIs(ctx As *LowerCtx, idx As Long) As Long
+    Dim ft As Long
+    LowPtrMemberIs = 0
+    If LowMemberIsArr(ctx, idx) <> 0 Then Exit Function
+    ft = LowMemberFieldTy(ctx, idx)
+    If ft = FIELDTY_PTR_BYTE Or ft = FIELDTY_PTR_LONG Or ft = FIELDTY_PTR_DOUBLE Or ft = FIELDTY_PTR_SINGLE Then
+        LowPtrMemberIs = 1
+        Exit Function
+    End If
+    If ft >= 0 Then LowPtrMemberIs = LowUdtIsPtr(ctx, ft)
+End Function
+
+' a[i] で、a が *Byte / VoidPtr の配列か *VoidPtr / *BytePtr（要素がポインタ）
+Function LowPtrIndexIs(ctx As *LowerCtx, idx As Long) As Long
+    Dim base As Long
+    LowPtrIndexIs = 0
+    base = LowNodeLeft(ctx, idx)
+    If base < 0 Then Exit Function
+    If LowNodeKind(ctx, base) <> AST_VAR Then Exit Function
+    If LowNameElemTy(ctx, base) = TY_PTR_BYTE_ARR Then LowPtrIndexIs = 1
 End Function
 
 Function LowPtrArithUse(ctx As *LowerCtx, idx As Long) As Long

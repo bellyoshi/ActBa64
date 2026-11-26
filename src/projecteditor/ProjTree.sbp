@@ -4,6 +4,7 @@
 ' <.pj の名前>.wnd があれば、<.pj の名前>.abp のノードの下にぶら下げる（無ければルートの末尾）。
 ' 各ノードの lParam は g_projRel / g_projFull の番号（ルートとフォルダーは -1、.wnd は PT_WND）。
 ' 選んだら（TVN_SELCHANGED）かダブルクリックしたら（NM_DBLCLK）、そのファイルを開くか前面にする（ProjOpenIndex）。
+' アイコンはシェルのシステム イメージ リスト（SHGetFileInfoW、拡張子だけで引く）。フォルダーのノードはフォルダーの絵。
 ' Linux 版は LxFrame.sbp の自前描画のリストのまま。
 
 #ifndef _LINUX
@@ -19,6 +20,23 @@ Const PT_TVM_SELECTITEM = &H110B    ' TV_FIRST + 11
 Const PT_TVGN_DROPHILITE = 8
 Const PT_TVHT_ONITEM = &H46         ' TVHT_ONITEMICON | TVHT_ONITEMLABEL | TVHT_ONITEMSTATEICON
 
+Const PT_SHGFI_SMALLICON = &H1
+Const PT_SHGFI_USEFILEATTRIBUTES = &H10
+Const PT_SHGFI_SYSICONINDEX = &H4000
+Const PT_FA_DIRECTORY = &H10
+Const PT_FA_NORMAL = &H80
+
+' SHFILEINFOW（szDisplayName は WCHAR 260、szTypeName は WCHAR 80）
+Type PT_SHFILEINFOW
+    hIcon As VoidPtr
+    iIcon As Long
+    dwAttributes As DWord
+    szDisplayName(519) As Byte
+    szTypeName(159) As Byte
+End Type
+
+Declare Function PT_SHGetFileInfoW Lib "shell32.dll" Alias "SHGetFileInfoW" (ByVal pszPath As *Byte, ByVal dwFileAttributes As DWord, ByRef psfi As PT_SHFILEINFOW, ByVal cbFileInfo As DWord, ByVal uFlags As DWord) As LONG_PTR
+
 Type PT_TVHITTESTINFO
     pt As POINTAPI
     flags As DWord
@@ -33,6 +51,8 @@ Dim g_ptIns As TVINSERTSTRUCT
 Dim g_ptItem As TVITEM
 Dim g_ptInited As Long
 Dim g_ptWndAt As VoidPtr            ' .wnd をぶら下げたノード（まだなら 0）
+Dim g_ptSfi As PT_SHFILEINFOW
+Dim g_ptDirIcon As Long             ' フォルダーの絵の番号（-1 ならまだ引いていない）
 
 Sub ProjTree_InitCtl()
     Dim icc As INITCOMMONCONTROLSEX
@@ -49,7 +69,42 @@ Sub ProjTree_Make(hWnd As HWND)
     style = WS_CHILD Or WS_VISIBLE Or WS_BORDER Or PT_STYLE
     g_hProjList = CreateWindowEx(0, "SysTreeView32", "", style, 0, 0, 100, 100, hWnd, ID_PROJLIST As HMENU, g_hInst, 0)
     SendMessage(g_hProjList, WM_SETFONT, GetStockObject(DEFAULT_GUI_FONT) As WPARAM, 0)
+    g_ptDirIcon = -1
+    ProjTree_SetImages()
 End Sub
+
+' 名前（拡張子だけ見る）と属性から、システム イメージ リスト（小さい絵）を引く。戻り値はリストのハンドル、
+' 絵の番号は g_ptSfi.iIcon
+Function ProjTree_ShInfo(name As String, ByVal attr As DWord) As LONG_PTR
+    Dim wide As *Byte, chars As Long, flags As DWord
+    FillMemory(VarPtr(g_ptSfi), SizeOf(PT_SHFILEINFOW), 0)
+    flags = PT_SHGFI_SYSICONINDEX Or PT_SHGFI_SMALLICON Or PT_SHGFI_USEFILEATTRIBUTES
+    wide = Enc_Utf8ToWide(name, chars)
+    ProjTree_ShInfo = PT_SHGetFileInfoW(wide, attr, g_ptSfi, SizeOf(PT_SHFILEINFOW), flags)
+    If wide <> 0 Then free(wide)
+End Function
+
+' ツリーにシステム イメージ リストを付ける（ツリーはこのリストを壊さない）
+Sub ProjTree_SetImages()
+    Dim himl As LONG_PTR
+    himl = ProjTree_ShInfo("a.txt", PT_FA_NORMAL)
+    If himl <> 0 Then SendMessage(g_hProjList, TVM_SETIMAGELIST, TVSIL_NORMAL, himl As LPARAM)
+End Sub
+
+' ファイルの絵の番号（引けなければ 0）
+Function ProjTree_FileIcon(name As String) As Long
+    ProjTree_FileIcon = 0
+    If ProjTree_ShInfo(name, PT_FA_NORMAL) <> 0 Then ProjTree_FileIcon = g_ptSfi.iIcon
+End Function
+
+' フォルダーの絵の番号（一度だけ引く）
+Function ProjTree_DirIcon() As Long
+    If g_ptDirIcon < 0 Then
+        g_ptDirIcon = 0
+        If ProjTree_ShInfo("folder", PT_FA_DIRECTORY) <> 0 Then g_ptDirIcon = g_ptSfi.iIcon
+    End If
+    ProjTree_DirIcon = g_ptDirIcon
+End Function
 
 ' TVI_ROOT / TVI_LAST（負の数）のハンドル。Long から LONG_PTR（VoidPtr）へは上位が 0 で
 ' 広がる（64bit で FFFF0000 になり、TVI_ROOT と見なされない）ので、Int64 を通して符号を広げる
@@ -58,20 +113,27 @@ Function ProjTree_Special(ByVal v As Int64) As LONG_PTR
 End Function
 
 ' 挿入の形を g_ptIns に作る（末尾に足す）
-Sub ProjTree_FillIns(parent As HTREEITEM, wide As *Byte, ByVal idx As Long)
+Sub ProjTree_FillIns(parent As HTREEITEM, wide As *Byte, ByVal idx As Long, ByVal img As Long)
     FillMemory(VarPtr(g_ptIns), SizeOf(TVINSERTSTRUCT), 0)
     g_ptIns.hParent = parent
     g_ptIns.hInsertAfter = ProjTree_Special(TVI_LAST) As HTREEITEM
-    g_ptIns.item.mask = TVIF_TEXT Or TVIF_PARAM
+    g_ptIns.item.mask = TVIF_TEXT Or TVIF_PARAM Or TVIF_IMAGE Or TVIF_SELECTEDIMAGE
     g_ptIns.item.pszText = wide
     g_ptIns.item.lParam = idx As LPARAM
+    g_ptIns.item.iImage = img
+    g_ptIns.item.iSelectedImage = img
 End Sub
 
+' ファイルのノード（絵は拡張子から）
 Function ProjTree_Insert(parent As HTREEITEM, text As String, ByVal idx As Long) As HTREEITEM
+    ProjTree_Insert = ProjTree_InsertImg(parent, text, idx, ProjTree_FileIcon(text))
+End Function
+
+Function ProjTree_InsertImg(parent As HTREEITEM, text As String, ByVal idx As Long, ByVal img As Long) As HTREEITEM
     Dim wide As *Byte, chars As Long
     wide = Enc_Utf8ToWide(text, chars)
-    ProjTree_FillIns(parent, wide, idx)
-    ProjTree_Insert = SendMessage(g_hProjList, PT_TVM_INSERTITEMW, 0, VarPtr(g_ptIns) As LPARAM) As HTREEITEM
+    ProjTree_FillIns(parent, wide, idx, img)
+    ProjTree_InsertImg = SendMessage(g_hProjList, PT_TVM_INSERTITEMW, 0, VarPtr(g_ptIns) As LPARAM) As HTREEITEM
     If wide <> 0 Then free(wide)
 End Function
 
@@ -86,7 +148,7 @@ End Function
 
 ' フォルダーのノードを足して覚える（128 個まで）
 Function ProjTree_NewDir(dir As String) As HTREEITEM
-    ProjTree_NewDir = ProjTree_Insert(g_ptRoot, dir, -1)
+    ProjTree_NewDir = ProjTree_InsertImg(g_ptRoot, dir, -1, ProjTree_DirIcon())
     If g_ptDirCount >= 128 Then Exit Function
     g_ptDirName(g_ptDirCount) = dir
     g_ptDirItem(g_ptDirCount) = ProjTree_NewDir

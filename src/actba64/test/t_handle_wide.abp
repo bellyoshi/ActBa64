@@ -1,0 +1,119 @@
+' Expect: 0
+' Target: actba64
+' Skip32: 1
+' HANDLE / HWND / WPARAM / LPARAM / LRESULT / LONG_PTR はポインタ幅（64bit）の整数
+' 変数・配列（間隔 8 バイト）・*HANDLE・Type のメンバ・仮引数（ByRef も）・戻り値・As HANDLE で上位 32 ビットが残る。
+' 負の定数（-1・INVALID_HANDLE_VALUE・HWND_TOPMOST）は符号で広げる（C の (HANDLE)(LONG)-1 と同じ）
+#console
+Type TT
+    h As HANDLE
+    w As WPARAM
+End Type
+
+Function Check(cond As Long, code As Long) As Long
+    Check = 0
+    If cond = 0 Then
+        Print "fail "; code
+        Check = 1
+    End If
+End Function
+
+Function RetH() As HANDLE
+    RetH = &H123456789 As HANDLE
+End Function
+
+Function RetInv() As HANDLE
+    RetInv = INVALID_HANDLE_VALUE
+End Function
+
+Function TakeH(h As HANDLE) As QWord
+    TakeH = h As QWord
+End Function
+
+Sub SetH(ByRef h As HANDLE)
+    h = &H223456789 As HANDLE
+End Sub
+
+Dim ha[3] As HANDLE
+Dim la[2] As LPARAM
+Dim ph As *HANDLE
+Dim pl As *LPARAM
+Dim t As TT
+Dim h As HANDLE
+Dim hw As HWND
+Dim wp As WPARAM
+Dim lp As LPARAM
+Dim r As LRESULT
+Dim lpt As LONG_PTR
+Dim b As VoidPtr
+Dim pq As *QWord
+Dim bad As Long
+bad = 0
+b = &H123456789 As VoidPtr
+
+' スカラー
+h = b As HANDLE
+bad = bad + Check(Str$(h) = "4886718345", 1)
+lpt = &H123456789
+pq = VarPtr(lpt)
+bad = bad + Check(Hex$(pq[0]) = "123456789", 2)
+bad = bad + Check(Str$(lpt) = "4886718345", 3)
+hw = b As HWND
+wp = b
+lp = b
+r = lp + 1
+bad = bad + Check(Str$(hw) = "4886718345" And Str$(wp) = "4886718345", 4)
+bad = bad + Check(Str$(r) = "4886718346", 5)
+bad = bad + Check(lp / 2 = 2443359172.5, 6)
+bad = bad + Check((wp And &HFFFF) = &H6789, 7)
+
+' 負の定数は全ビット 1
+h = INVALID_HANDLE_VALUE
+bad = bad + Check(Hex$(h As QWord) = "ffffffffffffffff", 8)
+h = -1
+bad = bad + Check(Hex$(h As QWord) = "ffffffffffffffff", 9)
+hw = HWND_TOPMOST
+bad = bad + Check(Hex$(hw As QWord) = "ffffffffffffffff", 10)
+b = -1
+bad = bad + Check(Hex$(b As QWord) = "ffffffffffffffff", 11)
+bad = bad + Check(Str$(h) = "-1", 12)
+b = &H123456789 As VoidPtr
+
+' 配列と *HANDLE / *LPARAM
+ha[0] = b As HANDLE
+ha[1] = INVALID_HANDLE_VALUE
+ha[2] = 7
+bad = bad + Check(VarPtr(ha[1]) - VarPtr(ha[0]) = 8, 13)
+bad = bad + Check(Hex$(ha[0] As QWord) = "123456789", 14)
+bad = bad + Check(Hex$(ha[1] As QWord) = "ffffffffffffffff", 15)
+bad = bad + Check(ha[2] = 7, 16)
+ph = VarPtr(ha[0])
+bad = bad + Check(Hex$(ph[1] As QWord) = "ffffffffffffffff", 17)
+bad = bad + Check(Str$(ph[0]) = "4886718345", 18)
+pl = VarPtr(la[0])
+pl[1] = b As LPARAM
+pq = VarPtr(la[0])
+bad = bad + Check(Hex$(pq[1]) = "123456789", 19)
+
+' Type のメンバ
+t.h = b As HANDLE
+t.w = -1
+bad = bad + Check(Str$(t.h) = "4886718345", 20)
+bad = bad + Check(Hex$(t.w As QWord) = "ffffffffffffffff", 21)
+bad = bad + Check(SizeOf(TT) = 16, 22)
+
+' 戻り値・仮引数
+bad = bad + Check(Hex$((RetH() + 1) As QWord) = "12345678a", 23)
+bad = bad + Check(Str$(RetInv()) = "-1", 24)
+bad = bad + Check(Hex$(TakeH(b As HANDLE)) = "123456789", 25)
+bad = bad + Check(Hex$(TakeH(-1)) = "ffffffffffffffff", 26)
+SetH(h)
+bad = bad + Check(Hex$(h As QWord) = "223456789", 27)
+
+' API から返るハンドルとの比較（CreateFile の失敗は INVALID_HANDLE_VALUE）
+h = CreateFile("Z:\no\such\dir\file.txt", GENERIC_READ, 0, ByVal 0, OPEN_EXISTING, 0, 0)
+bad = bad + Check(h = INVALID_HANDLE_VALUE, 28)
+bad = bad + Check(Hex$(h As QWord) = "ffffffffffffffff", 29)
+
+If bad = 0 Then Print "ok"
+ExitProcess(bad)
