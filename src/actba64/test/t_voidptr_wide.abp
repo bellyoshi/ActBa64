@@ -1,0 +1,90 @@
+' Expect: 0
+' Target: actba64
+' Skip32: 1
+' VoidPtr の 64bit の値が切れないこと（4GB より上のアドレス）
+' 配列の要素（間隔もポインタ幅）・Type のメンバ・*Byte 配列の要素・VoidPtr を返す関数の結果を
+' 足し引きや As QWord にしても上位 32 ビットが残る
+#console
+Type T
+    p As VoidPtr
+    q As VoidPtr
+End Type
+
+Function Check(cond As Long, code As Long) As Long
+    Check = 0
+    If cond = 0 Then
+        Print "fail "; code
+        Check = 1
+    End If
+End Function
+
+Function BigPtr() As VoidPtr
+    BigPtr = &H123456789 As VoidPtr
+End Function
+
+Function Id(p As VoidPtr) As VoidPtr
+    Id = p
+End Function
+
+Sub LocalArr(ByRef bad As Long)
+    Dim a[2] As VoidPtr
+    a[0] = &H1122334455667788 As VoidPtr
+    a[1] = 3 As VoidPtr
+    bad = bad + Check(Hex$(a[0] As QWord) = "1122334455667788", 20)
+    bad = bad + Check(VarPtr(a[1]) - VarPtr(a[0]) = SizeOf(VoidPtr), 21)
+End Sub
+
+Dim va[3] As VoidPtr
+Dim ba[3] As *Byte
+Dim t As T
+Dim v As VoidPtr
+Dim w As VoidPtr
+Dim pq As *QWord
+Dim bad As Long
+bad = 0
+
+' VoidPtr の配列: 要素はポインタ幅で、隣の要素に上位が潰されない
+va[0] = &H1122334455667788 As VoidPtr
+va[1] = 2 As VoidPtr
+bad = bad + Check(VarPtr(va[1]) - VarPtr(va[0]) = SizeOf(VoidPtr), 1)
+bad = bad + Check(Hex$(va[0] As QWord) = "1122334455667788", 2)
+pq = VarPtr(va[0])
+bad = bad + Check(Hex$(pq[0]) = "1122334455667788", 3)
+w = va[0]
+bad = bad + Check(Hex$(w As QWord) = "1122334455667788", 4)
+
+' Type のメンバ
+v = &H123456789 As VoidPtr
+t.p = v
+t.q = 5 As VoidPtr
+bad = bad + Check(Hex$(t.p As QWord) = "123456789", 5)
+w = t.p + 1
+bad = bad + Check(Hex$(w As QWord) = "12345678a", 6)
+w = t.p - 1
+bad = bad + Check(Hex$(w As QWord) = "123456788", 7)
+
+' *Byte の配列の要素
+ba[0] = v As *Byte
+bad = bad + Check(Hex$(ba[0] As QWord) = "123456789", 8)
+w = ba[0] + 1
+bad = bad + Check(Hex$(w As QWord) = "12345678a", 9)
+
+' VoidPtr を返す関数の結果
+w = BigPtr() + 16
+bad = bad + Check(Hex$(w As QWord) = "123456799", 10)
+w = BigPtr() - 1
+bad = bad + Check(Hex$(w As QWord) = "123456788", 11)
+w = Id(v) + 16
+bad = bad + Check(Hex$(w As QWord) = "123456799", 12)
+bad = bad + Check(Hex$(BigPtr() As QWord) = "123456789", 13)
+
+' 比較と、32bit の負数を足すとき（符号で広げる）
+bad = bad + Check(t.p = v, 14)
+bad = bad + Check(va[0] <> v, 15)
+w = BigPtr() + (-1)
+bad = bad + Check(Hex$(w As QWord) = "123456788", 16)
+
+LocalArr(bad)
+
+If bad = 0 Then Print "ok"
+ExitProcess(bad)
