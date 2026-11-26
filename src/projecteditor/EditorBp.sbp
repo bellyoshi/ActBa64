@@ -1,5 +1,6 @@
 ' EditorBp - ブレークポイント（ファイルのパスと行）と、デバッガーが止まっている行の印。
-' 余白（行番号のところ）のクリックか F9 で付け外しする。行は文書を直しても動かさない
+' 余白（行番号のところ）のクリックか F9 で付け外しする。文書の行を足したり消したりすると、印もいっしょにずらす
+' （TextBuffer の 1 文字の挿入・削除と選択の削除から。元に戻す・やり直しと読み込みは文書全体を置き換えるのでずらさない）
 
 Const EDBP_MAX = 256
 
@@ -10,6 +11,11 @@ Dim g_bpLine[EDBP_MAX] As Long
 ' デバッガーが止まっている所（無ければ行 0）
 Dim g_dbgStopPath As String
 Dim g_dbgStopLine As Long
+
+' 直す前の行の数・カーソルの行・カーソルが行頭か（EditorBp_EditBegin）
+Dim g_bpEditLines As Long
+Dim g_bpEditLine As Long
+Dim g_bpEditCol0 As Long
 
 ' 無題の文書は "" で覚える
 Function EditorBp_Same(a As String, b As String) As Long
@@ -102,3 +108,59 @@ Sub EditorBp_Dot(hDC As HDC, ByVal y As Long)
     rc.bottom = rc.top + 8
     Ui_FillRc(hDC, rc, RGB(200, 40, 40))
 End Sub
+
+' ---- 文書を直したとき ----
+
+' TextBuffer が直す前
+Sub EditorBp_EditBegin()
+    g_bpEditLines = TextBuf_LineCount()
+    g_bpEditLine = TextBuf_CursorLine()
+    g_bpEditCol0 = 0
+    If TextBuf_CursorIndex() = TextBuf_GetLineStart(g_bpEditLine) Then g_bpEditCol0 = 1
+End Sub
+
+' 直した後。行の数が変わったら、直した所より後の印をずらす。
+' 足したとき: カーソルの行より後（行頭で改行したならその行から）。消したとき: 直した後のカーソルの行より後
+Sub EditorBp_EditEnd(ByVal isInsert As Long)
+    Dim delta As Long, anchor As Long
+    delta = TextBuf_LineCount() - g_bpEditLines
+    If delta = 0 Then Exit Sub
+    anchor = TextBuf_CursorLine()
+    If isInsert <> 0 Then anchor = g_bpEditLine - g_bpEditCol0
+    EditorBp_Shift(g_docPath, anchor, delta)
+End Sub
+
+' anchor より後の行を delta ずらす。消えた行（anchor の次から）の印は anchor の行へ
+Sub EditorBp_Shift(path As String, ByVal anchor As Long, ByVal delta As Long)
+    Dim i As Long
+    For i = 0 To g_bpN - 1
+        If EditorBp_Same(g_bpPath[i], path) <> 0 Then g_bpLine[i] = EditorBp_NewLine(g_bpLine[i], anchor, delta)
+    Next
+    If g_dbgStopLine > 0 And EditorBp_Same(g_dbgStopPath, path) <> 0 Then g_dbgStopLine = EditorBp_NewLine(g_dbgStopLine, anchor, delta)
+    EditorBp_Dedupe()
+End Sub
+
+Function EditorBp_NewLine(ByVal ln As Long, ByVal anchor As Long, ByVal delta As Long) As Long
+    EditorBp_NewLine = ln
+    If ln <= anchor Then Exit Function
+    EditorBp_NewLine = ln + delta
+    If EditorBp_NewLine <= anchor Then EditorBp_NewLine = anchor
+End Function
+
+' 行が重なったら 1 つにする
+Sub EditorBp_Dedupe()
+    Dim i As Long
+    i = g_bpN - 1
+    While i > 0
+        If EditorBp_FindBefore(i) >= 0 Then EditorBp_Remove(i)
+        i = i - 1
+    Wend
+End Sub
+
+Function EditorBp_FindBefore(ByVal i As Long) As Long
+    Dim j As Long
+    EditorBp_FindBefore = -1
+    For j = 0 To i - 1
+        If g_bpLine[j] = g_bpLine[i] And EditorBp_Same(g_bpPath[j], g_bpPath[i]) <> 0 Then EditorBp_FindBefore = j
+    Next
+End Function
