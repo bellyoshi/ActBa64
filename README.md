@@ -4,7 +4,7 @@
 
 ActBa64 is a compiler for a large subset of the ActiveBasic language (versions 4.20 / 4.24), written in ActiveBasic itself. It started as an experiment — "what happens if you build an ActiveBasic look-alike in ActiveBasic?" — and has grown into a self-hosting toolchain that compiles itself, its resource compiler and its own editor.
 
-The goal is to let existing ActiveBasic programs compile and run **without editing the source**. However, it does not behave exactly like ActiveBasic; see [Differences from ActiveBasic](docs/different.md).
+The goal is to let existing ActiveBasic programs compile and run **without editing the source**. However, ActBa64 is an independent implementation modeled on ActiveBasic and is not fully compatible with it. Some specifications and behaviors may differ; see [Differences from ActiveBasic](docs/different.md).
 
 ActBa64 is an unofficial project and is not affiliated with Discoversoft, the developer of ActiveBasic.
 
