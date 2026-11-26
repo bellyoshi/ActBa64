@@ -10,8 +10,6 @@ Const IDM_PROJ_REMOVE = 1351
 Const IDM_PROJ_PROP = 1352
 Const PROJEDIT_ROOT = -1            ' ルートの番号（ProjEdit_Menu の idx）
 
-Dim g_peInitDir As String           ' ファイルを挿入のダイアログの最初のフォルダー
-
 Function ProjEdit_Nl$() As String
     ProjEdit_Nl$ = Chr$(13) & Chr$(10)
 End Function
@@ -69,7 +67,7 @@ End Sub
 Sub ProjEdit_AddFile(hWnd As HWND)
     Dim full As String, rel As String
     g_pjDir = ProjDirOf$(g_projectPath)
-    full = ProjEdit_Browse$(hWnd)
+    full = EditorDoc_BrowseOpenIn$(hWnd, g_pjDir)
     If Len(full) = 0 Then Exit Sub
     rel = ProjTree_RelPath$(g_pjDir, full, ProjEdit_Sep$(), ProjEdit_Ci())
     If ProjEdit_Listed(full, rel) <> 0 Then
@@ -86,31 +84,9 @@ Function ProjEdit_Listed(full As String, rel As String) As Long
     ProjEdit_Listed = ProjHas(full)
     If ProjEdit_Listed <> 0 Then Exit Function
     For i = 0 To g_projCount - 1
-        If ProjTree_SameComp(ProjTree_Rest$(g_projRel(i), 1, "\"), ProjTree_Rest$(rel, 1, "\"), ProjEdit_Ci()) <> 0 Then ProjEdit_Listed = 1
+        If ProjTree_SamePath(g_projRel(i), rel, ProjEdit_Ci()) <> 0 Then ProjEdit_Listed = 1
         If ProjEdit_Listed <> 0 Then Exit Function
     Next
-End Function
-
-' .pj のフォルダーから始めるファイルを開くダイアログ。やめたら ""
-Function ProjEdit_Browse$(hWnd As HWND) As String
-    Dim ofn As OPENFILENAME
-    Dim fileName[MAX_PATH] As Byte
-    Dim filter[127] As Byte
-    ProjEdit_Browse$ = ""
-    g_peInitDir = g_pjDir
-    FillMemory(VarPtr(fileName), MAX_PATH, 0)
-    EditorDoc_InitFilter(VarPtr(filter))
-    FillMemory(VarPtr(ofn), Len(ofn), 0)
-    ofn.lStructSize = Len(ofn)
-    ofn.hwndOwner = hWnd
-    ofn.lpstrFilter = VarPtr(filter)
-    ofn.nFilterIndex = 1
-    ofn.lpstrFile = VarPtr(fileName)
-    ofn.nMaxFile = MAX_PATH
-    ofn.lpstrInitialDir = StrPtr(g_peInitDir)
-    ofn.Flags = OFN_FILEMUSTEXIST Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER
-    If GetOpenFileName(ofn) = 0 Then Exit Function
-    ProjEdit_Browse$ = Enc_DupCStr$(VarPtr(fileName), lstrlen(VarPtr(fileName)))
 End Function
 
 ' ---- プロジェクトから削除 ----
@@ -144,13 +120,10 @@ End Sub
 
 ' .pj の #SOURCE から rel の行を消す（元の文字コードのまま）。書けたら 1
 Function ProjEdit_RemoveFromPj(rel As String) As Long
-    Dim saved As Long, enc As Long, body As String, nw As String
-    saved = g_docEncoding
-    body = EditorDoc_LoadTextFile$(g_projectPath)
-    enc = g_docEncoding
-    g_docEncoding = saved
+    Dim enc As Long, body As String, nw As String
     ProjEdit_RemoveFromPj = 0
-    nw = ProjTree_RemoveSource$(body, rel)
+    body = ProjLoadForRewrite$(enc)
+    nw = EditorNewForm_RemoveSource$(body, rel)
     If nw = body Then Exit Function
     ProjEdit_RemoveFromPj = ProjRewrite(nw, enc)
     If ProjEdit_RemoveFromPj = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & ProjEdit_Nl$() & g_projectPath, "editor")
@@ -173,7 +146,7 @@ Function ProjEdit_SizeLine$(path As String) As String
     Dim n As Long
     n = ProjEdit_FileSize(path)
     ProjEdit_SizeLine$ = UiText$(UI_PROJ_P_NOFILE)
-    If n >= 0 Then ProjEdit_SizeLine$ = UiText$(UI_PROJ_P_SIZE) & " " & ProjTree_Trim$(Str$(n)) & " " & UiText$(UI_PROJ_P_BYTES)
+    If n >= 0 Then ProjEdit_SizeLine$ = UiText$(UI_PROJ_P_SIZE) & " " & ProjTrim$(Str$(n)) & " " & UiText$(UI_PROJ_P_BYTES)
 End Function
 
 Sub ProjEdit_Prop(hWnd As HWND, ByVal idx As Long)
