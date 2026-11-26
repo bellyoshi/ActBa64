@@ -1,0 +1,98 @@
+' AdCond - 条件付きブレークポイント。b <場所> if <式> <比べ方> <値>
+'   比べ方: = <> < > <= >=。式は p と同じ（名前 / .メンバ / (添字) ...）。
+'   値が "..." なら文字として（= と <> だけ。p で見える文字列と比べる）、ほかは数として（Val）比べる。
+' 当たったら止まった段（一番上）で式を求め、偽なら止まらずに続ける。求められなければ止まって error を出す
+
+Dim g_adCond As AdNames
+
+Sub AdCondInit()
+    AdNamesInit(VarPtr(g_adCond), 256)
+End Sub
+
+' ブレークポイントの番号は 1 から順に増える。番号ごとに条件（無ければ ""）を足す
+Sub AdCondAdd(cond As String)
+    AdNamesPush(VarPtr(g_adCond), StrPtr(cond), Len(cond))
+End Sub
+
+Function AdCondOf$(id As Long) As String
+    AdCondOf$ = ""
+    If id >= 1 And id <= g_adCond.n Then AdCondOf$ = MakeStr(AdNamesAt(VarPtr(g_adCond), id - 1))
+End Function
+
+' " if " の位置（大文字小文字は見ない。無ければ 0）
+Function AdFindIf(a As String) As Long
+    AdFindIf = InStr(1, a, " if ")
+    If AdFindIf = 0 Then AdFindIf = InStr(1, a, " If ")
+    If AdFindIf = 0 Then AdFindIf = InStr(1, a, " IF ")
+End Function
+
+' 比べ方（長いものから探す）と、その位置
+Function AdCondOp$(cond As String, ByRef p As Long) As String
+    Dim k As Long, op As String
+    AdCondOp$ = ""
+    For k = 0 To 5
+        op = AdCsvAt$("<>,<=,>=,=,<,>,", k)
+        p = InStr(1, cond, op)
+        If p > 0 Then AdCondOp$ = op
+        If p > 0 Then Exit Function
+    Next
+End Function
+
+Function AdCsvAt$(csv As String, k As Long) As String
+    Dim s As String, i As Long
+    s = csv
+    For i = 1 To k
+        s = Mid$(s, InStr(1, s, ",") + 1)
+    Next
+    AdCsvAt$ = Left$(s, InStr(1, s, ",") - 1)
+End Function
+
+Function AdCmpNum(a As Double, b As Double, op As String) As Long
+    AdCmpNum = 0
+    If op = "=" And a = b Then AdCmpNum = 1
+    If op = "<>" And a <> b Then AdCmpNum = 1
+    If op = "<" And a < b Then AdCmpNum = 1
+    If op = ">" And a > b Then AdCmpNum = 1
+    If op = "<=" And a <= b Then AdCmpNum = 1
+    If op = ">=" And a >= b Then AdCmpNum = 1
+End Function
+
+' 文字として: = と <> だけ（比べた結果は真が -1）
+Function AdCmpStr(a As String, b As String, op As String) As Long
+    AdCmpStr = -1
+    If op = "=" Then AdCmpStr = 0 - (a = b)
+    If op = "<>" Then AdCmpStr = 1 + (a = b)
+    If AdCmpStr = -1 Then g_aeErr = "only = and <> can compare strings"
+End Function
+
+' 戻り値 1 : 真  0 : 偽  -1 : 求められない（g_aeErr）
+Function AdCondEval(cond As String) As Long
+    Dim p As Long, op As String, rhs As String
+    AdCondEval = -1
+    op = AdCondOp$(cond, p)
+    If op = "" Then g_aeErr = "no comparison (= <> < > <= >=) in: " + cond
+    If op = "" Then Exit Function
+    If AdEval(Trim$(Left$(cond, p - 1))) = 0 Then Exit Function
+    rhs = Trim$(Mid$(cond, p + Len(op)))
+    AdCondEval = AdCondCmp(AdEvText$(), rhs, op)
+End Function
+
+Function AdCondCmp(lt As String, rhs As String, op As String) As Long
+    If Left$(rhs, 1) = Chr$(34) Then
+        AdCondCmp = AdCmpStr(lt, rhs, op)
+    Else
+        AdCondCmp = AdCmpNum(Val(lt), Val(rhs), op)
+    End If
+End Function
+
+' ブレークポイントに当たった（CONTEXT は読んである）。止まるなら 1
+Function AdCondPass(id As Long) As Long
+    Dim r As Long
+    AdCondPass = 1
+    If AdCondOf$(id) = "" Then Exit Function
+    AdStackBuild()
+    g_adCurFrame = 0
+    r = AdCondEval(AdCondOf$(id))
+    If r < 0 Then Print "error condition: " + g_aeErr
+    If r = 0 Then AdCondPass = 0
+End Function

@@ -88,6 +88,10 @@ Invoke-Step "debugger tests (abdbg)" {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\abdbg\run_test.ps1")
 }
 
+Invoke-Step "debugger tests (abdbg, -actba32)" {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\abdbg\run_test.ps1") -Actba32
+}
+
 Write-Host ""
 Write-Host "CI OK"
 exit 0

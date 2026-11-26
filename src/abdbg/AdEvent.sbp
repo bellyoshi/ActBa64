@@ -37,9 +37,13 @@ Sub AdOnExit()
     Ad_ContinueDebugEvent(g_adEvPid, g_adEvTid, AD_DBG_CONTINUE)
 End Sub
 
+' 32bit の exe では、64bit の ntdll の最初のブレークポイント（0x80000003）は読み飛ばし、
+' 32bit の側の 0x4000001F / 0x4000001E を x64 と同じに扱う
 Sub AdOnException()
     Dim code As Long
     code = AdL(g_adEv, AD_EX_CODE)
+    If AdIs32() <> 0 And code = AD_EXC_BREAKPOINT Then Exit Sub
+    code = AdNormCode(code)
     If code = AD_EXC_BREAKPOINT Then AdOnBreak(AdQ(g_adEv, AD_EX_ADDR))
     If code = AD_EXC_SINGLE_STEP Then AdOnStep()
     If code <> AD_EXC_BREAKPOINT And code <> AD_EXC_SINGLE_STEP Then AdOnFault(code, AdQ(g_adEv, AD_EX_ADDR), AdL(g_adEv, AD_EX_FIRST))
@@ -88,14 +92,15 @@ Function AdHex8$(v As Long) As String
     AdHex8$ = Right$("0000000" + Hex$(v), 8)
 End Function
 
+' 条件付きで、条件が偽なら止まらずに続ける（1 命令進めて 0xCC を書き戻すのは同じ）
 Sub AdBpHit(i As Long, addr As QWord)
     AdBpRestore(i)
     AdThreadOpen()
     AdCtxGet()
-    AdPutQ(g_adCtx, AD_CX_RIP, addr)
-    AdPutL(g_adCtx, AD_CX_EFLAGS, AdL(g_adCtx, AD_CX_EFLAGS) Or &H100)
-    AdCtxSet()
+    AdSetReg(AD_REG_IP, addr)
+    AdSetTF()
     g_adRearm = i
+    If AdCondPass(AdBpIdOf(i)) = 0 Then Exit Sub
     AdStop("bp", Str$(AdBpIdOf(i)))
 End Sub
 
@@ -120,7 +125,7 @@ End Sub
 ' 止まった所にブレークポイントがあれば、続けたとき 0xCC を踏まないよう元に戻し、1 命令後に書き戻す
 Sub AdStopPassBp()
     Dim i As Long
-    i = AdBpFindAddr(AdQ(g_adCtx, AD_CX_RIP))
+    i = AdBpFindAddr(AdReg(AD_REG_IP))
     If i < 0 Or i = g_adRearm Then Exit Sub
     AdBpRestore(i)
     g_adRearm = i

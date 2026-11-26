@@ -7,6 +7,8 @@ Const EDBP_MAX = 256
 Dim g_bpN As Long
 Dim g_bpPath[EDBP_MAX] As String
 Dim g_bpLine[EDBP_MAX] As Long
+' 止まる条件（abdbg の b ... if の後ろ。空なら条件なし）
+Dim g_bpCond[EDBP_MAX] As String
 
 ' デバッガーが止まっている所（無ければ行 0）
 Dim g_dbgStopPath As String
@@ -42,6 +44,7 @@ Sub EditorBp_Remove(ByVal i As Long)
     g_bpN = g_bpN - 1
     g_bpPath[i] = g_bpPath[g_bpN]
     g_bpLine[i] = g_bpLine[g_bpN]
+    g_bpCond[i] = g_bpCond[g_bpN]
 End Sub
 
 Sub EditorBp_Toggle(path As String, ByVal lineNo As Long)
@@ -55,7 +58,29 @@ Sub EditorBp_Add(path As String, ByVal lineNo As Long)
     If g_bpN >= EDBP_MAX Then Exit Sub
     g_bpPath[g_bpN] = path
     g_bpLine[g_bpN] = lineNo
+    g_bpCond[g_bpN] = ""
     g_bpN = g_bpN + 1
+End Sub
+
+' Basic → 条件付きブレークポイント: カーソルの行の条件を尋ねる（無ければブレークポイントも足す）
+Sub EditorBp_CondCursor()
+    Dim i As Long, text As String
+    If g_activeChild = 0 Or g_activeChild = g_hProject Then Exit Sub
+    i = EditorBp_Find(g_docPath, TextBuf_CursorLine())
+    text = ""
+    If i >= 0 Then text = g_bpCond[i]
+    If Ab4D_Input(g_activeChild, UiText$(UI_DBG_CONDTITLE), text) = 0 Then Exit Sub
+    EditorBp_SetCond(g_docPath, TextBuf_CursorLine(), Trim$(text))
+End Sub
+
+Sub EditorBp_SetCond(path As String, ByVal lineNo As Long, cond As String)
+    Dim i As Long
+    i = EditorBp_Find(path, lineNo)
+    If i < 0 Then EditorBp_Add(path, lineNo)
+    If i < 0 Then i = g_bpN - 1
+    g_bpCond[i] = cond
+    EditorDbg_BpRedo(i)
+    InvalidateRect(g_activeChild, ByVal 0, FALSE)
 End Sub
 
 ' 付け外しして、デバッグ中ならデバッガーにも知らせる
@@ -86,8 +111,10 @@ End Function
 ' ---- 描く（DrawText_PaintLines が 1 行ごとに、文字より先に呼ぶ） ----
 
 Sub EditorBp_DrawLine(hDC As HDC, hWnd As HWND, ByVal lineNo As Long, ByVal y As Long)
+    Dim i As Long
     If g_dbgStopLine = lineNo And EditorBp_Same(g_dbgStopPath, g_docPath) <> 0 Then EditorBp_StopBg(hDC, hWnd, y)
-    If EditorBp_Has(g_docPath, lineNo) <> 0 Then EditorBp_Dot(hDC, y)
+    i = EditorBp_Find(g_docPath, lineNo)
+    If i >= 0 Then EditorBp_Dot(hDC, y, Len(g_bpCond[i]))
 End Sub
 
 ' 止まっている行: 黄色の背景
@@ -99,14 +126,15 @@ Sub EditorBp_StopBg(hDC As HDC, hWnd As HWND, ByVal y As Long)
     Ui_FillRc(hDC, rc, RGB(255, 238, 140))
 End Sub
 
-' ブレークポイント: 余白の左の赤い四角
-Sub EditorBp_Dot(hDC As HDC, ByVal y As Long)
+' ブレークポイント: 余白の左の四角（赤。条件付きは橙）
+Sub EditorBp_Dot(hDC As HDC, ByVal y As Long, ByVal hasCond As Long)
     Dim rc As RECT
     rc.left = 2
     rc.right = 10
     rc.top = y + (VS_LINE_HEIGHT - 8) \ 2
     rc.bottom = rc.top + 8
-    Ui_FillRc(hDC, rc, RGB(200, 40, 40))
+    If hasCond = 0 Then Ui_FillRc(hDC, rc, RGB(200, 40, 40))
+    If hasCond <> 0 Then Ui_FillRc(hDC, rc, RGB(235, 140, 20))
 End Sub
 
 ' ---- 文書を直したとき ----

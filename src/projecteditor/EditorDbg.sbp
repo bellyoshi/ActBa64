@@ -8,6 +8,7 @@ Const IDM_DBG_OVER = 1362
 Const IDM_DBG_IN = 1363
 Const IDM_DBG_OUT = 1364
 Const IDM_DBG_BP = 1365
+Const IDM_DBG_COND = 1366
 
 Dim g_dbgOn As Long
 Dim g_dbgStopped As Long
@@ -32,10 +33,10 @@ Dim g_dbgPi As PROCESS_INFORMATION
 
 ' ---- 始める ----
 
-' デバッガーは 64bit の Windows の exe だけ（abdbg が x64 のみ）
+' デバッガーは Windows の exe だけ（64bit と -actba32 の 32bit。Linux の ELF は動かせない）
 Function EditorDbg_CanTarget() As Long
     EditorDbg_CanTarget = 0
-    If g_buildTarget32 <> 0 Or g_buildLinux <> 0 Then
+    If g_buildLinux <> 0 Then
         MessageWnd_Append(UiText$(UI_DBG_NOTARGET) + Chr$(13) + Chr$(10))
         Exit Function
     End If
@@ -85,14 +86,27 @@ Sub EditorDbg_Stop()
 End Sub
 
 ' 動いている間にブレークポイントを足した・消した
+' 動いている間にブレークポイントを足した・消した
 Sub EditorDbg_BpChanged(path As String, ByVal lineNo As Long)
+    Dim i As Long
     If g_dbgOn = 0 Then Exit Sub
-    If EditorBp_Has(path, lineNo) <> 0 Then
-        EditorDbg_Send("b " + EditorDbg_OutPath$(path) + ":" + EditorGutter_Num$(lineNo))
-    Else
-        EditorDbg_Send("d " + EditorDbg_OutPath$(path) + ":" + EditorGutter_Num$(lineNo))
-    End If
+    i = EditorBp_Find(path, lineNo)
+    If i >= 0 Then EditorDbg_Send(EditorDbg_BpCmd$(i))
+    If i < 0 Then EditorDbg_Send("d " + EditorDbg_OutPath$(path) + ":" + EditorGutter_Num$(lineNo))
 End Sub
+
+' 動いている間に条件を変えた: 消して置き直す
+Sub EditorDbg_BpRedo(ByVal i As Long)
+    If g_dbgOn = 0 Then Exit Sub
+    EditorDbg_Send("d " + EditorDbg_OutPath$(g_bpPath[i]) + ":" + EditorGutter_Num$(g_bpLine[i]))
+    EditorDbg_Send(EditorDbg_BpCmd$(i))
+End Sub
+
+' b <パス>:<行>[ if <条件>]
+Function EditorDbg_BpCmd$(ByVal i As Long) As String
+    EditorDbg_BpCmd$ = "b " + EditorDbg_OutPath$(g_bpPath[i]) + ":" + EditorGutter_Num$(g_bpLine[i])
+    If Len(g_bpCond[i]) > 0 Then EditorDbg_BpCmd$ = EditorDbg_BpCmd$ + " if " + g_bpCond[i]
+End Function
 
 #ifdef _LINUX
 Sub EditorDbg_Launch(exe As String)
@@ -139,6 +153,7 @@ Sub EditorDbg_Begin()
     g_dbgStopLine = 0
     g_dbgPend = ""
     g_dbgTimer = EditorDbg_SetTimer(0, 0, 50, 0)
+    EditorDbgPane_Open()
 End Sub
 
 ' パイプを 2 組作り、子の側だけ継がせる

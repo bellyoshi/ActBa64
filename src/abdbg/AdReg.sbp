@@ -1,0 +1,93 @@
+' AdReg - レジスタとポインタの幅。x64 は CONTEXT、32bit（-actba32）の exe は WOW64 の WOW64_CONTEXT（x86 の並び）。
+' abdbg 自身は 64bit なので、32bit の exe は Wow64GetThreadContext / Wow64SetThreadContext で読み書きする
+
+Declare Function Ad_Wow64GetCtx Lib "kernel32.dll" Alias "Wow64GetThreadContext" (ByVal ht As HANDLE, ByVal ctx As *Byte) As Long
+Declare Function Ad_Wow64SetCtx Lib "kernel32.dll" Alias "Wow64SetThreadContext" (ByVal ht As HANDLE, ByVal ctx As *Byte) As Long
+
+' WOW64_CONTEXT: ContextFlags 0、Ebp B4、Eip B8、EFlags C0、Esp C4。CONTEXT_i386 | CONTROL | INTEGER | SEGMENTS
+Const AD_W32_FULL = &H00010007
+Const AD_W32_EBP = &HB4
+Const AD_W32_EIP = &HB8
+Const AD_W32_EFLAGS = &HC0
+Const AD_W32_ESP = &HC4
+
+' AdReg / AdSetReg の which
+Const AD_REG_IP = 0
+Const AD_REG_SP = 1
+Const AD_REG_FP = 2
+
+' 32bit の exe が出す int3 と 1 命令の例外（STATUS_WX86_BREAKPOINT / STATUS_WX86_SINGLE_STEP）
+Const AD_EXC_WX86_BREAKPOINT = &H4000001F
+Const AD_EXC_WX86_SINGLE_STEP = &H4000001E
+
+Function AdIs32() As Long
+    AdIs32 = 1 - g_adArch64
+End Function
+
+Function AdPtrSize() As Long
+    AdPtrSize = 8
+    If AdIs32() <> 0 Then AdPtrSize = 4
+End Function
+
+' ポインタ 1 つ（32bit の exe なら 4 バイト）
+Function AdReadP(addr As QWord) As QWord
+    AdReadP = AdReadN(addr, AdPtrSize())
+End Function
+
+Function AdRegOff(which As Long) As Long
+    AdRegOff = AD_CX_RIP
+    If which = AD_REG_SP Then AdRegOff = AD_CX_RSP
+    If which = AD_REG_FP Then AdRegOff = AD_CX_RBP
+    If AdIs32() <> 0 Then AdRegOff = AdRegOff32(which)
+End Function
+
+Function AdRegOff32(which As Long) As Long
+    AdRegOff32 = AD_W32_EIP
+    If which = AD_REG_SP Then AdRegOff32 = AD_W32_ESP
+    If which = AD_REG_FP Then AdRegOff32 = AD_W32_EBP
+End Function
+
+' 読んである CONTEXT のレジスタ（32bit は上位 0）
+Function AdReg(which As Long) As QWord
+    Dim v As QWord
+    v = 0
+    memcpy(VarPtr(v), VarPtr(g_adCtx[AdRegOff(which)]), AdPtrSize())
+    AdReg = v
+End Function
+
+Sub AdSetReg(which As Long, v As QWord)
+    memcpy(VarPtr(g_adCtx[AdRegOff(which)]), VarPtr(v), AdPtrSize())
+End Sub
+
+' 読んである CONTEXT の EFlags に TF を立てる（書き戻しは AdCtxSet）
+Sub AdCtxTF()
+    Dim off As Long
+    off = AD_CX_EFLAGS
+    If AdIs32() <> 0 Then off = AD_W32_EFLAGS
+    AdPutL(g_adCtx, off, AdL(g_adCtx, off) Or &H100)
+End Sub
+
+Sub AdCtxGet()
+    If AdIs32() <> 0 Then
+        AdPutL(g_adCtx, 0, AD_W32_FULL)
+        Ad_Wow64GetCtx(g_adHThr, g_adCtx)
+    Else
+        AdPutL(g_adCtx, AD_CX_FLAGS, AD_CTX_FULL)
+        Ad_GetCtx(g_adHThr, g_adCtx)
+    End If
+End Sub
+
+Sub AdCtxSet()
+    If AdIs32() <> 0 Then
+        Ad_Wow64SetCtx(g_adHThr, g_adCtx)
+    Else
+        Ad_SetCtx(g_adHThr, g_adCtx)
+    End If
+End Sub
+
+' 32bit の exe の例外のコードを x64 のものにそろえる
+Function AdNormCode(code As Long) As Long
+    AdNormCode = code
+    If code = AD_EXC_WX86_BREAKPOINT Then AdNormCode = AD_EXC_BREAKPOINT
+    If code = AD_EXC_WX86_SINGLE_STEP Then AdNormCode = AD_EXC_SINGLE_STEP
+End Function

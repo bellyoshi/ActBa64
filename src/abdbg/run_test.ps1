@@ -2,12 +2,16 @@
 #
 #   .\run_test.ps1            # abdbg.exe を作り直して test\*.abp を試す
 #   .\run_test.ps1 -Update    # 今の出力で test\*.out を書き直す（中身を見て確かめてから）
+#   .\run_test.ps1 -Actba32   # -actba32 の 32bit の exe で試す
 #
 # test\<名前>.abp を actba64 -debug で訳し、test\<名前>.in のコマンドを abdbg に渡す。
 # 出力（プログラム自身の出力も混ざる）のパスはファイル名だけにして test\<名前>.out と比べる。
+# -Actba32 では test\<名前>.out32 があればそれと比べる（32bit は機械語の並びが違い、ステップで止まる
+# 行が変わることがある）。-Update -Actba32 は .out と違うときだけ .out32 を書く（同じなら消す）。
 param(
     [string]$Compiler = "",
-    [switch]$Update
+    [switch]$Update,
+    [switch]$Actba32
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,16 +68,29 @@ foreach ($src in Get-ChildItem -LiteralPath (Join-Path $Root "test") -Filter *.a
     $outFile = Join-Path $src.DirectoryName "$name.out"
     if (-not (Test-Path -LiteralPath $inFile)) { continue }
     $exe = Join-Path $OutDir "$name.exe"
-    Invoke-Compiler @($src.FullName, "-debug", "-o", $exe)
-    $got = @(Invoke-Abdbg $exe ([System.IO.File]::ReadAllText($inFile)) | ForEach-Object { Format-Line $_ })
-    if ($Update) {
-        [System.IO.File]::WriteAllText($outFile, (($got -join "`r`n") + "`r`n"))
-        Write-Host "[UPDATE] $name"
-        continue
+    $cargs = @($src.FullName, "-debug", "-o", $exe)
+    if ($Actba32) {
+        $exe = Join-Path $OutDir "${name}_32.exe"
+        $cargs = @($src.FullName, "-debug", "-actba32", "-o", $exe)
     }
+    Invoke-Compiler $cargs
+    $got = @(Invoke-Abdbg $exe ([System.IO.File]::ReadAllText($inFile)) | ForEach-Object { Format-Line $_ })
     $want = @()
     if (Test-Path -LiteralPath $outFile) {
         $want = @([System.IO.File]::ReadAllLines($outFile) | Where-Object { $_ -ne "" })
+    }
+    $out32 = Join-Path $src.DirectoryName "$name.out32"
+    $same = (($got -join "`n") -ceq ($want -join "`n"))
+    if ($Update) {
+        $text = (($got -join "`r`n") + "`r`n")
+        if (-not $Actba32) { [System.IO.File]::WriteAllText($outFile, $text) }
+        if ($Actba32 -and -not $same) { [System.IO.File]::WriteAllText($out32, $text) }
+        if ($Actba32 -and $same -and (Test-Path -LiteralPath $out32)) { Remove-Item -LiteralPath $out32 }
+        Write-Host "[UPDATE] $name"
+        continue
+    }
+    if ($Actba32 -and (Test-Path -LiteralPath $out32)) {
+        $want = @([System.IO.File]::ReadAllLines($out32) | Where-Object { $_ -ne "" })
     }
     if (($got -join "`n") -ceq ($want -join "`n")) {
         $pass++

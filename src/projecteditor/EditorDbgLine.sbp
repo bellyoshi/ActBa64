@@ -27,8 +27,8 @@ End Sub
 Sub EditorDbg_OnList(w As String, rest As String)
     If w = "frame" Then EditorDbg_OnFrame(rest)
     If w = "var" Then EditorDbg_OnVar(rest)
-    If w = "bt" Then EditorDbg_Msg(UiText$(UI_DBG_STACK))
-    If w = "locals" Then EditorDbg_Msg(UiText$(UI_DBG_VARS))
+    If w = "bt" Then EditorDbgPane_BtHead(Val(rest))
+    If w = "locals" Then EditorDbgPane_Clear(EDP_VARS)
     If w = "error" Then EditorDbg_Msg("abdbg: " + rest)
 End Sub
 
@@ -52,7 +52,7 @@ End Function
 Sub EditorDbg_OnReady()
     Dim i As Long
     For i = 0 To g_bpN - 1
-        EditorDbg_Send("b " + EditorDbg_OutPath$(g_bpPath[i]) + ":" + EditorGutter_Num$(g_bpLine[i]))
+        EditorDbg_Send(EditorDbg_BpCmd$(i))
     Next
     EditorDbg_Send("r")
 End Sub
@@ -102,40 +102,44 @@ Sub EditorDbg_Stopped(path As String, ByVal ln As Long)
 End Sub
 
 ' frame <段> <行> <手続き> <パス>
+' frame <段> <行> <手続き> <パス> → デバッグの窓の呼び出し履歴
 Sub EditorDbg_OnFrame(rest As String)
     Dim ln As Long, fn As String, path As String
     EditorDbg_ParseLoc(EditorDbg_After$(rest), ln, fn, path)
-    EditorDbg_Msg("  at " + EditorDbg_LocText$(path, ln, fn))
+    EditorDbgPane_Frame(ln, fn, path)
 End Sub
 
 ' var <名前> <型> <値> → 名前 As 型 = 値
+' var <名前> <型> <値> → デバッグの窓に 名前 As 型 = 値
 Sub EditorDbg_OnVar(rest As String)
     Dim nm As String, ty As String
     nm = EditorDbg_Word$(rest)
     ty = EditorDbg_Word$(EditorDbg_After$(rest))
-    EditorDbg_Msg("  " + nm + " As " + ty + " = " + EditorDbg_After$(EditorDbg_After$(rest)))
+    EditorDbgPane_Add(EDP_VARS, nm + " As " + ty + " = " + EditorDbg_After$(EditorDbg_After$(rest)))
 End Sub
 
 ' ---- メニュー（Basic メニューの最後） ----
 
+' メニューの項目の見出し（IDM_DBG_GO から IDM_DBG_BP は UI_MENU_DBG_GO から続けて並ぶ）
+Function EditorDbg_MenuUi(id As Long) As Long
+    EditorDbg_MenuUi = UI_MENU_DBG_GO + (id - IDM_DBG_GO)
+    If id = IDM_DBG_COND Then EditorDbg_MenuUi = UI_MENU_DBG_COND
+End Function
+
 Sub EditorDbg_ApplyMenu()
+    Dim id As Long
     If g_dbgMenu = 0 Then EditorDbg_AddMenu()
-    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_GO, UI_MENU_DBG_GO)
-    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_STOP, UI_MENU_DBG_STOP)
-    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_OVER, UI_MENU_DBG_OVER)
-    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_IN, UI_MENU_DBG_IN)
-    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_OUT, UI_MENU_DBG_OUT)
-    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_BP, UI_MENU_DBG_BP)
+    For id = IDM_DBG_GO To IDM_DBG_COND
+        EditorMenu_SetCmd(hMenu_M_MAIN_2, id, EditorDbg_MenuUi(id))
+    Next
 End Sub
 
 Sub EditorDbg_AddMenu()
+    Dim id As Long
     AppendMenu(hMenu_M_MAIN_2, MF_SEPARATOR, 0, "")
-    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_GO, UI_MENU_DBG_GO)
-    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_STOP, UI_MENU_DBG_STOP)
-    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_OVER, UI_MENU_DBG_OVER)
-    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_IN, UI_MENU_DBG_IN)
-    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_OUT, UI_MENU_DBG_OUT)
-    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_BP, UI_MENU_DBG_BP)
+    For id = IDM_DBG_GO To IDM_DBG_COND
+        EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, id, EditorDbg_MenuUi(id))
+    Next
     g_dbgMenu = 1
 End Sub
 
@@ -146,9 +150,14 @@ Function EditorDbg_MenuCmd(id As Long) As Long
     If id = IDM_DBG_OVER Then EditorDbg_Step("n")
     If id = IDM_DBG_IN Then EditorDbg_Step("s")
     If id = IDM_DBG_OUT Then EditorDbg_Step("o")
-    If id = IDM_DBG_BP Then EditorBp_ToggleCursor()
-    If id < IDM_DBG_GO Or id > IDM_DBG_BP Then EditorDbg_MenuCmd = 0
+    EditorDbg_MenuBp(id)
+    If id < IDM_DBG_GO Or id > IDM_DBG_COND Then EditorDbg_MenuCmd = 0
 End Function
+
+Sub EditorDbg_MenuBp(id As Long)
+    If id = IDM_DBG_BP Then EditorBp_ToggleCursor()
+    If id = IDM_DBG_COND Then EditorBp_CondCursor()
+End Sub
 
 ' F5 / Shift+F5 / F9 / F10 / F11 / Shift+F11。使ったら 1
 Function EditorDbg_Key(ByVal vk As Long) As Long

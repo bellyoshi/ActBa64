@@ -1,4 +1,4 @@
-' AdStack - 呼び出し履歴。ActBa64 の手続きはどれも push rbp; mov rbp, rsp で始まるので rbp をたどる。
+' AdStack - 呼び出し履歴。ActBa64 の手続きはどれも push rbp; mov rbp, rsp で始まるので rbp をたどる（32bit は ebp。ポインタは 4 バイト）。
 ' 止まった所が exe の外（kernel32 の DebugBreak、API の中の例外）なら、スタックで最初に見つかる
 ' exe の中への戻り先から始める
 
@@ -21,16 +21,25 @@ Function AdStackScan(rsp As QWord) As QWord
     Wend
 End Function
 
-' スタックの k 番目の値。exe の中を指していなければ 0
+' スタックの k 番目の値。exe の中への戻り先らしくなければ 0（32bit は引数もスタックに積むので、文字列などを指す値を除く）
 Function AdStackAt(rsp As QWord, k As Long) As QWord
-    AdStackAt = AdReadQ(rsp + k * 8)
+    AdStackAt = AdReadP(rsp + k * AdPtrSize())
     If AdInImage(AdStackAt) = 0 Then AdStackAt = 0
+    If AdStackAt <> 0 And AdLooksRet(AdStackAt) = 0 Then AdStackAt = 0
+End Function
+
+' v の手前が call の命令なら 1（call rel32 / call [mem] / call レジスタ）
+Function AdLooksRet(v As QWord) As Long
+    AdLooksRet = 0
+    If AdReadB(v - 5) = &HE8 Then AdLooksRet = 1
+    If AdReadB(v - 6) = &HFF And AdReadB(v - 5) = &H15 Then AdLooksRet = 1
+    If AdReadB(v - 2) = &HFF And (AdReadB(v - 1) And &HF8) = &HD0 Then AdLooksRet = 1
 End Function
 
 Sub AdStackNext(ByRef pc As QWord, ByRef fp As QWord)
     Dim nfp As QWord
-    nfp = AdReadQ(fp)
-    pc = AdReadQ(fp + 8)
+    nfp = AdReadP(fp)
+    pc = AdReadP(fp + AdPtrSize())
     If nfp <= fp Then pc = 0
     fp = nfp
 End Sub
@@ -47,11 +56,11 @@ End Sub
 Sub AdStackBuild()
     Dim pc As QWord
     AdCtxGet()
-    pc = AdQ(g_adCtx, AD_CX_RIP)
+    pc = AdReg(AD_REG_IP)
     g_adFr0Ret = 1 - AdInImage(pc)
-    If g_adFr0Ret <> 0 Then pc = AdStackScan(AdQ(g_adCtx, AD_CX_RSP))
+    If g_adFr0Ret <> 0 Then pc = AdStackScan(AdReg(AD_REG_SP))
     g_adFrN = 0
-    AdStackWalk(pc, AdQ(g_adCtx, AD_CX_RBP))
+    AdStackWalk(pc, AdReg(AD_REG_FP))
 End Sub
 
 ' 行を引く RVA。戻り先は呼んだ命令の中（1 つ前のバイト）で引く
