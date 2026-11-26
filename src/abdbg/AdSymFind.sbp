@@ -30,15 +30,51 @@ Function AdSymLineAt(rva As Long) As Long
 End Function
 
 ' rva を含む手続きの番号（無ければ -1）
+Sub AdSymFnStep(rva As Long, ByRef lo As Long, ByRef hi As Long, ByRef found As Long)
+    Dim mid As Long
+    mid = (lo + hi) \ 2
+    If AdVecAt(VarPtr(g_adFnStart), mid) <= rva Then
+        found = mid
+        lo = mid + 1
+    Else
+        hi = mid - 1
+    End If
+End Sub
+
+' rva を含む手続きの番号（無ければ -1）。func は始まりの小さい順
 Function AdSymFuncAt(rva As Long) As Long
-    Dim i As Long
-    AdSymFuncAt = -1
-    For i = 0 To g_adFnStart.n - 1
-        If AdVecAt(VarPtr(g_adFnStart), i) <= rva And rva < AdVecAt(VarPtr(g_adFnEnd), i) Then
-            AdSymFuncAt = i
-            Exit Function
-        End If
-    Next
+    Dim lo As Long, hi As Long, found As Long
+    lo = 0
+    hi = g_adFnStart.n - 1
+    found = -1
+    While lo <= hi
+        AdSymFnStep(rva, lo, hi, found)
+    Wend
+    AdSymFuncAt = AdFnIfIn(found, rva)
+End Function
+
+Function AdFnIfIn(fn As Long, rva As Long) As Long
+    AdFnIfIn = -1
+    If fn < 0 Then Exit Function
+    If rva < AdVecAt(VarPtr(g_adFnEnd), fn) Then AdFnIfIn = fn
+End Function
+
+' addr がユーザーの手続き（Include やランタイムや OS でない）の中なら 1
+Function AdIsUser(addr As QWord) As Long
+    Dim fn As Long
+    AdIsUser = 0
+    If AdInImage(addr) = 0 Then Exit Function
+    fn = AdSymFuncAt(AdRvaOf(addr))
+    If fn >= 0 Then AdIsUser = AdVecAt(VarPtr(g_adFnUser), fn)
+End Function
+
+' rva がちょうど文の始まりなら 1
+Function AdIsStmtStart(rva As Long) As Long
+    Dim k As Long
+    AdIsStmtStart = 0
+    k = AdSymLineAt(rva)
+    If k < 0 Then Exit Function
+    If AdLnRva(k) = rva And AdVecAt(VarPtr(g_adLnFlag), k) = 1 Then AdIsStmtStart = 1
 End Function
 
 ' パスの最後の部分（\ と / の後ろ）

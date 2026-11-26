@@ -5,6 +5,8 @@ Dim g_adStdin As HANDLE
 Dim g_adQuit As Long
 Dim g_adExe As String
 
+Const AD_CMDS = " b break d delete r run c continue bt backtrace q quit s step n next o out finish "
+
 ' 1 バイト読む（終わりなら -1）
 Function AdReadCh() As Long
     Dim c As Byte
@@ -77,7 +79,39 @@ Sub AdCmdDo(w As String, a As String)
     If w = "c" Or w = "continue" Then AdCmdCont()
     If w = "bt" Or w = "backtrace" Then AdCmdBt()
     If w = "q" Or w = "quit" Then g_adQuit = 1
-    If InStr(1, " b break d delete r run c continue bt backtrace q quit ", " " + w + " ") = 0 Then Print "error unknown command: " + w
+    AdCmdDoStep(w)
+    If InStr(1, AD_CMDS, " " + w + " ") = 0 Then Print "error unknown command: " + w
+End Sub
+
+Sub AdCmdDoStep(w As String)
+    If w = "s" Or w = "step" Then AdCmdStep(AD_STEP_IN)
+    If w = "n" Or w = "next" Then AdCmdStep(AD_STEP_OVER)
+    If w = "o" Or w = "out" Or w = "finish" Then AdCmdOut()
+End Sub
+
+' 例外で止まったところからは続けるとプログラムが終わるので、ステップできない
+Function AdCanStep() As Long
+    AdCanStep = 0
+    If AdNeedStop() = 0 Then Exit Function
+    If g_adCont <> AD_DBG_CONTINUE Then Print "error cannot step after an exception"
+    If g_adCont = AD_DBG_CONTINUE Then AdCanStep = 1
+End Function
+
+Sub AdCmdStep(mode As Long)
+    If AdCanStep() = 0 Then Exit Sub
+    AdStepBegin(mode)
+    Print "running"
+    AdResume()
+End Sub
+
+Sub AdCmdOut()
+    If AdCanStep() = 0 Then Exit Sub
+    If AdStepOutBegin() = 0 Then
+        Print "error no caller"
+        Exit Sub
+    End If
+    Print "running"
+    AdResume()
 End Sub
 
 ' ---- 各コマンド ----

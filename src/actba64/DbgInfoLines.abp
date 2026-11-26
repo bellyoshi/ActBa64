@@ -8,6 +8,8 @@ Dim g_dbgMapL As *Long
 Dim g_dbgFile As *Byte
 Dim g_dbgFileN As Long
 Dim g_dbgFileCap As Long
+' 1: Include のフォルダのファイル（ライブラリ。デバッガーのステップインは入らない）
+Dim g_dbgFileLib As *Long
 ' 直前に引いた PpMapFind のファイル名（g_mapOut と同じ大きさ）とその番号
 Dim g_dbgLastRaw(259) As Byte
 Dim g_dbgLastIdx As Long
@@ -52,8 +54,9 @@ Function DbgFileReserve() As boolean
     If g_dbgFileN < g_dbgFileCap Then Exit Function
     nc = DbgNextCap(g_dbgFileCap)
     g_dbgFile = DbgGrowB(g_dbgFile, g_dbgFileCap, nc, DBG_PATH_LEN)
+    g_dbgFileLib = DbgGrowL(g_dbgFileLib, g_dbgFileCap, nc)
     g_dbgFileCap = nc
-    If g_dbgFile = NULL Then DbgFileReserve = false
+    If g_dbgFile = NULL Or g_dbgFileLib = NULL Then DbgFileReserve = false
 End Function
 
 Function DbgFileAdd(full As String) As Long
@@ -82,12 +85,19 @@ Function DbgRawSame(raw As *Byte) As Long
     Wend
 End Function
 
+Sub DbgMarkLib(f As Long, raw As *Byte)
+    If f < 0 Then Exit Sub
+    g_dbgFileLib[f] = 0
+    If PpIsUserFile(MakeStr(raw)) = 0 Or PpIsUserFile(DbgFullPath$(raw)) = 0 Then g_dbgFileLib[f] = 1
+End Sub
+
 ' PpMapFind が置いたファイル名の番号。名前が無ければ -1
 Function DbgFileIdx(raw As *Byte) As Long
     DbgFileIdx = -1
     If raw[0] = 0 Then Exit Function
     If g_dbgLastIdx < 0 Or DbgRawSame(raw) = 0 Then
         g_dbgLastIdx = DbgFileLookup(DbgFullPath$(raw))
+        DbgMarkLib(g_dbgLastIdx, raw)
         DbgCopyAt(VarPtr(g_dbgLastRaw), 0, raw, 260)
     End If
     DbgFileIdx = g_dbgLastIdx
@@ -165,6 +175,15 @@ Sub DbgOutFiles()
     Next
 End Sub
 
+Sub DbgOutLibs()
+    Dim i As Long
+    For i = 0 To g_dbgFileN - 1
+        If g_dbgFileLib[i] <> 0 Then DbgOutZ("lib")
+        If g_dbgFileLib[i] <> 0 Then DbgOutSN(i)
+        If g_dbgFileLib[i] <> 0 Then DbgOutNL()
+    Next
+End Sub
+
 ' 結合したソースの行 ln のファイルの番号（無ければ -1）と、その中の行（無ければ 0）
 Function DbgLnFile(ln As Long) As Long
     DbgLnFile = -1
@@ -197,6 +216,7 @@ End Sub
 Function DbgBuildLines(src As *Byte) As boolean
     DbgBuildLines = DbgMapLines(src)
     If DbgBuildLines Then DbgOutFiles()
+    If DbgBuildLines Then DbgOutLibs()
     If DbgBuildLines Then DbgOutLines()
     DbgFreeMap()
 End Function

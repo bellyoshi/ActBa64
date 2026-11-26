@@ -3,6 +3,7 @@
 Dim g_adLoaderSeen As Long
 Dim g_adRearm As Long
 Dim g_adFaultAddr As QWord
+Dim g_adStopKind As String
 
 ' MAIN のループから、動いている間呼ぶ（MAIN に戻るたびに String を回収できるよう 1 つずつ）
 Sub AdPump()
@@ -46,6 +47,16 @@ End Sub
 
 ' 自分のブレークポイント / 最初の ntdll のブレークポイント（読み飛ばす）/ Debug 文などの int3
 Sub AdOnBreak(addr As QWord)
+    If g_adTmpAddr <> 0 And addr = g_adTmpAddr Then
+        AdThreadOpen()
+        AdCtxGet()
+        AdTmpHit(addr)
+        Exit Sub
+    End If
+    AdOnBreakUser(addr)
+End Sub
+
+Sub AdOnBreakUser(addr As QWord)
     Dim i As Long
     i = AdBpFindAddr(addr)
     If i >= 0 Then AdBpHit(i, addr)
@@ -55,9 +66,13 @@ Sub AdOnBreak(addr As QWord)
 End Sub
 
 ' ブレークポイントの 1 命令を進めた後: 0xCC を書き戻す
+' 1 命令進んだ: ブレークポイントの 0xCC を書き戻し、ステップ中なら次を決める
 Sub AdOnStep()
     If g_adRearm >= 0 Then AdBpRearm(g_adRearm)
     g_adRearm = -1
+    If g_adTmpRearm <> 0 And g_adTmpAddr <> 0 Then AdWriteB(g_adTmpAddr, &HCC)
+    g_adTmpRearm = 0
+    If g_adStepping <> 0 And g_adEvTid = g_adStepTid Then AdStepOne()
 End Sub
 
 ' exe の外の 1 回目の例外はプログラム（OS）に任せる。同じ所の 2 回目は止めずに終わらせる
@@ -85,10 +100,24 @@ Sub AdBpHit(i As Long, addr As QWord)
 End Sub
 
 ' 止まる。場所（呼び出し履歴の一番上のユーザーの行）を出す
+' 止まる。場所（呼び出し履歴の一番上のユーザーの行）を出す
 Sub AdStop(kind As String, extra As String)
+    AdStepCancel()
     g_adState = AD_ST_STOP
+    g_adStopKind = kind
     AdThreadOpen()
     AdStackBuild()
+    AdStopPassBp()
     If extra <> "" Then extra = extra + " "
     Print "stop " + kind + " " + extra + AdFrameLoc$(AdStackUserFrame(kind))
+End Sub
+
+' 止まった所にブレークポイントがあれば、続けたとき 0xCC を踏まないよう元に戻し、1 命令後に書き戻す
+Sub AdStopPassBp()
+    Dim i As Long
+    i = AdBpFindAddr(AdQ(g_adCtx, AD_CX_RIP))
+    If i < 0 Or i = g_adRearm Then Exit Sub
+    AdBpRestore(i)
+    g_adRearm = i
+    AdSetTF()
 End Sub

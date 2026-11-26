@@ -14,6 +14,10 @@ Dim g_adFnStart As AdVec
 Dim g_adFnEnd As AdVec
 Dim g_adFnName As AdNames
 Dim g_adFile As AdNames
+' 1: Include のフォルダのファイル（lib の行）
+Dim g_adFileLib As AdVec
+' 1: ユーザーのソース（ライブラリでない）の文がある手続き
+Dim g_adFnUser As AdVec
 
 ' 今の位置が w で始まれば、その後ろへ進めて 1
 Function AdSymIs(w As *Byte) As Long
@@ -84,12 +88,21 @@ End Sub
 Sub AdSymAddFile()
     AdSymNum()
     AdNamesPush(VarPtr(g_adFile), VarPtr(g_adSym[g_adPos]), AdSymRestLen())
+    AdVecPush(VarPtr(g_adFileLib), 0)
+End Sub
+
+' lib <file の番号>
+Sub AdSymAddLib()
+    Dim f As Long
+    f = AdSymNum()
+    If f >= 0 And f < g_adFileLib.n Then AdVecSet(VarPtr(g_adFileLib), f, 1)
 End Sub
 
 Sub AdSymParseLine()
     If AdSymIs("line ") Then AdSymAddLine()
     If AdSymIs("func ") Then AdSymAddFunc()
     If AdSymIs("file ") Then AdSymAddFile()
+    If AdSymIs("lib ") Then AdSymAddLib()
     If AdSymIs("ABDBG 1") Then g_adHeadOk = 1
     If AdSymIs("arch x64") Then g_adArch64 = 1
 End Sub
@@ -129,5 +142,39 @@ Function AdSymParseAll(n As Long) As Long
         AdSymParseLine()
         AdSymNextLine()
     Wend
+    AdSymMarkUserFns()
     AdSymParseAll = g_adHeadOk
+End Function
+
+' ---- ユーザーの手続き（line も func も RVA の小さい順なので、並べて 1 回ずつ見る） ----
+
+Sub AdSymMarkUserFns()
+    Dim k As Long, fi As Long
+    For k = 0 To g_adFnStart.n - 1
+        AdVecPush(VarPtr(g_adFnUser), 0)
+    Next
+    fi = 0
+    For k = 0 To g_adLnRva.n - 1
+        fi = AdSymMarkLine(k, fi)
+    Next
+End Sub
+
+' line k が手続き fi（から先）の中のユーザーの文なら印。次に見る手続きを返す
+Function AdSymMarkLine(k As Long, fi As Long) As Long
+    While fi < g_adFnStart.n And AdVecAt(VarPtr(g_adFnEnd), fi) <= AdLnRva(k)
+        fi = fi + 1
+    Wend
+    AdSymMarkLine = fi
+    If fi >= g_adFnStart.n Then Exit Function
+    If AdVecAt(VarPtr(g_adFnStart), fi) > AdLnRva(k) Then Exit Function
+    If AdLnIsUser(k) <> 0 Then AdVecSet(VarPtr(g_adFnUser), fi, 1)
+End Function
+
+Function AdLnIsUser(k As Long) As Long
+    Dim f As Long
+    AdLnIsUser = 0
+    If AdVecAt(VarPtr(g_adLnFlag), k) <> 1 Then Exit Function
+    f = AdVecAt(VarPtr(g_adLnFile), k)
+    If f < 0 Then Exit Function
+    If AdVecAt(VarPtr(g_adFileLib), f) = 0 Then AdLnIsUser = 1
 End Function

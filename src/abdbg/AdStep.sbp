@@ -1,0 +1,187 @@
+' AdStep - ステップ実行。
+'   ステップイン（s）/ ステップオーバー（n）: TF で 1 命令ずつ進め、ユーザーのソースの文の始まりに来たら止まる。
+'     call で入った先がライブラリ（Include）・ランタイム・OS なら（n はいつも）、戻り先に一時ブレークポイントを
+'     置いて走らせ、戻ってきたらまた 1 命令ずつ進める。
+'     始めた段から戻ったら、呼び出し元の行（途中）で止まる。
+'   ステップアウト（o）: 今の段の戻り先に一時ブレークポイントを置いて走らせる。
+' 一時ブレークポイントは rsp が置いたときの段より上（戻った後）のときだけ当たりにする（再帰で深い段が通っても止まらない）
+
+Const AD_STEP_NONE = 0
+Const AD_STEP_IN = 1
+Const AD_STEP_OVER = 2
+Const AD_STEP_OUT = 3
+
+Dim g_adStepMode As Long
+Dim g_adStepping As Long
+Dim g_adStepTid As DWord
+Dim g_adStepFp As QWord
+Dim g_adPrevRip As QWord
+Dim g_adPrevRsp As QWord
+
+Dim g_adTmpAddr As QWord
+Dim g_adTmpOrig As Long
+Dim g_adTmpRsp As QWord
+Dim g_adTmpRearm As Long
+
+' 読んである CONTEXT に TF を立てて書き戻す（次の 1 命令で SINGLE_STEP になる）
+Sub AdSetTF()
+    AdPutL(g_adCtx, AD_CX_EFLAGS, AdL(g_adCtx, AD_CX_EFLAGS) Or &H100)
+    AdCtxSet()
+End Sub
+
+' ---- 一時ブレークポイント（ユーザーのブレークポイントと同じ所なら書かずに、そちらに任せる） ----
+
+Sub AdTmpSet(addr As QWord, needRsp As QWord)
+    AdTmpClear()
+    g_adTmpAddr = addr
+    g_adTmpRsp = needRsp
+    If AdBpFindAddr(addr) >= 0 Then Exit Sub
+    g_adTmpOrig = AdReadB(addr)
+    AdWriteB(addr, &HCC)
+End Sub
+
+Sub AdTmpClear()
+    If g_adTmpAddr = 0 Then Exit Sub
+    If AdBpFindAddr(g_adTmpAddr) < 0 Then AdWriteB(g_adTmpAddr, g_adTmpOrig)
+    g_adTmpAddr = 0
+    g_adTmpRearm = 0
+End Sub
+
+' 止まるとき（どんな理由でも）ステップをやめる
+Sub AdStepCancel()
+    g_adStepping = 0
+    g_adStepMode = AD_STEP_NONE
+    AdTmpClear()
+End Sub
+
+' 一時ブレークポイントに当たった。CONTEXT は読んである
+Sub AdTmpHit(addr As QWord)
+    Dim ok As Long
+    ok = AdTmpReached()
+    If ok <> 0 Then AdTmpClear()
+    If AdBpFindAddr(addr) >= 0 Then AdBpHit(AdBpFindAddr(addr), addr)
+    If AdBpFindAddr(addr) >= 0 Then Exit Sub
+    AdPutQ(g_adCtx, AD_CX_RIP, addr)
+    If ok <> 0 Then AdStepReturned()
+    If ok = 0 Then AdTmpPass()
+End Sub
+
+' ステップしているスレッドが、置いた段より上（戻った後）で当たったら 1
+Function AdTmpReached() As Long
+    AdTmpReached = 0
+    If g_adEvTid = g_adStepTid And AdQ(g_adCtx, AD_CX_RSP) >= g_adTmpRsp Then AdTmpReached = 1
+End Function
+
+' 深い段が通った: 元のバイトに戻して 1 命令進め、また 0xCC を書く
+Sub AdTmpPass()
+    AdWriteB(g_adTmpAddr, g_adTmpOrig)
+    g_adTmpRearm = 1
+    AdSetTF()
+End Sub
+
+' 呼んだ先から戻ってきた
+Sub AdStepReturned()
+    If g_adStepMode = AD_STEP_OUT Then
+        AdCtxSet()
+        AdStop("step", "")
+        Exit Sub
+    End If
+    AdStepResumeTF()
+End Sub
+
+Sub AdStepResumeTF()
+    g_adStepping = 1
+    g_adPrevRip = AdQ(g_adCtx, AD_CX_RIP)
+    g_adPrevRsp = AdQ(g_adCtx, AD_CX_RSP)
+    AdSetTF()
+End Sub
+
+' ---- 1 命令ずつ ----
+
+' SINGLE_STEP のたび（AdOnStep から）
+Sub AdStepOne()
+    Dim rip As QWord, rsp As QWord
+    AdThreadOpen()
+    AdCtxGet()
+    rip = AdQ(g_adCtx, AD_CX_RIP)
+    rsp = AdQ(g_adCtx, AD_CX_RSP)
+    AdStepDecide(rip, rsp)
+    g_adPrevRip = rip
+    g_adPrevRsp = rsp
+End Sub
+
+' 始めた段から戻ったのは ret の後（leave の後はまだ ret が残っていて rsp = rbp + 8）
+Sub AdStepDecide(rip As QWord, rsp As QWord)
+    If rsp > g_adStepFp + 8 Then
+        AdStepLeft(rip)
+    ElseIf AdStepIsCall(rip, rsp) <> 0 Then
+        AdStepCall(rip, rsp)
+    Else
+        AdStepAt(rip)
+    End If
+End Sub
+
+' ユーザーのソースの文の始まりなら止まり、ほかは次の 1 命令へ
+Sub AdStepAt(rip As QWord)
+    If AdIsUser(rip) <> 0 And AdIsStmtStart(AdRvaOf(rip)) <> 0 Then
+        AdStop("step", "")
+    Else
+        AdSetTF()
+    End If
+End Sub
+
+' 前の命令が call だったら 1（rsp が 8 減り、[rsp] が前の命令のすぐ後ろ）
+Function AdStepIsCall(rip As QWord, rsp As QWord) As Long
+    Dim ret As QWord
+    AdStepIsCall = 0
+    If rsp + 8 <> g_adPrevRsp Then Exit Function
+    ret = AdReadQ(rsp)
+    If ret <= g_adPrevRip Or ret > g_adPrevRip + 16 Or ret = rip Then Exit Function
+    AdStepIsCall = 1
+End Function
+
+' 呼んだ先へ入った。s でユーザーの手続きなら中へ、ほかは戻り先まで走らせる
+Sub AdStepCall(rip As QWord, rsp As QWord)
+    If g_adStepMode = AD_STEP_IN And AdIsUser(rip) <> 0 Then
+        AdSetTF()
+        Exit Sub
+    End If
+    g_adStepping = 0
+    AdTmpSet(AdReadQ(rsp), rsp + 8)
+End Sub
+
+' 始めた段から戻った。ユーザーのコードなら止まり、OS などへ戻ったら（コールバックの終わり）そのまま走らせる
+Sub AdStepLeft(rip As QWord)
+    If AdIsUser(rip) <> 0 Then
+        AdStop("step", "")
+    Else
+        AdStepCancel()
+    End If
+End Sub
+
+' ---- 始める ----
+
+' 止まっている段（Debug 文なら BasicDebug の呼び出し元）の rbp
+Function AdStepFrameFp() As QWord
+    AdStepFrameFp = g_adFrFp[AdStackUserFrame(g_adStopKind)]
+End Function
+
+Sub AdStepBegin(mode As Long)
+    g_adStepMode = mode
+    g_adStepTid = g_adEvTid
+    g_adStepFp = AdStepFrameFp()
+    AdCtxGet()
+    AdStepResumeTF()
+End Sub
+
+' 戻り先が exe の中に無ければ（モジュールの本体）0
+Function AdStepOutBegin() As Long
+    Dim fp As QWord
+    AdStepOutBegin = 0
+    fp = AdStepFrameFp()
+    If AdInImage(AdReadQ(fp + 8)) = 0 Then Exit Function
+    g_adStepMode = AD_STEP_OUT
+    g_adStepTid = g_adEvTid
+    AdTmpSet(AdReadQ(fp + 8), fp + 16)
+    AdStepOutBegin = 1
+End Function
