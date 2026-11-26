@@ -1,0 +1,178 @@
+' AdTree - 変数のツリー（ProjectEditor のデバッグの窓）。x <何> で 1 段分の子を出す
+'   x @locals   今の段（f で選んだ段）のローカル変数
+'   x @globals  ユーザーのソースで宣言したグローバル変数
+'   x <式>      その値の子（Type のメンバ、配列の要素、Type へのポインタの先のメンバ）
+' 答え: xs <子の数> の後に、子ごとに
+'   xi <子があれば 1> <子の式> <名前> <値>
+' <子の式> は空白を含まない（その子を開くときに x へ渡す）。整数の値は AB4 と同じく 10 進の後に (&H16 進)
+
+Const AD_TREE_MAX = 200
+
+' 今の値（g_ae*）に子があれば 1
+Function AdTreeHasKids() As Long
+    AdTreeHasKids = 0
+    If g_aeCnt > 0 Then AdTreeHasKids = 1
+    If g_aeVk = VK_UDT And AdUdtScalar(g_aeArg) = 0 Then AdTreeHasKids = 1
+    If g_aeVk = VK_PUDT And AdReadP(g_aeAddr) <> 0 Then AdTreeHasKids = 1
+End Function
+
+Function AdIsIntVk(vk As Long) As Long
+    AdIsIntVk = 1
+    If vk = VK_STRING Or vk = VK_UDT Or vk = VK_SINGLE Or vk = VK_DOUBLE Then AdIsIntVk = 0
+    If vk = VK_PTR Or vk = VK_PUDT Then AdIsIntVk = 0
+End Function
+
+' 今の値を 1 行の文字に（配列は添字の範囲だけ）
+Function AdTreeVal$() As String
+    Dim vk As Long
+    vk = g_aeVk
+    If vk = VK_UDT And AdUdtScalar(g_aeArg) <> 0 Then vk = AdUdtScalar(g_aeArg)
+    AdTreeVal$ = AdEvText$()
+    If g_aeCnt > 0 Then AdTreeVal$ = "(0 To " + Str$(g_aeCnt - 1) + ")"
+    If g_aeCnt = 0 And AdIsIntVk(vk) <> 0 Then AdTreeVal$ = AdTreeVal$ + "(&H" + AdUpHex$(AdReadN(g_aeAddr, AdVkSize(vk, g_aeArg))) + ")"
+End Function
+
+' 16 進を大文字で（AB4 と同じ）
+Function AdUpHex$(q As QWord) As String
+    Dim s As String, i As Long, p As *Byte
+    s = Hex$(q)
+    p = StrPtr(s)
+    For i = 0 To Len(s) - 1
+        If p[i] >= 97 Then p[i] = p[i] - 32
+    Next
+    AdUpHex$ = s
+End Function
+
+Sub AdTreeItem(expr As String, name As String)
+    Print "xi " + Str$(AdTreeHasKids()) + " " + expr + " " + name + " " + AdTreeVal$()
+End Sub
+
+' ---- 変数の一覧 ----
+
+' fn = -1 はユーザーのグローバル、モジュールの本体の段は 0 個
+Sub AdTreeVars(fn As Long)
+    Dim v As Long
+    If AdIsModuleFn(fn) <> 0 Then fn = -2
+    Print "xs " + Str$(AdTreeVarCount(fn))
+    For v = 0 To g_avFn.n - 1
+        If AdTreeVarShown(v, fn) <> 0 Then AdTreeVar(v)
+    Next
+End Sub
+
+Function AdTreeVarShown(v As Long, fn As Long) As Long
+    AdTreeVarShown = 0
+    If fn >= -1 Then AdTreeVarShown = AdLocalShown(v, fn)
+End Function
+
+Function AdTreeVarCount(fn As Long) As Long
+    Dim v As Long
+    AdTreeVarCount = 0
+    For v = 0 To g_avFn.n - 1
+        If AdTreeVarShown(v, fn) <> 0 Then AdTreeVarCount = AdTreeVarCount + 1
+    Next
+End Function
+
+Sub AdTreeVar(v As Long)
+    Dim nm As String
+    nm = MakeStr(AdVarName(v))
+    AdEvSetVar(v)
+    AdTreeItem(nm, nm)
+End Sub
+
+' ---- 値の子 ----
+
+Sub AdTreeKids(expr As String)
+    If g_aeCnt > 0 Then
+        AdTreeElems(expr)
+    ElseIf g_aeVk = VK_PUDT Then
+        AdTreeFields(expr + "->", AdReadP(g_aeAddr), g_aeArg)
+    Else
+        AdTreeUdt(expr)
+    End If
+End Sub
+
+Sub AdTreeUdt(expr As String)
+    If g_aeVk = VK_UDT And AdUdtScalar(g_aeArg) = 0 Then
+        AdTreeFields(expr + ".", g_aeAddr, g_aeArg)
+    Else
+        Print "xs 0"
+    End If
+End Sub
+
+' 配列の要素（AD_TREE_MAX 個まで）
+Sub AdTreeElems(expr As String)
+    Dim i As Long, n As Long, base As QWord
+    base = g_aeAddr
+    n = AdMinL(g_aeCnt, AD_TREE_MAX)
+    Print "xs " + Str$(n)
+    For i = 0 To n - 1
+        AdTreeElem(expr, base + i * g_aeEsz, g_aeVk, g_aeArg, i)
+    Next
+End Sub
+
+Function AdMinL(a As Long, b As Long) As Long
+    AdMinL = a
+    If b < a Then AdMinL = b
+End Function
+
+Sub AdTreeElem(expr As String, addr As QWord, vk As Long, arg As Long, i As Long)
+    g_aeAddr = addr
+    g_aeVk = vk
+    g_aeArg = arg
+    g_aeCnt = 0
+    AdTreeItem(expr + "(" + Str$(i) + ")", "(" + Str$(i) + ")")
+End Sub
+
+' Type のメンバ（sep は "." か "->"）
+Sub AdTreeFields(prefix As String, addr As QWord, ti As Long)
+    Dim k As Long, n As Long
+    n = 0
+    If addr <> 0 And ti >= 0 And ti < g_atCount.n Then n = AdVecAt(VarPtr(g_atCount), ti)
+    Print "xs " + Str$(n)
+    For k = 0 To n - 1
+        AdTreeField(prefix, addr, AdVecAt(VarPtr(g_atFirst), ti) + k)
+    Next
+End Sub
+
+Sub AdTreeField(prefix As String, addr As QWord, fi As Long)
+    Dim nm As String
+    nm = MakeStr(AdNamesAt(VarPtr(g_afName), fi))
+    g_aeAddr = addr
+    AdEvSetField(fi)
+    AdTreeItem(prefix + nm, nm)
+End Sub
+
+' ---- コマンド ----
+
+' 誤りのときも xs 0 を出す（ProjectEditor は問いと答えを順に組にする）
+Sub AdCmdTree(a As String)
+    g_aeErr = "not stopped"
+    If g_adState <> AD_ST_STOP Then
+        AdTreeErr()
+    ElseIf Left$(a, 1) = "@" Then
+        AdTreeTop(a)
+    Else
+        AdTreeExpr(a)
+    End If
+End Sub
+
+Sub AdTreeExpr(a As String)
+    If AdEval(a) <> 0 Then
+        AdTreeKids(a)
+    Else
+        AdTreeErr()
+    End If
+End Sub
+
+Sub AdTreeTop(a As String)
+    If a = "@globals" Then
+        AdTreeVars(-1)
+    Else
+        AdTreeVars(AdFrameFn(g_adCurFrame))
+    End If
+End Sub
+
+Sub AdTreeErr()
+    Print "error " + g_aeErr
+    Print "xs 0"
+End Sub
