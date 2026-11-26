@@ -68,7 +68,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | `Const` の再定義 | 同じ名前の定数は一度だけ定義する | **同じ名前・同じ値（数値・Double・文字列とも）の再定義はエラーにしない**。標準ヘッダ（`default.idx`）が定義する `MB_OK` などを、ユーザのソースでも同じ値で定義していることがあるため。**値が違えば、後ろの定義の行で `Const 'a' is already defined with a different value` のエラー**。組込みの `TRUE` / `FALSE` は対象外（ソースで定義し直しても、組込みの値のまま） |
 | ソース拡張子 | `.sbp` 推奨 | **メインのコードは `.abp`**（Active Basic Program。`.pj` で結合）、`#include` で読むファイルは `.sbp`（Sub Basic Program） |
 | 呼ばれない手続き | 呼ばれない Function / Sub はコンパイルしない | 構文エラーのある最上位の Function / Sub は、名前がほかから参照されていなければエラーにせず読み飛ばす（参照されていれば元のエラー）。**構文は通るがコード生成で失敗した手続き・メソッド（未定義の名前など）も、本体（main）と Export からたどれなければエラーにせず、空の本体で出す**。たどれれば元のエラー |
-| 名前の大文字小文字 | 区別しない | **型・フィールド・メソッド名は区別しない**。関数・`Declare`・`Const` は完全一致を先に探し、無ければ区別せずに探す（`printf` を `Printf` で呼べる。組込みの `TRUE` と、`commonool.abp` の `true` = -1 は別のまま） |
+| 名前の大文字小文字 | 区別しない | **型・フィールド・メソッド名は区別しない**。関数・`Declare`・`Const` は完全一致を先に探し、無ければ区別せずに探す（`printf` を `Printf` で呼べる。組込みの `TRUE` と、`common\bool.abp` の `true` = -1 は別のまま） |
 | オーバーロード | 引数の数・型の違う同名の Function / Sub / メソッド / コンストラクタ | 2 つ目からの定義を内部で `name#2` … にし、呼び出しの引数の数と種類（整数・実数・ポインタ・構造体・文字列）で選ぶ。引数まで同じ定義は `already defined` |
 | 前方参照の型 | 後ろで定義する型を使える | `TypeDef` / `Enum` も先に名前と大きさを登録する。値で持つフィールドの型が後ろで定義される `Type` / `Class` は、字句の並びでその型の後ろへ移してから読む |
 | `Len` | 文字列は文字数、それ以外は変数・式のバイト数 | 文字列・`BytePtr`・Byte 配列・関数の戻り値は文字列の長さ。数値のスカラー変数・数値の配列・数値リテラル・数値の式はバイト数（`Len(len)` = 配列全体、`Len(0)` = 4）。`len` のように組み込み関数と同じ名前の変数も、`(` が続かなければ変数 |
@@ -175,5 +175,5 @@ ActBa64 の文字列バイトは UTF-8 です。
 | DirectX 9 Include | `Include\directx9\`（`d3d9` / `d3dx9*` / `dinput` / `dsound` / `dmusic*`） | **未移植**。D3D11 基盤はサンプルで動作。`dx_input`・`dx_music` 相当は未 |
 | RAD | Project Editor | 機能拡充予定 |
 | Prompt 窓 | `basic\prompt.sbp`（`PromptProc` / `DrawPromptBuffer`） | 未移植。`Print` / `Input` はコンソール。`Inkey$` / `Input$` は `#n88basic` のみ |
-| デバッガランタイム | `system\debug.sbp` の `_DebugSys_*` | IDE デバッガ用。未移植 |
+| デバッガランタイム | `system\debug.sbp` の `_DebugSys_*` | IDE デバッガ用。移植しない（ActBa64 のデバッガーは別プロセスの `abdbg.exe` と `.abdbg` を使う。[debugger.md](./debugger.md)） |
 

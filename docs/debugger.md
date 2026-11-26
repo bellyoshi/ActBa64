@@ -1,6 +1,6 @@
-# デバッガー（計画と進み具合）
+# デバッガー
 
-ActBa64 で作った exe を、ブレークポイント・ステップ実行・変数の表示ができるデバッガーで動かせるようにする計画です。デバッガーも ActiveBasic（ActBa64）で書きます。
+ActBa64 で作った exe を、ブレークポイント・ステップ実行・変数の表示ができるデバッガーで動かせます（v0.1.9 から。64bit と `-actba32` の Windows の exe）。デバッガーも ActiveBasic（ActBa64）で書いています。ProjectEditor からの使い方は [projecteditor.md §7.3](./projecteditor.md#73-デバッグ実行)、ここは作りと形式とやり取りです。
 
 ## 全体の作り
 
@@ -26,7 +26,7 @@ ProjectEditor（ブレークポイント・今の行・変数・呼び出し履�
 | D1 | `abdbg.exe` の土台: 起動・ブレークポイント（`0xCC`）・続行・呼び出し履歴（rbp をたどる）・例外で落ちた行を出す | 済 |
 | D2 | ステップオーバー / ステップイン / ステップアウト | 済 |
 | D3 | 変数の表示（Long・Int64・Double・ポインタ・String → Type / Class のメンバ・配列） | 済 |
-| D4 | ProjectEditor に入れる（余白のクリックでブレークポイント、F5 / F9 / F10 / F11 / Shift+F11、変数・呼び出し履歴の窓） | 済（変数と呼び出し履歴はメッセージウィンドウに出す。[projecteditor.md §7.3](./projecteditor.md#73-デバッグ実行)） |
+| D4 | ProjectEditor に入れる（余白のクリックでブレークポイント、F5 / F9 / F10 / F11 / Shift+F11、変数・呼び出し履歴の窓） | 済（[projecteditor.md §7.3](./projecteditor.md#73-デバッグ実行)） |
 | D5 | 行の増減に付いていくブレークポイント・`-actba32`（WOW64）・条件付きブレークポイント・呼び出し履歴と変数のツリーの窓（済）。Linux（ptrace）とウォッチ（式を覚えて止まるたびに出す）はまだ | 一部 |
 
 ## `-debug` で出すもの（D0）

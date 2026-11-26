@@ -42,7 +42,7 @@ CallBack.wbpとMakeWindow.wbpをProjectEditorが書き換えます。これら�
 | [PE+32.md](./PE+32.md) | PE32+（64bit）と PE32（32bit、`-actba32`）の出力 |
 | [string-gc.md](./string-gc.md) | String GC（ハイブリッドマーク掃き出しの設計・BSS レイアウト・セーフポイント） |
 | [build.md](./build.md) | ビルド手順（AB4.20 stage0 → 自己ホスト → リリース一式）、統合テスト、[コンパイラソース分割](./build.md#コンパイラソースの分割) |
-| [debugger.md](./debugger.md) | デバッガーの計画（`-debug` の `.abdbg` の形式、`Debug` 文、abdbg.exe の段階） |
+| [debugger.md](./debugger.md) | デバッガー（`-debug` の `.abdbg` の形式、`Debug` 文、abdbg.exe のコマンドと答え、段階） |
 | [projecteditor.md](./projecteditor.md) | ProjectEditor（MDI、プロジェクト、コンパイル / 実行、ヘルプ、表示言語） |
 | [coding.md](./coding.md) | コーディング規約（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**） |
 | [activebasic-versions.md](./activebasic-versions.md) | 対応する ActiveBasic のバージョン（3.10 / 3.13 / 4.23 / 4.24。5.0 と 2.62 以前の扱い） |
