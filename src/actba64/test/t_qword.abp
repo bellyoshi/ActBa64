@@ -1,0 +1,112 @@
+' Expect: 0
+' Target: actba64
+' QWord: 最上位ビットの立った値の符号なし比較（< <= >= = <>、上位が等しく下位の 31 ビット目で決まる場合）、
+' + - * の 2^64 での折り返し、上位の大きい除数の \ Mod、ByRef・Select Case（64bit 出力と -actba32）
+#console
+Function Check(cond As Long, code As Long) As Long
+    Check = 0
+    If cond = 0 Then
+        Print "fail "; code
+        Check = 1
+    End If
+End Function
+
+Sub SetMax(ByRef v As QWord)
+    v = &HFFFFFFFFFFFFFFFF
+End Sub
+
+Sub AddOne(ByRef v As QWord)
+    v = v + 1
+End Sub
+
+Function Bigger(a As QWord, b As QWord) As QWord
+    If a > b Then
+        Bigger = a
+    Else
+        Bigger = b
+    End If
+End Function
+
+Dim u As QWord, v As QWord, w As QWord
+Dim l As Long
+Dim bad As Long
+bad = 0
+
+' 最上位ビットが立っていても大きい（符号つきなら負になる値）
+u = &H8000000000000000
+v = 1
+bad = bad + Check(u > v, 1)
+bad = bad + Check(v < u, 2)
+bad = bad + Check(u >= v And v <= u, 3)
+bad = bad + Check((u < v) = 0 And (v > u) = 0, 4)
+u = &HFFFFFFFFFFFFFFFF
+v = &H7FFFFFFFFFFFFFFF
+bad = bad + Check(u > v And v < u, 5)
+bad = bad + Check(u <> v And (u = v) = 0, 6)
+' 上位 32 ビットが等しく、下位の最上位ビットで決まる
+u = &H180000000
+v = &H17FFFFFFF
+bad = bad + Check(u > v And v < u, 7)
+u = &HFFFFFFFF80000000
+v = &HFFFFFFFF7FFFFFFF
+bad = bad + Check(u > v And u >= v And v <= u, 8)
+' 等しいとき
+u = &HFFFFFFFF00000001
+v = &HFFFFFFFF00000001
+bad = bad + Check(u = v And u <= v And u >= v And (u <> v) = 0, 9)
+' 関数の中の比較
+bad = bad + Check(Hex$(Bigger(&H8000000000000000, 5)) = "8000000000000000", 10)
+bad = bad + Check(Hex$(Bigger(3, &HFFFFFFFFFFFFFFFE)) = "fffffffffffffffe", 11)
+
+' 2^64 で折り返す
+u = &HFFFFFFFFFFFFFFFF
+u = u + 1
+bad = bad + Check(Str$(u) = "0", 12)
+u = u - 1
+bad = bad + Check(Str$(u) = "18446744073709551615", 13)
+u = &H100000000
+v = &H100000000
+w = u * v
+bad = bad + Check(Str$(w) = "0", 14)
+u = &HFFFFFFFFFFFFFFFF
+w = u * u
+bad = bad + Check(Str$(w) = "1", 15)
+u = 4294967296 + 1
+w = u * u
+bad = bad + Check(Hex$(w) = "200000001", 16)
+
+' 上位の大きい除数
+u = &HFFFFFFFFFFFFFFFF
+v = &H8000000000000000
+bad = bad + Check(Str$(u \ v) = "1", 17)
+bad = bad + Check(Hex$(u Mod v) = "7fffffffffffffff", 18)
+v = &H100000000
+bad = bad + Check(Hex$(u \ v) = "ffffffff" And Hex$(u Mod v) = "ffffffff", 19)
+u = &H8000000000000000
+v = &HFFFFFFFFFFFFFFFF
+bad = bad + Check(Str$(u \ v) = "0", 20)
+bad = bad + Check(Hex$(u Mod v) = "8000000000000000", 21)
+
+' ByRef
+u = 0
+SetMax(u)
+bad = bad + Check(Str$(u) = "18446744073709551615", 22)
+u = &HFFFFFFFF
+AddOne(u)
+bad = bad + Check(Str$(u) = "4294967296", 23)
+
+' Select Case（最上位ビットの立った値）
+u = &HFFFFFFFFFFFFFFFE
+l = 0
+Select Case u
+    Case 1
+        l = 1
+    Case &HFFFFFFFFFFFFFFFE
+        l = 2
+    Case Else
+        l = 3
+End Select
+bad = bad + Check(l = 2, 24)
+
+If bad = 0 Then Print "ok"
+ExitProcess(bad)

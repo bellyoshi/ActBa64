@@ -186,6 +186,8 @@ Function LowExprCallFnField(ctx As *LowerCtx, idx As Long) As Long
         Exit Function
     End If
     ' 呼ぶ先を先に読み、引数の領域の上へ置く（引数を並べると rax / rcx が変わるため）
+    ' -actba32 は呼ぶ先を置く前の esp を取っておき、呼んだ後にそこまで戻す（keep の分も戻る）
+    LowEmitFpSave(list)
     If Not LowFnFieldRecvAddr(ctx, recv) Then Exit Function
     If fOff <> 0 Then IrEmit(list, OP_ADD_RAX_IMM, fOff, 0)
     IrEmit(list, OP_LOAD_PTR, 0, 0)
@@ -199,8 +201,8 @@ Function LowExprCallFnField(ctx As *LowerCtx, idx As Long) As Long
     LowEmitLoadRegArgs(list, nArgs)
     IrEmit(list, OP_LOAD_RSP_RAX, callBytes, 0)
     IrEmit(list, OP_CALL_RAX, 0, 0)
-    LowEmitCallFinish(list, callBytes)
-    IrEmit(list, OP_ADD_RSP, keep, 0)
+    LowEmitFpRest(list, callBytes)
+    If TyIs32() = 0 Then IrEmit(list, OP_ADD_RSP, keep, 0)
     LowExprCallFnField = 1
 End Function
 
@@ -390,12 +392,13 @@ Function LowExprCallFnPtrEmit(ctx As *LowerCtx, idx As Long, vOff As Long, vGlob
     list = ctx->list
     AstCopyName(ctx->ast, idx, VarPtr(name))
     callBytes = LowCallBytes(nArgs)
+    LowEmitFpSave(list)
     If callBytes > 0 Then IrEmit(list, OP_SUB_RSP, callBytes, 0)
     If Not LowEmitCallArgHomes(ctx, idx, nArgs, 0, 0, VarPtr(name)) Then Exit Function
     LowEmitLoadRegArgs(list, nArgs)
     LowEmitLoadOff(list, vOff, vGlob)
     IrEmit(list, OP_CALL_RAX, 0, 0)
-    LowEmitCallFinish(list, callBytes)
+    LowEmitFpRest(list, callBytes)
     LowExprCallFnPtrEmit = 1
 End Function
 

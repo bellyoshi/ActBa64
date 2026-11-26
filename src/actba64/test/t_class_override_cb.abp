@@ -1,0 +1,77 @@
+' Expect: 0
+' Target: actba64
+' AB4 の「宣言だけの Virtual + 捨て引数 _this + vtable を自分で埋める」進捗コールバックを、
+' 中身のある Virtual と Override に書き換えた形（docs/migrate-ab4.md）。
+' 基底のポインタで呼ぶと子の Override へ行き、引数がずれないこと。
+' AB4.24 は中身のある Virtual も Override も無いので、この形は ActBa64 だけで通る
+#console
+
+Class ProgressCallback
+Public
+    Virtual Sub Init(Max As DWord)
+    End Sub
+    Virtual Function isCancel() As BOOL
+        isCancel = FALSE
+    End Function
+    Virtual Sub Step(stepN As Long, snesReadAdr As DWord)
+    End Sub
+    Virtual Sub Final()
+    End Sub
+End Class
+
+Class DumpProgress
+    Inherits ProgressCallback
+Private
+    maxV As Long
+    nowV As Long
+    adrSeen As DWord
+Public
+    finals As Long
+    Override Sub Init(Max As DWord)
+        maxV = Max
+        nowV = 0
+    End Sub
+    Override Sub Step(stepN As Long, snesReadAdr As DWord)
+        nowV = nowV + stepN
+        adrSeen = snesReadAdr
+    End Sub
+    Override Sub Final()
+        finals = finals + 1
+    End Sub
+    Function Percent() As Long
+        Percent = Int(nowV / maxV * 100)
+    End Function
+    Function LastAdr() As DWord
+        LastAdr = adrSeen
+    End Function
+End Class
+
+Function Dump(progress As *ProgressCallback) As Long
+    Dim i As Long
+    Dump = 0
+    If progress <> NULL Then progress->Init(160)
+    For i = 0 To 159
+        If progress <> NULL Then
+            If progress->isCancel() Then
+                Dump = 1
+                Exit Function
+            End If
+            progress->Step(1, &HC00000 + i * 1024)
+        End If
+    Next
+    If progress <> NULL Then progress->Final()
+End Function
+
+Function Run() As Long
+    Dim pc As *DumpProgress
+    Run = 0
+    pc = New DumpProgress
+    If Dump(pc) <> 0 Then Run = 1
+    If pc->Percent() <> 100 Then Run = 2
+    If pc->LastAdr() <> &HC00000 + 159 * 1024 Then Run = 3
+    If pc->finals <> 1 Then Run = 4
+    If Dump(NULL) <> 0 Then Run = 5
+    Delete pc
+End Function
+
+ExitProcess(Run())

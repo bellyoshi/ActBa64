@@ -373,6 +373,7 @@ End Sub
 - ネストした `Sub`/`Function` は不可
 - `Declare Function|Sub ... Lib "dll" [Alias "..."]` 可（IAT。任意 DLL・自作可。拡張子省略時は `.dll`。詳細は [§8](#8-winapi--iat)）
 - `Function Export Name` / `Sub Export Name` は DLL のエクスポート（[§8.4](#84-dll-を出力する)）
+- `Function Name cdecl(...)` / `Sub Name cdecl(...)` は cdecl の手続き。`-actba32` では呼ばれた側が引数を片付けずに `ret` で戻り、直接の呼び出しは呼んだ側が片付ける（C の `qsort` などへ渡すコールバック、引数の数が関数ポインタの型と合わない AB4 のコールバック。[migrate-ab4.md §2](./migrate-ab4.md#2-引数の数が合わないコールバック--cdecl)）。64bit では書いても同じ呼び方。`stdcall` も書ける（既定と同じ）。Class のメソッドには書けない。AB4.24 には無い
 
 ### 3.3 Class
 
@@ -658,6 +659,7 @@ s(r)
 - 戻り型はシグネチャの `As`（`Sub` は戻り値なし）。`*Function(...)` の `As` を省くと `Function` と同じく `Double`
 - `Type` / `Class` のフィールドの関数ポインタも呼べる: `p->rom.init_cb(h)`、`obj->fp(x)`（同じ名前のメソッドがあればメソッド）。戻り値は `Long` 幅として読む
 - `TypeDef F = *Function(...)` を後ろに書いても、前の手続きの仮引数 `f As F` を `f(...)` と呼べる
+- `*Function cdecl(...)` / `*Sub cdecl(...)`（`stdcall` も可）と書ける。`-actba32` の関数ポインタの呼び出し（変数・フィールド・メソッドの中のフィールド）は、引数を積む前の `esp` を `ebx` に取っておき、呼んだ後にそこへ戻す。そのため呼ぶ先は stdcall（`ret n`）でも cdecl（`ret`）でもよく、引数の数が型と違ってもスタックはずれない（余分な仮引数の中身はごみ）。64bit は今までどおり
 
 ### 5.2.2 リソース埋め込み
 
@@ -977,7 +979,7 @@ Declare Function MyAdd Lib "mydll" Alias "MyAdd" (ByVal a As Long, ByVal b As Lo
 
 | 注意 | 内容 |
 |---|---|
-| 呼び出し規約 | 既定（64bit）は Microsoft x64、`-actba32` は stdcall。DLL 側も合わせる |
+| 呼び出し規約 | 既定（64bit）は Microsoft x64、`-actba32` は stdcall。DLL 側も合わせる。`Declare Function 名前 cdecl Lib ...` と書くと、`-actba32` では呼んだ側が引数を片付ける（`wsprintf` のような可変個引数の関数。64bit では書いても同じ呼び方） |
 | C++ 名前 | `extern "C"` でエクスポートするか、マングル名を `Alias` に書く |
 | 配置 | 実行時に OS の DLL 検索パスで見つかること（通常は exe と同ディレクトリ） |
 | 回帰 | `t_decl_any_lib.abp`（任意 Lib 登録）、`t_decl_lib_norm.abp`（拡張子正規化） |
@@ -1051,7 +1053,7 @@ actba64 samples\dllcall\dllcall\dllcall.pj
 | 出力 | PE32+ / AMD64 | PE32 / i386 |
 | ポインタ / `String` / `HANDLE` | 8 バイト | 4 バイト |
 | `Long` | 4 | 4（LP64 ではない） |
-| 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース。呼び出し直前は 16 バイト整列。右辺の API 呼び出しも同じ） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop） |
+| 呼び出し | Microsoft x64（RCX/RDX/R8/R9 + シャドウスペース。呼び出し直前は 16 バイト整列。右辺の API 呼び出しも同じ） | stdcall（`[esp+i*4]`、呼び出し後は callee が pop）。`cdecl` の `Declare` と手続きは呼んだ側が pop。関数ポインタの呼び出しは呼んだ後に `esp` を戻す |
 | `Declare Lib` | ○ | ○ |
 | DLL 優先ベース | `0x180000000` | `0x10000000` |
 | DLL `.reloc` | 空の再配置表（コードは RIP 相対） | 絶対アドレスの HIGHLOW |

@@ -1,0 +1,86 @@
+' Expect: 0
+' Target: actba64
+' Skip32: 1
+' *QWord / *Int64 の添字は 8 バイトの整数（64bit 出力。-actba32 はまだ *DWord / *Long）
+' 読み書き・番地の進み方・QWord は符号なし Int64 は符号つき・仮引数のポインタ
+#console
+Function Check(cond As Long, code As Long) As Long
+    Check = 0
+    If cond = 0 Then
+        Print "fail "; code
+        Check = 1
+    End If
+End Function
+
+Function SumQ(p As *QWord, n As Long) As QWord
+    Dim i As Long
+    SumQ = 0
+    For i = 0 To n - 1
+        SumQ = SumQ + p[i]
+    Next
+End Function
+
+Sub FillQ(p As *QWord, n As Long, v As QWord)
+    Dim i As Long
+    For i = 0 To n - 1
+        p[i] = v
+    Next
+End Sub
+
+Dim q[3] As QWord
+Dim u As QWord
+Dim x As Int64
+Dim p As *QWord
+Dim px As *Int64
+Dim pb As *Byte
+Dim l As Long
+Dim bad As Long
+bad = 0
+
+' 読み書き（上位 32 ビットも）
+p = VarPtr(u)
+p[0] = &HFEDCBA9876543210
+bad = bad + Check(Hex$(u) = "fedcba9876543210", 1)
+u = &HFFFFFFFFFFFFFFFF
+bad = bad + Check(Str$(p[0]) = "18446744073709551615", 2)
+
+' 添字は 8 バイトずつ
+p = VarPtr(q[0])
+p[0] = 1
+p[1] = &H100000000
+p[2] = &H8000000000000000
+p[3] = 7
+bad = bad + Check(Str$(q[1]) = "4294967296", 3)
+bad = bad + Check(Hex$(q[2]) = "8000000000000000", 4)
+bad = bad + Check(Str$(q[3]) = "7", 5)
+pb = VarPtr(q[0])
+bad = bad + Check(pb[8] = 0 And pb[12] = 1 And pb[23] = &H80, 6)
+
+' 要素は符号なし（最上位ビットが立っていても大きい）
+bad = bad + Check(p[2] > p[1], 7)
+bad = bad + Check(p[2] > 1, 8)
+bad = bad + Check(Str$(p[2] \ 2) = "4611686018427387904", 9)
+
+' 32bit の値を入れると 0 で広がる。要素どうしの計算は 64bit
+l = -1
+p[0] = 5
+p[1] = p[0] + &HFFFFFFFF
+bad = bad + Check(Str$(p[1]) = "4294967300", 10)
+
+' *Int64 は符号つき
+x = 0
+px = VarPtr(x)
+px[0] = -5
+bad = bad + Check(Str$(x) = "-5", 11)
+bad = bad + Check(px[0] < 1, 12)
+px[0] = l
+bad = bad + Check(Str$(x) = "-1", 13)
+bad = bad + Check(Str$(px[0] * 4294967296) = "-4294967296", 14)
+
+' 仮引数のポインタ
+FillQ(VarPtr(q[0]), 4, &H100000001)
+bad = bad + Check(Hex$(q[3]) = "100000001", 15)
+bad = bad + Check(Hex$(SumQ(VarPtr(q[0]), 4)) = "400000004", 16)
+
+If bad = 0 Then Print "ok"
+ExitProcess(bad)

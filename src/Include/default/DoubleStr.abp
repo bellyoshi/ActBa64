@@ -2,9 +2,10 @@
 '
 ' Print が Double 式を表示するとき StrD$ を呼ぶ。
 ' ネストした関数呼び出しを避けるため、一時変数経由で連結する。
-' 小数は 6 桁に丸めてから出力し、末尾の 0 は落とす。
-' |d| が Long 範囲（約 2^31）を超えると StrDBig$。10^15 未満は整数部をそのまま、
-' それ以上は 1.5E+20 の形（仮数は小数 6 桁まで）。無限大は inf。
+' StrD$ は有効 15 桁に丸め、末尾の 0 は落とす（ActiveBasic の Str$ と同じ）。
+' 10^15 以上と 10^-4 未満は 1.5E+20 / 1.5E-5 の形。無限大は inf。
+' StrS$（Single）は有効 6 桁。|d| が Long 範囲（約 2^31）を超えると StrDBig$
+' （10^15 未満は整数部をそのまま、それ以上は仮数の小数 6 桁まで）。
 '
 ' 注意: この関数内で Chr$ を While と組み合わせると、未使用でも
 ' Input 文字列比較が壊れる事例があるため、桁は Mid$ で取る。
@@ -79,40 +80,175 @@ Function StrDPartsN(ByRef x As Double, ByRef ip As Long, ByRef n As Long, fd As 
     StrDPartsN = 1
 End Function
 
+' Double の Print / Str$。ActiveBasic の Str$ と同じく有効 15 桁（_ecvt(x, 15)）で丸め、
+' 末尾の 0 を落とす。dec（小数点の位置）が 15 を超えるか -3 未満なら指数形式。
 Function StrD$(d As Double) As String
     Dim x As Double
     Dim zero As Double
-    Dim maxIp As Double
-    Dim ip As Long
-    Dim n As Long
-    Dim neg As Long
     Dim sign As String
-    Dim s As String
+    Dim ds As String
+    Dim e As Long
+
+    zero = 0
+    x = d
+    sign = ""
+    If x < zero Then
+        sign = "-"
+        x = zero - x
+    End If
+    If x = zero Then
+        StrD$ = "0"
+        Exit Function
+    End If
+    If StrDIsInf(x) <> 0 Then
+        StrD$ = sign + "inf"
+        Exit Function
+    End If
+    e = StrDExp10(x)
+    ds = StrDDigits15$(x, e)
+    StrD$ = StrDLayout$(sign, ds, e)
+End Function
+
+' x（> 0、有限）の 10 進の指数 e（10^e <= x < 10^(e+1)）。多少ずれても StrDDigits15$ が直す
+Function StrDExp10(x As Double) As Long
+    Dim p As Double
+    Dim ten As Double
+    Dim one As Double
+    Dim e As Long
+    ten = 10
+    one = 1
+    If x >= one Then
+        StrDExp10 = StrDExpOf(x)
+        Exit Function
+    End If
+    p = 1
+    e = 0
+    While x * p < one
+        p = p * ten
+        e = e - 1
+    Wend
+    StrDExp10 = e
+End Function
+
+' x を 10^14 <= m < 10^15 に寄せて整数に丸め、15 文字の数字にする。e は桁上がりで直す
+Function StrDDigits15$(x As Double, ByRef e As Long) As String
+    Dim m As Double
+    Dim p As Double
+    Dim lo As Double
+    Dim hi As Double
+    Dim ten As Double
+    Dim g As Double
+    Dim r As Double
+    Dim half As Double
+    Dim k As Long
+    Dim q As Long
+    Dim rl As Long
     Dim t As String
     Dim digits As String
 
     digits = "0123456789"
-    zero = 0
-    maxIp = 2147483647
-    x = d
-    neg = 0
-    If x < zero Then
-        neg = 1
-        x = zero - x
+    ten = 10
+    half = 0.5
+    g = 1000000000
+    lo = StrDPow10(14)
+    hi = lo * ten
+    m = x
+    k = 14 - e
+    While k > 200
+        p = StrDPow10(100)
+        m = m * p
+        k = k - 100
+    Wend
+    If k >= 0 Then
+        p = StrDPow10(k)
+        m = m * p
+    Else
+        p = StrDPow10(0 - k)
+        m = m / p
     End If
-    sign = ""
-    If neg <> 0 Then
-        sign = "-"
+    If m >= hi Then
+        m = m / ten
+        e = e + 1
     End If
-    If x > maxIp Then
-        StrD$ = StrDBig$(x, sign, digits)
+    If m < lo Then
+        m = m * ten
+        e = e - 1
+    End If
+    ' m（< 10^15）を上 6 桁 q と下 9 桁 rl に分けて四捨五入
+    q = m / g
+    r = q
+    r = m - r * g
+    If r < 0 Then
+        q = q - 1
+        r = r + g
+    End If
+    r = r + half
+    rl = r
+    If rl >= 1000000000 Then
+        q = q + 1
+        rl = rl - 1000000000
+    End If
+    If q >= 1000000 Then
+        q = 100000
+        rl = 0
+        e = e + 1
+    End If
+    t = Str$(q)
+    StrDDigits15$ = t + StrDPad9$(rl, digits)
+End Function
+
+' 15 桁の数字 ds と指数 e を並べる（ActiveBasic の Str$ と同じ境目）
+Function StrDLayout$(sign As String, ds As String, e As Long) As String
+    Dim n As Long
+    Dim dec As Long
+    Dim i As Long
+    Dim s As String
+    Dim t As String
+
+    ' 末尾の 0 を落とした桁数
+    n = 15
+    While n > 1
+        t = Mid$(ds, n, 1)
+        If t <> "0" Then
+            Exit While
+        End If
+        n = n - 1
+    Wend
+    dec = e + 1
+    If dec > 15 Or dec < -3 Then
+        s = sign + Mid$(ds, 1, 1)
+        If n > 1 Then
+            t = Mid$(ds, 2, n - 1)
+            s = s + "." + t
+        End If
+        If e >= 0 Then
+            t = Str$(e)
+            s = s + "E+" + t
+        Else
+            t = Str$(0 - e)
+            s = s + "E-" + t
+        End If
+        StrDLayout$ = s
         Exit Function
     End If
-    StrDParts(x, ip, n)
-    t = Str$(ip)
-    s = sign + t
-    s = StrDFrac$(s, n, digits)
-    StrD$ = s
+    If dec > 0 Then
+        t = Mid$(ds, 1, dec)
+        s = sign + t
+        If n > dec Then
+            t = Mid$(ds, dec + 1, n - dec)
+            s = s + "." + t
+        End If
+        StrDLayout$ = s
+        Exit Function
+    End If
+    s = sign + "0."
+    i = dec
+    While i < 0
+        s = s + "0"
+        i = i + 1
+    Wend
+    t = Mid$(ds, 1, n)
+    StrDLayout$ = s + t
 End Function
 
 ' 整数部の桁数（0 は 0 桁）
