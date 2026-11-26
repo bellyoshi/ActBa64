@@ -1,0 +1,145 @@
+' AdSymFind - .abdbg の表を引く（RVA → 行・手続き、ファイル名 → 番号、行 → ブレークポイントを置く RVA）
+
+Dim g_adMainFile As Long
+
+Function AdLnRva(k As Long) As Long
+    AdLnRva = AdVecAt(VarPtr(g_adLnRva), k)
+End Function
+
+Sub AdSymStep(rva As Long, ByRef lo As Long, ByRef hi As Long, ByRef found As Long)
+    Dim mid As Long
+    mid = (lo + hi) \ 2
+    If AdLnRva(mid) <= rva Then
+        found = mid
+        lo = mid + 1
+    Else
+        hi = mid - 1
+    End If
+End Sub
+
+' rva を含む line の番号（無ければ -1）。line は RVA の小さい順に並ぶ
+Function AdSymLineAt(rva As Long) As Long
+    Dim lo As Long, hi As Long, found As Long
+    lo = 0
+    hi = g_adLnRva.n - 1
+    found = -1
+    While lo <= hi
+        AdSymStep(rva, lo, hi, found)
+    Wend
+    AdSymLineAt = found
+End Function
+
+' rva を含む手続きの番号（無ければ -1）
+Function AdSymFuncAt(rva As Long) As Long
+    Dim i As Long
+    AdSymFuncAt = -1
+    For i = 0 To g_adFnStart.n - 1
+        If AdVecAt(VarPtr(g_adFnStart), i) <= rva And rva < AdVecAt(VarPtr(g_adFnEnd), i) Then
+            AdSymFuncAt = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' パスの最後の部分（\ と / の後ろ）
+Function AdBaseName(p As *Byte) As *Byte
+    Dim i As Long
+    AdBaseName = p
+    i = 0
+    While p[i] <> 0
+        If p[i] = 92 Or p[i] = 47 Then AdBaseName = VarPtr(p[i + 1])
+        i = i + 1
+    Wend
+End Function
+
+' name がフルパスと同じか、パスを含まない名前ならファイル名と同じとき 1（大文字小文字は見ない）
+Function AdPathMatch(path As *Byte, name As *Byte) As Long
+    AdPathMatch = 1
+    If Ad_lstrcmpi(path, name) = 0 Then Exit Function
+    If AdBaseName(name) = name And Ad_lstrcmpi(AdBaseName(path), name) = 0 Then Exit Function
+    AdPathMatch = 0
+End Function
+
+Function AdSymFileFind(name As *Byte) As Long
+    Dim i As Long
+    AdSymFileFind = -1
+    For i = 0 To g_adFile.n - 1
+        If AdPathMatch(AdNamesAt(VarPtr(g_adFile), i), name) <> 0 Then
+            AdSymFileFind = i
+            Exit Function
+        End If
+    Next
+End Function
+
+' file の line 以降で、文の始まりがある最初の行（無ければ 0）
+Function AdSymResolve(file As Long, ln As Long) As Long
+    Dim k As Long
+    Dim best As Long
+    best = 0
+    For k = 0 To g_adLnRva.n - 1
+        If AdLnStmtIn(k, file) <> 0 Then best = AdBetterLine(best, AdVecAt(VarPtr(g_adLnLine), k), ln)
+    Next
+    AdSymResolve = best
+End Function
+
+Function AdLnStmtIn(k As Long, file As Long) As Long
+    AdLnStmtIn = 0
+    If AdVecAt(VarPtr(g_adLnFlag), k) <> 1 Then Exit Function
+    If AdVecAt(VarPtr(g_adLnFile), k) <> file Then Exit Function
+    AdLnStmtIn = 1
+End Function
+
+Function AdBetterLine(best As Long, cand As Long, ln As Long) As Long
+    AdBetterLine = best
+    If cand < ln Then Exit Function
+    If best = 0 Or cand < best Then AdBetterLine = cand
+End Function
+
+' メインのファイル: (module) の最初の文のファイル
+' メインのファイル: exe と同じ名前（拡張子の前まで）のソース。無ければ (module) の最後の文のファイル
+Sub AdSymFindMain(exeBase As *Byte)
+    Dim i As Long
+    g_adMainFile = -1
+    For i = 0 To g_adFile.n - 1
+        If AdStemEq(AdBaseName(AdNamesAt(VarPtr(g_adFile), i)), exeBase) <> 0 Then g_adMainFile = i
+    Next
+    If g_adMainFile < 0 Then AdSymMainFromModule()
+End Sub
+
+Sub AdSymMainFromModule()
+    Dim i As Long
+    For i = 0 To g_adFnName.n - 1
+        If Ad_lstrcmpi(AdNamesAt(VarPtr(g_adFnName), i), "(module)") = 0 Then AdSymLastFileIn(i)
+    Next
+End Sub
+
+' 手続き fn の中の最後の文のファイル
+Sub AdSymLastFileIn(fn As Long)
+    Dim k As Long
+    For k = 0 To g_adLnRva.n - 1
+        If AdLnInFn(k, fn) <> 0 Then g_adMainFile = AdVecAt(VarPtr(g_adLnFile), k)
+    Next
+End Sub
+
+Function AdLnInFn(k As Long, fn As Long) As Long
+    AdLnInFn = 0
+    If AdVecAt(VarPtr(g_adLnFlag), k) <> 1 Or AdVecAt(VarPtr(g_adLnFile), k) < 0 Then Exit Function
+    If AdLnRva(k) < AdVecAt(VarPtr(g_adFnStart), fn) Or AdLnRva(k) >= AdVecAt(VarPtr(g_adFnEnd), fn) Then Exit Function
+    AdLnInFn = 1
+End Function
+
+' a と b が "." の前まで同じなら 1（大文字小文字は見ない）
+Function AdStemEq(a As *Byte, b As *Byte) As Long
+    Dim i As Long
+    AdStemEq = 0
+    i = 0
+    While AdLower(a[i]) = AdLower(b[i]) And a[i] <> 0 And a[i] <> 46
+        i = i + 1
+    Wend
+    If (a[i] = 0 Or a[i] = 46) And (b[i] = 0 Or b[i] = 46) Then AdStemEq = 1
+End Function
+
+Function AdLower(c As Byte) As Long
+    AdLower = c
+    If c >= 65 And c <= 90 Then AdLower = c + 32
+End Function

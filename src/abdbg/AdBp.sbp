@@ -1,0 +1,107 @@
+' AdBp - ブレークポイント（文の始まりの 1 バイトを 0xCC にする）。
+' 1 つのブレークポイント（番号）が、同じ行の機械語の何か所か（For の初めと判定など）を持つ
+
+Dim g_adBpId As AdVec
+Dim g_adBpRva As AdVec
+Dim g_adBpOrig As AdVec
+Dim g_adBpOn As AdVec
+Dim g_adBpNext As Long
+
+Function AdBpIdOf(i As Long) As Long
+    AdBpIdOf = AdVecAt(VarPtr(g_adBpId), i)
+End Function
+
+Function AdBpAddr(i As Long) As QWord
+    AdBpAddr = g_adBase + AdVecAt(VarPtr(g_adBpRva), i)
+End Function
+
+Function AdBpIsOn(i As Long) As Long
+    AdBpIsOn = AdVecAt(VarPtr(g_adBpOn), i)
+End Function
+
+' 動いているプロセスへ 0xCC を書く（まだ起動していなければ AdOnCreate が書く）
+Sub AdBpArm(i As Long)
+    If g_adBase = 0 Or AdBpIsOn(i) = 0 Then Exit Sub
+    AdVecSet(VarPtr(g_adBpOrig), i, AdReadB(AdBpAddr(i)))
+    AdWriteB(AdBpAddr(i), &HCC)
+End Sub
+
+Sub AdBpArmAll()
+    Dim i As Long
+    For i = 0 To g_adBpId.n - 1
+        AdBpArm(i)
+    Next
+End Sub
+
+' 元のバイトに戻す（止まった・消した）
+Sub AdBpRestore(i As Long)
+    If g_adBase = 0 Then Exit Sub
+    AdWriteB(AdBpAddr(i), AdVecAt(VarPtr(g_adBpOrig), i))
+End Sub
+
+' 止まった後、1 命令進めてから 0xCC を書き戻す（消していなければ）
+Sub AdBpRearm(i As Long)
+    If AdBpIsOn(i) = 0 Then Exit Sub
+    AdWriteB(AdBpAddr(i), &HCC)
+End Sub
+
+Function AdBpFindRva(rva As Long) As Long
+    Dim i As Long
+    AdBpFindRva = -1
+    For i = 0 To g_adBpId.n - 1
+        If AdBpIsOn(i) <> 0 And AdVecAt(VarPtr(g_adBpRva), i) = rva Then
+            AdBpFindRva = i
+            Exit Function
+        End If
+    Next
+End Function
+
+Function AdBpFindAddr(addr As QWord) As Long
+    AdBpFindAddr = -1
+    If AdInImage(addr) = 0 Then Exit Function
+    AdBpFindAddr = AdBpFindRva(AdRvaOf(addr))
+End Function
+
+' 同じ RVA にもう置いてあれば足さない（元のバイトが 0xCC になってしまう）
+Sub AdBpPush(id As Long, rva As Long)
+    Dim i As Long
+    If AdBpFindRva(rva) >= 0 Then Exit Sub
+    i = AdVecPush(VarPtr(g_adBpId), id)
+    AdVecPush(VarPtr(g_adBpRva), rva)
+    AdVecPush(VarPtr(g_adBpOrig), 0)
+    AdVecPush(VarPtr(g_adBpOn), 1)
+    AdBpArm(i)
+End Sub
+
+' file の ln 行の文の始まりのすべてに置く
+Sub AdBpAddAt(id As Long, file As Long, ln As Long)
+    Dim k As Long
+    For k = 0 To g_adLnRva.n - 1
+        If AdLnStmtIn(k, file) <> 0 And AdVecAt(VarPtr(g_adLnLine), k) = ln Then AdBpPush(id, AdLnRva(k))
+    Next
+End Sub
+
+' 番号を返す（置けなければ -1。行はコードのある次の行へずらして ln に返す）
+Function AdBpAdd(file As Long, ByRef ln As Long) As Long
+    AdBpAdd = -1
+    ln = AdSymResolve(file, ln)
+    If ln <= 0 Then Exit Function
+    g_adBpNext = g_adBpNext + 1
+    AdBpAdd = g_adBpNext
+    AdBpAddAt(AdBpAdd, file, ln)
+End Function
+
+' 戻り値 1 : 消した  0 : その番号は無い
+Function AdBpDelete(id As Long) As Long
+    Dim i As Long
+    AdBpDelete = 0
+    For i = 0 To g_adBpId.n - 1
+        If AdBpIdOf(i) = id And AdBpIsOn(i) <> 0 Then AdBpDelete = AdBpOff(i)
+    Next
+End Function
+
+Function AdBpOff(i As Long) As Long
+    If g_adRearm <> i Then AdBpRestore(i)
+    AdVecSet(VarPtr(g_adBpOn), i, 0)
+    AdBpOff = 1
+End Function

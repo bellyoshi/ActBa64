@@ -1,0 +1,83 @@
+' AdApi - abdbg が使う kernel32 のデバッグ API と、DEBUG_EVENT / CONTEXT（x64）の読み書き
+
+Declare Function Ad_WaitForDebugEvent Lib "kernel32.dll" Alias "WaitForDebugEvent" (ByVal ev As *Byte, ByVal ms As DWord) As Long
+Declare Function Ad_ContinueDebugEvent Lib "kernel32.dll" Alias "ContinueDebugEvent" (ByVal pid As DWord, ByVal tid As DWord, ByVal status As DWord) As Long
+Declare Function Ad_ReadMem Lib "kernel32.dll" Alias "ReadProcessMemory" (ByVal hp As HANDLE, ByVal addr As QWord, ByVal buf As *Byte, ByVal n As QWord, ByVal done As VoidPtr) As Long
+Declare Function Ad_WriteMem Lib "kernel32.dll" Alias "WriteProcessMemory" (ByVal hp As HANDLE, ByVal addr As QWord, ByVal buf As *Byte, ByVal n As QWord, ByVal done As VoidPtr) As Long
+Declare Function Ad_FlushIcache Lib "kernel32.dll" Alias "FlushInstructionCache" (ByVal hp As HANDLE, ByVal addr As QWord, ByVal n As QWord) As Long
+Declare Function Ad_GetCtx Lib "kernel32.dll" Alias "GetThreadContext" (ByVal ht As HANDLE, ByVal ctx As *Byte) As Long
+Declare Function Ad_SetCtx Lib "kernel32.dll" Alias "SetThreadContext" (ByVal ht As HANDLE, ByVal ctx As *Byte) As Long
+Declare Function Ad_OpenThread Lib "kernel32.dll" Alias "OpenThread" (ByVal access As DWord, ByVal inherit As Long, ByVal tid As DWord) As HANDLE
+Declare Function Ad_CloseHandle Lib "kernel32.dll" Alias "CloseHandle" (ByVal h As HANDLE) As Long
+Declare Function Ad_CreateProcess Lib "kernel32.dll" Alias "CreateProcessA" (ByVal app As VoidPtr, ByVal cmd As *Byte, ByVal pa As VoidPtr, ByVal ta As VoidPtr, ByVal inherit As Long, ByVal flags As DWord, ByVal env As VoidPtr, ByVal dir As VoidPtr, ByVal si As *Byte, ByVal pi As *Byte) As Long
+Declare Function Ad_VirtualAlloc Lib "kernel32.dll" Alias "VirtualAlloc" (ByVal addr As VoidPtr, ByVal size As QWord, ByVal kind As DWord, ByVal prot As DWord) As *Byte
+Declare Function Ad_ReadFile Lib "kernel32.dll" Alias "ReadFile" (ByVal h As HANDLE, ByVal buf As *Byte, ByVal n As DWord, ByVal got As *Byte, ByVal ov As VoidPtr) As Long
+Declare Function Ad_GetStdHandle Lib "kernel32.dll" Alias "GetStdHandle" (ByVal which As DWord) As HANDLE
+Declare Function Ad_GetLastError Lib "kernel32.dll" Alias "GetLastError" () As DWord
+Declare Function Ad_GetFullPath Lib "kernel32.dll" Alias "GetFullPathNameA" (ByVal name As *Byte, ByVal n As DWord, ByVal buf As *Byte, ByVal part As VoidPtr) As DWord
+Declare Function Ad_lstrcmpi Lib "kernel32.dll" Alias "lstrcmpiA" (ByVal a As *Byte, ByVal b As *Byte) As Long
+
+Const AD_DEBUG_ONLY_THIS = 2
+Const AD_DBG_CONTINUE = &H00010002
+Const AD_DBG_NOT_HANDLED = &H80010001
+Const AD_EXC_BREAKPOINT = &H80000003
+Const AD_EXC_SINGLE_STEP = &H80000004
+Const AD_CTX_FULL = &H0010000B
+Const AD_THREAD_ALL = &H001FFFFF
+Const AD_INFINITE = &HFFFFFFFF
+Const AD_STD_INPUT = &HFFFFFFF6
+
+' DEBUG_EVENT（x64）: code / pid / tid の後、共用体は 16 バイト目から
+Const AD_EV_EXCEPTION = 1
+Const AD_EV_CREATE_PROCESS = 3
+Const AD_EV_EXIT_PROCESS = 5
+Const AD_EV_LOAD_DLL = 6
+' EXCEPTION_DEBUG_INFO: ExceptionCode 16、ExceptionAddress 32、dwFirstChance 168
+Const AD_EX_CODE = 16
+Const AD_EX_ADDR = 32
+Const AD_EX_FIRST = 168
+
+' CONTEXT（x64）の位置
+Const AD_CX_FLAGS = &H30
+Const AD_CX_EFLAGS = &H44
+Const AD_CX_RSP = &H98
+Const AD_CX_RBP = &HA0
+Const AD_CX_RIP = &HF8
+
+Dim g_adEv As *Byte
+Dim g_adCtx As *Byte
+Dim g_adSi As *Byte
+Dim g_adPi As *Byte
+
+' VirtualAlloc はページ境界（CONTEXT は 16 バイト境界が要る）。中は 0。STARTUPINFO（x64 は 104 バイト）は cb だけ
+Sub AdApiInit()
+    g_adEv = Ad_VirtualAlloc(0, 4096, &H3000, 4)
+    g_adCtx = Ad_VirtualAlloc(0, 4096, &H3000, 4)
+    g_adSi = Ad_VirtualAlloc(0, 4096, &H3000, 4)
+    g_adPi = VarPtr(g_adSi[1024])
+    AdPutL(g_adSi, 0, 104)
+End Sub
+
+Function AdL(p As *Byte, off As Long) As Long
+    Dim v As Long
+    memcpy(VarPtr(v), VarPtr(p[off]), 4)
+    AdL = v
+End Function
+
+Function AdQ(p As *Byte, off As Long) As QWord
+    Dim v As QWord
+    memcpy(VarPtr(v), VarPtr(p[off]), 8)
+    AdQ = v
+End Function
+
+Sub AdPutQ(p As *Byte, off As Long, v As QWord)
+    memcpy(VarPtr(p[off]), VarPtr(v), 8)
+End Sub
+
+Sub AdPutL(p As *Byte, off As Long, v As Long)
+    memcpy(VarPtr(p[off]), VarPtr(v), 4)
+End Sub
+
+Sub AdCloseIf(h As HANDLE)
+    If h <> 0 Then Ad_CloseHandle(h)
+End Sub

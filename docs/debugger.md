@@ -23,7 +23,7 @@ ProjectEditor（ブレークポイント・今の行・変数・呼び出し履�
 | 段階 | 内容 | 状態 |
 |---|---|---|
 | D0 | コンパイラが `.abdbg` を書く（行の表・手続き・ローカル変数・グローバル変数）。`Debug` 文 | 済 |
-| D1 | `abdbg.exe` の土台: 起動・ブレークポイント（`0xCC`）・続行・呼び出し履歴（rbp をたどる）・例外で落ちた行を出す | |
+| D1 | `abdbg.exe` の土台: 起動・ブレークポイント（`0xCC`）・続行・呼び出し履歴（rbp をたどる）・例外で落ちた行を出す | 済 |
 | D2 | ステップオーバー / ステップイン / ステップアウト | |
 | D3 | 変数の表示（Long・Int64・Double・ポインタ・String → Type / Class のメンバ・配列） | |
 | D4 | ProjectEditor に入れる（余白のクリックでブレークポイント、F5 / F9 / F10 / F11 / Shift+F11、変数・呼び出し履歴の窓） | |
@@ -74,10 +74,48 @@ line <RVA> <file の番号> <行> <文の始まりなら 1>
 
 `OP_DBG_*` は `-debug` のときだけ入るので、リリースの IR と機械語は前と同じです。`-X`（`LinuxPrune`）は手続きの最後の命令を見て次の手続きへ落ちるかを決めるので、`OP_DBG_*` を飛ばして見ます。
 
-## これから（D1 の作り）
+## abdbg.exe（D1）
 
-- `CreateProcess` に `DEBUG_ONLY_THIS_PROCESS`、`WaitForDebugEvent` / `ContinueDebugEvent` で回す。`CREATE_PROCESS_DEBUG_INFO.lpBaseOfImage` が読み込まれた先頭
-- ブレークポイント: 文の始まりの 1 バイトを `0xCC` にする。止まったら元に戻し、rip を 1 戻して TF で 1 命令進め、`0xCC` を書き直す
-- 最初の `ntdll` のブレークポイントは読み飛ばす
-- `CONTEXT` は 16 バイト境界に置く
-- 呼び出し履歴は rbp をたどる（どの手続きも `push rbp; mov rbp, rsp` で始まる）。戻り先は `[rbp+8]`
+ソースは [`src/abdbg`](../src/abdbg)（`abdbg.pj`。ActBa64 で訳す 64bit の exe）。リリースでは `release\abdbg.exe` に入ります。
+
+```
+actba64 hello.abp -debug -o hello.exe
+abdbg hello.exe
+```
+
+`hello.exe` の隣の `hello.abdbg` を読み、標準入力から 1 行に 1 つのコマンドを受けます。答えも標準出力に 1 行ずつ出します（ProjectEditor が読む形。パスは行の最後）。デバッグしているプログラムの出力も同じ標準出力に混ざります。今は x64 の exe だけです（`-actba32` の exe は D5）。
+
+| コマンド | 意味 | 答え |
+|---|---|---|
+| `b <ファイル>:<行>` / `b <行>` | ブレークポイント。ファイルはフルパスかファイル名だけ。行だけならメインのファイル（exe と同じ名前のソース） | `bp <番号> <行> <フルパス>`。コードの無い行は、コードのある次の行へずらす |
+| `d <番号>` | ブレークポイントを消す | `deleted <番号>` |
+| `r` | 動かし始める | `running` |
+| `c` | 止まった所から続ける | `running` |
+| `bt` | 呼び出し履歴（止まっているとき） | `bt <段の数>` の後に `frame <段> <行> <手続き> <フルパス>` を段の数だけ |
+| `q` | やめる（動いているプログラムも終わる）。標準入力が終わっても同じ | なし |
+
+止まったとき・終わったときに出す行:
+
+| 行 | いつ |
+|---|---|
+| `ready` | `.abdbg` を読めた（最初の 1 行） |
+| `stop bp <番号> <行> <手続き> <フルパス>` | ブレークポイント |
+| `stop debug <行> <手続き> <フルパス>` | `Debug` 文（場所は `BasicDebug` を呼んだ行） |
+| `stop exception <コード> <行> <手続き> <フルパス>` | 例外（`c0000005` など 16 進 8 桁）。exe の中で起きた 1 回目の例外と、OS の DLL の中で起きて誰も受けなかった例外。場所は exe の中の一番近い段。ここから `c` するとプログラムは終わる |
+| `exit <終了コード>` | プログラムが終わった |
+| `error <説明>` | コマンドの誤りなど |
+
+場所が分からないときは `0 ? ?` です。
+
+### 作り
+
+- `CreateProcess` に `DEBUG_ONLY_THIS_PROCESS`、`WaitForDebugEvent` / `ContinueDebugEvent` で回す（`AdEvent.sbp`）。`CREATE_PROCESS_DEBUG_INFO.lpBaseOfImage` が読み込まれた先頭で、ブレークポイントはそこで書く
+- ブレークポイントは文の始まりの 1 バイトを `0xCC` にする（`AdBp.sbp`）。止まったら元に戻して rip を 1 戻し、TF で 1 命令進めてから `0xCC` を書き直す
+- 最初の `ntdll` のブレークポイントは読み飛ばす。それより後の、自分のでない `int3` は `Debug` 文として止まる
+- 呼び出し履歴は rbp をたどる（`AdStack.sbp`）。exe の外で止まったとき（`DebugBreak`、API の中の例外）は、スタックで最初に見つかる exe の中への戻り先から始める。戻り先の行は、1 バイト前（呼んだ命令）で引く
+- `CONTEXT` は 16 バイト境界が要るので `VirtualAlloc` で取る
+- イベントやコマンドを 1 つ扱うたびに MAIN のループへ戻る（手続きの中で作った String は MAIN に戻るまで回収されないため）
+
+### テスト
+
+`src\abdbg\run_test.ps1` が `test\*.abp` を `-debug` で訳し、`test\<名前>.in` のコマンドを渡して、出力（パスはファイル名だけにする）を `test\<名前>.out` と比べます。CI（`ci.ps1`）でも回します。

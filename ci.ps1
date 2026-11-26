@@ -84,6 +84,10 @@ Invoke-Step "integration tests (-actba32)" {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Cc "run_test2.ps1") stage2 -Actba32 -TimeoutSec 20
 }
 
+Invoke-Step "debugger tests (abdbg)" {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\abdbg\run_test.ps1")
+}
+
 Write-Host ""
 Write-Host "CI OK"
 exit 0
