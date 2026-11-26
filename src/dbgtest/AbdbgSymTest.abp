@@ -1,0 +1,89 @@
+' AdSym / AdVarSym（.abdbg を読む）と AdSymFind（RVA → 行・手続き、ファイル名 → 番号、行 → 置く行）。
+' 小さな .abdbg を書いて読む:
+'   Helper（4096..4160。main.abp の 3・4 行、For の後ろの続きが 3 行）、(module)（4160..4200。10 行）、
+'   LibFn（4200..4300。lib.abp の 5 行。lib.abp は Include のファイル）
+
+Dim dtLf As String
+Dim dtSym As String
+Dim dtPath As String
+
+dtLf = Chr$(10)
+dtSym = "ABDBG 1" + dtLf + "arch x64" + dtLf + "text 4096" + dtLf + "data 8192" + dtLf
+dtSym = dtSym + "func 0 4096 4160 Helper" + dtLf + "func 1 4160 4200 (module)" + dtLf + "func 2 4200 4300 LibFn" + dtLf
+dtSym = dtSym + "var 0 -8 0 0 -1 4 0 3 Long n" + dtLf + "var -1 0 0 1 -1 8 0 1 String g" + dtLf
+dtSym = dtSym + "var -1 8 0 5 0 8 1 2 Pt libVar" + dtLf + "var -1 16 0 6 4 16 0 2 Long() arr" + dtLf
+dtSym = dtSym + "type 0 8 0 Pt" + dtLf + "field 0 0 4 1 -1 Long x" + dtLf + "field 0 4 4 1 -1 Long y" + dtLf
+dtSym = dtSym + "type 1 4 0 BOOL" + dtLf
+dtSym = dtSym + "file 0 C:/src/main.abp" + dtLf + "file 1 C:/inc/lib.abp" + dtLf + "lib 1" + dtLf
+dtSym = dtSym + "line 4096 -1 0 0" + dtLf + "line 4100 0 3 1" + dtLf + "line 4120 0 4 1" + dtLf + "line 4140 0 3 0" + dtLf
+dtSym = dtSym + "line 4160 -1 0 0" + dtLf + "line 4170 0 10 1" + dtLf + "line 4200 -1 0 0" + dtLf + "line 4210 1 5 1" + dtLf
+dtSym = dtSym + "line 4300 -1 0 0" + dtLf
+dtPath = "dbgtest_tmp.abdbg"
+WriteAll(StrPtr(dtPath), StrPtr(dtSym), Len(dtSym))
+
+Assert(1, AdSymLoad(StrPtr(dtPath)), "sym load")
+Assert(1, g_adArch64, "sym arch")
+Assert(8192, g_adDataRva, "sym data")
+Assert(3, g_adFnStart.n, "sym funcs")
+Assert(9, g_adLnRva.n, "sym lines")
+Assert(2, g_adFile.n, "sym files")
+Assert(1, AdFileIsUser(0), "sym main is user")
+Assert(0, AdFileIsUser(1), "sym lib is not user")
+
+' RVA → line の番号（その RVA を含む）
+Assert(-1, AdSymLineAt(100), "line before")
+Assert(0, AdSymLineAt(4096), "line exact first")
+Assert(1, AdSymLineAt(4105), "line inside")
+Assert(8, AdSymLineAt(5000), "line after last")
+
+' RVA → 手続き（終わりは含まない）
+Assert(0, AdSymFuncAt(4100), "func helper")
+Assert(1, AdSymFuncAt(4160), "func module start")
+Assert(2, AdSymFuncAt(4299), "func lib end-1")
+Assert(-1, AdSymFuncAt(4300), "func past end")
+Assert(-1, AdSymFuncAt(4000), "func before")
+
+' 文の始まり（続きの行 0 は止まらない）
+Assert(1, AdIsStmtStart(4100), "stmt start")
+Assert(0, AdIsStmtStart(4105), "stmt middle")
+Assert(0, AdIsStmtStart(4140), "stmt tail")
+
+' 行 → 置く行（コードのある次の行）
+Assert(3, AdSymResolve(0, 2), "resolve up to 3")
+Assert(4, AdSymResolve(0, 4), "resolve exact")
+Assert(10, AdSymResolve(0, 5), "resolve skip to 10")
+Assert(0, AdSymResolve(0, 11), "resolve none")
+
+' ファイル名 → 番号（フルパスか、名前だけ。大文字小文字は見ない）
+Assert(0, AdSymFileFind(StrPtr("main.abp")), "file by name")
+Assert(0, AdSymFileFind(StrPtr("MAIN.ABP")), "file by name case")
+Assert(1, AdSymFileFind(StrPtr("C:/inc/lib.abp")), "file by path")
+Assert(-1, AdSymFileFind(StrPtr("none.abp")), "file none")
+Assert(-1, AdSymFileFind(StrPtr("D:/main.abp")), "file other path")
+
+' ユーザーの手続き（ライブラリのファイルの文しか無いものは違う）
+Assert(1, AdVecAt(VarPtr(g_adFnUser), 0), "user fn helper")
+Assert(1, AdVecAt(VarPtr(g_adFnUser), 1), "user fn module")
+Assert(0, AdVecAt(VarPtr(g_adFnUser), 2), "user fn lib")
+
+' メインのファイル（exe と同じ名前）
+Assert(1, AdStemEq(StrPtr("Main.abp"), StrPtr("main.exe")), "stem eq")
+Assert(0, AdStemEq(StrPtr("main2.abp"), StrPtr("main.exe")), "stem ne")
+AdSymFindMain(StrPtr("main.exe"))
+Assert(0, g_adMainFile, "main file")
+Assert(-1, MakeStr(AdBaseName(StrPtr("C:/a/b.abp"))) = "b.abp", "base name")
+
+' 変数（ローカルは手続きの番号、グローバルはユーザーのファイルだけも引ける）
+Assert(4, g_avFn.n, "vars")
+Assert(0, AdVarFind(0, StrPtr("N"), 0), "var local case")
+Assert(1, AdVarFind(-1, StrPtr("g"), 1), "var global user")
+Assert(-1, AdVarFind(-1, StrPtr("libVar"), 1), "var global lib hidden")
+Assert(2, AdVarFind(-1, StrPtr("libVar"), 0), "var global lib any")
+Assert(-1, AdVarFind(1, StrPtr("n"), 0), "var other fn")
+
+' Type とメンバ
+Assert(8, AdTypeSize(0), "type size")
+Assert(1, AdFieldFind(0, StrPtr("Y")), "field find case")
+Assert(-1, AdFieldFind(0, StrPtr("z")), "field none")
+Assert(0, AdUdtScalar(0), "udt with fields")
+Assert(VK_LONG, AdUdtScalar(1), "alias BOOL is Long")

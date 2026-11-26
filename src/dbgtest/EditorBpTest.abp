@@ -1,0 +1,55 @@
+' EditorBpList（ProjectEditor のブレークポイントの一覧と、行を足し消ししたときのずらし方）
+
+Dim dtA As String
+Dim dtB As String
+dtA = "C:/src/a.abp"
+dtB = "C:/src/b.abp"
+
+' 付け外し（パスの大文字小文字は見ない。無題は ""）
+EditorBp_Toggle(dtA, 4)
+Assert(1, EditorBp_Has(dtA, 4), "bp toggle on")
+Assert(1, EditorBp_Has("c:/SRC/A.abp", 4), "bp path case")
+Assert(0, EditorBp_Has(dtB, 4), "bp other file")
+EditorBp_Toggle(dtA, 4)
+Assert(0, EditorBp_Has(dtA, 4), "bp toggle off")
+Assert(0, g_bpN, "bp empty")
+Assert(1, EditorBp_Same("", ""), "untitled same")
+Assert(0, EditorBp_Same("", dtA), "untitled vs file")
+
+' ずらす行（anchor より後だけ。消えた行は anchor へ）
+Assert(3, EditorBp_NewLine(3, 3, 1), "newline at anchor")
+Assert(5, EditorBp_NewLine(4, 3, 1), "newline insert")
+Assert(2, EditorBp_NewLine(4, 2, -2), "newline merged")
+Assert(7, EditorBp_NewLine(9, 2, -2), "newline delete")
+
+' 2 行目の後に 1 行足す: 4 → 5、10 → 11、2 はそのまま、別のファイルも動かない
+EditorBp_Toggle(dtA, 2)
+EditorBp_Toggle(dtA, 4)
+EditorBp_Toggle(dtA, 10)
+EditorBp_Toggle(dtB, 4)
+EditorBp_Shift(dtA, 2, 1)
+Assert(1, EditorBp_Has(dtA, 2), "shift keep anchor")
+Assert(1, EditorBp_Has(dtA, 5), "shift 4 to 5")
+Assert(1, EditorBp_Has(dtA, 11), "shift 10 to 11")
+Assert(0, EditorBp_Has(dtA, 4), "shift old 4 gone")
+Assert(1, EditorBp_Has(dtB, 4), "shift other file")
+
+' 3〜5 行目を消す（4 行目の後の 2 行が消える）: 5 → 4 へまとまり、11 → 9
+EditorBp_Toggle(dtA, 6)
+EditorBp_Shift(dtA, 4, -2)
+Assert(1, EditorBp_Has(dtA, 4), "delete merged to anchor")
+Assert(1, EditorBp_Has(dtA, 9), "delete 11 to 9")
+Assert(4, g_bpN, "delete dedupe")
+
+' 条件は消えたものを詰めるときにいっしょに動く
+g_bpCond[EditorBp_Find(dtA, 9)] = "i = 5"
+EditorBp_Toggle(dtA, 2)
+Assert(-1, g_bpCond[EditorBp_Find(dtA, 9)] = "i = 5", "cond moves with remove")
+
+' 止まっている行も同じようにずれる
+g_dbgStopPath = dtA
+g_dbgStopLine = 9
+EditorBp_Shift(dtA, 1, 3)
+Assert(12, g_dbgStopLine, "stop line shifts")
+EditorBp_Shift(dtB, 1, 3)
+Assert(12, g_dbgStopLine, "stop line other file")

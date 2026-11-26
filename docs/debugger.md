@@ -143,3 +143,5 @@ abdbg hello.exe
 ### テスト
 
 `src\abdbg\run_test.ps1` が `test\*.abp` を `-debug` で訳し、`test\<名前>.in` のコマンドを渡して、出力（パスはファイル名だけ、ポインタの値は `&H?` にする）を `test\<名前>.out` と比べます。`-Actba32` で 32bit の exe でも試し、`test\<名前>.out32` があればそれと比べます（機械語の並びが違い、ステップで止まる行が変わるもの）。CI（`ci.ps1`）で両方回します。
+
+ユニットテストは `src\dbgtest`（`rundbgtest.ps1`。`unittest.pj` とは別のプロジェクト）です。abdbg の `.abdbg` の読み方と引き方・条件・値の種類と大きさと、ProjectEditor のデバッグの部分のうち窓を使わないところ（`EditorBpList` のブレークポイントの一覧と行のずらし方、`EditorDbgParse` の答えの分け方、`EditorDbgTreeReq` の変数のツリーの問いと答えの組み方）を、窓・パイプの代わり（`DbgStubs.sbp`）で試します。`check.ps1 unit` と CI で回します。

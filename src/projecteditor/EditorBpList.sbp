@@ -1,0 +1,92 @@
+' EditorBpList - ブレークポイントの一覧（ファイルのパスと行と条件）と、デバッガーが止まっている行。
+' 行を足し消ししたときのずらし方もここ。窓を使わないので src\dbgtest で試す（窓の側は EditorBp）
+
+Const EDBP_MAX = 256
+
+Dim g_bpN As Long
+Dim g_bpPath[EDBP_MAX] As String
+Dim g_bpLine[EDBP_MAX] As Long
+' 止まる条件（abdbg の b ... if の後ろ。空なら条件なし）
+Dim g_bpCond[EDBP_MAX] As String
+
+' デバッガーが止まっている所（無ければ行 0）
+Dim g_dbgStopPath As String
+Dim g_dbgStopLine As Long
+
+' 無題の文書は "" で覚える
+Function EditorBp_Same(a As String, b As String) As Long
+    EditorBp_Same = 0
+    If Len(a) = 0 And Len(b) = 0 Then EditorBp_Same = 1
+    If ProjSamePath(a, b) <> 0 Then EditorBp_Same = 1
+End Function
+
+' 番号（無ければ -1）
+Function EditorBp_Find(path As String, ByVal lineNo As Long) As Long
+    Dim i As Long
+    EditorBp_Find = -1
+    For i = 0 To g_bpN - 1
+        If g_bpLine[i] = lineNo And EditorBp_Same(g_bpPath[i], path) <> 0 Then EditorBp_Find = i
+    Next
+End Function
+
+Function EditorBp_Has(path As String, ByVal lineNo As Long) As Long
+    EditorBp_Has = 0
+    If EditorBp_Find(path, lineNo) >= 0 Then EditorBp_Has = 1
+End Function
+
+Sub EditorBp_Remove(ByVal i As Long)
+    g_bpN = g_bpN - 1
+    g_bpPath[i] = g_bpPath[g_bpN]
+    g_bpLine[i] = g_bpLine[g_bpN]
+    g_bpCond[i] = g_bpCond[g_bpN]
+End Sub
+
+Sub EditorBp_Toggle(path As String, ByVal lineNo As Long)
+    Dim i As Long
+    i = EditorBp_Find(path, lineNo)
+    If i >= 0 Then EditorBp_Remove(i)
+    If i < 0 Then EditorBp_Add(path, lineNo)
+End Sub
+
+Sub EditorBp_Add(path As String, ByVal lineNo As Long)
+    If g_bpN >= EDBP_MAX Then Exit Sub
+    g_bpPath[g_bpN] = path
+    g_bpLine[g_bpN] = lineNo
+    g_bpCond[g_bpN] = ""
+    g_bpN = g_bpN + 1
+End Sub
+
+' anchor より後の行を delta ずらす。消えた行（anchor の次から）の印は anchor の行へ
+Sub EditorBp_Shift(path As String, ByVal anchor As Long, ByVal delta As Long)
+    Dim i As Long
+    For i = 0 To g_bpN - 1
+        If EditorBp_Same(g_bpPath[i], path) <> 0 Then g_bpLine[i] = EditorBp_NewLine(g_bpLine[i], anchor, delta)
+    Next
+    If g_dbgStopLine > 0 And EditorBp_Same(g_dbgStopPath, path) <> 0 Then g_dbgStopLine = EditorBp_NewLine(g_dbgStopLine, anchor, delta)
+    EditorBp_Dedupe()
+End Sub
+
+Function EditorBp_NewLine(ByVal ln As Long, ByVal anchor As Long, ByVal delta As Long) As Long
+    EditorBp_NewLine = ln
+    If ln <= anchor Then Exit Function
+    EditorBp_NewLine = ln + delta
+    If EditorBp_NewLine <= anchor Then EditorBp_NewLine = anchor
+End Function
+
+' 行が重なったら 1 つにする
+Sub EditorBp_Dedupe()
+    Dim i As Long
+    i = g_bpN - 1
+    While i > 0
+        If EditorBp_FindBefore(i) >= 0 Then EditorBp_Remove(i)
+        i = i - 1
+    Wend
+End Sub
+
+Function EditorBp_FindBefore(ByVal i As Long) As Long
+    Dim j As Long
+    EditorBp_FindBefore = -1
+    For j = 0 To i - 1
+        If g_bpLine[j] = g_bpLine[i] And EditorBp_Same(g_bpPath[j], g_bpPath[i]) <> 0 Then EditorBp_FindBefore = j
+    Next
+End Function
