@@ -68,3 +68,84 @@ Function ProjTree_IsMainSrc(rel As String, pj As String) As Long
     If Len(ProjTree_Dir$(rel)) > 0 Then Exit Function
     ProjTree_IsMainSrc = ProjTree_SameDir(rel, ProjTree_Base$(pj) + ".abp")
 End Function
+
+' ---- 右クリックの「ファイルを挿入」の相対パス（ProjEdit.sbp） ----
+
+' \ か / なら 1
+Function ProjTree_IsSep(c As String) As Long
+    ProjTree_IsSep = 0
+    If c = "\" Or c = "/" Then ProjTree_IsSep = 1
+End Function
+
+' p から区切りを飛ばして、次の区切りの前までを返す（p はその後ろへ進む）。無ければ ""
+Function ProjTree_Comp$(s As String, ByRef p As Long) As String
+    Dim a As Long
+    ProjTree_Comp$ = ""
+    While p <= Len(s)
+        If ProjTree_IsSep(Mid$(s, p, 1)) = 0 Then Exit While
+        p = p + 1
+    Wend
+    a = p
+    While p <= Len(s)
+        If ProjTree_IsSep(Mid$(s, p, 1)) <> 0 Then Exit While
+        p = p + 1
+    Wend
+    If p > a Then ProjTree_Comp$ = Mid$(s, a, p - a)
+End Function
+
+' 区切りの間の名前が同じなら 1（ci <> 0 なら大文字小文字を区別しない）
+Function ProjTree_SameComp(a As String, b As String, ByVal ci As Long) As Long
+    ProjTree_SameComp = 0
+    If ci <> 0 Then
+        If ProjTree_Key$(a) = ProjTree_Key$(b) Then ProjTree_SameComp = 1
+    Else
+        If a = b Then ProjTree_SameComp = 1
+    End If
+End Function
+
+' p から後ろの名前を sep でつなぐ
+Function ProjTree_Rest$(s As String, ByVal p As Long, sep As String) As String
+    Dim c As String
+    ProjTree_Rest$ = ""
+    c = ProjTree_Comp$(s, p)
+    While Len(c) > 0
+        If Len(ProjTree_Rest$) > 0 Then ProjTree_Rest$ = ProjTree_Rest$ & sep
+        ProjTree_Rest$ = ProjTree_Rest$ & c
+        c = ProjTree_Comp$(s, p)
+    Wend
+End Function
+
+' base（フォルダー）から見た full の相対パス（"..\common\a.sbp" など）。
+' 先頭（ドライブ）から違えば full のまま
+Function ProjTree_RelPath$(base As String, full As String, sep As String, ByVal ci As Long) As String
+    Dim pb As Long, pf As Long, qb As Long, qf As Long, n As Long
+    Dim a As String, b As String, up As String
+    ProjTree_RelPath$ = full
+    pb = 1 : pf = 1 : n = 0
+    Do
+        qb = pb : qf = pf
+        a = ProjTree_Comp$(base, qb)
+        b = ProjTree_Comp$(full, qf)
+        If Len(a) = 0 Or Len(b) = 0 Then Exit Do
+        If ProjTree_SameComp(a, b, ci) = 0 Then Exit Do
+        pb = qb : pf = qf : n = n + 1
+    Loop
+    If n = 0 Then Exit Function
+    up = ""
+    While Len(ProjTree_Comp$(base, pb)) > 0
+        up = up & ".." & sep
+    Wend
+    ProjTree_RelPath$ = up & ProjTree_Rest$(full, pf, sep)
+End Function
+
+' 同じパスの書き方なら 1（\ と / は区別しない。ci <> 0 なら大文字小文字も）
+Function ProjTree_SamePath(a As String, b As String, ByVal ci As Long) As Long
+    ProjTree_SamePath = ProjTree_SameComp(ProjTree_Rest$(a, 1, "\"), ProjTree_Rest$(b, 1, "\"), ci)
+End Function
+
+' .abp なら 1（#SOURCE で最初の .abp がプロジェクトのメインファイル）
+Function ProjTree_IsAbp(rel As String) As Long
+    ProjTree_IsAbp = 0
+    If Len(rel) < 4 Then Exit Function
+    If ProjTree_Key$(Right$(rel, 4)) = ".abp" Then ProjTree_IsAbp = 1
+End Function

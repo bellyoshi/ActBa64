@@ -1,0 +1,276 @@
+' ProjEdit - プロジェクト ビューの右クリックのメニュー（Windows のツリーと Linux の一覧で共通）。
+'   ルート（.pj）:  ファイルを挿入 … 選んだファイルを .pj からの相対パスで #SOURCE の最後に足す
+'   ファイル:       プロジェクトから削除 … #SOURCE からその行を消す（ファイルそのものは消さない）
+'                   プロパティ … プロジェクト内のパス・フルパス・サイズ
+' #SOURCE で最初の .abp はプロジェクトのメインファイル。消す前に確かめる。
+' .pj を書き換えたら ProjOpen で読み直し、ツリーを作り直す。
+
+Const IDM_PROJ_ADDFILE = 1350
+Const IDM_PROJ_REMOVE = 1351
+Const IDM_PROJ_PROP = 1352
+Const IDM_PROJ_CLOSE = 1353         ' ファイル メニューとルートの右クリック
+Const PROJEDIT_ROOT = -1            ' ルートの番号（ProjEdit_Menu の idx）
+
+Dim g_projCloseMenu As Long         ' ファイル メニューに差し込んだら 1
+
+Function ProjEdit_Nl$() As String
+    ProjEdit_Nl$ = Chr$(13) & Chr$(10)
+End Function
+
+' 相対パスの区切り（Windows は \、Linux は /）
+Function ProjEdit_Sep$() As String
+#ifdef _LINUX
+    ProjEdit_Sep$ = "/"
+#else
+    ProjEdit_Sep$ = "\"
+#endif
+End Function
+
+' パスの大文字小文字を区別しないなら 1（Windows）
+Function ProjEdit_Ci() As Long
+#ifdef _LINUX
+    ProjEdit_Ci = 0
+#else
+    ProjEdit_Ci = 1
+#endif
+End Function
+
+' idx が g_projRel のファイルの番号なら 1
+Function ProjEdit_IsFile(ByVal idx As Long) As Long
+    ProjEdit_IsFile = 0
+    If idx >= 0 And idx < g_projCount Then ProjEdit_IsFile = 1
+End Function
+
+' idx: PROJEDIT_ROOT ならルートのメニュー、0 以上なら g_projRel(idx) のファイルのメニュー。
+' (x, y) はスクリーンの座標（TrackPopupMenu に渡すもの）
+Sub ProjEdit_Menu(hWnd As HWND, ByVal idx As Long, ByVal x As Long, ByVal y As Long)
+    Dim hPop As HMENU, cmd As Long
+    If Len(g_projectPath) = 0 Then Exit Sub
+    If idx <> PROJEDIT_ROOT And ProjEdit_IsFile(idx) = 0 Then Exit Sub
+    hPop = CreatePopupMenu()
+    If hPop = 0 Then Exit Sub
+    ProjEdit_Build(hPop, idx)
+    cmd = TrackPopupMenu(hPop, TPM_LEFTALIGN Or TPM_RIGHTBUTTON Or TPM_RETURNCMD, x, y, 0, hWnd, ByVal 0)
+    DestroyMenu(hPop)
+    ProjEdit_Run(hWnd, cmd, idx)
+End Sub
+
+Sub ProjEdit_Build(hPop As HMENU, ByVal idx As Long)
+    If idx = PROJEDIT_ROOT Then
+        EditorMenu_Append(hPop, MF_STRING, IDM_PROJ_ADDFILE, UI_PROJ_ADDFILE)
+        AppendMenu(hPop, MF_SEPARATOR, 0, "")
+        EditorMenu_Append(hPop, MF_STRING, IDM_PROJ_CLOSE, UI_PROJ_CLOSE)
+        Exit Sub
+    End If
+    EditorMenu_Append(hPop, MF_STRING, IDM_PROJ_REMOVE, UI_PROJ_REMOVE)
+    AppendMenu(hPop, MF_SEPARATOR, 0, "")
+    EditorMenu_Append(hPop, MF_STRING, IDM_PROJ_PROP, UI_PROJ_PROP)
+End Sub
+
+Sub ProjEdit_Run(hWnd As HWND, ByVal cmd As Long, ByVal idx As Long)
+    If cmd = IDM_PROJ_ADDFILE Then ProjEdit_AddFile(hWnd)
+    If cmd = IDM_PROJ_REMOVE Then ProjEdit_Remove(hWnd, idx)
+    If cmd = IDM_PROJ_PROP Then ProjEdit_Prop(hWnd, idx)
+    If cmd = IDM_PROJ_CLOSE Then ProjEdit_CloseLater()
+End Sub
+
+' ---- ファイルを挿入 ----
+
+Sub ProjEdit_AddFile(hWnd As HWND)
+    Dim full As String, rel As String
+    g_pjDir = ProjDirOf$(g_projectPath)
+    full = EditorDoc_BrowseOpenIn$(hWnd, g_pjDir)
+    If Len(full) = 0 Then Exit Sub
+    rel = ProjTree_RelPath$(g_pjDir, full, ProjEdit_Sep$(), ProjEdit_Ci())
+    If ProjEdit_Listed(full, rel) <> 0 Then
+        UiMsgBox(hWnd, UiText$(UI_PROJ_ALREADY) & ProjEdit_Nl$() & rel, "editor")
+        Exit Sub
+    End If
+    If EditorNewForm_AddToPj(rel) = 0 Then Exit Sub
+    ProjOpen(g_projectPath)
+End Sub
+
+' もう #SOURCE にあれば 1（フルパスか、相対パスの書き方が同じ）
+Function ProjEdit_Listed(full As String, rel As String) As Long
+    Dim i As Long
+    ProjEdit_Listed = ProjHas(full)
+    If ProjEdit_Listed <> 0 Then Exit Function
+    For i = 0 To g_projCount - 1
+        If ProjTree_SamePath(g_projRel(i), rel, ProjEdit_Ci()) <> 0 Then ProjEdit_Listed = 1 : Exit Function
+    Next
+End Function
+
+' ---- プロジェクトから削除 ----
+
+' #SOURCE で最初の .abp の番号（無ければ -1）
+Function ProjEdit_MainIndex() As Long
+    Dim i As Long
+    ProjEdit_MainIndex = -1
+    For i = 0 To g_projCount - 1
+        If ProjTree_IsAbp(g_projRel(i)) <> 0 Then ProjEdit_MainIndex = i : Exit Function
+    Next
+End Function
+
+' メインファイルなら消してよいか尋ねる。消してよければ 1
+Function ProjEdit_MainOk(hWnd As HWND, ByVal idx As Long) As Long
+    Dim nl As String, msg As String
+    ProjEdit_MainOk = 1
+    If idx <> ProjEdit_MainIndex() Then Exit Function
+    nl = ProjEdit_Nl$()
+    msg = UiText$(UI_PROJ_MAIN) & nl & g_projRel(idx) & nl & nl & UiText$(UI_PROJ_REMOVE_ASK)
+    ProjEdit_MainOk = UiMsgBoxYesNo(hWnd, msg, "editor")
+End Function
+
+Sub ProjEdit_Remove(hWnd As HWND, ByVal idx As Long)
+    If ProjEdit_IsFile(idx) = 0 Then Exit Sub
+    If ProjEdit_MainOk(hWnd, idx) = 0 Then Exit Sub
+    If ProjEdit_RemoveFromPj(g_projRel(idx)) = 0 Then Exit Sub
+    ProjOpen(g_projectPath)
+End Sub
+
+' .pj の #SOURCE から rel の行を消す（元の文字コードのまま）。書けたら 1
+Function ProjEdit_RemoveFromPj(rel As String) As Long
+    Dim enc As Long, body As String, nw As String
+    ProjEdit_RemoveFromPj = 0
+    body = ProjLoadForRewrite$(enc)
+    nw = EditorNewForm_RemoveSource$(body, rel)
+    If nw = body Then Exit Function
+    ProjEdit_RemoveFromPj = ProjRewrite(nw, enc)
+    If ProjEdit_RemoveFromPj = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & ProjEdit_Nl$() & g_projectPath, "editor")
+End Function
+
+' ---- プロパティ ----
+
+' ファイルのバイト数（開けなければ -1）
+Function ProjEdit_FileSize(path As String) As Long
+    Dim h As HANDLE
+    ProjEdit_FileSize = -1
+    If AB4Proj_Exists(path) = 0 Then Exit Function
+    h = FileOpenRead(StrPtr(path))
+    If h = INVALID_HANDLE_VALUE Then Exit Function
+    ProjEdit_FileSize = FileSizeOrZero(h)
+    CloseHandle(h)
+End Function
+
+Function ProjEdit_SizeLine$(path As String) As String
+    Dim n As Long
+    n = ProjEdit_FileSize(path)
+    ProjEdit_SizeLine$ = UiText$(UI_PROJ_P_NOFILE)
+    If n >= 0 Then ProjEdit_SizeLine$ = UiText$(UI_PROJ_P_SIZE) & " " & ProjTrim$(Str$(n)) & " " & UiText$(UI_PROJ_P_BYTES)
+End Function
+
+Sub ProjEdit_Prop(hWnd As HWND, ByVal idx As Long)
+    Dim nl As String, msg As String
+    If ProjEdit_IsFile(idx) = 0 Then Exit Sub
+    nl = ProjEdit_Nl$()
+    msg = UiText$(UI_PROJ_P_REL) & " " & g_projRel(idx) & nl
+    msg = msg & UiText$(UI_PROJ_P_FULL) & " " & g_projFull(idx) & nl
+    msg = msg & ProjEdit_SizeLine$(g_projFull(idx))
+    UiMsgBox(hWnd, msg, UiText$(UI_PROJ_PROP_TITLE))
+End Sub
+
+' ---- プロジェクトを閉じる ----
+' 開けるプロジェクトは 1 つだけ。閉じるときは、プロジェクトの文書（#SOURCE と .wnd）を
+' 保存するか尋ねながら閉じてから、プロジェクトの窓を閉じる。一時フォルダーのプロジェクトなら先に保存を尋ねる
+
+' path がこのプロジェクトのファイル（#SOURCE か .wnd）なら 1
+Function ProjEdit_IsMember(path As String) As Long
+    ProjEdit_IsMember = ProjHas(path)
+    If ProjEdit_IsMember = 0 Then ProjEdit_IsMember = ProjSamePath(path, EditorProjCmd_WndPath$(g_projectPath))
+End Function
+
+' 開いているプロジェクトの文書で最初のもの（無ければ 0）
+Function ProjEdit_MemberDoc() As HWND
+    Dim i As Long, v As HWND
+    ProjEdit_MemberDoc = 0
+    For i = 0 To 7
+        v = g_docHwnd(i)
+        If g_docUsed(i) <> 0 And v <> 0 Then
+            If ProjEdit_IsMember(MdiDocPath$(v)) <> 0 Then ProjEdit_MemberDoc = v : Exit Function
+        End If
+    Next
+End Function
+
+' 文書を閉じる（保存していなければ MainWndProc の WM_CLOSE が尋ねる）
+Sub ProjEdit_CloseDoc(v As HWND)
+#ifdef _LINUX
+    MainWndProc(v, WM_CLOSE, 0, 0)
+#else
+    SendMessage(v, WM_CLOSE, 0, 0)
+#endif
+End Sub
+
+' プロジェクトの文書を順に閉じる。どれかでやめたら 0
+Function ProjEdit_CloseDocs() As Long
+    Dim v As HWND
+    ProjEdit_CloseDocs = 0
+    v = ProjEdit_MemberDoc()
+    While v <> 0
+        ProjEdit_CloseDoc(v)
+        If MdiSlotOf(v) >= 0 Then Exit Function
+        v = ProjEdit_MemberDoc()
+    Wend
+    ProjEdit_CloseDocs = 1
+End Function
+
+' 閉じる前に尋ねる。1 = 閉じてよい（文書はもう閉じた）、0 = やめる
+' 一時プロジェクトを「いいえ」なら、そのメンバーの文書の保存は尋ねない
+Function ProjEdit_CloseAsk() As Long
+    ProjEdit_CloseAsk = EditorTemp_AskClose(1)
+    If ProjEdit_CloseAsk <> 0 Then ProjEdit_CloseAsk = ProjEdit_CloseDocs()
+    g_projTempDrop = 0
+End Function
+
+' プロジェクトを閉じる。閉じたか、開いていなければ 1
+Function ProjEdit_Close() As Long
+    ProjEdit_Close = 1
+    If g_hProject = 0 Then Exit Function
+    ProjEdit_Close = ProjEdit_CloseAsk()
+    If ProjEdit_Close = 0 Then Exit Function
+#ifdef _LINUX
+    LxShell_ProjDrop()
+#else
+    SendMessage(g_hClient, WM_MDIDESTROY, g_hProject As WPARAM, 0)
+#endif
+End Function
+
+' 右クリックから。Windows はツリーの通知の中なので、窓を壊すのはメッセージ ループに戻ってから
+Sub ProjEdit_CloseLater()
+#ifdef _LINUX
+    ProjEdit_Close()
+#else
+    PostMessage(hMainWnd, WM_COMMAND, IDM_PROJ_CLOSE, 0)
+#endif
+End Sub
+
+' 別の .pj を開く前に、今のプロジェクトを閉じる。開いてよければ 1
+Function ProjEdit_CloseForOpen(path As String) As Long
+    ProjEdit_CloseForOpen = 1
+    If ProjSamePath(path, g_projectPath) <> 0 Then Exit Function
+    ProjEdit_CloseForOpen = ProjEdit_Close()
+End Function
+
+' ---- ファイル メニュー ----
+
+' 開くの次（名前を付けて保存の前）に差し込む。2 回目からは表示名だけ更新
+Sub ProjEdit_ApplyMenu()
+    Dim wide As *Byte, chars As Long
+    If g_projCloseMenu = 0 Then
+        wide = Enc_Utf8ToWide(UiText$(UI_PROJ_CLOSE), chars)
+        If wide = 0 Then Exit Sub
+        InsertMenuW(hMenu_M_MAIN_0, IDM_SAVEAS, MF_BYCOMMAND Or MF_STRING, IDM_PROJ_CLOSE, wide)
+        free(wide)
+        g_projCloseMenu = 1
+    End If
+    EditorMenu_SetCmd(hMenu_M_MAIN_0, IDM_PROJ_CLOSE, UI_PROJ_CLOSE)
+    ProjEdit_UpdateMenu()
+End Sub
+
+' プロジェクトを開いていなければ灰色
+Sub ProjEdit_UpdateMenu()
+    Dim flags As Long
+    If g_projCloseMenu = 0 Then Exit Sub
+    flags = MF_BYCOMMAND
+    If g_hProject = 0 Then flags = flags Or MF_GRAYED
+    EnableMenuItem(hMenu_M_MAIN_0, IDM_PROJ_CLOSE, flags)
+End Sub
