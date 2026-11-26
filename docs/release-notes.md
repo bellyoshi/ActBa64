@@ -7,6 +7,7 @@ AB4デザイナーのイベント処理ダイアログを AB 4.20 に近づけ�
 ### コンパイラ
 
 - 式の中の `x As QWord` / `x As Int64` を 64bit への変換として読みます。`-actba32` でも 64bit です。`Long` は符号で、`DWord` は 0 で広げ、64bit どうしはそのままです。`-actba32` ではこれまで `As DWord` / `As Long` として読んでいたので、`lo Or (hi As QWord) << 32` のような書き方（RGBALib の `lengthQWord` など）で上位 32 ビットが消えていました。
+- `Print` / `Str$` の Double を ActiveBasic と同じ有効 15 桁で書きます（`Print Sqr(5)` は `2.23606797749979`）。これまでは小数 6 桁に丸めていました。10^15 以上と 10^-4 未満は `1.5E+20` / `1.234E-5` の形です。
 - `Function 名前 cdecl(...)` / `Sub 名前 cdecl(...)` と、関数ポインタの `*Function cdecl(...)` / `*Sub cdecl(...)` を書けます（ActBa64 だけの書き方です）。`-actba32` では cdecl の手続きは引数を片付けずに戻り、呼んだ側が片付けます。C の `qsort` へ比較関数を渡せます。
 - `-actba32` の関数ポインタの呼び出しは、呼んだ後に `esp` を呼ぶ前の位置へ戻します。これまでは、型より引数の多い stdcall の関数を呼ぶとスタックがずれました。
 - AB4 のコードを移すときの直し方を [migrate-ab4.md](./migrate-ab4.md) にまとめました。宣言だけの `Virtual` の vtable を自分で埋めるコードは `Virtual` と `Override` に、引数の数が合わないコールバックは `cdecl` に書き換えます。
