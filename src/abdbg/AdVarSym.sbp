@@ -1,0 +1,163 @@
+' AdVarSym - .abdbg の var / type / field を読む
+'   var <手続きの番号 | -1> <off> <ByRef> <kind> <typeIdx> <バイト数> <file> <行> <型> <名前>
+'   type <番号> <大きさ> <Class か> <名前>
+'   field <型の番号> <off> <要素の大きさ> <要素の数> <種類> <型の名前> <名前>
+
+Dim g_adDataRva As Long
+Dim g_adFnId As AdVec
+
+Dim g_avFn As AdVec
+Dim g_avOff As AdVec
+Dim g_avRef As AdVec
+Dim g_avKind As AdVec
+Dim g_avTi As AdVec
+Dim g_avSize As AdVec
+Dim g_avFile As AdVec
+Dim g_avType As AdNames
+Dim g_avName As AdNames
+
+Dim g_atSize As AdVec
+Dim g_atFirst As AdVec
+Dim g_atCount As AdVec
+Dim g_atName As AdNames
+
+Dim g_afOff As AdVec
+Dim g_afSize As AdVec
+Dim g_afCount As AdVec
+Dim g_afTy As AdVec
+Dim g_afTyName As AdNames
+Dim g_afName As AdNames
+
+Sub AdVarSymInit()
+    AdNamesInit(VarPtr(g_avType), 64)
+    AdNamesInit(VarPtr(g_avName), 64)
+    AdNamesInit(VarPtr(g_atName), 64)
+    AdNamesInit(VarPtr(g_afTyName), 64)
+    AdNamesInit(VarPtr(g_afName), 64)
+End Sub
+
+' 行の残りの最初の語（空白の手前まで）の長さ
+Function AdSymWordLen() As Long
+    Dim n As Long
+    n = 0
+    While g_adSym[g_adPos + n] > 32
+        n = n + 1
+    Wend
+    AdSymWordLen = n
+End Function
+
+' <語> <残り> の 2 つを名前の表へ足す
+Sub AdSymTwoNames(a As *AdNames, b As *AdNames)
+    Dim n As Long
+    n = AdSymWordLen()
+    AdNamesPush(a, VarPtr(g_adSym[g_adPos]), n)
+    g_adPos = g_adPos + n
+    If g_adSym[g_adPos] = 32 Then g_adPos = g_adPos + 1
+    AdNamesPush(b, VarPtr(g_adSym[g_adPos]), AdSymRestLen())
+End Sub
+
+Sub AdVarAdd()
+    AdVecPush(VarPtr(g_avFn), AdSymNum())
+    AdVecPush(VarPtr(g_avOff), AdSymNum())
+    AdVecPush(VarPtr(g_avRef), AdSymNum())
+    AdVecPush(VarPtr(g_avKind), AdSymNum())
+    AdVecPush(VarPtr(g_avTi), AdSymNum())
+    AdVarAddRest()
+End Sub
+
+' <バイト数> <file> <行> <型> <名前>
+Sub AdVarAddRest()
+    AdVecPush(VarPtr(g_avSize), AdSymNum())
+    AdVecPush(VarPtr(g_avFile), AdSymNum())
+    AdSymNum()
+    AdSymTwoNames(VarPtr(g_avType), VarPtr(g_avName))
+End Sub
+
+' type の番号は 0 から順に並ぶ
+Sub AdTypeAdd()
+    AdSymNum()
+    AdVecPush(VarPtr(g_atSize), AdSymNum())
+    AdSymNum()
+    AdVecPush(VarPtr(g_atFirst), -1)
+    AdVecPush(VarPtr(g_atCount), 0)
+    AdNamesPush(VarPtr(g_atName), VarPtr(g_adSym[g_adPos]), AdSymRestLen())
+End Sub
+
+' 同じ型のメンバは続けて並ぶ
+Sub AdFieldAdd()
+    Dim ti As Long
+    ti = AdSymNum()
+    If ti >= 0 And ti < g_atFirst.n Then AdFieldOwn(ti, g_afOff.n)
+    AdVecPush(VarPtr(g_afOff), AdSymNum())
+    AdVecPush(VarPtr(g_afSize), AdSymNum())
+    AdVecPush(VarPtr(g_afCount), AdSymNum())
+    AdVecPush(VarPtr(g_afTy), AdSymNum())
+    AdSymTwoNames(VarPtr(g_afTyName), VarPtr(g_afName))
+End Sub
+
+Sub AdFieldOwn(ti As Long, fi As Long)
+    If AdVecAt(VarPtr(g_atFirst), ti) < 0 Then AdVecSet(VarPtr(g_atFirst), ti, fi)
+    AdVecSet(VarPtr(g_atCount), ti, AdVecAt(VarPtr(g_atCount), ti) + 1)
+End Sub
+
+Sub AdSymParseVarLine()
+    If AdSymIs("var ") Then AdVarAdd()
+    If AdSymIs("type ") Then AdTypeAdd()
+    If AdSymIs("field ") Then AdFieldAdd()
+    If AdSymIs("data ") Then g_adDataRva = AdSymNum()
+End Sub
+
+' ---- 引く ----
+
+Function AdVarName(v As Long) As *Byte
+    AdVarName = AdNamesAt(VarPtr(g_avName), v)
+End Function
+
+Function AdFileIsUser(f As Long) As Long
+    AdFileIsUser = 0
+    If f < 0 Or f >= g_adFileLib.n Then Exit Function
+    If AdVecAt(VarPtr(g_adFileLib), f) = 0 Then AdFileIsUser = 1
+End Function
+
+' 手続き fn（abdbg の表の番号。-1 はグローバル）の変数 v なら 1
+Function AdVarOf(v As Long, fn As Long) As Long
+    Dim id As Long
+    id = -1
+    If fn >= 0 Then id = AdVecAt(VarPtr(g_adFnId), fn)
+    AdVarOf = 0
+    If AdVecAt(VarPtr(g_avFn), v) = id Then AdVarOf = 1
+End Function
+
+' 手続き fn の中で名前が name の変数（大文字小文字は見ない）。無ければ -1
+Function AdVarFind(fn As Long, name As *Byte, userOnly As Long) As Long
+    Dim v As Long
+    AdVarFind = -1
+    For v = 0 To g_avFn.n - 1
+        If AdVarOf(v, fn) <> 0 And Ad_lstrcmpi(AdVarName(v), name) = 0 And AdVarShown(v, fn, userOnly) <> 0 Then
+            AdVarFind = v
+            Exit Function
+        End If
+    Next
+End Function
+
+' グローバルは userOnly のとき、ユーザーのソースで宣言したものだけ
+Function AdVarShown(v As Long, fn As Long, userOnly As Long) As Long
+    AdVarShown = 1
+    If fn >= 0 Or userOnly = 0 Then Exit Function
+    AdVarShown = AdFileIsUser(AdVecAt(VarPtr(g_avFile), v))
+End Function
+
+Function AdFieldFind(ti As Long, name As *Byte) As Long
+    Dim k As Long, fi As Long
+    AdFieldFind = -1
+    For k = 0 To AdVecAt(VarPtr(g_atCount), ti) - 1
+        fi = AdVecAt(VarPtr(g_atFirst), ti) + k
+        If Ad_lstrcmpi(AdNamesAt(VarPtr(g_afName), fi), name) = 0 Then AdFieldFind = fi
+    Next
+End Function
+
+Function AdIsModuleFn(fn As Long) As Long
+    AdIsModuleFn = 0
+    If fn < 0 Then Exit Function
+    If Ad_lstrcmpi(AdNamesAt(VarPtr(g_adFnName), fn), "(module)") = 0 Then AdIsModuleFn = 1
+End Function

@@ -1,0 +1,140 @@
+' ===================================================
+'  DbgInfoUdt - .abdbg の type / field（Type と Class のメンバ）。
+'  型表にはメンバの大きさと種類しか残らない（String と VoidPtr、Integer と Word が分からない）ので、
+'  パーサーがメンバの型の名前を読んだときに写しておく
+' ===================================================
+
+Dim g_dbgPendTy(79) As Byte
+Dim g_dbgFieldTy As *Byte
+Dim g_dbgFieldTyCap As Long
+Dim g_dbgTypes As *TypeTable
+
+' ParseFieldTypeSize がメンバの型の名前を読んだ（isPtr: * が付いていた）
+Sub DbgNoteFieldTy(name As *Byte, isPtr As Long)
+    g_dbgPendTy[0] = 0
+    If DbgEnabled() = 0 Then Exit Sub
+    If isPtr <> 0 Then lstrcpy(VarPtr(g_dbgPendTy), "*")
+    lstrcat(VarPtr(g_dbgPendTy), name)
+End Sub
+
+Function DbgCapFor(cap As Long, need As Long) As Long
+    DbgCapFor = DbgNextCap(cap)
+    While DbgCapFor <= need
+        DbgCapFor = DbgCapFor * 2
+    Wend
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgFieldTyReserve(fi As Long) As boolean
+    Dim nc As Long
+    DbgFieldTyReserve = true
+    If fi < g_dbgFieldTyCap Then Exit Function
+    nc = DbgCapFor(g_dbgFieldTyCap, fi)
+    g_dbgFieldTy = DbgGrowB(g_dbgFieldTy, g_dbgFieldTyCap, nc, SYM_NAME_LEN)
+    g_dbgFieldTyCap = nc
+    If g_dbgFieldTy = NULL Then DbgFieldTyReserve = false
+End Function
+
+' ParseClassField がメンバ fi を型表に足した後
+Sub DbgTakeFieldTy(fi As Long)
+    If DbgEnabled() = 0 Or fi < 0 Then Exit Sub
+    If Not DbgFieldTyReserve(fi) Then g_dbgFieldTyCap = 0
+    If g_dbgFieldTy = NULL Then Exit Sub
+    DbgCopyAt(g_dbgFieldTy, BytesN(fi, SYM_NAME_LEN), VarPtr(g_dbgPendTy), SYM_NAME_LEN)
+    g_dbgPendTy[0] = 0
+End Sub
+
+' AstToIr の終わりで型表を覚える（AstFree は .abdbg を書いた後）
+Sub DbgSetTypes(t As *TypeTable)
+    g_dbgTypes = t
+End Sub
+
+' ---- 書き出し ----
+'   type <番号> <大きさ> <0=Type 1=Class 2=関数ポインタ> <名前>
+'   field <型の番号> <off> <要素の大きさ> <要素の数> <種類> <型の名前> <名前>
+'   種類: 0 以上は Type / Class の番号、-1 は型の名前で決まる値、ほかは FIELDTY_*
+
+Sub DbgOutTypes()
+    Dim i As Long
+    If g_dbgTypes = NULL Then Exit Sub
+    For i = 0 To g_dbgTypes->nTypes - 1
+        DbgOutTypeHead(i)
+        DbgOutFields(i)
+    Next
+End Sub
+
+Sub DbgOutTypeHead(ti As Long)
+    Dim sizes As *Long, isc As *Long
+    sizes = g_dbgTypes->typeSizes
+    isc = g_dbgTypes->typeIsClass
+    DbgOutZ("type")
+    DbgOutSN(ti)
+    DbgOutSN(sizes[ti])
+    DbgOutSN(isc[ti])
+    DbgOutNamed(g_dbgTypes->typeNames, BytesN(ti, TYNAME_LEN))
+End Sub
+
+' 空白と名前と改行
+Sub DbgOutNamed(names As *Byte, off As Long)
+    DbgOutZ(" ")
+    DbgOutZ(VarPtr(names[off]))
+    DbgOutNL()
+End Sub
+
+Function DbgTypeFirst(ti As Long) As Long
+    Dim firsts As *Long
+    firsts = g_dbgTypes->typeFirst
+    DbgTypeFirst = firsts[ti]
+End Function
+
+Sub DbgOutFields(ti As Long)
+    Dim fi As Long
+    Dim nexts As *Long
+    nexts = g_dbgTypes->fieldNext
+    fi = DbgTypeFirst(ti)
+    While fi >= 0
+        DbgOutField(ti, fi)
+        fi = nexts[fi]
+    Wend
+End Sub
+
+Sub DbgOutField(ti As Long, fi As Long)
+    DbgOutZ("field")
+    DbgOutSN(ti)
+    DbgOutFieldNums(fi)
+    DbgOutZ(" ")
+    DbgOutFieldTy(fi)
+    DbgOutNamed(g_dbgTypes->fieldNames, BytesN(fi, TYNAME_LEN))
+End Sub
+
+Sub DbgOutFieldNums(fi As Long)
+    Dim offs As *Long, sizes As *Long
+    offs = g_dbgTypes->fieldOffs
+    sizes = g_dbgTypes->fieldSizes
+    DbgOutSN(offs[fi])
+    DbgOutSN(sizes[fi])
+    DbgOutFieldKind(fi)
+End Sub
+
+Sub DbgOutFieldKind(fi As Long)
+    Dim counts As *Long, tys As *Long
+    counts = g_dbgTypes->fieldCounts
+    tys = g_dbgTypes->fieldTypeIdxs
+    DbgOutSN(counts[fi])
+    DbgOutSN(tys[fi])
+End Sub
+
+' 読んだときの型の名前（無ければ ?）
+Sub DbgOutFieldTy(fi As Long)
+    If DbgFieldTyOk(fi) = 0 Then
+        DbgOutZ("?")
+    Else
+        DbgOutZ(VarPtr(g_dbgFieldTy[BytesN(fi, SYM_NAME_LEN)]))
+    End If
+End Sub
+
+Function DbgFieldTyOk(fi As Long) As Long
+    DbgFieldTyOk = 0
+    If fi >= g_dbgFieldTyCap Or g_dbgFieldTy = NULL Then Exit Function
+    If g_dbgFieldTy[BytesN(fi, SYM_NAME_LEN)] <> 0 Then DbgFieldTyOk = 1
+End Function

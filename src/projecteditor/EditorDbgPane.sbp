@@ -1,0 +1,193 @@
+' EditorDbgPane - デバッグの窓（Windows だけ）。上は呼び出し履歴のリスト、下は「グローバル / ローカル」の
+' タブと変数のツリー（AB4 のデバッグの窓と同じ形。ツリーは EditorDbgTree）。
+' 呼び出し履歴の段を選ぶと、abdbg に f <段> を送ってその段の行へ移り、ローカルのツリーを読み直す。
+' デバッグを始めると開き、× は隠すだけ（次のデバッグでまた出す）
+
+Const EDP_FRAMES = 2201
+Const EDP_TREE = 2202
+Const EDP_LBL_FRAMES = 2203
+Const EDP_TABS = 2204
+Const EDP_MAX_FRAMES = 64
+
+Dim g_hDbgPane As HWND
+Dim g_dbgFramePath[EDP_MAX_FRAMES] As String
+Dim g_dbgFrameLine[EDP_MAX_FRAMES] As Long
+Dim g_dbgFrameN As Long
+' bt <n> の後に来る frame の行の残り（f <段> の答えの frame は数えない）
+Dim g_dbgBtLeft As Long
+' 0 = グローバル、1 = ローカル
+Dim g_dbgTab As Long
+
+#ifndef _LINUX
+Declare Function EditorDbgPane_SendW Lib "user32" Alias "SendMessageW" (ByVal h As HWND, ByVal m As DWord, ByVal w As WPARAM, ByVal l As VoidPtr) As LRESULT
+
+Function EditorDbgPane_Proc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As LPARAM) As DWord
+    EditorDbgPane_Proc = 0
+    If dwMsg = WM_CLOSE Then ShowWindow(hWnd, SW_HIDE)
+    If dwMsg = WM_SIZE Then EditorDbgPane_Layout()
+    If dwMsg = WM_COMMAND Then EditorDbgPane_Cmd(wParam)
+    If dwMsg = WM_NOTIFY Then EditorDbgPane_Notify(lParam)
+    If EditorDbgPane_Own(dwMsg) = 0 Then EditorDbgPane_Proc = Dlg_DefWindowProcW(hWnd, dwMsg, wParam, lParam)
+End Function
+
+Function EditorDbgPane_Own(dwMsg As DWord) As Long
+    EditorDbgPane_Own = 0
+    If dwMsg = WM_CLOSE Or dwMsg = WM_SIZE Or dwMsg = WM_COMMAND Or dwMsg = WM_NOTIFY Then EditorDbgPane_Own = 1
+End Function
+
+' メインの窓の右上に、大きさの変えられる道具の窓として作る
+Sub EditorDbgPane_Create()
+    Dim rc As RECT
+    GetWindowRect(hMainWnd, rc)
+    g_hDbgPane = CreateWindowEx(&H80, "NORMALDLG", "", &H00CC0000, rc.right - 440, rc.top + 80, 420, 520, hMainWnd, 0 As HMENU, GetModuleHandle(0), 0)
+    If g_hDbgPane = 0 Then Exit Sub
+    Dlg_SetWndProcW(g_hDbgPane, GWL_WNDPROC, AddressOf(EditorDbgPane_Proc) As LONG_PTR)
+    Setting_SetUtf8Text(g_hDbgPane, UiText$(UI_DBG_PANE))
+    EditorDbgPane_Parts()
+    EditorDbgPane_Layout()
+End Sub
+
+' LISTBOX: WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_BORDER | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT
+' TREE: WS_CHILD | WS_VISIBLE | WS_BORDER | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS
+Sub EditorDbgPane_Parts()
+    Setting_SetUtf8Text(Dlg_Make(g_hDbgPane, "STATIC", 0, &H50000000, 0, 0, 10, 10, EDP_LBL_FRAMES), UiText$(UI_DBG_STACK))
+    Dlg_Make(g_hDbgPane, "LISTBOX", 0, &H50B00101, 0, 0, 10, 10, EDP_FRAMES)
+    Dlg_Make(g_hDbgPane, "SysTabControl32", 0, &H54000000, 0, 0, 10, 10, EDP_TABS)
+    Dlg_Make(g_hDbgPane, "SysTreeView32", 0, &H50800027, 0, 0, 10, 10, EDP_TREE)
+    SendMessage(GetDlgItem(g_hDbgPane, EDP_FRAMES), LB_SETHORIZONTALEXTENT, 2000, 0)
+    EditorDbgPane_Tabs()
+End Sub
+
+' グローバル / ローカル（初めはローカル。TCM_SETCURSEL）
+Sub EditorDbgPane_Tabs()
+    EditorDbgPane_AddTab(0, UiText$(UI_DBG_GLOBALS))
+    EditorDbgPane_AddTab(1, UiText$(UI_DBG_LOCALS))
+    g_dbgTab = 1
+    SendMessage(GetDlgItem(g_hDbgPane, EDP_TABS), &H130C, 1, 0)
+End Sub
+
+' TCM_INSERTITEMW。TCITEMW は mask（TCIF_TEXT = 1）と pszText（x64 は 16 バイト目、x86 は 12）
+Sub EditorDbgPane_AddTab(ByVal i As Long, s As String)
+    Dim it[63] As Byte, wide As *Byte, chars As Long
+    FillMemory(VarPtr(it), 64, 0)
+    wide = Enc_Utf8ToWide(s, chars)
+    it[0] = 1
+    memcpy(VarPtr(it[EditorDbgPane_TabTextOff()]), VarPtr(wide), SizeOf(VoidPtr))
+    EditorDbgPane_SendW(GetDlgItem(g_hDbgPane, EDP_TABS), &H133E, i, VarPtr(it))
+    If wide <> 0 Then free(wide)
+End Sub
+
+Function EditorDbgPane_TabTextOff() As Long
+    EditorDbgPane_TabTextOff = 12
+#ifdef _WIN64
+    EditorDbgPane_TabTextOff = 16
+#endif
+End Function
+
+' 上の 4 分の 1 が呼び出し履歴、その下にタブ（高さ 26）、残りがツリー
+Sub EditorDbgPane_Layout()
+    Dim rc As RECT, h As Long
+    If g_hDbgPane = 0 Then Exit Sub
+    GetClientRect(g_hDbgPane, rc)
+    h = (rc.bottom - 60) \ 4
+    EditorDbgPane_Move(EDP_LBL_FRAMES, 6, 18, rc.right)
+    EditorDbgPane_Move(EDP_FRAMES, 26, h, rc.right)
+    EditorDbgPane_Move(EDP_TABS, 32 + h, 26, rc.right)
+    EditorDbgPane_Move(EDP_TREE, 58 + h, rc.bottom - 64 - h, rc.right)
+End Sub
+
+Sub EditorDbgPane_Move(ByVal id As Long, ByVal y As Long, ByVal h As Long, ByVal cw As Long)
+    MoveWindow(GetDlgItem(g_hDbgPane, id), 6, y, cw - 12, h, TRUE)
+End Sub
+
+' 出す（無ければ作る）。フォーカスはエディタのまま
+Sub EditorDbgPane_Open()
+    If g_hDbgPane <> 0 And IsWindow(g_hDbgPane) = 0 Then g_hDbgPane = 0
+    If g_hDbgPane = 0 Then EditorDbgPane_Create()
+    If g_hDbgPane <> 0 Then ShowWindow(g_hDbgPane, SW_SHOWNOACTIVATE)
+End Sub
+
+Sub EditorDbgPane_Clear(ByVal id As Long)
+    If g_hDbgPane = 0 Then Exit Sub
+    SendMessage(GetDlgItem(g_hDbgPane, id), LB_RESETCONTENT, 0, 0)
+End Sub
+
+' UTF-8 の 1 行を足す
+Sub EditorDbgPane_Add(ByVal id As Long, s As String)
+    Dim wide As *Byte, chars As Long
+    If g_hDbgPane = 0 Then Exit Sub
+    wide = Enc_Utf8ToWide(s, chars)
+    If wide = 0 Then Exit Sub
+    EditorDbgPane_SendW(GetDlgItem(g_hDbgPane, id), LB_ADDSTRING, 0, wide)
+    free(wide)
+End Sub
+
+' 呼び出し履歴の段を選んだ（LBN_SELCHANGE = 1）
+Sub EditorDbgPane_Cmd(wParam As WPARAM)
+    Dim n As Long
+    If LOWORD(wParam) <> EDP_FRAMES Or HIWORD(wParam) <> 1 Then Exit Sub
+    n = SendMessage(GetDlgItem(g_hDbgPane, EDP_FRAMES), LB_GETCURSEL, 0, 0)
+    If n < 0 Or n >= g_dbgFrameN Or g_dbgStopped = 0 Then Exit Sub
+    EditorDbg_Send("f " + EditorGutter_Num$(n))
+    EditorDbgTree_Refresh()
+    EditorDbgPane_Goto(n)
+End Sub
+
+Sub EditorDbgPane_Goto(ByVal n As Long)
+    If g_dbgFrameLine[n] <= 0 Then Exit Sub
+    If Len(g_dbgFramePath[n]) > 0 Then MsgJump_Go(g_dbgFramePath[n], g_dbgFrameLine[n])
+    If Len(g_dbgFramePath[n]) = 0 Then MsgJump_GoLine(g_dbgFrameLine[n])
+End Sub
+
+' タブを替えた（TCN_SELCHANGE = -551）か、ツリーの + を開く（TVN_ITEMEXPANDING A = -405 / W = -454）
+Sub EditorDbgPane_Notify(lParam As LPARAM)
+    Dim nm As *NMHDR
+    nm = lParam As *NMHDR
+    If nm = 0 Then Exit Sub
+    If nm->idFrom = EDP_TABS And nm->code = -551 Then EditorDbgPane_TabChanged()
+    If nm->idFrom = EDP_TREE And (nm->code = -405 Or nm->code = -454) Then EditorDbgTree_Expanding(lParam)
+End Sub
+
+Sub EditorDbgPane_TabChanged()
+    g_dbgTab = SendMessage(GetDlgItem(g_hDbgPane, EDP_TABS), &H130B, 0, 0)
+    EditorDbgTree_Refresh()
+End Sub
+#else
+Sub EditorDbgPane_Open()
+End Sub
+
+Sub EditorDbgPane_Clear(ByVal id As Long)
+End Sub
+
+Sub EditorDbgPane_Add(ByVal id As Long, s As String)
+End Sub
+#endif
+
+' ---- abdbg の答えから（EditorDbgLine） ----
+
+' bt <n>
+Sub EditorDbgPane_BtHead(ByVal n As Long)
+    EditorDbgPane_Clear(EDP_FRAMES)
+    g_dbgFrameN = 0
+    g_dbgBtLeft = n
+End Sub
+
+' frame <段> <行> <手続き> <パス>（bt の続きだけ）
+Sub EditorDbgPane_Frame(ByVal ln As Long, fn As String, path As String)
+    If g_dbgBtLeft <= 0 Then Exit Sub
+    g_dbgBtLeft = g_dbgBtLeft - 1
+    If g_dbgFrameN >= EDP_MAX_FRAMES Then Exit Sub
+    g_dbgFramePath[g_dbgFrameN] = path
+    g_dbgFrameLine[g_dbgFrameN] = ln
+    g_dbgFrameN = g_dbgFrameN + 1
+    EditorDbgPane_Add(EDP_FRAMES, fn + "    " + EditorDbgPane_Base$(path) + "(" + EditorGutter_Num$(ln) + ")")
+End Sub
+
+Function EditorDbgPane_Base$(path As String) As String
+    Dim i As Long
+    EditorDbgPane_Base$ = path
+    For i = Len(path) To 1 Step -1
+        If Mid$(path, i, 1) = Chr$(92) Or Mid$(path, i, 1) = "/" Then EditorDbgPane_Base$ = Mid$(path, i + 1)
+        If Mid$(path, i, 1) = Chr$(92) Or Mid$(path, i, 1) = "/" Then Exit Function
+    Next
+End Function

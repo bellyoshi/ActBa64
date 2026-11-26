@@ -1,0 +1,197 @@
+' AdValue - 動いているプロセスのメモリの値を文字にする（x64 の ActBa64 の並び）
+'   String は文字のバイト列へのポインタ（その 4 バイト前が長さ、bit31 はヒープの印）
+
+Const VK_LONG = 1
+Const VK_DWORD = 2
+Const VK_INT64 = 3
+Const VK_QWORD = 4
+Const VK_BYTE = 5
+Const VK_WORD = 6
+Const VK_INTEGER = 7
+Const VK_SINGLE = 8
+Const VK_DOUBLE = 9
+Const VK_STRING = 10
+Const VK_PTR = 11
+Const VK_UDT = 12
+Const VK_LPTR = 13
+' Type へのポインタ（arg は Type の番号）
+Const VK_PUDT = 14
+
+Const AD_MAX_ELEMS = 10
+Const AD_MAX_TEXT = 200
+
+' n バイト読む（足りない上位は 0）
+Function AdReadN(addr As QWord, n As Long) As QWord
+    Dim v As QWord
+    v = 0
+    Ad_ReadMem(g_adHProc, addr, VarPtr(v), n, 0)
+    AdReadN = v
+End Function
+
+Function AdTypeSize(ti As Long) As Long
+    AdTypeSize = 8
+    If ti >= 0 And ti < g_atSize.n Then AdTypeSize = AdVecAt(VarPtr(g_atSize), ti)
+End Function
+
+Function AdVkSize(vk As Long, arg As Long) As Long
+    AdVkSize = AdPtrSize()
+    If vk = VK_LONG Or vk = VK_DWORD Or vk = VK_SINGLE Then AdVkSize = 4
+    If vk = VK_INT64 Or vk = VK_QWORD Or vk = VK_DOUBLE Then AdVkSize = 8
+    If vk = VK_BYTE Then AdVkSize = 1
+    If vk = VK_WORD Or vk = VK_INTEGER Then AdVkSize = 2
+    If vk = VK_UDT Then AdVkSize = AdTypeSize(arg)
+End Function
+
+' メンバの無い Type（BOOL など別名）は大きさで整数として見せる
+Function AdUdtScalar(ti As Long) As Long
+    Dim sz As Long
+    AdUdtScalar = 0
+    If ti < 0 Or ti >= g_atCount.n Then Exit Function
+    If AdVecAt(VarPtr(g_atCount), ti) > 0 Then Exit Function
+    sz = AdTypeSize(ti)
+    AdUdtScalar = AdVkBySize(sz)
+End Function
+
+Function AdVkBySize(sz As Long) As Long
+    AdVkBySize = VK_PTR
+    If sz = 1 Then AdVkBySize = VK_BYTE
+    If sz = 2 Then AdVkBySize = VK_INTEGER
+    If sz = 4 Then AdVkBySize = VK_LONG
+End Function
+
+Function AdFmt$(addr As QWord, vk As Long, arg As Long, depth As Long) As String
+    If vk = VK_UDT And AdUdtScalar(arg) <> 0 Then vk = AdUdtScalar(arg)
+    If vk = VK_STRING Then
+        AdFmt$ = AdFmtStr$(AdReadP(addr))
+    ElseIf vk = VK_UDT Then
+        AdFmt$ = AdFmtUdt$(addr, arg, depth)
+    Else
+        AdFmt$ = AdFmtNum$(addr, vk)
+    End If
+End Function
+
+Function AdFmtNum$(addr As QWord, vk As Long) As String
+    If vk = VK_SINGLE Or vk = VK_DOUBLE Then
+        AdFmtNum$ = AdFmtReal$(addr, vk)
+    Else
+        AdFmtNum$ = AdFmtInt$(addr, vk)
+    End If
+End Function
+
+Function AdFmtInt$(addr As QWord, vk As Long) As String
+    Dim q As QWord
+    q = AdReadN(addr, AdVkSize(vk, 0))
+    AdFmtInt$ = "&H" + Hex$(q)
+    If vk = VK_PTR Or vk = VK_PUDT Then Exit Function
+    AdFmtInt$ = Str$(q)
+    If vk = VK_QWORD Or vk = VK_DWORD Or vk = VK_BYTE Or vk = VK_WORD Then Exit Function
+    AdFmtInt$ = AdFmtSigned$(q, vk)
+End Function
+
+Function AdFmtSigned$(q As QWord, vk As Long) As String
+    Dim i As Int64
+    i = AdSigned(q, vk)
+    AdFmtSigned$ = Str$(i)
+End Function
+
+' 符号付きの整数として（Long と 32bit の LONG_PTR は 32bit、Integer は 16bit の符号を広げる）
+Function AdSigned(q As QWord, vk As Long) As Int64
+    Dim v As Long
+    AdSigned = q
+    If vk = VK_LPTR And AdIs32() <> 0 Then vk = VK_LONG
+    If vk = VK_LONG Then memcpy(VarPtr(v), VarPtr(q), 4)
+    If vk = VK_LONG Then AdSigned = v
+    If vk = VK_INTEGER Then AdSigned = AdSx16(q)
+End Function
+
+Function AdSx16(q As QWord) As Long
+    AdSx16 = q
+    If AdSx16 >= 32768 Then AdSx16 = AdSx16 - 65536
+End Function
+
+Function AdFmtReal$(addr As QWord, vk As Long) As String
+    Dim d As Double
+    Dim s As Single
+    d = 0
+    s = 0
+    If vk = VK_DOUBLE Then Ad_ReadMem(g_adHProc, addr, VarPtr(d), 8, 0)
+    If vk = VK_SINGLE Then Ad_ReadMem(g_adHProc, addr, VarPtr(s), 4, 0)
+    If vk = VK_SINGLE Then d = s
+    AdFmtReal$ = Str$(d)
+End Function
+
+' ---- String ----
+
+Function AdFmtStr$(p As QWord) As String
+    Dim n As Long
+    AdFmtStr$ = Chr$(34) + Chr$(34)
+    If p = 0 Then Exit Function
+    n = AdReadL(p - 4) And &H7FFFFFFF
+    AdFmtStr$ = AdQuote$(AdReadText$(p, n), n)
+End Function
+
+' 先頭から AD_MAX_TEXT バイトまで。制御文字は ? にする（1 行に収めるため）
+Function AdReadText$(p As QWord, n As Long) As String
+    Dim buf As *Byte
+    If n > AD_MAX_TEXT Then n = AD_MAX_TEXT
+    buf = calloc(n + 1)
+    Ad_ReadMem(g_adHProc, p, buf, n, 0)
+    AdNoCtrl(buf, n)
+    AdReadText$ = MakeStr(buf)
+    free(buf)
+End Function
+
+Sub AdNoCtrl(buf As *Byte, n As Long)
+    Dim i As Long
+    For i = 0 To n - 1
+        If buf[i] < 32 Then buf[i] = 63
+    Next
+End Sub
+
+Function AdQuote$(s As String, n As Long) As String
+    AdQuote$ = Chr$(34) + s + Chr$(34)
+    If n > Len(s) Then AdQuote$ = AdQuote$ + "...(" + Str$(n) + ")"
+End Function
+
+' ---- Type / 配列 ----
+
+Function AdFmtUdt$(addr As QWord, ti As Long, depth As Long) As String
+    Dim k As Long, s As String
+    AdFmtUdt$ = "{...}"
+    If depth >= 3 Or ti < 0 Or ti >= g_atFirst.n Then Exit Function
+    s = ""
+    For k = 0 To AdVecAt(VarPtr(g_atCount), ti) - 1
+        s = AdJoin$(s, AdFmtMember$(addr, AdVecAt(VarPtr(g_atFirst), ti) + k, depth))
+    Next
+    AdFmtUdt$ = "{" + s + "}"
+End Function
+
+Function AdFmtMember$(addr As QWord, fi As Long, depth As Long) As String
+    AdFmtMember$ = MakeStr(AdNamesAt(VarPtr(g_afName), fi)) + "=" + AdFmtField$(addr, fi, depth + 1)
+End Function
+
+Function AdJoin$(a As String, b As String) As String
+    AdJoin$ = b
+    If a <> "" Then AdJoin$ = a + ", " + b
+End Function
+
+Function AdFmtField$(addr As QWord, fi As Long, depth As Long) As String
+    Dim a As QWord
+    a = addr + AdVecAt(VarPtr(g_afOff), fi)
+    If AdVecAt(VarPtr(g_afCount), fi) > 1 Then
+        AdFmtField$ = AdFmtArr$(a, AdFieldVk(fi), AdFieldArg(fi), AdVecAt(VarPtr(g_afSize), fi), AdVecAt(VarPtr(g_afCount), fi), depth)
+    Else
+        AdFmtField$ = AdFmt$(a, AdFieldVk(fi), AdFieldArg(fi), depth)
+    End If
+End Function
+
+' [要素, 要素, ...]（AD_MAX_ELEMS まで）
+Function AdFmtArr$(addr As QWord, vk As Long, arg As Long, esz As Long, cnt As Long, depth As Long) As String
+    Dim i As Long, s As String
+    s = ""
+    For i = 0 To cnt - 1
+        If i < AD_MAX_ELEMS Then s = AdJoin$(s, AdFmt$(addr + i * esz, vk, arg, depth))
+    Next
+    If cnt > AD_MAX_ELEMS Then s = s + ", ..."
+    AdFmtArr$ = "[" + s + "]"
+End Function

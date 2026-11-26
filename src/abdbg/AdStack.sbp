@@ -1,0 +1,108 @@
+' AdStack - 呼び出し履歴。ActBa64 の手続きはどれも push rbp; mov rbp, rsp で始まるので rbp をたどる（32bit は ebp。ポインタは 4 バイト）。
+' 止まった所が exe の外（kernel32 の DebugBreak、API の中の例外）なら、スタックで最初に見つかる
+' exe の中への戻り先から始める
+
+Const AD_MAX_FRAMES = 64
+
+Dim g_adFrPc[AD_MAX_FRAMES] As QWord
+Dim g_adFrFp[AD_MAX_FRAMES] As QWord
+Dim g_adFrN As Long
+' 1: 一番上の段もスタックで見つけた戻り先（exe の外で止まった）
+Dim g_adFr0Ret As Long
+
+' rsp から上で、最初の exe の中を指す値
+Function AdStackScan(rsp As QWord) As QWord
+    Dim k As Long
+    AdStackScan = 0
+    k = 0
+    While k < 1024 And AdStackScan = 0
+        AdStackScan = AdStackAt(rsp, k)
+        k = k + 1
+    Wend
+End Function
+
+' スタックの k 番目の値。exe の中への戻り先らしくなければ 0（32bit は引数もスタックに積むので、文字列などを指す値を除く）
+Function AdStackAt(rsp As QWord, k As Long) As QWord
+    AdStackAt = AdReadP(rsp + k * AdPtrSize())
+    If AdInImage(AdStackAt) = 0 Then AdStackAt = 0
+    If AdStackAt <> 0 And AdLooksRet(AdStackAt) = 0 Then AdStackAt = 0
+End Function
+
+' v の手前が call の命令なら 1（call rel32 / call [mem] / call レジスタ）
+Function AdLooksRet(v As QWord) As Long
+    AdLooksRet = 0
+    If AdReadB(v - 5) = &HE8 Then AdLooksRet = 1
+    If AdReadB(v - 6) = &HFF And AdReadB(v - 5) = &H15 Then AdLooksRet = 1
+    If AdReadB(v - 2) = &HFF And (AdReadB(v - 1) And &HF8) = &HD0 Then AdLooksRet = 1
+End Function
+
+Sub AdStackNext(ByRef pc As QWord, ByRef fp As QWord)
+    Dim nfp As QWord
+    nfp = AdReadP(fp)
+    pc = AdReadP(fp + AdPtrSize())
+    If nfp <= fp Then pc = 0
+    fp = nfp
+End Sub
+
+Sub AdStackWalk(pc As QWord, fp As QWord)
+    While pc <> 0 And AdInImage(pc) <> 0 And g_adFrN < AD_MAX_FRAMES
+        g_adFrPc[g_adFrN] = pc
+        g_adFrFp[g_adFrN] = fp
+        g_adFrN = g_adFrN + 1
+        AdStackNext(pc, fp)
+    Wend
+End Sub
+
+Sub AdStackBuild()
+    Dim pc As QWord
+    AdCtxGet()
+    pc = AdReg(AD_REG_IP)
+    g_adFr0Ret = 1 - AdInImage(pc)
+    If g_adFr0Ret <> 0 Then pc = AdStackScan(AdReg(AD_REG_SP))
+    g_adFrN = 0
+    AdStackWalk(pc, AdReg(AD_REG_FP))
+End Sub
+
+' 行を引く RVA。戻り先は呼んだ命令の中（1 つ前のバイト）で引く
+Function AdFrameRva(i As Long) As Long
+    AdFrameRva = AdRvaOf(g_adFrPc[i])
+    If i > 0 Or g_adFr0Ret <> 0 Then AdFrameRva = AdFrameRva - 1
+End Function
+
+Function AdFrameFn(i As Long) As Long
+    AdFrameFn = -1
+    If i < 0 Or i >= g_adFrN Then Exit Function
+    AdFrameFn = AdSymFuncAt(AdFrameRva(i))
+End Function
+
+Function AdFnName$(fn As Long) As String
+    AdFnName$ = "?"
+    If fn >= 0 Then AdFnName$ = MakeStr(AdNamesAt(VarPtr(g_adFnName), fn))
+End Function
+
+' <行> <手続き> <ファイル>（分からなければ 0 ? ?）
+Function AdFrameLoc$(i As Long) As String
+    Dim k As Long
+    AdFrameLoc$ = "0 ? ?"
+    If i < 0 Or i >= g_adFrN Then Exit Function
+    k = AdSymLineAt(AdFrameRva(i))
+    AdFrameLoc$ = AdLnText$(k, AdFrameFn(i))
+End Function
+
+Function AdLnText$(k As Long, fn As Long) As String
+    Dim f As Long
+    f = -1
+    If k >= 0 Then f = AdVecAt(VarPtr(g_adLnFile), k)
+    AdLnText$ = "0 " + AdFnName$(fn) + " ?"
+    If f < 0 Then Exit Function
+    AdLnText$ = Str$(AdVecAt(VarPtr(g_adLnLine), k)) + " " + AdFnName$(fn) + " " + MakeStr(AdNamesAt(VarPtr(g_adFile), f))
+End Function
+
+' 止まった場所として見せる段。Debug 文は BasicDebug の中で止まるので、その呼び出し元
+Function AdStackUserFrame(kind As String) As Long
+    AdStackUserFrame = 0
+    If kind <> "debug" Then Exit Function
+    While AdStackUserFrame < g_adFrN - 1 And AdFnName$(AdFrameFn(AdStackUserFrame)) = "BasicDebug"
+        AdStackUserFrame = AdStackUserFrame + 1
+    Wend
+End Function

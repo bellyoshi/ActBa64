@@ -1,0 +1,183 @@
+' AdSym - .abdbg（actba64 -debug が書くデバッグ情報）を読む。String は作らずにバイト列のまま読む
+
+Dim g_adSym As *Byte
+Dim g_adSymLen As Long
+Dim g_adPos As Long
+Dim g_adArch64 As Long
+Dim g_adHeadOk As Long
+
+Dim g_adLnRva As AdVec
+Dim g_adLnFile As AdVec
+Dim g_adLnLine As AdVec
+Dim g_adLnFlag As AdVec
+Dim g_adFnStart As AdVec
+Dim g_adFnEnd As AdVec
+Dim g_adFnName As AdNames
+Dim g_adFile As AdNames
+' 1: Include のフォルダのファイル（lib の行）
+Dim g_adFileLib As AdVec
+' 1: ユーザーのソース（ライブラリでない）の文がある手続き
+Dim g_adFnUser As AdVec
+
+' 今の位置が w で始まれば、その後ろへ進めて 1
+Function AdSymIs(w As *Byte) As Long
+    Dim j As Long
+    j = 0
+    While w[j] <> 0 And g_adSym[g_adPos + j] = w[j]
+        j = j + 1
+    Wend
+    ' 比べた結果は真が -1。全部合えば 1、途中で違えば 0
+    AdSymIs = 1 + (w[j] <> 0)
+    If AdSymIs <> 0 Then g_adPos = g_adPos + j
+End Function
+
+Function AdSymDigits() As Long
+    Dim v As Long
+    v = 0
+    While g_adSym[g_adPos] >= 48 And g_adSym[g_adPos] <= 57
+        v = v * 10 + (g_adSym[g_adPos] - 48)
+        g_adPos = g_adPos + 1
+    Wend
+    AdSymDigits = v
+End Function
+
+' [-]数字。後ろの空白 1 つも読む
+Function AdSymNum() As Long
+    Dim neg As Long
+    neg = 0
+    If g_adSym[g_adPos] = 45 Then neg = 1
+    If neg <> 0 Then g_adPos = g_adPos + 1
+    AdSymNum = AdSymDigits()
+    If neg <> 0 Then AdSymNum = 0 - AdSymNum
+    If g_adSym[g_adPos] = 32 Then g_adPos = g_adPos + 1
+End Function
+
+' 行の残りの長さ（CR / LF の手前まで）
+Function AdSymRestLen() As Long
+    Dim n As Long
+    n = 0
+    While g_adSym[g_adPos + n] <> 0 And g_adSym[g_adPos + n] <> 10 And g_adSym[g_adPos + n] <> 13
+        n = n + 1
+    Wend
+    AdSymRestLen = n
+End Function
+
+Sub AdSymNextLine()
+    While g_adSym[g_adPos] <> 0 And g_adSym[g_adPos] <> 10
+        g_adPos = g_adPos + 1
+    Wend
+    If g_adSym[g_adPos] = 10 Then g_adPos = g_adPos + 1
+End Sub
+
+Sub AdSymAddLine()
+    AdVecPush(VarPtr(g_adLnRva), AdSymNum())
+    AdVecPush(VarPtr(g_adLnFile), AdSymNum())
+    AdVecPush(VarPtr(g_adLnLine), AdSymNum())
+    AdVecPush(VarPtr(g_adLnFlag), AdSymNum())
+End Sub
+
+' func <番号> <始まり> <終わり> <名前>
+Sub AdSymAddFunc()
+    AdVecPush(VarPtr(g_adFnId), AdSymNum())
+    AdVecPush(VarPtr(g_adFnStart), AdSymNum())
+    AdVecPush(VarPtr(g_adFnEnd), AdSymNum())
+    AdNamesPush(VarPtr(g_adFnName), VarPtr(g_adSym[g_adPos]), AdSymRestLen())
+End Sub
+
+' file <番号> <パス>（番号は 0 から順に並ぶ）
+Sub AdSymAddFile()
+    AdSymNum()
+    AdNamesPush(VarPtr(g_adFile), VarPtr(g_adSym[g_adPos]), AdSymRestLen())
+    AdVecPush(VarPtr(g_adFileLib), 0)
+End Sub
+
+' lib <file の番号>
+Sub AdSymAddLib()
+    Dim f As Long
+    f = AdSymNum()
+    If f >= 0 And f < g_adFileLib.n Then AdVecSet(VarPtr(g_adFileLib), f, 1)
+End Sub
+
+Sub AdSymParseLine()
+    If AdSymIs("line ") Then AdSymAddLine()
+    If AdSymIs("func ") Then AdSymAddFunc()
+    If AdSymIs("file ") Then AdSymAddFile()
+    If AdSymIs("lib ") Then AdSymAddLib()
+    AdSymParseVarLine()
+    If AdSymIs("ABDBG 1") Then g_adHeadOk = 1
+    If AdSymIs("arch x64") Then g_adArch64 = 1
+End Sub
+
+
+
+Sub AdSymInit()
+    AdNamesInit(VarPtr(g_adFnName), 128)
+    AdNamesInit(VarPtr(g_adFile), 1024)
+    AdVarSymInit()
+    AdCondInit()
+    g_adArch64 = 0
+    g_adHeadOk = 0
+End Sub
+
+' 戻り値 1 : 読めた  0 : 読めない（無い・形式が違う）
+Function AdSymLoad(path As *Byte) As Long
+    Dim raw As *Byte
+    Dim n As Long
+    AdSymLoad = 0
+    AdSymInit()
+    raw = LoadFile(path, n)
+    If raw = 0 Then Exit Function
+    AdSymTake(raw, n)
+    AdSymLoad = AdSymParseAll(n)
+End Function
+
+' 読んだ中身を末尾 0 の入れ物へ写す（読むときに終わりを確かめなくてよいように）
+Sub AdSymTake(raw As *Byte, n As Long)
+    g_adSym = calloc(n + 1)
+    memcpy(g_adSym, raw, n)
+    free(raw)
+End Sub
+
+Function AdSymParseAll(n As Long) As Long
+    g_adSymLen = n
+    g_adPos = 0
+    While g_adPos < g_adSymLen
+        AdSymParseLine()
+        AdSymNextLine()
+    Wend
+    AdSymMarkUserFns()
+    AdSymParseAll = g_adHeadOk
+End Function
+
+' ---- ユーザーの手続き（line も func も RVA の小さい順なので、並べて 1 回ずつ見る） ----
+
+Sub AdSymMarkUserFns()
+    Dim k As Long, fi As Long
+    For k = 0 To g_adFnStart.n - 1
+        AdVecPush(VarPtr(g_adFnUser), 0)
+    Next
+    fi = 0
+    For k = 0 To g_adLnRva.n - 1
+        fi = AdSymMarkLine(k, fi)
+    Next
+End Sub
+
+' line k が手続き fi（から先）の中のユーザーの文なら印。次に見る手続きを返す
+Function AdSymMarkLine(k As Long, fi As Long) As Long
+    While fi < g_adFnStart.n And AdVecAt(VarPtr(g_adFnEnd), fi) <= AdLnRva(k)
+        fi = fi + 1
+    Wend
+    AdSymMarkLine = fi
+    If fi >= g_adFnStart.n Then Exit Function
+    If AdVecAt(VarPtr(g_adFnStart), fi) > AdLnRva(k) Then Exit Function
+    If AdLnIsUser(k) <> 0 Then AdVecSet(VarPtr(g_adFnUser), fi, 1)
+End Function
+
+Function AdLnIsUser(k As Long) As Long
+    Dim f As Long
+    AdLnIsUser = 0
+    If AdVecAt(VarPtr(g_adLnFlag), k) <> 1 Then Exit Function
+    f = AdVecAt(VarPtr(g_adLnFile), k)
+    If f < 0 Then Exit Function
+    If AdVecAt(VarPtr(g_adFileLib), f) = 0 Then AdLnIsUser = 1
+End Function

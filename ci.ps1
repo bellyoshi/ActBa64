@@ -76,12 +76,24 @@ Invoke-Step "unit tests" {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\unittest\rununittest.ps1")
 }
 
+Invoke-Step "debugger unit tests (dbgtest)" {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\dbgtest\rundbgtest.ps1")
+}
+
 Invoke-Step "integration tests (64bit)" {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Cc "run_test2.ps1") stage2 -TimeoutSec 20
 }
 
 Invoke-Step "integration tests (-actba32)" {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Cc "run_test2.ps1") stage2 -Actba32 -TimeoutSec 20
+}
+
+Invoke-Step "debugger tests (abdbg)" {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\abdbg\run_test.ps1")
+}
+
+Invoke-Step "debugger tests (abdbg, -actba32)" {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\abdbg\run_test.ps1") -Actba32
 }
 
 Write-Host ""

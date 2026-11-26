@@ -1,9 +1,10 @@
 # ActBa64 ドキュメント
 
-Actba64はActiveBasic 互換サブセットコンパイラ です。
+ActBa64 は、ActiveBasic（4.20 / 4.24）の言語の大部分をコンパイルするコンパイラです。ActiveBasic 自身で書かれています。「ActiveBasic で ActiveBasic もどきを作ったらどうなるか？」という実験から始まり、今では自分自身・リソースコンパイラ・専用エディタをすべて自分でコンパイルできるツールチェーンになりました。
 
-ActiveBasicでActiveBasicもどきをつくったらどうなるか？
-という実験プロジェクトです。完全に同じ動きをするわけではありませんのでご了承ください。
+目標は、既存の ActiveBasic のプログラムを **ソースを書き換えずに** コンパイルして動かすことです。ただし本ツールチェインは、ActiveBasicを参考に独自に実装したものであり、完全な互換性は有していません。仕様や挙動が一部異なる場合があります。違いは [ActiveBasic との相違](./different.md) にまとめています。
+
+ActBa64 は非公式のプロジェクトであり、ActiveBasic の開発元である Discoversoft とは無関係です。
 
 ## 重要
 
@@ -41,6 +42,7 @@ CallBack.wbpとMakeWindow.wbpをProjectEditorが書き換えます。これら�
 | [PE+32.md](./PE+32.md) | PE32+（64bit）と PE32（32bit、`-actba32`）の出力 |
 | [string-gc.md](./string-gc.md) | String GC（ハイブリッドマーク掃き出しの設計・BSS レイアウト・セーフポイント） |
 | [build.md](./build.md) | ビルド手順（AB4.20 stage0 → 自己ホスト → リリース一式）、統合テスト、[コンパイラソース分割](./build.md#コンパイラソースの分割) |
+| [debugger.md](./debugger.md) | デバッガーの計画（`-debug` の `.abdbg` の形式、`Debug` 文、abdbg.exe の段階） |
 | [projecteditor.md](./projecteditor.md) | ProjectEditor（MDI、プロジェクト、コンパイル / 実行、ヘルプ、表示言語） |
 | [coding.md](./coding.md) | コーディング規約（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**） |
 | [activebasic-versions.md](./activebasic-versions.md) | 対応する ActiveBasic のバージョン（3.10 / 3.13 / 4.23 / 4.24。5.0 と 2.62 以前の扱い） |

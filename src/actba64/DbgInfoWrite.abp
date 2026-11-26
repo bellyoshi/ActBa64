@@ -1,0 +1,195 @@
+' ===================================================
+'  DbgInfoWrite - exe の隣（拡張子を .abdbg にしたもの）にデバッグ情報を書く
+'  UTF-8 のテキスト。1 行 1 件、数は 10 進、名前とパスは行の最後（空白を含んでよい）:
+'    ABDBG 1
+'    arch x64 | x86
+'    text <.text の RVA>
+'    data <.data（グローバル）の RVA>
+'    func <番号> <始まりの RVA> <終わりの RVA> <名前>
+'    var <手続きの番号 | -1=グローバル> <off> <ByRef> <kind> <typeIdx> <バイト数> <file の番号 | -1> <宣言した行 | 0> <型> <名前>
+'    type / field（DbgInfoUdt）
+'    file <番号> <フルパス>
+'    lib <file の番号>（Include のフォルダのファイル。file の後）
+'    line <RVA> <file の番号 | -1> <行 | 0> <1=文の始まり 0=続き>
+'  line はその RVA から次の line の RVA の手前まで。行 0 はどの行でもない。
+'  大きなプログラムでも速いよう、書くときは String を作らずバイト列へ足していく
+'  （手続きの中で作った String は MAIN に戻るまで回収されない）
+' ===================================================
+
+Const DBG_PATH_LEN = 1024
+
+Dim g_dbgOut As *Byte
+Dim g_dbgOutN As Long
+Dim g_dbgOutCap As Long
+Dim g_dbgDataRva As DWord
+
+' CompileIrToPe が .data の RVA を知らせる
+Sub DbgSetDataRva(dataRva As DWord)
+    g_dbgDataRva = dataRva
+End Sub
+
+' ---- 書き出しの入れ物 ----
+
+Function DbgOutNextCap(n As Long) As Long
+    DbgOutNextCap = g_dbgOutCap * 2
+    DbgOutNextCap = DbgOutNextCap + n + 65536
+End Function
+
+' 足りなければ g_dbgBad を立てて false
+Function DbgOutReserve(n As Long) As boolean
+    Dim p As *Byte
+    DbgOutReserve = true
+    If g_dbgOutN + n < g_dbgOutCap Then Exit Function
+    p = MemGrow(g_dbgOut, g_dbgOutCap, DbgOutNextCap(n))
+    If p <> NULL Then g_dbgOutCap = DbgOutNextCap(n)
+    If p <> NULL Then g_dbgOut = p
+    If p = NULL Then g_dbgBad = 1
+    If p = NULL Then DbgOutReserve = false
+End Function
+
+' 末尾 0 のバイト列を足す
+Sub DbgOutZ(p As *Byte)
+    Dim n As Long
+    n = 0
+    While p[n] <> 0
+        n = n + 1
+    Wend
+    If Not DbgOutReserve(n) Then Exit Sub
+    If n > 0 Then memcpy(VarPtr(g_dbgOut[g_dbgOutN]), p, n)
+    g_dbgOutN = g_dbgOutN + n
+End Sub
+
+Sub DbgOutNL()
+    If Not DbgOutReserve(1) Then Exit Sub
+    g_dbgOut[g_dbgOutN] = 10
+    g_dbgOutN = g_dbgOutN + 1
+End Sub
+
+Sub DbgOutDigits(d As *Byte, u As DWord)
+    Dim i As Long
+    i = 14
+    Do
+        d[i] = 48 + (u Mod 10)
+        u = u \ 10
+        i = i - 1
+    Loop While u <> 0
+    DbgOutZ(VarPtr(d[i + 1]))
+End Sub
+
+' 空白と 10 進の数
+Sub DbgOutSN(v As Long)
+    Dim d(15) As Byte
+    Dim u As DWord
+    DbgOutZ(" ")
+    If v < 0 Then DbgOutZ("-")
+    u = v
+    If v < 0 Then u = 0 - v
+    d[15] = 0
+    DbgOutDigits(VarPtr(d), u)
+End Sub
+
+Sub DbgOutRva(off As Long)
+    Dim r As DWord
+    r = TEXT_RVA
+    r = r + off
+    DbgOutSN(r)
+End Sub
+
+' ---- 見出し・手続き・変数 ----
+
+Sub DbgOutHeader()
+    DbgOutZ("ABDBG 1")
+    DbgOutNL()
+    If TyIs32() <> 0 Then DbgOutZ("arch x86")
+    If TyIs32() = 0 Then DbgOutZ("arch x64")
+    DbgOutNL()
+    DbgOutHeaderData()
+End Sub
+
+Sub DbgOutHeaderData()
+    DbgOutZ("text")
+    DbgOutRva(0)
+    DbgOutNL()
+    DbgOutZ("data")
+    DbgOutSN(g_dbgDataRva)
+    DbgOutNL()
+End Sub
+
+' 機械語になった（-X で消えていない）手続きなら 1
+Function DbgFnLive(fid As Long) As Long
+    DbgFnLive = 1
+    If fid < 0 Then Exit Function
+    If g_dbgFnStart[fid] < 0 Or g_dbgFnEnd[fid] < 0 Then DbgFnLive = 0
+End Function
+
+Sub DbgOutFunc(i As Long)
+    DbgOutZ("func")
+    DbgOutSN(i)
+    DbgOutRva(g_dbgFnStart[i])
+    DbgOutRva(g_dbgFnEnd[i])
+    DbgOutZ(" ")
+    DbgOutZ(VarPtr(g_dbgFnName[BytesN(i, SYM_NAME_LEN)]))
+    DbgOutNL()
+End Sub
+
+Sub DbgOutFuncs()
+    Dim i As Long
+    For i = 0 To g_dbgFnN - 1
+        If DbgFnLive(i) <> 0 Then DbgOutFunc(i)
+    Next
+End Sub
+
+Sub DbgOutVar(v As Long)
+    DbgOutZ("var")
+    DbgOutSN(g_dbgVarFn[v])
+    DbgOutSN(g_dbgVarOff[v])
+    DbgOutSN(g_dbgVarRef[v])
+    DbgOutSN(g_dbgVarKind[v])
+    DbgOutSN(g_dbgVarTi[v])
+    DbgOutVarPlace(v)
+    DbgOutVarTail(v)
+End Sub
+
+' 宣言したファイルの番号と行（分からなければ -1 0）
+' バイト数と、宣言したファイルの番号と行（分からなければ -1 0）
+Sub DbgOutVarPlace(v As Long)
+    DbgOutSN(g_dbgVarSize[v])
+    DbgOutSN(DbgLnFile(g_dbgVarLine[v]))
+    DbgOutSN(DbgLnLocal(g_dbgVarLine[v]))
+    DbgOutZ(" ")
+End Sub
+
+Sub DbgOutVarTail(v As Long)
+    DbgOutType(v)
+    DbgOutZ(" ")
+    DbgOutZ(VarPtr(g_dbgVarName[BytesN(v, SYM_NAME_LEN)]))
+    DbgOutNL()
+End Sub
+
+Sub DbgOutVars()
+    Dim v As Long
+    For v = 0 To g_dbgVarN - 1
+        If DbgFnLive(g_dbgVarFn[v]) <> 0 Then DbgOutVar(v)
+    Next
+End Sub
+
+' ---- 書く先 ----
+
+' 最後の部分の拡張子の "." の位置（1 から。無ければ 0）
+Function DbgExtPos(s As String) As Long
+    Dim p As *Byte
+    Dim i As Long
+    p = StrPtr(s)
+    DbgExtPos = 0
+    For i = 0 To Len(s) - 1
+        If p[i] = 46 Then DbgExtPos = i + 1
+        If p[i] = 47 Or p[i] = 92 Then DbgExtPos = 0
+    Next
+End Function
+
+Function DbgPathOf$(outPath As *Byte) As String
+    Dim s As String
+    s = MakeStr(outPath)
+    If DbgExtPos(s) > 0 Then s = Left$(s, DbgExtPos(s) - 1)
+    DbgPathOf$ = s + ".abdbg"
+End Function

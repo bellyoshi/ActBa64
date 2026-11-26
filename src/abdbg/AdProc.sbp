@@ -1,0 +1,108 @@
+' AdProc - デバッグするプロセス（起動・メモリ・スレッドの CONTEXT・続行）
+
+Const AD_ST_IDLE = 0
+Const AD_ST_RUN = 1
+Const AD_ST_STOP = 2
+Const AD_ST_DONE = 3
+
+Dim g_adState As Long
+Dim g_adHProc As HANDLE
+Dim g_adHThr As HANDLE
+Dim g_adBase As QWord
+Dim g_adImgSize As QWord
+Dim g_adEvPid As DWord
+Dim g_adEvTid As DWord
+Dim g_adCont As DWord
+' 1: プログラムを新しいコンソールで動かす（-console。標準入出力をデバッガーのコマンドと分ける）
+Dim g_adNewConsole As Long
+
+' 戻り値 1 : 起動した  0 : 起動できない
+Function AdStart(exe As String) As Long
+    Dim cmd As String
+    AdStart = 0
+    cmd = Chr$(34) + exe + Chr$(34)
+    If Ad_CreateProcess(0, StrPtr(cmd), 0, 0, 0, AdStartFlags(), 0, 0, g_adSi, g_adPi) = 0 Then Exit Function
+    g_adHProc = AdQ(g_adPi, 0)
+    AdCloseIf(AdQ(g_adPi, 8))
+    g_adState = AD_ST_RUN
+    AdStart = 1
+End Function
+
+' CREATE_NEW_CONSOLE = &H10
+Function AdStartFlags() As DWord
+    AdStartFlags = AD_DEBUG_ONLY_THIS
+    If g_adNewConsole <> 0 Then AdStartFlags = AdStartFlags Or &H10
+End Function
+
+' ---- メモリ ----
+
+Function AdReadQ(addr As QWord) As QWord
+    Dim v As QWord
+    v = 0
+    Ad_ReadMem(g_adHProc, addr, VarPtr(v), 8, 0)
+    AdReadQ = v
+End Function
+
+Function AdReadL(addr As QWord) As Long
+    Dim v As Long
+    v = 0
+    Ad_ReadMem(g_adHProc, addr, VarPtr(v), 4, 0)
+    AdReadL = v
+End Function
+
+Function AdReadB(addr As QWord) As Long
+    Dim b As Byte
+    b = 0
+    Ad_ReadMem(g_adHProc, addr, VarPtr(b), 1, 0)
+    AdReadB = b
+End Function
+
+Sub AdWriteB(addr As QWord, v As Long)
+    Dim b As Byte
+    b = v
+    Ad_WriteMem(g_adHProc, addr, VarPtr(b), 1, 0)
+    Ad_FlushIcache(g_adHProc, addr, 1)
+End Sub
+
+' PE の SizeOfImage（読み込まれた先頭から）
+Function AdReadImgSize() As QWord
+    Dim nt As QWord
+    nt = g_adBase + AdReadL(g_adBase + &H3C)
+    AdReadImgSize = AdReadL(nt + &H50)
+End Function
+
+' addr がデバッグしている exe の中なら 1
+Function AdInImage(addr As QWord) As Long
+    AdInImage = 0
+    If g_adBase = 0 Or addr < g_adBase Then Exit Function
+    If addr - g_adBase >= g_adImgSize Then Exit Function
+    AdInImage = 1
+End Function
+
+' exe の中のアドレス → RVA
+Function AdRvaOf(addr As QWord) As Long
+    AdRvaOf = addr - g_adBase
+End Function
+
+' ---- 止まっているスレッド ----
+
+Sub AdThreadOpen()
+    AdThreadClose()
+    g_adHThr = Ad_OpenThread(AD_THREAD_ALL, 0, g_adEvTid)
+End Sub
+
+Sub AdThreadClose()
+    AdCloseIf(g_adHThr)
+    g_adHThr = 0
+End Sub
+
+
+
+
+
+' 止まった所から続ける
+Sub AdResume()
+    AdThreadClose()
+    g_adState = AD_ST_RUN
+    Ad_ContinueDebugEvent(g_adEvPid, g_adEvTid, g_adCont)
+End Sub

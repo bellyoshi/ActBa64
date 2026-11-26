@@ -89,7 +89,7 @@ actba64 <src.abp|.pj> [-actba32] [-X] [-debug] [-pN88] [-pAB2] [-o <out>]
 
 `-pN88` は N88-BASIC のソースを読む（行番号は省略可）（[language.md §1.7](./language.md#pn88)）。`-pAB2` は ActiveBasic 2.62 のソースを読む（`ParserAB2*` と `Include\AB2`）（[language.md §1.8](./language.md#pab2)）。`-X` は呼ばれない関数を消して exe を小さくする（下の「呼ばれない関数を消す」と同じ解析を Windows の出力にも使う。Hello World は 144KB → 9KB）。PE の `.data`（大域変数）は中身が全部 0 なので、ファイルには持たない（BSS。`IMAGE_SCN_CNT_UNINITIALIZED_DATA`、ローダーが 0 で埋める）。
 
-`-debug` は `_DEBUG` を定義する（`#IFDEF _DEBUG` の部分を入れる。AB4 でデバッグ実行したときと同じ）。**デバッガーは付かない**。ブレークポイント・ステップ実行・変数の表示は無く、exe の中身も `_DEBUG` の分のほかはリリースと同じ（[language.md §7.7](./language.md#77-条件付きコンパイル)）。
+`-debug` は `_DEBUG` を定義する（`#IFDEF _DEBUG` の部分を入れる。AB4 でデバッグ実行したときと同じ。[language.md §7.7](./language.md#77-条件付きコンパイル)）。あわせて exe の隣に**デバッグ情報 `.abdbg`**（行の表・手続き・変数）を書く（`-linux` では書かない）。exe の中身は `_DEBUG` の分と `Debug` 文のほかはリリースと同じ。デバッガー本体（`abdbg.exe`）はまだ無い。計画と `.abdbg` の形式は [debugger.md](./debugger.md)。
 
 `.pj` の `#OUTPUT_RELEASE` は `-o` が無いときに使う（パスは `.pj` ディレクトリ基準）。`-debug` のときは `#OUTPUT_DEBUG` を使い、無ければ `#OUTPUT_RELEASE` を使う。DLL は `#MODULETYPE=1` で、再配置は `PeReloc.abp` が `.reloc` に書く（[language.md §8.4](./language.md#84-dll-を出力する)）。
 

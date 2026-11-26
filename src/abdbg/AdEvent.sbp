@@ -1,0 +1,133 @@
+' AdEvent - デバッグイベントを 1 つ待って扱う。止まるときは g_adState を AD_ST_STOP にして返す
+
+Dim g_adLoaderSeen As Long
+Dim g_adRearm As Long
+Dim g_adFaultAddr As QWord
+Dim g_adStopKind As String
+
+' MAIN のループから、動いている間呼ぶ（MAIN に戻るたびに String を回収できるよう 1 つずつ）
+Sub AdPump()
+    If Ad_WaitForDebugEvent(g_adEv, AD_INFINITE) = 0 Then Exit Sub
+    g_adEvPid = AdL(g_adEv, 4)
+    g_adEvTid = AdL(g_adEv, 8)
+    g_adCont = AD_DBG_CONTINUE
+    AdOnEvent(AdL(g_adEv, 0))
+    If g_adState = AD_ST_RUN Then Ad_ContinueDebugEvent(g_adEvPid, g_adEvTid, g_adCont)
+End Sub
+
+Sub AdOnEvent(code As Long)
+    If code = AD_EV_EXCEPTION Then AdOnException()
+    If code = AD_EV_CREATE_PROCESS Then AdOnCreate()
+    If code = AD_EV_EXIT_PROCESS Then AdOnExit()
+    If code = AD_EV_LOAD_DLL Then AdCloseIf(AdQ(g_adEv, 16))
+End Sub
+
+' CREATE_PROCESS_DEBUG_INFO: hFile 16、lpBaseOfImage 40
+Sub AdOnCreate()
+    AdCloseIf(AdQ(g_adEv, 16))
+    g_adBase = AdQ(g_adEv, 40)
+    g_adImgSize = AdReadImgSize()
+    g_adRearm = -1
+    AdBpArmAll()
+End Sub
+
+Sub AdOnExit()
+    Print "exit " + Str$(AdL(g_adEv, 16))
+    g_adState = AD_ST_DONE
+    Ad_ContinueDebugEvent(g_adEvPid, g_adEvTid, AD_DBG_CONTINUE)
+End Sub
+
+' 32bit の exe では、64bit の ntdll の最初のブレークポイント（0x80000003）は読み飛ばし、
+' 32bit の側の 0x4000001F / 0x4000001E を x64 と同じに扱う
+Sub AdOnException()
+    Dim code As Long
+    code = AdL(g_adEv, AD_EX_CODE)
+    If AdIs32() <> 0 And code = AD_EXC_BREAKPOINT Then Exit Sub
+    code = AdNormCode(code)
+    If code = AD_EXC_BREAKPOINT Then AdOnBreak(AdQ(g_adEv, AD_EX_ADDR))
+    If code = AD_EXC_SINGLE_STEP Then AdOnStep()
+    If code <> AD_EXC_BREAKPOINT And code <> AD_EXC_SINGLE_STEP Then AdOnFault(code, AdQ(g_adEv, AD_EX_ADDR), AdL(g_adEv, AD_EX_FIRST))
+End Sub
+
+' 自分のブレークポイント / 最初の ntdll のブレークポイント（読み飛ばす）/ Debug 文などの int3
+Sub AdOnBreak(addr As QWord)
+    If g_adTmpAddr <> 0 And addr = g_adTmpAddr Then
+        AdThreadOpen()
+        AdCtxGet()
+        AdTmpHit(addr)
+        Exit Sub
+    End If
+    AdOnBreakUser(addr)
+End Sub
+
+Sub AdOnBreakUser(addr As QWord)
+    Dim i As Long
+    i = AdBpFindAddr(addr)
+    If i >= 0 Then AdBpHit(i, addr)
+    If i >= 0 Then Exit Sub
+    If g_adLoaderSeen <> 0 Then AdStop("debug", "")
+    g_adLoaderSeen = 1
+End Sub
+
+' ブレークポイントの 1 命令を進めた後: 0xCC を書き戻す
+' 1 命令進んだ: ブレークポイントの 0xCC を書き戻し、ステップ中なら次を決める
+Sub AdOnStep()
+    If g_adRearm >= 0 Then AdBpRearm(g_adRearm)
+    g_adRearm = -1
+    If g_adTmpRearm <> 0 And g_adTmpAddr <> 0 Then AdWriteB(g_adTmpAddr, &HCC)
+    g_adTmpRearm = 0
+    If g_adStepping <> 0 And g_adEvTid = g_adStepTid Then AdStepOne()
+End Sub
+
+' exe の外の 1 回目の例外はプログラム（OS）に任せる。同じ所の 2 回目は止めずに終わらせる
+Sub AdOnFault(code As Long, addr As QWord, first As Long)
+    g_adCont = AD_DBG_NOT_HANDLED
+    If first <> 0 And AdInImage(addr) = 0 Then Exit Sub
+    If first = 0 And addr = g_adFaultAddr Then Exit Sub
+    g_adFaultAddr = addr
+    AdStop("exception", AdHex8$(code))
+End Sub
+
+Function AdHex8$(v As Long) As String
+    AdHex8$ = Right$("0000000" + Hex$(v), 8)
+End Function
+
+' 条件付きで、条件が偽なら止まらずに続ける（1 命令進めて 0xCC を書き戻すのは同じ）
+Sub AdBpHit(i As Long, addr As QWord)
+    AdBpRestore(i)
+    AdThreadOpen()
+    AdCtxGet()
+    AdSetReg(AD_REG_IP, addr)
+    AdSetTF()
+    g_adRearm = i
+    If AdCondPass(AdBpIdOf(i)) = 0 Then Exit Sub
+    AdStop("bp", Str$(AdBpIdOf(i)))
+End Sub
+
+' 止まる。場所（呼び出し履歴の一番上のユーザーの行）を出す
+' 止まる。場所（呼び出し履歴の一番上のユーザーの行）を出す
+Sub AdStop(kind As String, extra As String)
+    AdStepCancel()
+    g_adState = AD_ST_STOP
+    g_adStopKind = kind
+    AdThreadOpen()
+    AdStackBuild()
+    g_adCurFrame = AdStackUserFrame(kind)
+    AdStopPassBp()
+    AdPrintStop(kind, extra)
+End Sub
+
+Sub AdPrintStop(kind As String, extra As String)
+    If extra <> "" Then extra = extra + " "
+    Print "stop " + kind + " " + extra + AdFrameLoc$(g_adCurFrame)
+End Sub
+
+' 止まった所にブレークポイントがあれば、続けたとき 0xCC を踏まないよう元に戻し、1 命令後に書き戻す
+Sub AdStopPassBp()
+    Dim i As Long
+    i = AdBpFindAddr(AdReg(AD_REG_IP))
+    If i < 0 Or i = g_adRearm Then Exit Sub
+    AdBpRestore(i)
+    g_adRearm = i
+    AdSetTF()
+End Sub

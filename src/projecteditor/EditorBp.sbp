@@ -1,0 +1,105 @@
+' EditorBp - ブレークポイントと、デバッガーが止まっている行の印の、窓の側（一覧とずらし方は EditorBpList）。
+' 余白（行番号のところ）のクリックか F9 で付け外しする。文書の行を足したり消したりすると、印もいっしょにずらす
+' （TextBuffer の 1 文字の挿入・削除と選択の削除から。元に戻す・やり直しと読み込みは文書全体を置き換えるのでずらさない）
+
+' 直す前の行の数・カーソルの行・カーソルが行頭か（EditorBp_EditBegin）
+Dim g_bpEditLines As Long
+Dim g_bpEditLine As Long
+Dim g_bpEditCol0 As Long
+
+' デバッグ → 条件付きブレークポイント: カーソルの行の条件を尋ねる（無ければブレークポイントも足す）
+Sub EditorBp_CondCursor()
+    Dim i As Long, text As String
+    If g_activeChild = 0 Or g_activeChild = g_hProject Then Exit Sub
+    i = EditorBp_Find(g_docPath, TextBuf_CursorLine())
+    text = ""
+    If i >= 0 Then text = g_bpCond[i]
+    If Ab4D_Input(g_activeChild, UiText$(UI_DBG_CONDTITLE), text) = 0 Then Exit Sub
+    EditorBp_SetCond(g_docPath, TextBuf_CursorLine(), Trim$(text))
+End Sub
+
+Sub EditorBp_SetCond(path As String, ByVal lineNo As Long, cond As String)
+    Dim i As Long
+    i = EditorBp_Find(path, lineNo)
+    If i < 0 Then EditorBp_Add(path, lineNo)
+    If i < 0 Then i = g_bpN - 1
+    g_bpCond[i] = cond
+    EditorDbg_BpRedo(i)
+    InvalidateRect(g_activeChild, ByVal 0, FALSE)
+End Sub
+
+' 付け外しして、デバッグ中ならデバッガーにも知らせる
+Sub EditorBp_ToggleAt(hWnd As HWND, path As String, ByVal lineNo As Long)
+    EditorBp_Toggle(path, lineNo)
+    EditorDbg_BpChanged(path, lineNo)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' F9: 今の文書のカーソルの行
+Sub EditorBp_ToggleCursor()
+    If g_activeChild = 0 Or g_activeChild = g_hProject Then Exit Sub
+    EditorBp_ToggleAt(g_activeChild, g_docPath, TextBuf_CursorLine())
+End Sub
+
+' 余白のクリックなら付け外しして 1
+Function EditorBp_GutterClick(hWnd As HWND, ByVal lParam As LPARAM) As Long
+    Dim x As Long, y As Long, lineNo As Long
+    EditorBp_GutterClick = 0
+    EditorSelect_XY(lParam, x, y)
+    If x >= g_textLeft - VS_MARGIN_X Then Exit Function
+    lineNo = g_viewTopLine + (y - VS_MARGIN_Y) \ VS_LINE_HEIGHT
+    If lineNo < 1 Or lineNo > TextBuf_LineCount() Then Exit Function
+    EditorBp_ToggleAt(hWnd, g_docPath, lineNo)
+    EditorBp_GutterClick = 1
+End Function
+
+' ---- 描く（DrawText_PaintLines が 1 行ごとに、文字より先に呼ぶ） ----
+
+Sub EditorBp_DrawLine(hDC As HDC, hWnd As HWND, ByVal lineNo As Long, ByVal y As Long)
+    Dim i As Long
+    If g_dbgStopLine = lineNo And EditorBp_Same(g_dbgStopPath, g_docPath) <> 0 Then EditorBp_StopBg(hDC, hWnd, y)
+    i = EditorBp_Find(g_docPath, lineNo)
+    If i >= 0 Then EditorBp_Dot(hDC, y, Len(g_bpCond[i]))
+End Sub
+
+' 止まっている行: 黄色の背景
+Sub EditorBp_StopBg(hDC As HDC, hWnd As HWND, ByVal y As Long)
+    Dim rc As RECT
+    Ui_ClientRect(hWnd, rc)
+    rc.top = y
+    rc.bottom = y + VS_LINE_HEIGHT
+    Ui_FillRc(hDC, rc, RGB(255, 238, 140))
+End Sub
+
+' ブレークポイント: 余白の左の四角（赤。条件付きは橙）
+Sub EditorBp_Dot(hDC As HDC, ByVal y As Long, ByVal hasCond As Long)
+    Dim rc As RECT
+    rc.left = 2
+    rc.right = 10
+    rc.top = y + (VS_LINE_HEIGHT - 8) \ 2
+    rc.bottom = rc.top + 8
+    If hasCond = 0 Then Ui_FillRc(hDC, rc, RGB(200, 40, 40))
+    If hasCond <> 0 Then Ui_FillRc(hDC, rc, RGB(235, 140, 20))
+End Sub
+
+' ---- 文書を直したとき ----
+
+' TextBuffer が直す前
+Sub EditorBp_EditBegin()
+    g_bpEditLines = TextBuf_LineCount()
+    g_bpEditLine = TextBuf_CursorLine()
+    g_bpEditCol0 = 0
+    If TextBuf_CursorIndex() = TextBuf_GetLineStart(g_bpEditLine) Then g_bpEditCol0 = 1
+End Sub
+
+' 直した後。行の数が変わったら、直した所より後の印をずらす。
+' 足したとき: カーソルの行より後（行頭で改行したならその行から）。消したとき: 直した後のカーソルの行より後
+Sub EditorBp_EditEnd(ByVal isInsert As Long)
+    Dim delta As Long, anchor As Long
+    delta = TextBuf_LineCount() - g_bpEditLines
+    If delta = 0 Then Exit Sub
+    anchor = TextBuf_CursorLine()
+    If isInsert <> 0 Then anchor = g_bpEditLine - g_bpEditCol0
+    EditorBp_Shift(g_docPath, anchor, delta)
+End Sub
+

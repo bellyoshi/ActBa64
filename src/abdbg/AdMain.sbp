@@ -1,0 +1,66 @@
+' AdMain - abdbg の本体（#SOURCE の最後）。
+' 動いている間はデバッグイベントを、止まっている間はコマンドを 1 つずつ扱う。
+' ループを MAIN に置くのは、手続きの中で作った String が MAIN に戻るたびに回収されるため
+
+' prog.exe → prog.abdbg
+Function AdDbgPath$(exe As String) As String
+    Dim i As Long
+    AdDbgPath$ = exe + ".abdbg"
+    For i = Len(exe) To 1 Step -1
+        If Mid$(exe, i, 1) = Chr$(92) Or Mid$(exe, i, 1) = "/" Then Exit Function
+        If Mid$(exe, i, 1) = "." Then AdDbgPath$ = Left$(exe, i) + "abdbg"
+        If Mid$(exe, i, 1) = "." Then Exit Function
+    Next
+End Function
+
+Sub AdUsage()
+    Print "usage: abdbg [-console] <prog.exe>   (prog.abdbg from actba64 -debug must be next to it)"
+    ExitProcess(1)
+End Sub
+
+Sub AdInit()
+    Dim buf[1023] As Byte
+    Dim full[1023] As Byte
+    If GetCmd(AdArgFirst(), VarPtr(buf)) = 0 Then AdUsage()
+    If Ad_GetFullPath(VarPtr(buf), 1024, VarPtr(full), 0) = 0 Then AdFail("bad path")
+    g_adExe = MakeStr(VarPtr(full))
+    If AdSymLoad(StrPtr(AdDbgPath$(g_adExe))) = 0 Then AdFail("cannot read " + AdDbgPath$(g_adExe) + " (compile with actba64 -debug)")
+    AdInitSym(VarPtr(full))
+End Sub
+
+' -console があれば 1 つ進める（プログラムを自分のコンソールで動かす）。exe の引数の番号を返す
+Function AdArgFirst() As Long
+    Dim buf[1023] As Byte
+    AdArgFirst = 1
+    If GetCmd(1, VarPtr(buf)) = 0 Then Exit Function
+    If Ad_lstrcmpi(VarPtr(buf), "-console") <> 0 Then Exit Function
+    g_adNewConsole = 1
+    AdArgFirst = 2
+End Function
+
+Sub AdInitSym(exe As *Byte)
+    AdSymFindMain(AdBaseName(exe))
+    Print "ready"
+End Sub
+
+Sub AdFail(msg As String)
+    Print "error " + msg
+    ExitProcess(2)
+End Sub
+
+AdApiInit()
+g_adIn = calloc(4096)
+g_adStdin = Ad_GetStdHandle(AD_STD_INPUT)
+g_adState = AD_ST_IDLE
+AdInit()
+Do
+    If g_adState = AD_ST_RUN Then
+        AdPump()
+    ElseIf AdReadLine() = 0 Then
+        Exit Do
+    Else
+        AdCmdRun()
+    End If
+    If g_adQuit <> 0 Then Exit Do
+Loop
+End

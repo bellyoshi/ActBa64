@@ -1,0 +1,171 @@
+' AdEval - p の式（名前 / .メンバ / ->メンバ / (添字) / [添字]）と、locals・f コマンド
+
+' 名前に使える文字（英数字・_・$・%・漢字などのバイト）
+Function AdIsNameCh(c As Long) As Long
+    AdIsNameCh = 0
+    If (c >= 48 And c <= 57) Or (c >= 65 And c <= 90) Or (c >= 97 And c <= 122) Then AdIsNameCh = 1
+    If c = 95 Or c = 36 Or c = 37 Or c >= 128 Then AdIsNameCh = 1
+End Function
+
+' s の pos 文字目から名前を読み、pos をその後ろへ
+Function AdEvIdent$(s As String, ByRef pos As Long) As String
+    Dim st As Long
+    st = pos
+    While pos <= Len(s) And AdIsNameCh(Asc(Mid$(s, pos, 1) + " ")) <> 0
+        pos = pos + 1
+    Wend
+    AdEvIdent$ = Mid$(s, st, pos - st)
+End Function
+
+' 最初の名前: 今の段のローカル → ユーザーのグローバル → ほかのグローバル
+Function AdEvRoot(name As String) As Long
+    Dim v As Long
+    AdEvRoot = 0
+    v = AdVarFind(AdFrameFn(g_adCurFrame), StrPtr(name), 0)
+    If v < 0 Then v = AdVarFind(-1, StrPtr(name), 1)
+    If v < 0 Then v = AdVarFind(-1, StrPtr(name), 0)
+    If v < 0 Then g_aeErr = "no such variable: " + name
+    If v >= 0 Then AdEvSetVar(v)
+    If v >= 0 Then AdEvRoot = 1
+End Function
+
+Sub AdEvField(name As String)
+    Dim fi As Long
+    If g_aeCnt > 0 Or g_aeVk <> VK_UDT Then g_aeErr = "not a Type: ." + name
+    If g_aeErr <> "" Then Exit Sub
+    fi = AdFieldFind(g_aeArg, StrPtr(name))
+    If fi < 0 Then g_aeErr = "no such member: " + name
+    If fi >= 0 Then AdEvSetField(fi)
+End Sub
+
+Sub AdEvSetField(fi As Long)
+    g_aeAddr = g_aeAddr + AdVecAt(VarPtr(g_afOff), fi)
+    g_aeVk = AdFieldVk(fi)
+    g_aeArg = AdFieldArg(fi)
+    g_aeEsz = AdVecAt(VarPtr(g_afSize), fi)
+    g_aeCnt = AdVecAt(VarPtr(g_afCount), fi)
+    If g_aeCnt <= 1 Then g_aeCnt = 0
+End Sub
+
+' p->x: Type へのポインタの先のメンバ
+Sub AdEvArrow(name As String)
+    If g_aeCnt > 0 Or g_aeVk <> VK_PUDT Then g_aeErr = "not a pointer to a Type: ->" + name
+    If g_aeErr <> "" Then Exit Sub
+    g_aeAddr = AdReadP(g_aeAddr)
+    g_aeVk = VK_UDT
+    AdEvField(name)
+End Sub
+
+Sub AdEvIndex(i As Long)
+    If g_aeCnt <= 0 Then g_aeErr = "not an array"
+    If g_aeCnt > 0 And (i < 0 Or i >= g_aeCnt) Then g_aeErr = "index out of range (0 to " + Str$(g_aeCnt - 1) + ")"
+    If g_aeErr <> "" Then Exit Sub
+    g_aeAddr = g_aeAddr + i * g_aeEsz
+    g_aeCnt = 0
+End Sub
+
+' . / -> / ( / [ を 1 つ読む
+Sub AdEvStep(s As String, ByRef pos As Long)
+    If Mid$(s, pos, 1) = "." Then
+        AdEvDotAt(s, pos)
+    ElseIf Mid$(s, pos, 2) = "->" Then
+        AdEvArrowAt(s, pos)
+    Else
+        AdEvBracket(s, pos, Mid$(s, pos, 1))
+    End If
+End Sub
+
+Sub AdEvDotAt(s As String, ByRef pos As Long)
+    pos = pos + 1
+    AdEvField(AdEvIdent$(s, pos))
+End Sub
+
+Sub AdEvArrowAt(s As String, ByRef pos As Long)
+    pos = pos + 2
+    AdEvArrow(AdEvIdent$(s, pos))
+End Sub
+
+Sub AdEvBracket(s As String, ByRef pos As Long, c As String)
+    Dim close As Long
+    If c <> "(" And c <> "[" Then g_aeErr = "bad expression at: " + Mid$(s, pos)
+    If g_aeErr <> "" Then Exit Sub
+    close = InStr(pos, s, AdCloseOf$(c))
+    If close = 0 Then g_aeErr = "missing " + AdCloseOf$(c)
+    If close = 0 Then Exit Sub
+    AdEvIndex(Val(Mid$(s, pos + 1, close - pos - 1)))
+    pos = close + 1
+End Sub
+
+Function AdCloseOf$(c As String) As String
+    AdCloseOf$ = ")"
+    If c = "[" Then AdCloseOf$ = "]"
+End Function
+
+' 戻り値 1 : 値がある（g_ae*）  0 : 誤り（g_aeErr）
+Function AdEval(s As String) As Long
+    Dim pos As Long
+    g_aeErr = ""
+    pos = 1
+    AdEval = AdEvRoot(AdEvIdent$(s, pos))
+    While AdEval <> 0 And pos <= Len(s) And g_aeErr = ""
+        AdEvStep(s, pos)
+    Wend
+    If g_aeErr <> "" Then AdEval = 0
+End Function
+
+' ---- コマンド ----
+
+Sub AdCmdPrint(a As String)
+    If AdNeedStop() = 0 Then Exit Sub
+    If AdEval(a) <> 0 Then
+        Print "value " + AdEvText$()
+    Else
+        Print "error " + g_aeErr
+    End If
+End Sub
+
+Sub AdCmdFrame(a As String)
+    Dim n As Long
+    If AdNeedStop() = 0 Then Exit Sub
+    n = Val(a)
+    If n < 0 Or n >= g_adFrN Then Print "error no such frame: " + a
+    If n < 0 Or n >= g_adFrN Then Exit Sub
+    g_adCurFrame = n
+    Print "frame " + Str$(n) + " " + AdFrameLoc$(n)
+End Sub
+
+' 今の段の変数（モジュールの本体ならユーザーのグローバル）
+Sub AdCmdLocals()
+    Dim fn As Long
+    If AdNeedStop() = 0 Then Exit Sub
+    fn = AdFrameFn(g_adCurFrame)
+    If AdIsModuleFn(fn) <> 0 Then fn = -1
+    Print "locals " + Str$(AdLocalsCount(fn))
+    AdPrintLocals(fn)
+End Sub
+
+Function AdLocalShown(v As Long, fn As Long) As Long
+    AdLocalShown = 0
+    If AdVarOf(v, fn) <> 0 Then AdLocalShown = AdVarShown(v, fn, 1)
+End Function
+
+Function AdLocalsCount(fn As Long) As Long
+    Dim v As Long
+    AdLocalsCount = 0
+    For v = 0 To g_avFn.n - 1
+        If AdLocalShown(v, fn) <> 0 Then AdLocalsCount = AdLocalsCount + 1
+    Next
+End Function
+
+' var <名前> <型> <値>
+Sub AdPrintLocals(fn As Long)
+    Dim v As Long
+    For v = 0 To g_avFn.n - 1
+        If AdLocalShown(v, fn) <> 0 Then AdPrintVar(v)
+    Next
+End Sub
+
+Sub AdPrintVar(v As Long)
+    AdEvSetVar(v)
+    Print "var " + MakeStr(AdVarName(v)) + " " + MakeStr(AdNamesAt(VarPtr(g_avType), v)) + " " + AdEvText$()
+End Sub

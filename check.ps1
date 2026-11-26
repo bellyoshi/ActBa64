@@ -1,7 +1,7 @@
 ﻿# check.ps1 - コミット前は unit、プッシュ前は integration
 #
 #   .\check.ps1              # unit（src\unittest\rununittest.ps1）
-#   .\check.ps1 unit
+#   .\check.ps1 unit       # + src\dbgtest\rundbgtest.ps1（デバッガーのユニットテスト）
 #   .\check.ps1 integration  # src\actba64\run_test2.ps1（既定 stage1・64bit）+ run_test_linux.ps1 + run_selfhost_linux.ps1（WSL）
 #   .\check.ps1 docs         # check-links.ps1（.md / .mdc の相対リンクと #見出し）
 
@@ -33,7 +33,9 @@ if (-not (Test-Path -LiteralPath $script)) {
 
 Write-Host "=== check $Kind ==="
 & powershell -NoProfile -ExecutionPolicy Bypass -File $script
-if ($LASTEXITCODE -ne 0 -or $Kind -ne "integration") {
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($Kind -eq "unit") {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "src\dbgtest\rundbgtest.ps1")
     exit $LASTEXITCODE
 }
 

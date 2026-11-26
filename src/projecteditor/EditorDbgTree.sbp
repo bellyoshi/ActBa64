@@ -1,0 +1,84 @@
+' EditorDbgTree - デバッグの窓の変数のツリー（Windows だけ）。
+' 一番上は abdbg の x @globals / x @locals、+ を開いたときに x <式> でその 1 段を読む。
+' 問いと答えを組にするところは EditorDbgTreeReq
+
+Const EDT_MAX_ITEMS = 4096
+
+' ツリーの項目ごとの式（項目の lParam がこの番号）と、もう子を読んだか
+Dim g_dbgTreeExpr[EDT_MAX_ITEMS] As String
+Dim g_dbgTreeLoaded[EDT_MAX_ITEMS] As Long
+Dim g_dbgTreeN As Long
+#ifndef _LINUX
+Dim g_dbgTvIns As TVINSERTSTRUCT
+
+Function EditorDbgTree_Wnd() As HWND
+    EditorDbgTree_Wnd = 0
+    If g_hDbgPane <> 0 Then EditorDbgTree_Wnd = GetDlgItem(g_hDbgPane, EDP_TREE)
+End Function
+
+' 子を入れる。子のあるものは + を出す（開いたときに読む）
+Sub EditorDbgTree_Insert(text As String, expr As String, ByVal kids As Long)
+    Dim wide As *Byte, chars As Long
+    If EditorDbgTree_Wnd() = 0 Or g_dbgTreeN >= EDT_MAX_ITEMS Then Exit Sub
+    EditorDbgTree_Keep(expr)
+    wide = Enc_Utf8ToWide(text, chars)
+    EditorDbgTree_FillIns(wide, kids)
+    SendMessage(EditorDbgTree_Wnd(), &H1132, 0, VarPtr(g_dbgTvIns) As LPARAM)
+    g_dbgTreeN = g_dbgTreeN + 1
+    free(wide)
+End Sub
+
+' 項目の式を覚える（lParam が番号）
+Sub EditorDbgTree_Keep(expr As String)
+    g_dbgTreeExpr[g_dbgTreeN] = expr
+    g_dbgTreeLoaded[g_dbgTreeN] = 0
+End Sub
+
+' TVM_EXPAND / TVE_EXPAND（子はもう読んだので、TVN_ITEMEXPANDING でまた問わない）
+Sub EditorDbgTree_Open(h As LONG_PTR)
+    SendMessage(EditorDbgTree_Wnd(), TVM_EXPAND, TVE_EXPAND, h As LPARAM)
+End Sub
+
+' TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN。親が 0 なら一番上
+Sub EditorDbgTree_FillIns(wide As *Byte, ByVal kids As Long)
+    FillMemory(VarPtr(g_dbgTvIns), SizeOf(TVINSERTSTRUCT), 0)
+    g_dbgTvIns.hParent = g_dbgCurParent As HTREEITEM
+    If g_dbgCurParent = 0 Then g_dbgTvIns.hParent = ProjTree_Special(TVI_ROOT) As HTREEITEM
+    g_dbgTvIns.hInsertAfter = ProjTree_Special(TVI_LAST) As HTREEITEM
+    g_dbgTvIns.item.mask = TVIF_TEXT Or TVIF_PARAM Or TVIF_CHILDREN
+    g_dbgTvIns.item.pszText = wide
+    g_dbgTvIns.item.cChildren = kids
+    g_dbgTvIns.item.lParam = g_dbgTreeN As LPARAM
+End Sub
+
+' ツリーを消し、今のタブの一番上を読み直す（止まったとき・段やタブを替えたとき）
+Sub EditorDbgTree_Refresh()
+    If EditorDbgTree_Wnd() = 0 Or g_dbgStopped = 0 Then Exit Sub
+    SendMessage(EditorDbgTree_Wnd(), TVM_DELETEITEM, 0, ProjTree_Special(TVI_ROOT) As LPARAM)
+    g_dbgTreeN = 0
+    g_dbgTreeGen = g_dbgTreeGen + 1
+    If g_dbgTab = 0 Then EditorDbgTree_Ask("@globals", 0)
+    If g_dbgTab <> 0 Then EditorDbgTree_Ask("@locals", 0)
+End Sub
+
+' + を開く（TVN_ITEMEXPANDING。開くとき（TVE_EXPAND）で、まだ読んでいない項目だけ）
+Sub EditorDbgTree_Expanding(lParam As LPARAM)
+    Dim tv As NMTREEVIEW, idx As Long
+    memcpy(VarPtr(tv), lParam As VoidPtr, SizeOf(NMTREEVIEW))
+    If (tv.action And TVE_EXPAND) = 0 Or g_dbgStopped = 0 Then Exit Sub
+    idx = tv.itemNew.lParam
+    If idx < 0 Or idx >= g_dbgTreeN Then Exit Sub
+    If g_dbgTreeLoaded[idx] <> 0 Then Exit Sub
+    g_dbgTreeLoaded[idx] = 1
+    EditorDbgTree_Ask(g_dbgTreeExpr[idx], tv.itemNew.hItem As LONG_PTR)
+End Sub
+#else
+Sub EditorDbgTree_Insert(text As String, expr As String, ByVal kids As Long)
+End Sub
+
+Sub EditorDbgTree_Refresh()
+End Sub
+
+Sub EditorDbgTree_Open(h As LONG_PTR)
+End Sub
+#endif

@@ -1,0 +1,217 @@
+' AdCmd - 標準入力のコマンド（1 行 1 つ）
+
+Dim g_adIn As *Byte
+Dim g_adStdin As HANDLE
+Dim g_adQuit As Long
+Dim g_adExe As String
+
+Const AD_CMDS = " b break d delete r run c continue bt backtrace q quit s step n next o out finish p print l locals f frame x "
+
+' 1 バイト読む（終わりなら -1）
+Function AdReadCh() As Long
+    Dim c As Byte
+    Dim got As DWord
+    got = 0
+    AdReadCh = -1
+    If Ad_ReadFile(g_adStdin, VarPtr(c), 1, VarPtr(got), 0) = 0 Then Exit Function
+    If got = 0 Then Exit Function
+    AdReadCh = c
+End Function
+
+' 1 行を g_adIn へ（CR は捨てる）。入力が終わっていれば 0
+Function AdReadLine() As Long
+    Dim n As Long
+    g_adIn[0] = 0
+    n = 0
+    AdReadLine = AdReadRest(n)
+End Function
+
+Function AdReadRest(ByRef n As Long) As Long
+    Dim c As Long
+    c = AdReadCh()
+    While c >= 0 And c <> 10
+        n = AdInPut(n, c)
+        c = AdReadCh()
+    Wend
+    AdReadRest = 1
+    If c < 0 And n = 0 Then AdReadRest = 0
+End Function
+
+' g_adIn の n バイト目に c を足して末尾に 0（CR と、長すぎる分は捨てる）。新しい長さを返す
+Function AdInPut(n As Long, c As Long) As Long
+    AdInPut = n
+    If c = 13 Or n >= 4095 Then Exit Function
+    g_adIn[n] = c
+    g_adIn[n + 1] = 0
+    AdInPut = n + 1
+End Function
+
+' 前後の空白を除いた最初の語と、その後ろ
+Function AdWord$(s As String) As String
+    Dim p As Long
+    p = InStr(1, s + " ", " ")
+    AdWord$ = Left$(s, p - 1)
+End Function
+
+Function AdArg$(s As String) As String
+    Dim p As Long
+    p = InStr(1, s + " ", " ")
+    AdArg$ = Trim$(Mid$(s, p + 1))
+End Function
+
+Sub AdCmdRun()
+    Dim s As String
+    s = Trim$(MakeStr(AdSkipBom(g_adIn)))
+    If s = "" Then Exit Sub
+    AdCmdDo(AdWord$(s), AdArg$(s))
+End Sub
+
+' UTF-8 の BOM（.NET Framework が標準入力の初めに付けることがある）を飛ばす
+Function AdSkipBom(p As *Byte) As *Byte
+    AdSkipBom = p
+    If p[0] = &HEF And p[1] = &HBB And p[2] = &HBF Then AdSkipBom = VarPtr(p[3])
+End Function
+
+Sub AdCmdDo(w As String, a As String)
+    If w = "b" Or w = "break" Then AdCmdBreak(a)
+    If w = "d" Or w = "delete" Then AdCmdDelete(a)
+    If w = "r" Or w = "run" Then AdCmdStart()
+    If w = "c" Or w = "continue" Then AdCmdCont()
+    If w = "bt" Or w = "backtrace" Then AdCmdBt()
+    If w = "q" Or w = "quit" Then g_adQuit = 1
+    AdCmdDoStep(w, a)
+    If InStr(1, AD_CMDS, " " + w + " ") = 0 Then Print "error unknown command: " + w
+End Sub
+
+Sub AdCmdDoStep(w As String, a As String)
+    If w = "s" Or w = "step" Then AdCmdStep(AD_STEP_IN)
+    If w = "n" Or w = "next" Then AdCmdStep(AD_STEP_OVER)
+    If w = "o" Or w = "out" Or w = "finish" Then AdCmdOut()
+    If w = "p" Or w = "print" Then AdCmdPrint(a)
+    If w = "l" Or w = "locals" Then AdCmdLocals()
+    If w = "f" Or w = "frame" Then AdCmdFrame(a)
+    If w = "x" Then AdCmdTree(a)
+End Sub
+
+' 例外で止まったところからは続けるとプログラムが終わるので、ステップできない
+Function AdCanStep() As Long
+    AdCanStep = 0
+    If AdNeedStop() = 0 Then Exit Function
+    If g_adCont <> AD_DBG_CONTINUE Then Print "error cannot step after an exception"
+    If g_adCont = AD_DBG_CONTINUE Then AdCanStep = 1
+End Function
+
+Sub AdCmdStep(mode As Long)
+    If AdCanStep() = 0 Then Exit Sub
+    AdStepBegin(mode)
+    Print "running"
+    AdResume()
+End Sub
+
+Sub AdCmdOut()
+    If AdCanStep() = 0 Then Exit Sub
+    If AdStepOutBegin() = 0 Then
+        Print "error no caller"
+        Exit Sub
+    End If
+    Print "running"
+    AdResume()
+End Sub
+
+' ---- 各コマンド ----
+
+' 最後の : の位置（ドライブの C: より後ろ）
+Function AdLastColon(s As String) As Long
+    Dim i As Long
+    AdLastColon = 0
+    For i = 1 To Len(s)
+        If Mid$(s, i, 1) = ":" Then AdLastColon = i
+    Next
+End Function
+
+' b <場所> [if <条件>]
+Sub AdCmdBreak(a As String)
+    Dim q As Long
+    q = AdFindIf(a)
+    If q > 0 Then
+        AdCmdBreakLoc(Trim$(Left$(a, q - 1)), Trim$(Mid$(a, q + 4)))
+    Else
+        AdCmdBreakLoc(a, "")
+    End If
+End Sub
+
+Sub AdCmdBreakLoc(a As String, cond As String)
+    Dim p As Long, f As Long
+    p = AdLastColon(a)
+    f = g_adMainFile
+    If p > 0 Then f = AdSymFileFind(StrPtr(Left$(a, p - 1)))
+    If f < 0 Then Print "error no such file: " + Left$(a, p - 1)
+    If f >= 0 Then AdCmdBreakAt(f, Val(Mid$(a, p + 1)), cond)
+End Sub
+
+Sub AdCmdBreakAt(f As Long, ln As Long, cond As String)
+    Dim id As Long
+    id = AdBpAdd(f, ln)
+    If id < 0 Then
+        Print "error no code at or after that line"
+        Exit Sub
+    End If
+    AdCondAdd(cond)
+    Print "bp " + Str$(id) + " " + Str$(ln) + " " + MakeStr(AdNamesAt(VarPtr(g_adFile), f))
+End Sub
+
+' d <番号> / d <ファイル>:<行>（その行を b したときと同じ行のブレークポイントを消す）
+Sub AdCmdDelete(a As String)
+    If AdLastColon(a) > 0 Then
+        AdCmdDeleteAt(a)
+    ElseIf AdBpDelete(Val(a)) <> 0 Then
+        Print "deleted " + Str$(Val(a))
+    Else
+        Print "error no such breakpoint: " + a
+    End If
+End Sub
+
+' 消せたら deleted <ファイル>:<行>
+Sub AdCmdDeleteAt(a As String)
+    Dim p As Long, f As Long, ln As Long
+    p = AdLastColon(a)
+    f = AdSymFileFind(StrPtr(Left$(a, p - 1)))
+    ln = 0
+    If f >= 0 Then ln = AdSymResolve(f, Val(Mid$(a, p + 1)))
+    ln = AdBpDeleteLine(f, ln)
+    If ln <> 0 Then Print "deleted " + a
+    If ln = 0 Then Print "error no breakpoint at: " + a
+End Sub
+
+Sub AdCmdStart()
+    If g_adState <> AD_ST_IDLE Then
+        Print "error already started"
+    ElseIf AdStart(g_adExe) <> 0 Then
+        Print "running"
+    Else
+        Print "error cannot start: " + g_adExe + " (" + Str$(Ad_GetLastError()) + ")"
+    End If
+End Sub
+
+' 止まっていなければ error を出して 0
+Function AdNeedStop() As Long
+    AdNeedStop = 1
+    If g_adState = AD_ST_STOP Then Exit Function
+    Print "error not stopped"
+    AdNeedStop = 0
+End Function
+
+Sub AdCmdCont()
+    If AdNeedStop() = 0 Then Exit Sub
+    Print "running"
+    AdResume()
+End Sub
+
+Sub AdCmdBt()
+    Dim i As Long
+    If AdNeedStop() = 0 Then Exit Sub
+    Print "bt " + Str$(g_adFrN)
+    For i = 0 To g_adFrN - 1
+        Print "frame " + Str$(i) + " " + AdFrameLoc$(i)
+    Next
+End Sub

@@ -1,0 +1,84 @@
+' ===================================================
+'  DbgInfoEmit - 機械語にするとき OP_DBG_* の位置（.text の先頭からの offset）を覚える
+'  機械語は 2 回出す（CompileIrToPe）。行の表は毎回作り直し、最後の回のものを書く
+' ===================================================
+
+Dim g_dbgLnOff As *Long
+Dim g_dbgLnLine As *Long
+Dim g_dbgLnFlag As *Long
+Dim g_dbgLnN As Long
+Dim g_dbgLnCap As Long
+
+' IrEmitCode / IrEmitCode32 の初めに呼ぶ
+Sub DbgEmitReset()
+    g_dbgLnN = 0
+End Sub
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgLnGrow(nc As Long) As boolean
+    g_dbgLnOff = DbgGrowL(g_dbgLnOff, g_dbgLnCap, nc)
+    g_dbgLnLine = DbgGrowL(g_dbgLnLine, g_dbgLnCap, nc)
+    g_dbgLnFlag = DbgGrowL(g_dbgLnFlag, g_dbgLnCap, nc)
+    DbgLnGrow = false
+    If g_dbgLnOff = NULL Or g_dbgLnLine = NULL Or g_dbgLnFlag = NULL Then Exit Function
+    g_dbgLnCap = nc
+    DbgLnGrow = true
+End Function
+
+' 戻り値 true : 正常終了  false : エラーあり
+Function DbgLnReserve() As boolean
+    DbgLnReserve = true
+    If g_dbgLnN < g_dbgLnCap Then Exit Function
+    DbgLnReserve = DbgLnGrow(DbgNextCap(g_dbgLnCap))
+End Function
+
+Sub DbgSetLn(k As Long, off As Long, ln As Long, flag As Long)
+    g_dbgLnOff[k] = off
+    g_dbgLnLine[k] = ln
+    g_dbgLnFlag[k] = flag
+End Sub
+
+' 直前の印と同じ位置なら上書き（間にコードが無い）、同じ行・種類なら足さないで 1
+Function DbgLnMerge(off As Long, ln As Long, flag As Long) As Long
+    Dim k As Long
+    DbgLnMerge = 0
+    k = g_dbgLnN - 1
+    If k < 0 Then Exit Function
+    If g_dbgLnOff[k] = off Then DbgSetLn(k, off, ln, flag)
+    If g_dbgLnLine[k] = ln And g_dbgLnFlag[k] = flag Then DbgLnMerge = 1
+End Function
+
+' ln = 0 は「どの行でもない」（手続きの終わりから次の手続きまで）
+Sub DbgNoteLine(off As Long, ln As Long, flag As Long)
+    If DbgLnMerge(off, ln, flag) <> 0 Then Exit Sub
+    If Not DbgLnReserve() Then
+        g_dbgBad = 1
+        Exit Sub
+    End If
+    DbgSetLn(g_dbgLnN, off, ln, flag)
+    g_dbgLnN = g_dbgLnN + 1
+End Sub
+
+' ラベル lab の位置（この回の機械語で、もう出ていれば）。無ければ off
+Function DbgLabOff(lab As Long, off As Long) As Long
+    DbgLabOff = off
+    If lab < 0 Or lab >= g_cgLabCap Then Exit Function
+    If g_cgLabOff[lab] >= 0 Then DbgLabOff = g_cgLabOff[lab]
+End Function
+
+Sub DbgOnOp(off As Long, op As *IrOp)
+    Dim fid As Long
+    fid = op->arg1
+    If op->op = OP_DBG_LINE Then DbgNoteLine(off, fid, op->arg2)
+    If op->op = OP_DBG_FUNC Then g_dbgFnStart[fid] = DbgLabOff(op->arg2, off)
+    If op->op = OP_DBG_FEND Then g_dbgFnEnd[fid] = off
+    If op->op = OP_DBG_FEND Then DbgNoteLine(off, 0, DBG_LN_TAIL)
+End Sub
+
+' OP_DBG_* なら位置を覚えて true（機械語は出さない）
+Function DbgTryEmit(cb As *CodeBuffer, op As *IrOp) As boolean
+    DbgTryEmit = false
+    If op->op < OP_DBG_LINE Or op->op > OP_DBG_FEND Then Exit Function
+    DbgOnOp(cb->size, op)
+    DbgTryEmit = true
+End Function
