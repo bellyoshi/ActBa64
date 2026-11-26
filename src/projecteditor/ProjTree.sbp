@@ -12,6 +12,7 @@ Const PT_TVM_GETITEMA = &H110C      ' TV_FIRST + 12
 Const PT_TVGN_CARET = 9
 Const PT_TVN_SELCHANGEDW = -451     ' TVN_FIRST - 51
 Const PT_WND = -2                   ' .wnd のノードの lParam
+Const PT_NOMENU = -3                ' 右クリックのメニューを出さない（ProjTree_MenuIndex）
 Const PT_STYLE = &H27               ' TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS
 Const PT_TVM_HITTEST = &H1111       ' TV_FIRST + 17
 Const PT_TVM_SELECTITEM = &H110B    ' TV_FIRST + 11
@@ -198,21 +199,33 @@ Function ProjTree_HitItem() As HTREEITEM
     ProjTree_HitItem = ht.hItem
 End Function
 
+' 右クリックのメニューの番号（ProjEdit_Menu の idx）。ルートは PROJEDIT_ROOT、ファイルはその番号、
+' フォルダー・.wnd・ノードの外は PT_NOMENU
+Function ProjTree_MenuIndex(h As HTREEITEM) As Long
+    Dim idx As Long
+    ProjTree_MenuIndex = PT_NOMENU
+    If h = 0 Then Exit Function
+    If h = g_ptRoot Then ProjTree_MenuIndex = PROJEDIT_ROOT : Exit Function
+    idx = ProjTree_ItemParam(h)
+    If idx >= 0 Then ProjTree_MenuIndex = idx
+End Function
+
+' h を薄く強調する（0 なら強調を消す）
+Sub ProjTree_DropHilite(h As HTREEITEM)
+    If g_hProjList <> 0 Then SendMessage(g_hProjList, PT_TVM_SELECTITEM, PT_TVGN_DROPHILITE, h As LPARAM)
+End Sub
+
 ' 右クリック: ルートなら「ファイルを挿入」、ファイルなら「プロジェクトから削除」「プロパティ」（ProjEdit.sbp）。
 ' 選んでいるノードは変えない（変えるとそのファイルが開く）。メニューを出す間だけ薄く強調する
 Sub ProjTree_RClick()
-    Dim h As HTREEITEM, idx As Long, pt As POINTAPI, none As LONG_PTR
+    Dim h As HTREEITEM, idx As Long, pt As POINTAPI
     h = ProjTree_HitItem()
-    If h = 0 Then Exit Sub
-    idx = ProjTree_ItemParam(h)
-    If h = g_ptRoot Then idx = PROJEDIT_ROOT
-    If idx < 0 And idx <> PROJEDIT_ROOT Then Exit Sub
-    If h <> g_ptRoot And idx = PROJEDIT_ROOT Then Exit Sub
+    idx = ProjTree_MenuIndex(h)
+    If idx = PT_NOMENU Then Exit Sub
     GetCursorPos(pt)
-    SendMessage(g_hProjList, PT_TVM_SELECTITEM, PT_TVGN_DROPHILITE, h As LPARAM)
+    ProjTree_DropHilite(h)
     ProjEdit_Menu(g_hProject, idx, pt.x, pt.y)
-    none = 0
-    If g_hProjList <> 0 Then SendMessage(g_hProjList, PT_TVM_SELECTITEM, PT_TVGN_DROPHILITE, none As LPARAM)
+    ProjTree_DropHilite(0)
 End Sub
 
 ' WM_NOTIFY。右クリックを受け持ったら 1（既定の WM_CONTEXTMENU を出さない）
