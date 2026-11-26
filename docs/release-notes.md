@@ -21,6 +21,7 @@
 AB4プロジェクト作成:
 
 - 「EXE - N88 プロンプト ベース」も作れるようにしました。`#N88BASIC` の `<名前>.abp` と `.idx`・`.pj`・`.wrk` の 4 つを書き、AB 4.20 で作ったものとバイト単位で同じです。コマンドラインでは `ProjectCmd -createPj <名前> -n88` です（[projecteditor.md §7.2](./projecteditor.md#72-ab4-プロジェクト作成と-projectcmd)）。
+- 「EXE - DOS プロンプト ベース」も作れるようにしました。N88 と同じ 4 つで、`<名前>.abp` に `#N88BASIC` ではなく `#console` を置きます。AB 4.20 で作ったものとバイト単位で同じです。コマンドラインでは `ProjectCmd -createPj <名前> -dos` です。
 
 ### ドキュメント
 
@@ -29,7 +30,7 @@ AB4プロジェクト作成:
 ### テスト
 
 - 回帰テスト `t_cdecl_func`、`t_cdecl32`、`t_class_override_cb`、`t_qword`、`t_qword_ptr`、`t_str_double15` を足しました。`t_for_double` は 15 桁の表示に合わせて直しました。
-- ユニットテスト `AB4ProjTest` に N88 プロンプト ベースの確かめを足しました。
+- ユニットテスト `AB4ProjTest` に N88 / DOS プロンプト ベースの確かめを足しました。
 
 ## v0.1.6（v0.1.5 からの変更点）
 
