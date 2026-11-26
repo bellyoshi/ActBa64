@@ -1,0 +1,163 @@
+' EditorDbgLine - abdbg の答えの 1 行を扱う（止まった行へ移り、呼び出し履歴と変数をメッセージに出す）
+'   ready / stop <種類> [番号・コード] <行> <手続き> <パス> / running / exit <コード> /
+'   bt <n> の後の frame <段> <行> <手続き> <パス> / locals <n> の後の var <名前> <型> <値> / error <説明>
+
+Function EditorDbg_Word$(s As String) As String
+    EditorDbg_Word$ = Left$(s, InStr(1, s + " ", " ") - 1)
+End Function
+
+Function EditorDbg_After$(s As String) As String
+    EditorDbg_After$ = Mid$(s, InStr(1, s + " ", " ") + 1)
+End Function
+
+Sub EditorDbg_Msg(s As String)
+    MessageWnd_Append(s + Chr$(13) + Chr$(10))
+End Sub
+
+Sub EditorDbg_OnLine(s As String)
+    Dim w As String
+    w = EditorDbg_Word$(s)
+    If w = "ready" Then EditorDbg_OnReady()
+    If w = "stop" Then EditorDbg_OnStop(EditorDbg_After$(s))
+    If w = "running" Then EditorDbg_OnRunning()
+    If w = "exit" Then EditorDbg_OnExit(EditorDbg_After$(s))
+    EditorDbg_OnList(w, EditorDbg_After$(s))
+End Sub
+
+Sub EditorDbg_OnList(w As String, rest As String)
+    If w = "frame" Then EditorDbg_OnFrame(rest)
+    If w = "var" Then EditorDbg_OnVar(rest)
+    If w = "bt" Then EditorDbg_Msg(UiText$(UI_DBG_STACK))
+    If w = "locals" Then EditorDbg_Msg(UiText$(UI_DBG_VARS))
+    If w = "error" Then EditorDbg_Msg("abdbg: " + rest)
+End Sub
+
+
+
+' ---- パス（無題の文書は一時ファイルで訳している） ----
+
+Function EditorDbg_OutPath$(path As String) As String
+    EditorDbg_OutPath$ = path
+    If Len(path) = 0 And Len(g_buildN88Src) > 0 Then EditorDbg_OutPath$ = g_buildN88Src
+End Function
+
+Function EditorDbg_InPath$(path As String) As String
+    EditorDbg_InPath$ = path
+    If Len(g_buildN88Src) > 0 And ProjSamePath(path, g_buildN88Src) <> 0 Then EditorDbg_InPath$ = g_docPath
+End Function
+
+' ---- 答え ----
+
+' ブレークポイントを全部置いてから動かす
+Sub EditorDbg_OnReady()
+    Dim i As Long
+    For i = 0 To g_bpN - 1
+        EditorDbg_Send("b " + EditorDbg_OutPath$(g_bpPath[i]) + ":" + EditorGutter_Num$(g_bpLine[i]))
+    Next
+    EditorDbg_Send("r")
+End Sub
+
+Sub EditorDbg_OnRunning()
+    g_dbgStopped = 0
+    g_dbgStopLine = 0
+    If g_activeChild <> 0 Then InvalidateRect(g_activeChild, ByVal 0, FALSE)
+End Sub
+
+Sub EditorDbg_OnExit(code As String)
+    EditorDbg_Msg(UiText$(UI_DBG_EXIT) + code)
+    EditorDbg_End()
+End Sub
+
+' <行> <手続き> <パス>（種類の後の番号・コードは除いてある）
+Sub EditorDbg_ParseLoc(loc As String, ByRef ln As Long, ByRef fn As String, ByRef path As String)
+    ln = Val(EditorDbg_Word$(loc))
+    fn = EditorDbg_Word$(EditorDbg_After$(loc))
+    path = EditorDbg_InPath$(EditorDbg_After$(EditorDbg_After$(loc)))
+End Sub
+
+' stop bp <番号> ... / stop exception <コード> ... / stop step ... / stop debug ...
+Sub EditorDbg_OnStop(rest As String)
+    Dim loc As String, ln As Long, fn As String, path As String
+    loc = EditorDbg_After$(rest)
+    If EditorDbg_Word$(rest) = "bp" Or EditorDbg_Word$(rest) = "exception" Then loc = EditorDbg_After$(loc)
+    EditorDbg_ParseLoc(loc, ln, fn, path)
+    EditorDbg_Stopped(path, ln)
+    MessageWnd_SetText(UiText$(UI_DBG_STOPPED) + Left$(rest, Len(rest) - Len(loc)) + EditorDbg_LocText$(path, ln, fn) + Chr$(13) + Chr$(10))
+    EditorDbg_Send("bt")
+    EditorDbg_Send("l")
+End Sub
+
+' メッセージから飛べる形（MessageJump は "  at " で始まる行も読む）
+Function EditorDbg_LocText$(path As String, ByVal ln As Long, fn As String) As String
+    EditorDbg_LocText$ = path + "(" + EditorGutter_Num$(ln) + "): " + fn
+End Function
+
+Sub EditorDbg_Stopped(path As String, ByVal ln As Long)
+    g_dbgStopped = 1
+    g_dbgStopPath = path
+    g_dbgStopLine = ln
+    If ln > 0 And Len(path) > 0 Then MsgJump_Go(path, ln)
+    If ln > 0 And Len(path) = 0 Then MsgJump_GoLine(ln)
+    If g_activeChild <> 0 Then InvalidateRect(g_activeChild, ByVal 0, FALSE)
+End Sub
+
+' frame <段> <行> <手続き> <パス>
+Sub EditorDbg_OnFrame(rest As String)
+    Dim ln As Long, fn As String, path As String
+    EditorDbg_ParseLoc(EditorDbg_After$(rest), ln, fn, path)
+    EditorDbg_Msg("  at " + EditorDbg_LocText$(path, ln, fn))
+End Sub
+
+' var <名前> <型> <値> → 名前 As 型 = 値
+Sub EditorDbg_OnVar(rest As String)
+    Dim nm As String, ty As String
+    nm = EditorDbg_Word$(rest)
+    ty = EditorDbg_Word$(EditorDbg_After$(rest))
+    EditorDbg_Msg("  " + nm + " As " + ty + " = " + EditorDbg_After$(EditorDbg_After$(rest)))
+End Sub
+
+' ---- メニュー（Basic メニューの最後） ----
+
+Sub EditorDbg_ApplyMenu()
+    If g_dbgMenu = 0 Then EditorDbg_AddMenu()
+    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_GO, UI_MENU_DBG_GO)
+    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_STOP, UI_MENU_DBG_STOP)
+    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_OVER, UI_MENU_DBG_OVER)
+    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_IN, UI_MENU_DBG_IN)
+    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_OUT, UI_MENU_DBG_OUT)
+    EditorMenu_SetCmd(hMenu_M_MAIN_2, IDM_DBG_BP, UI_MENU_DBG_BP)
+End Sub
+
+Sub EditorDbg_AddMenu()
+    AppendMenu(hMenu_M_MAIN_2, MF_SEPARATOR, 0, "")
+    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_GO, UI_MENU_DBG_GO)
+    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_STOP, UI_MENU_DBG_STOP)
+    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_OVER, UI_MENU_DBG_OVER)
+    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_IN, UI_MENU_DBG_IN)
+    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_OUT, UI_MENU_DBG_OUT)
+    EditorMenu_Append(hMenu_M_MAIN_2, MF_STRING, IDM_DBG_BP, UI_MENU_DBG_BP)
+    g_dbgMenu = 1
+End Sub
+
+Function EditorDbg_MenuCmd(id As Long) As Long
+    EditorDbg_MenuCmd = 1
+    If id = IDM_DBG_GO Then EditorDbg_Go(hMainWnd)
+    If id = IDM_DBG_STOP Then EditorDbg_Stop()
+    If id = IDM_DBG_OVER Then EditorDbg_Step("n")
+    If id = IDM_DBG_IN Then EditorDbg_Step("s")
+    If id = IDM_DBG_OUT Then EditorDbg_Step("o")
+    If id = IDM_DBG_BP Then EditorBp_ToggleCursor()
+    If id < IDM_DBG_GO Or id > IDM_DBG_BP Then EditorDbg_MenuCmd = 0
+End Function
+
+' F5 / Shift+F5 / F9 / F10 / F11 / Shift+F11。使ったら 1
+Function EditorDbg_Key(ByVal vk As Long) As Long
+    EditorDbg_Key = 1
+    If vk = VK_F5 And EditorKeys_Shift() <> 0 Then EditorDbg_Stop()
+    If vk = VK_F5 And EditorKeys_Shift() = 0 Then EditorDbg_Go(hMainWnd)
+    If vk = VK_F9 Then EditorBp_ToggleCursor()
+    If vk = VK_F10 Then EditorDbg_Step("n")
+    If vk = VK_F11 And EditorKeys_Shift() <> 0 Then EditorDbg_Step("o")
+    If vk = VK_F11 And EditorKeys_Shift() = 0 Then EditorDbg_Step("s")
+    If vk <> VK_F5 And vk <> VK_F9 And vk <> VK_F10 And vk <> VK_F11 Then EditorDbg_Key = 0
+End Function

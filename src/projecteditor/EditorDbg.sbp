@@ -1,0 +1,264 @@
+' EditorDbg - デバッガー（abdbg.exe）を子プロセスで動かし、標準入出力のパイプで話す（Windows だけ）。
+' 答えは MAIN のメッセージループのスレッドタイマー（hwnd = 0 の WM_TIMER）で読む。
+' やり取りは docs/debugger.md。行を読んだ後は EditorDbgLine.sbp
+
+Const IDM_DBG_GO = 1360
+Const IDM_DBG_STOP = 1361
+Const IDM_DBG_OVER = 1362
+Const IDM_DBG_IN = 1363
+Const IDM_DBG_OUT = 1364
+Const IDM_DBG_BP = 1365
+
+Dim g_dbgOn As Long
+Dim g_dbgStopped As Long
+Dim g_dbgForce As Long
+Dim g_dbgMenu As Long
+
+#ifndef _LINUX
+Declare Function EditorDbg_PeekNamedPipe Lib "kernel32" Alias "PeekNamedPipe" (ByVal h As HANDLE, ByVal buf As VoidPtr, ByVal n As DWord, ByVal got As VoidPtr, ByVal avail As *Byte, ByVal rest As VoidPtr) As Long
+Declare Function EditorDbg_CreatePipe Lib "kernel32" Alias "CreatePipe" (ByVal r As *Byte, ByVal w As *Byte, ByVal sa As VoidPtr, ByVal n As DWord) As Long
+Declare Function EditorDbg_CreateProcess Lib "kernel32" Alias "CreateProcessA" (ByVal app As VoidPtr, ByVal cmd As *Byte, ByVal pa As VoidPtr, ByVal ta As VoidPtr, ByVal inherit As Long, ByVal flags As DWord, ByVal env As VoidPtr, ByVal dir As *Byte, ByVal si As *Byte, ByVal pi As *Byte) As Long
+Declare Function EditorDbg_SetTimer Lib "user32" Alias "SetTimer" (ByVal h As HWND, ByVal id As LONG_PTR, ByVal ms As DWord, ByVal fn As VoidPtr) As LONG_PTR
+Declare Function EditorDbg_KillTimer Lib "user32" Alias "KillTimer" (ByVal h As HWND, ByVal id As LONG_PTR) As Long
+
+Dim g_dbgHProc As HANDLE
+Dim g_dbgInW As HANDLE
+Dim g_dbgOutR As HANDLE
+Dim g_dbgTimer As LONG_PTR
+Dim g_dbgPend As String
+Dim g_dbgSi As STARTUPINFO
+Dim g_dbgPi As PROCESS_INFORMATION
+#endif
+
+' ---- 始める ----
+
+' デバッガーは 64bit の Windows の exe だけ（abdbg が x64 のみ）
+Function EditorDbg_CanTarget() As Long
+    EditorDbg_CanTarget = 0
+    If g_buildTarget32 <> 0 Or g_buildLinux <> 0 Then
+        MessageWnd_Append(UiText$(UI_DBG_NOTARGET) + Chr$(13) + Chr$(10))
+        Exit Function
+    End If
+    EditorDbg_CanTarget = 1
+End Function
+
+Function EditorDbg_AbdbgPath$() As String
+    EditorDbg_AbdbgPath$ = EditorBuild_ExeDir$() + "abdbg.exe"
+End Function
+
+' -debug を付けて訳し、exe のパスを返す（訳せなければ ""）
+Function EditorDbg_Compile$(hWnd As HWND) As String
+    EditorDbg_Compile$ = ""
+    g_dbgForce = 1
+    If EditorBuild_DoCompile(hWnd) <> 0 Then EditorDbg_Compile$ = EditorBuild_ExePathFromDoc$()
+    g_dbgForce = 0
+End Function
+
+' F5: 止まっていれば続ける。動いていなければ訳してデバッグを始める
+Sub EditorDbg_Go(hWnd As HWND)
+    If g_dbgOn <> 0 Then
+        If g_dbgStopped <> 0 Then EditorDbg_Send("c")
+        Exit Sub
+    End If
+    MessageWnd_Open(hWnd)
+    If EditorDbg_CanTarget() <> 0 Then EditorDbg_CompileGo(hWnd)
+End Sub
+
+Sub EditorDbg_CompileGo(hWnd As HWND)
+    Dim exe As String
+    exe = EditorDbg_Compile$(hWnd)
+    If Len(exe) > 0 Then EditorDbg_Launch(exe)
+End Sub
+
+' F10 / F11 / Shift+F11（止まっているときだけ）
+Sub EditorDbg_Step(cmd As String)
+    If g_dbgOn = 0 Or g_dbgStopped = 0 Then Exit Sub
+    EditorDbg_Send(cmd)
+End Sub
+
+' Shift+F5
+Sub EditorDbg_Stop()
+    If g_dbgOn = 0 Then Exit Sub
+    EditorDbg_Send("q")
+    EditorDbg_End()
+    MessageWnd_Append(UiText$(UI_DBG_ENDED) + Chr$(13) + Chr$(10))
+End Sub
+
+' 動いている間にブレークポイントを足した・消した
+Sub EditorDbg_BpChanged(path As String, ByVal lineNo As Long)
+    If g_dbgOn = 0 Then Exit Sub
+    If EditorBp_Has(path, lineNo) <> 0 Then
+        EditorDbg_Send("b " + EditorDbg_OutPath$(path) + ":" + EditorGutter_Num$(lineNo))
+    Else
+        EditorDbg_Send("d " + EditorDbg_OutPath$(path) + ":" + EditorGutter_Num$(lineNo))
+    End If
+End Sub
+
+#ifdef _LINUX
+Sub EditorDbg_Launch(exe As String)
+    EditorDbg_Msg(UiText$(UI_DBG_LINUX))
+End Sub
+
+Sub EditorDbg_Send(cmd As String)
+End Sub
+
+Sub EditorDbg_End()
+    g_dbgOn = 0
+    g_dbgStopped = 0
+    g_dbgStopLine = 0
+End Sub
+
+Sub EditorDbg_OnTimer()
+End Sub
+#else
+
+Sub EditorDbg_Launch(exe As String)
+    If EditorDbg_HaveAbdbg() = 0 Then Exit Sub
+    EditorDbg_Msg(UiText$(UI_DBG_START) + exe)
+    If EditorDbg_Spawn(EditorDbg_Cmd$(exe), RunDir_Of$(exe)) <> 0 Then EditorDbg_Begin()
+    If g_dbgOn = 0 Then EditorDbg_Msg(UiText$(UI_DBG_NOSTART))
+End Sub
+
+Function EditorDbg_HaveAbdbg() As Long
+    EditorDbg_HaveAbdbg = 1
+    If GetFileAttributes(StrPtr(EditorDbg_AbdbgPath$())) <> -1 Then Exit Function
+    EditorDbg_Msg(UiText$(UI_DBG_NOABDBG))
+    EditorDbg_HaveAbdbg = 0
+End Function
+
+' コンソールのプログラムは新しいコンソールで（標準入出力をデバッガーのやり取りと分ける）
+Function EditorDbg_Cmd$(exe As String) As String
+    EditorDbg_Cmd$ = EditorBuild_QuoteArg$(EditorDbg_AbdbgPath$())
+    If EditorBuild_WantConsole(exe) <> 0 Then EditorDbg_Cmd$ = EditorDbg_Cmd$ + " -console"
+    EditorDbg_Cmd$ = EditorDbg_Cmd$ + " " + EditorBuild_QuoteArg$(exe)
+End Function
+
+Sub EditorDbg_Begin()
+    g_dbgOn = 1
+    g_dbgStopped = 0
+    g_dbgStopLine = 0
+    g_dbgPend = ""
+    g_dbgTimer = EditorDbg_SetTimer(0, 0, 50, 0)
+End Sub
+
+' パイプを 2 組作り、子の側だけ継がせる
+Function EditorDbg_Pipes(ByRef inR As HANDLE, ByRef outW As HANDLE) As Long
+    EditorDbg_Pipes = 0
+    If EditorDbg_CreatePipe(VarPtr(inR), VarPtr(g_dbgInW), 0, 0) = 0 Then Exit Function
+    If EditorDbg_CreatePipe(VarPtr(g_dbgOutR), VarPtr(outW), 0, 0) = 0 Then Exit Function
+    EditorDbg_Inherit(inR)
+    EditorDbg_Inherit(outW)
+    EditorDbg_Pipes = 1
+End Function
+
+Sub EditorDbg_Inherit(h As HANDLE)
+    EditorBuild_SetHandleInformation(h, EDITORBUILD_HANDLE_FLAG_INHERIT, EDITORBUILD_HANDLE_FLAG_INHERIT)
+End Sub
+
+Sub EditorDbg_ArmSi(inR As HANDLE, outW As HANDLE)
+    FillMemory(VarPtr(g_dbgSi), Len(g_dbgSi), 0)
+    FillMemory(VarPtr(g_dbgPi), Len(g_dbgPi), 0)
+    g_dbgSi.cb = Len(g_dbgSi)
+    g_dbgSi.dwFlags = STARTF_USESTDHANDLES
+    g_dbgSi.hStdInput = inR
+    g_dbgSi.hStdOutput = outW
+    g_dbgSi.hStdError = outW
+End Sub
+
+' 作業ディレクトリは exe のあるフォルダ（実行と同じ）
+Function EditorDbg_Spawn(cmd As String, dir As String) As Long
+    Dim inR As HANDLE, outW As HANDLE
+    EditorDbg_Spawn = 0
+    If EditorDbg_Pipes(inR, outW) = 0 Then Exit Function
+    EditorDbg_ArmSi(inR, outW)
+    EditorDbg_Spawn = EditorDbg_CreateAnsi(cmd, dir)
+    CloseHandle(inR)
+    CloseHandle(outW)
+    If EditorDbg_Spawn = 0 Then EditorDbg_CloseAll()
+End Function
+
+' コマンドラインとフォルダの UTF-8 を CP932 にして（abdbg は GetCommandLineA で読む）
+Function EditorDbg_CreateAnsi(cmd As String, dir As String) As Long
+    Dim a As *Byte, d As *Byte
+    a = BasicAnsiPtr(StrPtr(cmd))
+    d = BasicAnsiPtr(StrPtr(dir))
+    EditorDbg_CreateAnsi = EditorDbg_CreateProcess(0, a, 0, 0, 1, CREATE_NO_WINDOW, 0, d, VarPtr(g_dbgSi), VarPtr(g_dbgPi))
+    BasicFreeAnsi(a, StrPtr(cmd))
+    BasicFreeAnsi(d, StrPtr(dir))
+    If EditorDbg_CreateAnsi <> 0 Then CloseHandle(g_dbgPi.hThread)
+    If EditorDbg_CreateAnsi <> 0 Then g_dbgHProc = g_dbgPi.hProcess
+End Function
+
+Sub EditorDbg_CloseAll()
+    If g_dbgInW <> 0 Then CloseHandle(g_dbgInW)
+    If g_dbgOutR <> 0 Then CloseHandle(g_dbgOutR)
+    If g_dbgHProc <> 0 Then CloseHandle(g_dbgHProc)
+    g_dbgInW = 0
+    g_dbgOutR = 0
+    g_dbgHProc = 0
+End Sub
+
+' 終わる（abdbg はパイプが閉じると止め、デバッグしていたプログラムも終わる）
+Sub EditorDbg_End()
+    If g_dbgTimer <> 0 Then EditorDbg_KillTimer(0, g_dbgTimer)
+    g_dbgTimer = 0
+    EditorDbg_CloseAll()
+    g_dbgOn = 0
+    g_dbgStopped = 0
+    g_dbgStopLine = 0
+    If g_activeChild <> 0 Then InvalidateRect(g_activeChild, ByVal 0, FALSE)
+End Sub
+
+' 1 行送る（UTF-8 のまま。abdbg の .abdbg のパスも UTF-8）
+Sub EditorDbg_Send(cmd As String)
+    Dim s As String
+    Dim done As DWord
+    If g_dbgInW = 0 Then Exit Sub
+    s = cmd + Chr$(10)
+    WriteFile(g_dbgInW, StrPtr(s), Len(s), VarPtr(done), 0)
+End Sub
+
+' MAIN のメッセージループから（hwnd = 0 の WM_TIMER）
+Sub EditorDbg_OnTimer()
+    Dim avail As DWord
+    If g_dbgOn = 0 Or g_dbgOutR = 0 Then Exit Sub
+    avail = 0
+    If EditorDbg_PeekNamedPipe(g_dbgOutR, 0, 0, 0, VarPtr(avail), 0) = 0 Then
+        EditorDbg_Gone()
+        Exit Sub
+    End If
+    If avail > 0 Then EditorDbg_ReadSome(avail)
+End Sub
+
+Sub EditorDbg_ReadSome(avail As DWord)
+    Dim buf[4095] As Byte
+    Dim got As DWord
+    If avail > 4096 Then avail = 4096
+    got = 0
+    ReadFile(g_dbgOutR, VarPtr(buf), avail, VarPtr(got), 0)
+    If got > 0 Then g_dbgPend = g_dbgPend + Enc_DupCStr$(VarPtr(buf), got)
+    EditorDbg_Lines()
+End Sub
+
+' abdbg が終わった（パイプが切れた）
+Sub EditorDbg_Gone()
+    EditorDbg_Lines()
+    EditorDbg_End()
+End Sub
+
+' 行に揃ったところを 1 行ずつ
+Sub EditorDbg_Lines()
+    Dim p As Long
+    p = InStr(1, g_dbgPend, Chr$(10))
+    While p > 0
+        EditorDbg_OnLine(EditorDbg_NoCr$(Left$(g_dbgPend, p - 1)))
+        g_dbgPend = Mid$(g_dbgPend, p + 1)
+        p = InStr(1, g_dbgPend, Chr$(10))
+    Wend
+End Sub
+#endif
+
+Function EditorDbg_NoCr$(s As String) As String
+    EditorDbg_NoCr$ = s
+    If Right$(s, 1) = Chr$(13) Then EditorDbg_NoCr$ = Left$(s, Len(s) - 1)
+End Function

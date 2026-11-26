@@ -1,0 +1,104 @@
+' EditorBp - ブレークポイント（ファイルのパスと行）と、デバッガーが止まっている行の印。
+' 余白（行番号のところ）のクリックか F9 で付け外しする。行は文書を直しても動かさない
+
+Const EDBP_MAX = 256
+
+Dim g_bpN As Long
+Dim g_bpPath[EDBP_MAX] As String
+Dim g_bpLine[EDBP_MAX] As Long
+
+' デバッガーが止まっている所（無ければ行 0）
+Dim g_dbgStopPath As String
+Dim g_dbgStopLine As Long
+
+' 無題の文書は "" で覚える
+Function EditorBp_Same(a As String, b As String) As Long
+    EditorBp_Same = 0
+    If Len(a) = 0 And Len(b) = 0 Then EditorBp_Same = 1
+    If ProjSamePath(a, b) <> 0 Then EditorBp_Same = 1
+End Function
+
+' 番号（無ければ -1）
+Function EditorBp_Find(path As String, ByVal lineNo As Long) As Long
+    Dim i As Long
+    EditorBp_Find = -1
+    For i = 0 To g_bpN - 1
+        If g_bpLine[i] = lineNo And EditorBp_Same(g_bpPath[i], path) <> 0 Then EditorBp_Find = i
+    Next
+End Function
+
+Function EditorBp_Has(path As String, ByVal lineNo As Long) As Long
+    EditorBp_Has = 0
+    If EditorBp_Find(path, lineNo) >= 0 Then EditorBp_Has = 1
+End Function
+
+Sub EditorBp_Remove(ByVal i As Long)
+    g_bpN = g_bpN - 1
+    g_bpPath[i] = g_bpPath[g_bpN]
+    g_bpLine[i] = g_bpLine[g_bpN]
+End Sub
+
+Sub EditorBp_Toggle(path As String, ByVal lineNo As Long)
+    Dim i As Long
+    i = EditorBp_Find(path, lineNo)
+    If i >= 0 Then EditorBp_Remove(i)
+    If i < 0 Then EditorBp_Add(path, lineNo)
+End Sub
+
+Sub EditorBp_Add(path As String, ByVal lineNo As Long)
+    If g_bpN >= EDBP_MAX Then Exit Sub
+    g_bpPath[g_bpN] = path
+    g_bpLine[g_bpN] = lineNo
+    g_bpN = g_bpN + 1
+End Sub
+
+' 付け外しして、デバッグ中ならデバッガーにも知らせる
+Sub EditorBp_ToggleAt(hWnd As HWND, path As String, ByVal lineNo As Long)
+    EditorBp_Toggle(path, lineNo)
+    EditorDbg_BpChanged(path, lineNo)
+    InvalidateRect(hWnd, ByVal 0, FALSE)
+End Sub
+
+' F9: 今の文書のカーソルの行
+Sub EditorBp_ToggleCursor()
+    If g_activeChild = 0 Or g_activeChild = g_hProject Then Exit Sub
+    EditorBp_ToggleAt(g_activeChild, g_docPath, TextBuf_CursorLine())
+End Sub
+
+' 余白のクリックなら付け外しして 1
+Function EditorBp_GutterClick(hWnd As HWND, ByVal lParam As LPARAM) As Long
+    Dim x As Long, y As Long, lineNo As Long
+    EditorBp_GutterClick = 0
+    EditorSelect_XY(lParam, x, y)
+    If x >= g_textLeft - VS_MARGIN_X Then Exit Function
+    lineNo = g_viewTopLine + (y - VS_MARGIN_Y) \ VS_LINE_HEIGHT
+    If lineNo < 1 Or lineNo > TextBuf_LineCount() Then Exit Function
+    EditorBp_ToggleAt(hWnd, g_docPath, lineNo)
+    EditorBp_GutterClick = 1
+End Function
+
+' ---- 描く（DrawText_PaintLines が 1 行ごとに、文字より先に呼ぶ） ----
+
+Sub EditorBp_DrawLine(hDC As HDC, hWnd As HWND, ByVal lineNo As Long, ByVal y As Long)
+    If g_dbgStopLine = lineNo And EditorBp_Same(g_dbgStopPath, g_docPath) <> 0 Then EditorBp_StopBg(hDC, hWnd, y)
+    If EditorBp_Has(g_docPath, lineNo) <> 0 Then EditorBp_Dot(hDC, y)
+End Sub
+
+' 止まっている行: 黄色の背景
+Sub EditorBp_StopBg(hDC As HDC, hWnd As HWND, ByVal y As Long)
+    Dim rc As RECT
+    Ui_ClientRect(hWnd, rc)
+    rc.top = y
+    rc.bottom = y + VS_LINE_HEIGHT
+    Ui_FillRc(hDC, rc, RGB(255, 238, 140))
+End Sub
+
+' ブレークポイント: 余白の左の赤い四角
+Sub EditorBp_Dot(hDC As HDC, ByVal y As Long)
+    Dim rc As RECT
+    rc.left = 2
+    rc.right = 10
+    rc.top = y + (VS_LINE_HEIGHT - 8) \ 2
+    rc.bottom = rc.top + 8
+    Ui_FillRc(hDC, rc, RGB(200, 40, 40))
+End Sub
