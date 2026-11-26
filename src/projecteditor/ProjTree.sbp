@@ -13,6 +13,16 @@ Const PT_TVGN_CARET = 9
 Const PT_TVN_SELCHANGEDW = -451     ' TVN_FIRST - 51
 Const PT_WND = -2                   ' .wnd のノードの lParam
 Const PT_STYLE = &H27               ' TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS
+Const PT_TVM_HITTEST = &H1111       ' TV_FIRST + 17
+Const PT_TVM_SELECTITEM = &H110B    ' TV_FIRST + 11
+Const PT_TVGN_DROPHILITE = 8
+Const PT_TVHT_ONITEM = &H46         ' TVHT_ONITEMICON | TVHT_ONITEMLABEL | TVHT_ONITEMSTATEICON
+
+Type PT_TVHITTESTINFO
+    pt As POINTAPI
+    flags As DWord
+    hItem As HTREEITEM
+End Type
 
 Dim g_ptRoot As HTREEITEM
 Dim g_ptDirCount As Long
@@ -175,12 +185,45 @@ Function ProjTree_IsOpenCode(ByVal code As Long) As Long
     If code = TVN_SELCHANGED Or code = PT_TVN_SELCHANGEDW Or code = NM_DBLCLK Then ProjTree_IsOpenCode = 1
 End Function
 
-' WM_NOTIFY
-Sub ProjOnNotify(lParam As LPARAM)
-    Dim nm As *NMHDR
-    nm = lParam As *NMHDR
-    If nm = 0 Then Exit Sub
-    If nm->hwndFrom <> g_hProjList Then Exit Sub
-    If ProjTree_IsOpenCode(nm->code As Long) <> 0 Then ProjTree_OpenSel()
+' マウスの下のノード（無ければ 0）
+Function ProjTree_HitItem() As HTREEITEM
+    Dim ht As PT_TVHITTESTINFO
+    ProjTree_HitItem = 0
+    GetCursorPos(ht.pt)
+    ScreenToClient(g_hProjList, ht.pt)
+    If SendMessage(g_hProjList, PT_TVM_HITTEST, 0, VarPtr(ht) As LPARAM) = 0 Then Exit Function
+    If (ht.flags And PT_TVHT_ONITEM) = 0 Then Exit Function
+    ProjTree_HitItem = ht.hItem
+End Function
+
+' 右クリック: ルートなら「ファイルを挿入」、ファイルなら「プロジェクトから削除」「プロパティ」（ProjEdit.sbp）。
+' 選んでいるノードは変えない（変えるとそのファイルが開く）。メニューを出す間だけ薄く強調する
+Sub ProjTree_RClick()
+    Dim h As HTREEITEM, idx As Long, pt As POINTAPI, none As LONG_PTR
+    h = ProjTree_HitItem()
+    If h = 0 Then Exit Sub
+    idx = ProjTree_ItemParam(h)
+    If h = g_ptRoot Then idx = PROJEDIT_ROOT
+    If idx < 0 And idx <> PROJEDIT_ROOT Then Exit Sub
+    If h <> g_ptRoot And idx = PROJEDIT_ROOT Then Exit Sub
+    GetCursorPos(pt)
+    SendMessage(g_hProjList, PT_TVM_SELECTITEM, PT_TVGN_DROPHILITE, h As LPARAM)
+    ProjEdit_Menu(g_hProject, idx, pt.x, pt.y)
+    none = 0
+    If g_hProjList <> 0 Then SendMessage(g_hProjList, PT_TVM_SELECTITEM, PT_TVGN_DROPHILITE, none As LPARAM)
 End Sub
+
+' WM_NOTIFY。右クリックを受け持ったら 1（既定の WM_CONTEXTMENU を出さない）
+Function ProjOnNotify(lParam As LPARAM) As Long
+    Dim nm As *NMHDR
+    ProjOnNotify = 0
+    nm = lParam As *NMHDR
+    If nm = 0 Then Exit Function
+    If nm->hwndFrom <> g_hProjList Then Exit Function
+    If ProjTree_IsOpenCode(nm->code As Long) <> 0 Then ProjTree_OpenSel()
+    If nm->code = NM_RCLICK Then
+        ProjTree_RClick()
+        ProjOnNotify = 1
+    End If
+End Function
 #endif

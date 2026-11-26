@@ -1,0 +1,187 @@
+' ProjEdit - プロジェクト ビューの右クリックのメニュー（Windows のツリーと Linux の一覧で共通）。
+'   ルート（.pj）:  ファイルを挿入 … 選んだファイルを .pj からの相対パスで #SOURCE の最後に足す
+'   ファイル:       プロジェクトから削除 … #SOURCE からその行を消す（ファイルそのものは消さない）
+'                   プロパティ … プロジェクト内のパス・フルパス・サイズ
+' #SOURCE で最初の .abp はプロジェクトのメインファイル。消す前に確かめる。
+' .pj を書き換えたら ProjOpen で読み直し、ツリーを作り直す。
+
+Const IDM_PROJ_ADDFILE = 1350
+Const IDM_PROJ_REMOVE = 1351
+Const IDM_PROJ_PROP = 1352
+Const PROJEDIT_ROOT = -1            ' ルートの番号（ProjEdit_Menu の idx）
+
+Dim g_peInitDir As String           ' ファイルを挿入のダイアログの最初のフォルダー
+
+Function ProjEdit_Nl$() As String
+    ProjEdit_Nl$ = Chr$(13) & Chr$(10)
+End Function
+
+' 相対パスの区切り（Windows は \、Linux は /）
+Function ProjEdit_Sep$() As String
+#ifdef _LINUX
+    ProjEdit_Sep$ = "/"
+#else
+    ProjEdit_Sep$ = "\"
+#endif
+End Function
+
+' パスの大文字小文字を区別しないなら 1（Windows）
+Function ProjEdit_Ci() As Long
+#ifdef _LINUX
+    ProjEdit_Ci = 0
+#else
+    ProjEdit_Ci = 1
+#endif
+End Function
+
+' idx: PROJEDIT_ROOT ならルートのメニュー、0 以上なら g_projRel(idx) のファイルのメニュー。
+' (x, y) はスクリーンの座標（TrackPopupMenu に渡すもの）
+Sub ProjEdit_Menu(hWnd As HWND, ByVal idx As Long, ByVal x As Long, ByVal y As Long)
+    Dim hPop As HMENU, cmd As Long
+    If Len(g_projectPath) = 0 Then Exit Sub
+    If idx < PROJEDIT_ROOT Or idx >= g_projCount Then Exit Sub
+    hPop = CreatePopupMenu()
+    If hPop = 0 Then Exit Sub
+    ProjEdit_Build(hPop, idx)
+    cmd = TrackPopupMenu(hPop, TPM_LEFTALIGN Or TPM_RIGHTBUTTON Or TPM_RETURNCMD, x, y, 0, hWnd, ByVal 0)
+    DestroyMenu(hPop)
+    ProjEdit_Run(hWnd, cmd, idx)
+End Sub
+
+Sub ProjEdit_Build(hPop As HMENU, ByVal idx As Long)
+    If idx = PROJEDIT_ROOT Then
+        EditorMenu_Append(hPop, MF_STRING, IDM_PROJ_ADDFILE, UI_PROJ_ADDFILE)
+        Exit Sub
+    End If
+    EditorMenu_Append(hPop, MF_STRING, IDM_PROJ_REMOVE, UI_PROJ_REMOVE)
+    AppendMenu(hPop, MF_SEPARATOR, 0, "")
+    EditorMenu_Append(hPop, MF_STRING, IDM_PROJ_PROP, UI_PROJ_PROP)
+End Sub
+
+Sub ProjEdit_Run(hWnd As HWND, ByVal cmd As Long, ByVal idx As Long)
+    If cmd = IDM_PROJ_ADDFILE Then ProjEdit_AddFile(hWnd)
+    If cmd = IDM_PROJ_REMOVE Then ProjEdit_Remove(hWnd, idx)
+    If cmd = IDM_PROJ_PROP Then ProjEdit_Prop(hWnd, idx)
+End Sub
+
+' ---- ファイルを挿入 ----
+
+Sub ProjEdit_AddFile(hWnd As HWND)
+    Dim full As String, rel As String
+    g_pjDir = ProjDirOf$(g_projectPath)
+    full = ProjEdit_Browse$(hWnd)
+    If Len(full) = 0 Then Exit Sub
+    rel = ProjTree_RelPath$(g_pjDir, full, ProjEdit_Sep$(), ProjEdit_Ci())
+    If ProjEdit_Listed(full, rel) <> 0 Then
+        UiMsgBox(hWnd, UiText$(UI_PROJ_ALREADY) & ProjEdit_Nl$() & rel, "editor")
+        Exit Sub
+    End If
+    If EditorNewForm_AddToPj(rel) = 0 Then Exit Sub
+    ProjOpen(g_projectPath)
+End Sub
+
+' もう #SOURCE にあれば 1（フルパスか、相対パスの書き方が同じ）
+Function ProjEdit_Listed(full As String, rel As String) As Long
+    Dim i As Long
+    ProjEdit_Listed = ProjHas(full)
+    If ProjEdit_Listed <> 0 Then Exit Function
+    For i = 0 To g_projCount - 1
+        If ProjTree_SameComp(ProjTree_Rest$(g_projRel(i), 1, "\"), ProjTree_Rest$(rel, 1, "\"), ProjEdit_Ci()) <> 0 Then ProjEdit_Listed = 1
+        If ProjEdit_Listed <> 0 Then Exit Function
+    Next
+End Function
+
+' .pj のフォルダーから始めるファイルを開くダイアログ。やめたら ""
+Function ProjEdit_Browse$(hWnd As HWND) As String
+    Dim ofn As OPENFILENAME
+    Dim fileName[MAX_PATH] As Byte
+    Dim filter[127] As Byte
+    ProjEdit_Browse$ = ""
+    g_peInitDir = g_pjDir
+    FillMemory(VarPtr(fileName), MAX_PATH, 0)
+    EditorDoc_InitFilter(VarPtr(filter))
+    FillMemory(VarPtr(ofn), Len(ofn), 0)
+    ofn.lStructSize = Len(ofn)
+    ofn.hwndOwner = hWnd
+    ofn.lpstrFilter = VarPtr(filter)
+    ofn.nFilterIndex = 1
+    ofn.lpstrFile = VarPtr(fileName)
+    ofn.nMaxFile = MAX_PATH
+    ofn.lpstrInitialDir = StrPtr(g_peInitDir)
+    ofn.Flags = OFN_FILEMUSTEXIST Or OFN_PATHMUSTEXIST Or OFN_HIDEREADONLY Or OFN_EXPLORER
+    If GetOpenFileName(ofn) = 0 Then Exit Function
+    ProjEdit_Browse$ = Enc_DupCStr$(VarPtr(fileName), lstrlen(VarPtr(fileName)))
+End Function
+
+' ---- プロジェクトから削除 ----
+
+' #SOURCE で最初の .abp の番号（無ければ -1）
+Function ProjEdit_MainIndex() As Long
+    Dim i As Long
+    ProjEdit_MainIndex = -1
+    For i = 0 To g_projCount - 1
+        If ProjTree_IsAbp(g_projRel(i)) <> 0 Then ProjEdit_MainIndex = i
+        If ProjEdit_MainIndex >= 0 Then Exit Function
+    Next
+End Function
+
+' メインファイルなら消してよいか尋ねる。消してよければ 1
+Function ProjEdit_MainOk(hWnd As HWND, ByVal idx As Long) As Long
+    Dim nl As String, msg As String
+    ProjEdit_MainOk = 1
+    If idx <> ProjEdit_MainIndex() Then Exit Function
+    nl = ProjEdit_Nl$()
+    msg = UiText$(UI_PROJ_MAIN) & nl & g_projRel(idx) & nl & nl & UiText$(UI_PROJ_REMOVE_ASK)
+    ProjEdit_MainOk = UiMsgBoxYesNo(hWnd, msg, "editor")
+End Function
+
+Sub ProjEdit_Remove(hWnd As HWND, ByVal idx As Long)
+    If idx < 0 Or idx >= g_projCount Then Exit Sub
+    If ProjEdit_MainOk(hWnd, idx) = 0 Then Exit Sub
+    If ProjEdit_RemoveFromPj(g_projRel(idx)) = 0 Then Exit Sub
+    ProjOpen(g_projectPath)
+End Sub
+
+' .pj の #SOURCE から rel の行を消す（元の文字コードのまま）。書けたら 1
+Function ProjEdit_RemoveFromPj(rel As String) As Long
+    Dim saved As Long, enc As Long, body As String, nw As String
+    saved = g_docEncoding
+    body = EditorDoc_LoadTextFile$(g_projectPath)
+    enc = g_docEncoding
+    g_docEncoding = saved
+    ProjEdit_RemoveFromPj = 0
+    nw = ProjTree_RemoveSource$(body, rel)
+    If nw = body Then Exit Function
+    ProjEdit_RemoveFromPj = ProjRewrite(nw, enc)
+    If ProjEdit_RemoveFromPj = 0 Then UiMsgBox(hMainWnd, UiText$(UI_SAVE_FAILED) & ProjEdit_Nl$() & g_projectPath, "editor")
+End Function
+
+' ---- プロパティ ----
+
+' ファイルのバイト数（開けなければ -1）
+Function ProjEdit_FileSize(path As String) As Long
+    Dim h As HANDLE
+    ProjEdit_FileSize = -1
+    If AB4Proj_Exists(path) = 0 Then Exit Function
+    h = FileOpenRead(StrPtr(path))
+    If h = INVALID_HANDLE_VALUE Then Exit Function
+    ProjEdit_FileSize = FileSizeOrZero(h)
+    CloseHandle(h)
+End Function
+
+Function ProjEdit_SizeLine$(path As String) As String
+    Dim n As Long
+    n = ProjEdit_FileSize(path)
+    ProjEdit_SizeLine$ = UiText$(UI_PROJ_P_NOFILE)
+    If n >= 0 Then ProjEdit_SizeLine$ = UiText$(UI_PROJ_P_SIZE) & " " & ProjTree_Trim$(Str$(n)) & " " & UiText$(UI_PROJ_P_BYTES)
+End Function
+
+Sub ProjEdit_Prop(hWnd As HWND, ByVal idx As Long)
+    Dim nl As String, msg As String
+    If idx < 0 Or idx >= g_projCount Then Exit Sub
+    nl = ProjEdit_Nl$()
+    msg = UiText$(UI_PROJ_P_REL) & " " & g_projRel(idx) & nl
+    msg = msg & UiText$(UI_PROJ_P_FULL) & " " & g_projFull(idx) & nl
+    msg = msg & ProjEdit_SizeLine$(g_projFull(idx))
+    UiMsgBox(hWnd, msg, UiText$(UI_PROJ_PROP_TITLE))
+End Sub

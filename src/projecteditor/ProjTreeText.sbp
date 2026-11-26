@@ -68,3 +68,145 @@ Function ProjTree_IsMainSrc(rel As String, pj As String) As Long
     If Len(ProjTree_Dir$(rel)) > 0 Then Exit Function
     ProjTree_IsMainSrc = ProjTree_SameDir(rel, ProjTree_Base$(pj) + ".abp")
 End Function
+
+' ---- 右クリックのメニューで #SOURCE を足す・消す（ProjEdit.sbp） ----
+
+' \ か / なら 1
+Function ProjTree_IsSep(c As String) As Long
+    ProjTree_IsSep = 0
+    If c = "\" Or c = "/" Then ProjTree_IsSep = 1
+End Function
+
+' p から区切りを飛ばして、次の区切りの前までを返す（p はその後ろへ進む）。無ければ ""
+Function ProjTree_Comp$(s As String, ByRef p As Long) As String
+    Dim a As Long
+    ProjTree_Comp$ = ""
+    While p <= Len(s)
+        If ProjTree_IsSep(Mid$(s, p, 1)) = 0 Then Exit While
+        p = p + 1
+    Wend
+    a = p
+    While p <= Len(s)
+        If ProjTree_IsSep(Mid$(s, p, 1)) <> 0 Then Exit While
+        p = p + 1
+    Wend
+    If p > a Then ProjTree_Comp$ = Mid$(s, a, p - a)
+End Function
+
+' 区切りの間の名前が同じなら 1（ci <> 0 なら大文字小文字を区別しない）
+Function ProjTree_SameComp(a As String, b As String, ByVal ci As Long) As Long
+    ProjTree_SameComp = 0
+    If ci <> 0 Then
+        If ProjTree_Key$(a) = ProjTree_Key$(b) Then ProjTree_SameComp = 1
+    Else
+        If a = b Then ProjTree_SameComp = 1
+    End If
+End Function
+
+' p から後ろの名前を sep でつなぐ
+Function ProjTree_Rest$(s As String, ByVal p As Long, sep As String) As String
+    Dim c As String
+    ProjTree_Rest$ = ""
+    c = ProjTree_Comp$(s, p)
+    While Len(c) > 0
+        If Len(ProjTree_Rest$) > 0 Then ProjTree_Rest$ = ProjTree_Rest$ & sep
+        ProjTree_Rest$ = ProjTree_Rest$ & c
+        c = ProjTree_Comp$(s, p)
+    Wend
+End Function
+
+' base（フォルダー）から見た full の相対パス（"..\common\a.sbp" など）。
+' 先頭（ドライブ）から違えば full のまま
+Function ProjTree_RelPath$(base As String, full As String, sep As String, ByVal ci As Long) As String
+    Dim pb As Long, pf As Long, qb As Long, qf As Long, n As Long
+    Dim a As String, b As String, up As String
+    ProjTree_RelPath$ = full
+    pb = 1 : pf = 1 : n = 0
+    Do
+        qb = pb : qf = pf
+        a = ProjTree_Comp$(base, qb)
+        b = ProjTree_Comp$(full, qf)
+        If Len(a) = 0 Or Len(b) = 0 Then Exit Do
+        If ProjTree_SameComp(a, b, ci) = 0 Then Exit Do
+        pb = qb : pf = qf : n = n + 1
+    Loop
+    If n = 0 Then Exit Function
+    up = ""
+    While Len(ProjTree_Comp$(base, pb)) > 0
+        up = up & ".." & sep
+    Wend
+    ProjTree_RelPath$ = up & ProjTree_Rest$(full, pf, sep)
+End Function
+
+' 前後の空白とタブを除く
+Function ProjTree_Trim$(s As String) As String
+    Dim a As Long, b As Long
+    a = 1 : b = Len(s)
+    While a <= b
+        If Mid$(s, a, 1) <> " " And Mid$(s, a, 1) <> Chr$(9) Then Exit While
+        a = a + 1
+    Wend
+    While b >= a
+        If Mid$(s, b, 1) <> " " And Mid$(s, b, 1) <> Chr$(9) Then Exit While
+        b = b - 1
+    Wend
+    ProjTree_Trim$ = Mid$(s, a, b - a + 1)
+End Function
+
+' p の行の次の行の始まり（無ければ Len + 1）
+Function ProjTree_NextLine(text As String, ByVal p As Long) As Long
+    While p <= Len(text)
+        If Mid$(text, p, 1) = Chr$(10) Then Exit While
+        p = p + 1
+    Wend
+    ProjTree_NextLine = p + 1
+    If ProjTree_NextLine > Len(text) + 1 Then ProjTree_NextLine = Len(text) + 1
+End Function
+
+' "#SOURCE" の行なら 1（"#SOURCE=" や "#SOURCE " も）
+Function ProjTree_IsSrcKey(t As String) As Long
+    Dim c As String
+    ProjTree_IsSrcKey = 0
+    If Len(t) < 7 Then Exit Function
+    If ProjTree_Key$(Left$(t, 7)) <> "#source" Then Exit Function
+    ProjTree_IsSrcKey = 1
+    If Len(t) = 7 Then Exit Function
+    c = Mid$(t, 8, 1)
+    If c <> "=" And c <> " " And c <> Chr$(9) Then ProjTree_IsSrcKey = 0
+End Function
+
+' #SOURCE の中の rel の行（最初の 1 つ）を消した .pj。無ければ text のまま
+Function ProjTree_RemoveSource$(text As String, rel As String) As String
+    Dim p As Long, e As Long, inSrc As Long, ln As String
+    ProjTree_RemoveSource$ = text
+    p = 1 : inSrc = 0
+    While p <= Len(text)
+        e = ProjTree_NextLine(text, p)
+        ln = ProjTree_Trim$(ProjTree_StripNl$(Mid$(text, p, e - p)))
+        If Left$(ln, 1) = "#" Then
+            inSrc = ProjTree_IsSrcKey(ln)
+        ElseIf inSrc <> 0 And Len(ln) > 0 Then
+            If ProjTree_Key$(ln) = ProjTree_Key$(rel) Then
+                ProjTree_RemoveSource$ = Left$(text, p - 1) & Mid$(text, e)
+                Exit Function
+            End If
+        End If
+        p = e
+    Wend
+End Function
+
+' 行の終わりの CR / LF を除く
+Function ProjTree_StripNl$(s As String) As String
+    ProjTree_StripNl$ = s
+    While Len(ProjTree_StripNl$) > 0
+        If Right$(ProjTree_StripNl$, 1) <> Chr$(10) And Right$(ProjTree_StripNl$, 1) <> Chr$(13) Then Exit While
+        ProjTree_StripNl$ = Left$(ProjTree_StripNl$, Len(ProjTree_StripNl$) - 1)
+    Wend
+End Function
+
+' .abp なら 1（#SOURCE で最初の .abp がプロジェクトのメインファイル）
+Function ProjTree_IsAbp(rel As String) As Long
+    ProjTree_IsAbp = 0
+    If Len(rel) < 4 Then Exit Function
+    If ProjTree_Key$(Right$(rel, 4)) = ".abp" Then ProjTree_IsAbp = 1
+End Function
