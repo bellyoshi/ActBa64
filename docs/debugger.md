@@ -25,7 +25,7 @@ ProjectEditor（ブレークポイント・今の行・変数・呼び出し履�
 | D0 | コンパイラが `.abdbg` を書く（行の表・手続き・ローカル変数・グローバル変数）。`Debug` 文 | 済 |
 | D1 | `abdbg.exe` の土台: 起動・ブレークポイント（`0xCC`）・続行・呼び出し履歴（rbp をたどる）・例外で落ちた行を出す | 済 |
 | D2 | ステップオーバー / ステップイン / ステップアウト | 済 |
-| D3 | 変数の表示（Long・Int64・Double・ポインタ・String → Type / Class のメンバ・配列） | |
+| D3 | 変数の表示（Long・Int64・Double・ポインタ・String → Type / Class のメンバ・配列） | 済 |
 | D4 | ProjectEditor に入れる（余白のクリックでブレークポイント、F5 / F9 / F10 / F11 / Shift+F11、変数・呼び出し履歴の窓） | |
 | D5 | 条件付きブレークポイント・ウォッチ・`-actba32`（WOW64）・Linux | |
 
@@ -43,7 +43,9 @@ arch x64
 text 4096
 data 167936
 func <番号> <始まりの RVA> <終わりの RVA> <名前>
-var <手続きの番号> <off> <ByRef> <kind> <typeIdx> <型> <名前>
+var <手続きの番号> <off> <ByRef> <kind> <typeIdx> <バイト数> <file の番号> <宣言した行> <型> <名前>
+type <番号> <大きさ> <0=Type 1=Class 2=関数ポインタ> <名前>
+field <型の番号> <off> <要素の大きさ> <要素の数> <種類> <型の名前> <名前>
 file <番号> <フルパス>
 lib <file の番号>
 line <RVA> <file の番号> <行> <文の始まりなら 1>
@@ -54,7 +56,9 @@ line <RVA> <file の番号> <行> <文の始まりなら 1>
 | `arch` | `x64` か `x86`（`-actba32`） |
 | `text` / `data` | `.text`（機械語）と `.data`（グローバル変数）の RVA。実際のアドレスは、読み込まれた先頭（ASLR で変わる）＋ RVA |
 | `func` | 手続きの範囲（先頭の `push rbp` から `leave; ret` まで）。モジュールの本体は `(module)`。Include の手続きも出る |
-| `var` | 手続きの番号が `-1` ならグローバル変数で、`off` は `.data` の先頭から。ほかはその手続きのローカル変数・仮引数で、`off` は `[rbp+off]`（`-actba32` は `[ebp+off]`）。`ByRef` が 1 なら、その場所にあるのは値へのポインタ。`kind` / `typeIdx` はコンパイラの型の番号（`TY_*`・`LOW_PTI_*`、Type / Class は型表の番号）で、`型` はそれを読みやすくした名前（`Long`、`DWord`、`String`、`Double`、`*Byte`、`Pt`、`*Pt`、`Long()` など） |
+| `var` | 手続きの番号が `-1` ならグローバル変数で、`off` は `.data` の先頭から。ほかはその手続きのローカル変数・仮引数で、`off` は `[rbp+off]`（`-actba32` は `[ebp+off]`）。`ByRef` が 1 なら、その場所にあるのは値へのポインタ。`kind` / `typeIdx` はコンパイラの型の番号（`TY_*`・`LOW_PTI_*`、Type / Class は型表の番号）で、`型` はそれを読みやすくした名前（`Long`、`DWord`、`String`、`Double`、`*Byte`、`Pt`、`*Pt`、`Long()` など）。`バイト数` は変数全体の大きさ（配列なら全部の要素。要素の数はこれを要素の大きさで割る）。`file` / `宣言した行` は `Dim` のある所（仮引数などは `-1 0`） |
+| `type` | Type / Class（Include の Windows の構造体も）。番号は `var` の `typeIdx`・`field` の種類と同じで、0 から順に並ぶ |
+| `field` | メンバ。同じ型のメンバは続けて並ぶ。`種類` は 0 以上なら Type / Class の番号、`-1` なら `型の名前` で値の読み方が決まる（`String`、`Integer`、`Word`、`HANDLE` など）、ほかはコンパイラの `FIELDTY_*`（`-4` Double、`-6` Single、`-10` DWord、`-13` Int64、`-14` QWord、`-2` / `-3` / `-7` / `-8` ポインタ）。`型の名前` はソースに書いた名前（分からなければ `?`） |
 | `file` | ソースファイル（`#include` したものも）。`line` から番号で引く |
 | `lib` | Include のフォルダのファイル（ライブラリ）。ステップインはこのファイルの手続きには入らない |
 | `line` | その RVA から次の `line` の RVA の手前までが、そのファイルのその行の機械語。`文の始まり` が 1 の位置がブレークポイントを置ける所。0 は入れ子の文の後ろ（`For` の `Next` の加算と判定、`Loop While` の判定など）で、行を調べるのには使うがステップ実行では止まらない。ファイル番号 `-1` / 行 `0` はどの行でもない（手続きの外） |
@@ -72,6 +76,7 @@ line <RVA> <file の番号> <行> <文の始まりなら 1>
 | `DbgInfo.abp` | 下ろすとき: 文の始まり・入れ子の後ろ・手続きの始まりと終わりに `OP_DBG_LINE` / `OP_DBG_FUNC` / `OP_DBG_FEND` を IR に入れる（`LowStmtList`、`LowModStmtNext`、`AstToIrEmitFuncSetup` / `Finish`、`LowEmitMainOpen` / `Close`） |
 | `DbgInfoVar.abp` | 手続きの終わりでローカル変数の表を、`AstToIr` の終わりでグローバル変数の表を写す |
 | `DbgInfoEmit.abp` | 機械語にするとき、`OP_DBG_*` の位置（`.text` の先頭からの offset）を覚える。印は機械語を出さない |
+| `DbgInfoUdt.abp` | `type` / `field`。メンバの型の名前は、型表に残らないのでパーサー（`ParseFieldTypeSize`）が読んだときに写しておく |
 | `DbgInfoType.abp` / `DbgInfoWrite.abp` / `DbgInfoLines.abp` | 書き出し。結合したソースの行は `PpMapFind` でファイルと行に戻す |
 
 `OP_DBG_*` は `-debug` のときだけ入るので、リリースの IR と機械語は前と同じです。`-X`（`LinuxPrune`）は手続きの最後の命令を見て次の手続きへ落ちるかを決めるので、`OP_DBG_*` を飛ばして見ます。
@@ -96,6 +101,9 @@ abdbg hello.exe
 | `n` | ステップオーバー（次の文まで。呼んだ手続きの中では止まらない） | `running` の後に `stop step …` |
 | `s` | ステップイン（呼んだユーザーの手続きの中へ入る。Include の手続き・ランタイム・API には入らない） | 同上 |
 | `o` | ステップアウト（今の手続きから戻った所まで） | 同上。モジュールの本体では `error no caller` |
+| `p <式>` | 変数の値。式は名前に `.メンバ` / `->メンバ`（Type へのポインタ）/ `(添字)` / `[添字]` をつなげたもの。名前は今の段のローカル → ユーザーのソースのグローバル → ほかのグローバルの順に探す | `value <値>` |
+| `l` | 今の段の変数。モジュールの本体なら、ユーザーのソースで宣言したグローバル変数 | `locals <数>` の後に `var <名前> <型> <値>` を数だけ |
+| `f <段>` | `p` と `l` で見る段を選ぶ（`bt` の段の番号。止まったときは一番上のユーザーの段） | `frame <段> <行> <手続き> <フルパス>` |
 | `bt` | 呼び出し履歴（止まっているとき） | `bt <段の数>` の後に `frame <段> <行> <手続き> <フルパス>` を段の数だけ |
 | `q` | やめる（動いているプログラムも終わる）。標準入力が終わっても同じ | なし |
 
@@ -113,6 +121,8 @@ abdbg hello.exe
 
 場所が分からないときは `0 ? ?` です。
 
+値の書き方: 整数は 10 進（DWord / QWord / Byte / Word は符号なし）、ポインタ（`*型`・`VoidPtr`・大きさ 8 のよく分からない型）は `&H` の 16 進、`Single` / `Double` は `Str$` と同じ、String は `"..."`（200 バイトまで。長ければ `"..."...(長さ)`、制御文字は `?`）、Type は `{メンバ=値, ...}`（3 段まで）、配列は `[値, ...]`（10 個まで）。メンバの無い Type（`BOOL` などの別名）は大きさで整数として見せます。
+
 ### 作り
 
 - `CreateProcess` に `DEBUG_ONLY_THIS_PROCESS`、`WaitForDebugEvent` / `ContinueDebugEvent` で回す（`AdEvent.sbp`）。`CREATE_PROCESS_DEBUG_INFO.lpBaseOfImage` が読み込まれた先頭で、ブレークポイントはそこで書く
@@ -122,6 +132,7 @@ abdbg hello.exe
 - ステップイン / オーバー（`AdStep.sbp`）は TF で 1 命令ずつ進め、ユーザーの手続き（`lib` でないファイルの文がある手続き）の文の始まりに来たら止まる。`call` で入った先がライブラリ・ランタイム・OS なら（`n` はいつも）戻り先に一時ブレークポイントを置いて走らせ、戻ったらまた 1 命令ずつ進める。始めた段の `ret` の後（rsp が rbp + 8 より上）は、呼び出し元の途中で止まる。`Debug` 文で止まったところからは、`BasicDebug` の呼び出し元の段で進める
 - ステップアウトは今の段の戻り先（`[rbp+8]`）に一時ブレークポイントを置く。一時ブレークポイントは rsp が置いたときの段より上のときだけ当たりにする（再帰で深い段が通っても止まらない）
 - ステップの途中でブレークポイント・`Debug` 文・例外に当たったら、そこで止まってステップはやめる。例外で止まったところからはステップできない（続けるとプログラムが終わる）
+- 変数の場所（`AdVarCmd.sbp`）は、ローカルが選んだ段の rbp + `off`、グローバルが読み込まれた先頭 + `data` + `off`。`ByRef` ならそこにあるポインタの先。String は文字へのポインタで、その 4 バイト前が長さ（[string-gc.md](./string-gc.md)）
 - `CONTEXT` は 16 バイト境界が要るので `VirtualAlloc` で取る
 - イベントやコマンドを 1 つ扱うたびに MAIN のループへ戻る（手続きの中で作った String は MAIN に戻るまで回収されないため）
 

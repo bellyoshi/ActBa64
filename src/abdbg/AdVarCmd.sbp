@@ -1,0 +1,120 @@
+' AdVarCmd - 変数を見るコマンド
+'   locals      今の段の変数（モジュールの本体ならユーザーのソースのグローバル変数）
+'   p <式>      変数の値。式は 名前 / 名前.メンバ / 名前->メンバ / 名前(添字) / 名前[添字] をつないだもの
+'   f <段>      locals と p で見る段を選ぶ（止まったときは一番上のユーザーの段）
+
+Dim g_adCurFrame As Long
+
+' 式の今の値: 場所・種類・配列なら要素の数と大きさ
+Dim g_aeAddr As QWord
+Dim g_aeVk As Long
+Dim g_aeArg As Long
+Dim g_aeCnt As Long
+Dim g_aeEsz As Long
+Dim g_aeErr As String
+
+' ---- 型 → 値の種類 ----
+
+' TY_LONG の枠（typeIdx で DWord / Int64 / QWord / VoidPtr / LONG_PTR）
+Function AdLongVk(ti As Long) As Long
+    AdLongVk = VK_LONG
+    If ti = -12 Then AdLongVk = VK_DWORD
+    If ti = -13 Then AdLongVk = VK_INT64
+    If ti = -14 Then AdLongVk = VK_QWORD
+    If ti = -2 Then AdLongVk = VK_PTR
+    If ti = -17 Then AdLongVk = VK_LPTR
+End Function
+
+' 変数の kind（TY_*）。配列はその要素
+Function AdKindVk(kind As Long, ti As Long) As Long
+    AdKindVk = AdKindVkLo(kind, ti)
+    If kind = 11 Then AdKindVk = VK_DOUBLE
+    If kind = 12 Then AdKindVk = VK_UDT
+    If kind = 13 Or kind = 14 Then AdKindVk = VK_SINGLE
+    If kind = 16 Then AdKindVk = VK_PTR
+    If kind = 17 Then AdKindVk = VK_WORD
+    If kind = 18 Then AdKindVk = VK_INT64
+    If kind = 19 Then AdKindVk = VK_QWORD
+End Function
+
+Function AdKindVkLo(kind As Long, ti As Long) As Long
+    AdKindVkLo = VK_PTR
+    If kind = 0 Then AdKindVkLo = AdLongVk(ti)
+    If kind = 1 Or kind = 8 Then AdKindVkLo = VK_STRING
+    If kind = 2 Or kind = 3 Then AdKindVkLo = VK_BYTE
+    If kind = 5 Then AdKindVkLo = VK_UDT
+    If kind = 6 Then AdKindVkLo = VK_LONG
+    If kind = 7 Then AdKindVkLo = VK_PUDT
+    If kind = 10 Then AdKindVkLo = VK_DOUBLE
+End Function
+
+Function AdKindIsArr(kind As Long) As Long
+    AdKindIsArr = 0
+    If kind = 3 Or kind = 6 Or kind = 8 Or kind = 11 Or kind = 12 Then AdKindIsArr = 1
+    If kind = 14 Or kind = 16 Or kind = 17 Or kind = 18 Or kind = 19 Then AdKindIsArr = 1
+End Function
+
+' メンバの種類（0 以上は Type の番号、負は FIELDTY_*、-1 は読んだ型の名前で）。
+' FIELDTY_INT64 = -13 → VK_INT64、FIELDTY_QWORD = -14 → VK_QWORD
+Function AdFieldVk(fi As Long) As Long
+    Dim ty As Long
+    ty = AdVecAt(VarPtr(g_afTy), fi)
+    AdFieldVk = AdFieldNameVk(fi)
+    If ty >= 0 Then AdFieldVk = VK_UDT
+    If ty = -4 Then AdFieldVk = VK_DOUBLE
+    If ty = -6 Then AdFieldVk = VK_SINGLE
+    If ty = -10 Then AdFieldVk = VK_DWORD
+    If ty = -13 Or ty = -14 Then AdFieldVk = VK_INT64 - 13 - ty
+End Function
+
+Function AdFieldArg(fi As Long) As Long
+    AdFieldArg = AdVecAt(VarPtr(g_afTy), fi)
+End Function
+
+Function AdFieldNameVk(fi As Long) As Long
+    Dim t As *Byte
+    t = AdNamesAt(VarPtr(g_afTyName), fi)
+    AdFieldNameVk = AdVkBySize(AdVecAt(VarPtr(g_afSize), fi))
+    If t[0] = 42 Then AdFieldNameVk = VK_PTR
+    If Ad_lstrcmpi(t, "String") = 0 Then AdFieldNameVk = VK_STRING
+    If Ad_lstrcmpi(t, "Word") = 0 Then AdFieldNameVk = VK_WORD
+    If Ad_lstrcmpi(t, "Byte") = 0 Or Ad_lstrcmpi(t, "Char") = 0 Then AdFieldNameVk = VK_BYTE
+End Function
+
+' ---- 変数の場所 ----
+
+Function AdFrameFp(i As Long) As QWord
+    AdFrameFp = 0
+    If i >= 0 And i < g_adFrN Then AdFrameFp = g_adFrFp[i]
+End Function
+
+' 変数 v の値のある場所（ByRef ならポインタの先）
+Function AdVarAddr(v As Long) As QWord
+    Dim a As QWord
+    a = AdFrameFp(g_adCurFrame)
+    If AdVecAt(VarPtr(g_avFn), v) < 0 Then a = g_adBase + g_adDataRva
+    a = a + AdVecAt(VarPtr(g_avOff), v)
+    If AdVecAt(VarPtr(g_avRef), v) <> 0 Then a = AdReadQ(a)
+    AdVarAddr = a
+End Function
+
+' 式の値を変数 v にする
+Sub AdEvSetVar(v As Long)
+    Dim kind As Long
+    kind = AdVecAt(VarPtr(g_avKind), v)
+    g_aeAddr = AdVarAddr(v)
+    g_aeVk = AdKindVk(kind, AdVecAt(VarPtr(g_avTi), v))
+    g_aeArg = AdVecAt(VarPtr(g_avTi), v)
+    g_aeEsz = AdVkSize(g_aeVk, g_aeArg)
+    g_aeCnt = 0
+    If AdKindIsArr(kind) <> 0 Then g_aeCnt = AdVecAt(VarPtr(g_avSize), v) \ g_aeEsz
+End Sub
+
+' 今の値を文字に
+Function AdEvText$() As String
+    If g_aeCnt > 0 Then
+        AdEvText$ = AdFmtArr$(g_aeAddr, g_aeVk, g_aeArg, g_aeEsz, g_aeCnt, 0)
+    Else
+        AdEvText$ = AdFmt$(g_aeAddr, g_aeVk, g_aeArg, 0)
+    End If
+End Function

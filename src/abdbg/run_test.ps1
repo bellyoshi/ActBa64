@@ -42,9 +42,10 @@ function Invoke-Abdbg([string]$exe, [string]$inText) {
     return ($text.Result -replace "`r", "") -split "`n" | Where-Object { $_ -ne "" }
 }
 
-# C:\...\name.abp → name.abp
+# C:\...\name.abp → name.abp。ポインタの値（&H...）は配置で変わるので &H? にする
 function Format-Line([string]$s) {
-    return ($s -replace '[A-Za-z]:\\(?:[^\\\r\n]*\\)*', '')
+    $s = $s -replace '[A-Za-z]:\\(?:[^\\\r\n]*\\)*', ''
+    return ($s -replace '&H[0-9a-fA-F]+', '&H?')
 }
 
 Push-Location $Root
