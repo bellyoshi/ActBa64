@@ -1,0 +1,231 @@
+' TextBuffer のカーソル位置・選択範囲（g_selAnchor）と上下移動（g_preferredCol）
+' 変数は TextBuffer.sbp、行の計算は TextBufLine.sbp
+
+Function TextBuf_CursorLine() As Long
+    TextBuf_EnsureInit()
+    TextBuf_CursorLine = TextBuf_GetLineAtIndex(g_textBuf.gap_start)
+End Function
+
+Function TextBuf_CursorIndex() As Long
+    TextBuf_EnsureInit()
+    TextBuf_CursorIndex = g_textBuf.gap_start
+End Function
+
+Sub TextBuf_ClearSelection()
+    g_selAnchor = -1
+End Sub
+
+Function TextBuf_HasSelection() As Long
+    TextBuf_HasSelection = 0
+    TextBuf_EnsureInit()
+    If g_selAnchor < 0 Then Exit Function
+    If g_selAnchor = g_textBuf.gap_start Then Exit Function
+    TextBuf_HasSelection = 1
+End Function
+
+Function TextBuf_SelStart() As Long
+    Dim a As Long
+    Dim b As Long
+    TextBuf_EnsureInit()
+    a = g_selAnchor
+    b = g_textBuf.gap_start
+    If a < 0 Then a = b
+    If a < b Then
+        TextBuf_SelStart = a
+    Else
+        TextBuf_SelStart = b
+    End If
+End Function
+
+Function TextBuf_SelEnd() As Long
+    Dim a As Long
+    Dim b As Long
+    TextBuf_EnsureInit()
+    a = g_selAnchor
+    b = g_textBuf.gap_start
+    If a < 0 Then a = b
+    If a > b Then
+        TextBuf_SelEnd = a
+    Else
+        TextBuf_SelEnd = b
+    End If
+End Function
+
+Sub TextBuf_SelectAll()
+    TextBuf_EnsureInit()
+    g_selAnchor = 0
+    TextBuf_MoveCursorTo(TextBuf_Len())
+    TextBuf_SyncPreferredCol()
+End Sub
+
+Function TextBuf_GetSelected$() As String
+    Dim s As String
+    Dim a As Long
+    Dim b As Long
+    Dim n As Long
+
+    TextBuf_GetSelected$ = ""
+    If TextBuf_HasSelection() = 0 Then Exit Function
+    s = TextBuf_GetConfirmed$()
+    a = TextBuf_SelStart()
+    b = TextBuf_SelEnd()
+    n = Len(s)
+    If a < 0 Then a = 0
+    If b > n Then b = n
+    If b <= a Then Exit Function
+    TextBuf_GetSelected$ = Mid$(s, a + 1, b - a)
+End Function
+
+Sub TextBuf_DeleteSelection()
+    Dim s As String
+    Dim a As Long
+    Dim b As Long
+    Dim n As Long
+    Dim leftS As String
+    Dim rightS As String
+
+    If TextBuf_HasSelection() = 0 Then Exit Sub
+    EditorBp_EditBegin()
+    a = TextBuf_SelStart()
+    b = TextBuf_SelEnd()
+    s = TextBuf_GetConfirmed$()
+    n = Len(s)
+    leftS = ""
+    rightS = ""
+    If a > 0 Then leftS = Left$(s, a)
+    If b < n Then rightS = Mid$(s, b + 1)
+    EditorUndo_EndCoalesce()
+    EditorUndo_BeforeEdit()
+    TextBuf_SetText(leftS + rightS)
+    TextBuf_MoveCursorTo(a)
+    TextBuf_SyncPreferredCol()
+    g_selAnchor = -1
+    EditorUndo_EndCoalesce()
+    EditorBp_EditEnd(0)
+End Sub
+
+Sub TextBuf_SyncPreferredCol()
+    Dim lineNo As Long
+    Dim s As Long
+
+    TextBuf_EnsureInit()
+    lineNo = TextBuf_CursorLine()
+    s = TextBuf_GetLineStart(lineNo)
+    g_preferredCol = g_textBuf.gap_start - s
+    If g_preferredCol < 0 Then g_preferredCol = 0
+End Sub
+
+Function TextBuf_SnapInLine(ByVal lineStart As Long, ByVal lineEnd As Long, ByVal desired As Long) As Long
+    Dim i As Long
+    Dim n As Long
+    Dim b As Long
+
+    If desired <= lineStart Then
+        TextBuf_SnapInLine = lineStart
+        Exit Function
+    End If
+    If desired >= lineEnd Then
+        TextBuf_SnapInLine = lineEnd
+        Exit Function
+    End If
+
+    i = lineStart
+    While i < lineEnd
+        b = TextBuf_GetByte(i)
+        n = Enc_Utf8CharBytes(b)
+        If i + n > lineEnd Then n = 1
+        If i + n > desired Then
+            TextBuf_SnapInLine = i
+            Exit Function
+        End If
+        i = i + n
+        If i = desired Then
+            TextBuf_SnapInLine = i
+            Exit Function
+        End If
+    Wend
+    TextBuf_SnapInLine = lineEnd
+End Function
+
+Function TextBuf_IndexFromLineCol(ByVal lineNo As Long, ByVal col As Long) As Long
+    Dim s As Long
+    Dim e As Long
+
+    TextBuf_IndexFromLineCol = 0
+    TextBuf_EnsureInit()
+    If lineNo < 1 Then lineNo = 1
+    If lineNo > TextBuf_LineCount() Then lineNo = TextBuf_LineCount()
+    s = TextBuf_GetLineStart(lineNo)
+    e = TextBuf_GetLineEnd(lineNo)
+    If col < 0 Then col = 0
+    TextBuf_IndexFromLineCol = TextBuf_SnapInLine(s, e, s + col)
+End Function
+
+Sub TextBuf_SetKeep(ByVal keep As Long)
+    g_selKeep = keep
+End Sub
+
+Sub TextBuf_PrepareMove()
+    TextBuf_EnsureInit()
+    If g_selKeep <> 0 Then
+        g_selKeep = 0
+        If g_selAnchor < 0 Then g_selAnchor = g_textBuf.gap_start
+        Exit Sub
+    End If
+    TextBuf_ClearSelection()
+End Sub
+
+Function TextBuf_AtFirstLine() As Long
+    TextBuf_AtFirstLine = 0
+    If TextBuf_CursorLine() > 1 Then Exit Function
+    TextBuf_MoveCursorTo(TextBuf_GetLineStart(1))
+    TextBuf_AtFirstLine = 1
+End Function
+
+Sub TextBuf_MoveCursorUp()
+    TextBuf_PrepareMove()
+    If TextBuf_AtFirstLine() <> 0 Then Exit Sub
+    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(TextBuf_CursorLine() - 1, g_preferredCol))
+End Sub
+
+Function TextBuf_AtLastLine() As Long
+    TextBuf_AtLastLine = 0
+    If TextBuf_CursorLine() < TextBuf_LineCount() Then Exit Function
+    TextBuf_MoveCursorTo(TextBuf_GetLineEnd(TextBuf_LineCount()))
+    TextBuf_AtLastLine = 1
+End Function
+
+Sub TextBuf_MoveCursorDown()
+    TextBuf_PrepareMove()
+    If TextBuf_AtLastLine() <> 0 Then Exit Sub
+    TextBuf_MoveCursorTo(TextBuf_IndexFromLineCol(TextBuf_CursorLine() + 1, g_preferredCol))
+End Sub
+
+Function TextBuf_GetTextBeforeCursorOnLine$() As String
+    Dim lineNo As Long
+    Dim s As Long
+    Dim e As Long
+    Dim n As Long
+    Dim i As Long
+    Dim out As *Byte
+
+    TextBuf_GetTextBeforeCursorOnLine$ = ""
+    TextBuf_EnsureInit()
+    lineNo = TextBuf_CursorLine()
+    s = TextBuf_GetLineStart(lineNo)
+    e = g_textBuf.gap_start
+    If e < s Then Exit Function
+    n = e - s
+    If n <= 0 Then Exit Function
+
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+
+    For i = 0 To n - 1
+        out[i] = TextBuf_GetByte(s + i)
+    Next
+    out[n] = 0
+
+    TextBuf_GetTextBeforeCursorOnLine$ = Enc_DupCStr$(out, n)
+    free(out)
+End Function
