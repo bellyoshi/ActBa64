@@ -1,0 +1,202 @@
+' ファイル・フォルダの API。パスは妥当な UTF-8 ならワイド文字 API へ、違えば（CP932 など）A 版へ。
+' 書き戻すパス（カレントフォルダ・TEMP・FindFirstFile の名前など）は UTF-8。
+' 戻り値は A 版と同じ決まりで、文字数の代わりに UTF-8 のバイト数。-linux は A 版（UTF-8 のまま）。
+
+' ワイドの結果を受ける大きさ（文字数）。パスと環境変数の上限
+Const BASIC_WMAX = 32767
+
+Sub BasicFree2(a As *Byte, b As *Byte)
+    If a <> 0 Then free(a)
+    If b <> 0 Then free(b)
+End Sub
+
+' ワイド chars 文字を UTF-8 で buf（n バイト）へ。入れば書いたバイト数（NUL 抜き）、入らなければ NUL 込みの要るバイト数
+Function BasicPutNeed(wide As *Byte, chars As Long, buf As *Byte, n As DWord) As DWord
+    Dim need As Long
+    need = BasicUtf8Len(wide, chars)
+    BasicPutNeed = need + 1
+    If buf = 0 Or need >= n Then Exit Function
+    BasicPutNeed = GwPutFit(wide, chars, buf, n)
+End Function
+
+' W 版の戻り値 chars（0 は失敗、BASIC_WMAX 以上は入らなかった）を BasicPutNeed へ。w は free する
+Function BasicWDone(w As *Byte, chars As DWord, buf As *Byte, n As DWord) As DWord
+    BasicWDone = 0
+    If chars > 0 And chars < BASIC_WMAX Then BasicWDone = BasicPutNeed(w, chars, buf, n)
+    free(w)
+End Function
+
+' ---------- パスを渡すだけの API ----------
+
+Function CopyFile(lpExistingFileName As *Byte, lpNewFileName As *Byte, bFailIfExists As Long) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicPathWide(lpExistingFileName)
+    b = BasicPathWide(lpNewFileName)
+    If a = 0 Or b = 0 Then CopyFile = CopyFileA(lpExistingFileName, lpNewFileName, bFailIfExists)
+#ifndef _LINUX
+    If a <> 0 And b <> 0 Then CopyFile = CopyFileW(a, b, bFailIfExists)
+#endif
+    BasicFree2(a, b)
+End Function
+
+Function MoveFile(lpExistingFileName As *Byte, lpNewFileName As *Byte) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicPathWide(lpExistingFileName)
+    b = BasicPathWide(lpNewFileName)
+    If a = 0 Or b = 0 Then MoveFile = MoveFileA(lpExistingFileName, lpNewFileName)
+#ifndef _LINUX
+    If a <> 0 And b <> 0 Then MoveFile = MoveFileW(a, b)
+#endif
+    BasicFree2(a, b)
+End Function
+
+Function DeleteFile(lpFileName As *Byte) As Long
+    Dim w As *Byte
+    w = BasicPathWide(lpFileName)
+    If w = 0 Then DeleteFile = DeleteFileA(lpFileName)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    DeleteFile = DeleteFileW(w)
+#endif
+    free(w)
+End Function
+
+Function CreateDirectory(lpPathName As *Byte, ByRef lpSecurityAttributes As SECURITY_ATTRIBUTES) As Long
+    Dim w As *Byte
+    w = BasicPathWide(lpPathName)
+    If w = 0 Then CreateDirectory = CreateDirectoryA(lpPathName, VarPtr(lpSecurityAttributes))
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    CreateDirectory = CreateDirectoryW(w, VarPtr(lpSecurityAttributes))
+#endif
+    free(w)
+End Function
+
+Function RemoveDirectory(lpPathName As *Byte) As Long
+    Dim w As *Byte
+    w = BasicPathWide(lpPathName)
+    If w = 0 Then RemoveDirectory = RemoveDirectoryA(lpPathName)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    RemoveDirectory = RemoveDirectoryW(w)
+#endif
+    free(w)
+End Function
+
+Function SetCurrentDirectory(lpPathName As *Byte) As Long
+    Dim w As *Byte
+    w = BasicPathWide(lpPathName)
+    If w = 0 Then SetCurrentDirectory = SetCurrentDirectoryA(lpPathName)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    SetCurrentDirectory = SetCurrentDirectoryW(w)
+#endif
+    free(w)
+End Function
+
+Function SetFileAttributes(lpFileName As *Byte, dwFileAttributes As DWord) As Long
+    Dim w As *Byte
+    w = BasicPathWide(lpFileName)
+    If w = 0 Then SetFileAttributes = SetFileAttributesA(lpFileName, dwFileAttributes)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    SetFileAttributes = SetFileAttributesW(w, dwFileAttributes)
+#endif
+    free(w)
+End Function
+
+Function LoadLibrary(lpLibFileName As *Byte) As HINSTANCE
+    Dim w As *Byte
+    w = BasicPathWide(lpLibFileName)
+    If w = 0 Then LoadLibrary = LoadLibraryA(lpLibFileName)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    LoadLibrary = LoadLibraryW(w)
+#endif
+    free(w)
+End Function
+
+' ---------- パスを書き戻す API ----------
+
+Function GetCurrentDirectory(nBufferLength As DWord, lpBuffer As *Byte) As DWord
+    Dim w As *Byte
+    GetCurrentDirectory = 0
+#ifdef _LINUX
+    GetCurrentDirectory = GetCurrentDirectoryA(nBufferLength, lpBuffer)
+#else
+    w = GwAlloc(BASIC_WMAX)
+    If w <> 0 Then GetCurrentDirectory = BasicWDone(w, GetCurrentDirectoryW(BASIC_WMAX, w), lpBuffer, nBufferLength)
+#endif
+End Function
+
+Function GetTempPath(nBufferLength As DWord, lpBuffer As *Byte) As DWord
+    Dim w As *Byte
+    GetTempPath = 0
+#ifdef _LINUX
+    GetTempPath = GetTempPathA(nBufferLength, lpBuffer)
+#else
+    w = GwAlloc(BASIC_WMAX)
+    If w <> 0 Then GetTempPath = BasicWDone(w, GetTempPathW(BASIC_WMAX, w), lpBuffer, nBufferLength)
+#endif
+End Function
+
+Function GetWindowsDirectory(lpBuffer As *Byte, uSize As DWord) As DWord
+    Dim w As *Byte
+    GetWindowsDirectory = 0
+#ifdef _LINUX
+    GetWindowsDirectory = GetWindowsDirectoryA(lpBuffer, uSize)
+#else
+    w = GwAlloc(BASIC_WMAX)
+    If w <> 0 Then GetWindowsDirectory = BasicWDone(w, GetWindowsDirectoryW(w, BASIC_WMAX), lpBuffer, uSize)
+#endif
+End Function
+
+Function GetSystemDirectory(lpBuffer As *Byte, uSize As DWord) As DWord
+    Dim w As *Byte
+    GetSystemDirectory = 0
+#ifdef _LINUX
+    GetSystemDirectory = GetSystemDirectoryA(lpBuffer, uSize)
+#else
+    w = GwAlloc(BASIC_WMAX)
+    If w <> 0 Then GetSystemDirectory = BasicWDone(w, GetSystemDirectoryW(w, BASIC_WMAX), lpBuffer, uSize)
+#endif
+End Function
+
+' lpFilePart には buf の中の名前の先頭（\ で終わるパスなら 0）を書く
+Function GetFullPathName(lpFileName As *Byte, nBufferLength As DWord, lpBuffer As *Byte, lpFilePart As VoidPtr) As DWord
+    Dim w As *Byte
+    w = BasicPathWide(lpFileName)
+    If w = 0 Then GetFullPathName = GetFullPathNameA(lpFileName, nBufferLength, lpBuffer, lpFilePart)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    GetFullPathName = BasicFullW(w, nBufferLength, lpBuffer, lpFilePart)
+#endif
+    free(w)
+End Function
+
+Function BasicFullW(w As *Byte, n As DWord, buf As *Byte, part As VoidPtr) As DWord
+    Dim o As *Byte
+    BasicFullW = 0
+    o = GwAlloc(BASIC_WMAX)
+    If o = 0 Then Exit Function
+    BasicFullW = BasicWDone(o, GetFullPathNameW(w, BASIC_WMAX, o, 0), buf, n)
+    If BasicFullW > 0 And BasicFullW < n Then BasicFilePart(buf, BasicFullW, part)
+End Function
+
+' 最後の \ か / の次の位置（なければ 0）
+Function BasicNameAt(buf As *Byte, n As Long) As Long
+    Dim i As Long
+    BasicNameAt = 0
+    For i = 0 To n - 1
+        If buf[i] = &H5C Or buf[i] = &H2F Then BasicNameAt = i + 1
+    Next
+End Function
+
+Sub BasicFilePart(buf As *Byte, n As Long, part As VoidPtr)
+    Dim pp As *VoidPtr, i As Long
+    If part = 0 Then Exit Sub
+    pp = part
+    i = BasicNameAt(buf, n)
+    pp[0] = 0
+    If i < n Then pp[0] = buf + i
+End Sub

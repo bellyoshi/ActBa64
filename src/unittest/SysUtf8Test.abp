@@ -1,0 +1,123 @@
+' GetCommandLine / GetEnvironmentVariable / SetEnvironmentVariable / GetComputerName / GetUserName /
+' GetWindowsDirectory / GetSystemDirectory / FormatMessage / DragQueryFile は UTF-8 で返す。
+' CreateProcess は UTF-8 のコマンドラインをワイド文字 API に渡す（CP932 にない 𠮷 のパスも子に届く）。
+
+Dim suBuf(1023) As Byte
+Dim suD As DWord
+Dim suN As Long
+Dim suP As *Byte
+Dim suV As String
+Dim suDrop As HGLOBAL
+Dim suSi As STARTUPINFO
+Dim suPi As PROCESS_INFORMATION
+Dim suCode As DWord
+
+' DROPFILES（pFiles = 20、fWide = 1）のあとにワイドの a 0 b 0 0
+Sub SysT_DropPut(p As *Byte, a As *Byte, ca As Long, b As *Byte, cb As Long)
+    p[0] = 20
+    p[16] = 1
+    memcpy(p + 20, a, (ca + 1) * 2)
+    memcpy(p + 20 + (ca + 1) * 2, b, (cb + 1) * 2)
+End Sub
+
+Function SysT_Drop(a As String, b As String) As HGLOBAL
+    Dim wa As *Byte, wb As *Byte
+    wa = BasicWidePtr(StrPtr(a))
+    wb = BasicWidePtr(StrPtr(b))
+    SysT_Drop = GlobalAlloc(GHND, 20 + (BasicWideChars(wa) + BasicWideChars(wb) + 3) * 2)
+    SysT_DropPut(GlobalLock(SysT_Drop), wa, BasicWideChars(wa), wb, BasicWideChars(wb))
+    GlobalUnlock(SysT_Drop)
+    BasicFree2(wa, wb)
+End Function
+
+' cmd が "dir" を見つければ 7、見つけなければ 3 で終わる（起動できなければ 0）
+Function SysT_ExistCmd$(dir As String) As String
+    SysT_ExistCmd$ = "cmd.exe /c if exist " + Chr$(34) + dir + Chr$(34) + " (exit 7) else (exit 3)"
+End Function
+
+Function SysT_Exist(dir As String) As DWord
+    Dim cmd As String
+    cmd = SysT_ExistCmd$(dir)
+    If CreateProcess(0, StrPtr(cmd), 0, 0, 0, 0, 0, 0, suSi, suPi) = 0 Then Exit Function
+    WaitForSingleObject(suPi.hProcess, 10000)
+    GetExitCodeProcess(suPi.hProcess, suCode)
+    SysT_Exist = suCode
+    CloseHandle(suPi.hProcess)
+    CloseHandle(suPi.hThread)
+End Function
+
+suSi.cb = Len(suSi)
+
+' コマンドライン（同じポインタを返す）
+suP = GetCommandLine()
+Assert(-1, BasicUtf8Chars(suP, lstrlen(suP)) > 0, "cmdline utf8")
+Assert(-1, InStr(MakeStr(suP), "unittest") > 0, "cmdline exe")
+Assert(-1, GetCommandLine() = suP, "cmdline same ptr")
+
+' 環境変数
+suV = "値𠮷"
+Assert(-1, SetEnvironmentVariable("ACTBA_UT_ENV", StrPtr(suV)) <> 0, "setenv")
+Assert(Len(suV), GetEnvironmentVariable("ACTBA_UT_ENV", VarPtr(suBuf), 1024), "getenv len")
+Assert(-1, MakeStr(VarPtr(suBuf)) = suV, "getenv utf8")
+Assert(Len(suV) + 1, GetEnvironmentVariable("ACTBA_UT_ENV", 0, 0), "getenv need")
+Assert(Len(suV) + 1, GetEnvironmentVariable("ACTBA_UT_ENV", VarPtr(suBuf), Len(suV)), "getenv small")
+Assert(-1, SetEnvironmentVariable("ACTBA_UT_ENV", 0) <> 0, "unsetenv")
+Assert(0, GetEnvironmentVariable("ACTBA_UT_ENV", VarPtr(suBuf), 1024), "unsetenv gone")
+
+' コンピューター名（nSize は NUL 抜き）・ユーザー名（nSize は NUL 込み）
+suN = 1024
+Assert(1, GetComputerName(VarPtr(suBuf), suN), "computer")
+Assert(suN, lstrlen(VarPtr(suBuf)), "computer len")
+suD = suN
+Assert(0, GetComputerName(VarPtr(suBuf), suN), "computer small")
+Assert(suD + 1, suN, "computer need")
+suN = 1024
+Assert(1, GetUserName(VarPtr(suBuf), suN), "user")
+Assert(lstrlen(VarPtr(suBuf)) + 1, suN, "user len")
+Assert(-1, BasicUtf8Chars(VarPtr(suBuf), suN - 1) > 0, "user utf8")
+
+' Windows / System フォルダ
+suD = GetWindowsDirectory(VarPtr(suBuf), 1024)
+Assert(-1, suD > 0, "windir")
+Assert(suD, lstrlen(VarPtr(suBuf)), "windir len")
+suD = GetSystemDirectory(VarPtr(suBuf), 1024)
+Assert(-1, suD > 0, "sysdir")
+Assert(suD, lstrlen(VarPtr(suBuf)), "sysdir len")
+
+' FormatMessage（FROM_SYSTEM | IGNORE_INSERTS。日本語の Windows なら日本語の文）
+suD = FormatMessage(&H1200, 0, 2, 0, VarPtr(suBuf), 1024, 0)
+Assert(-1, suD > 0, "fmt sys")
+Assert(suD, lstrlen(VarPtr(suBuf)), "fmt sys len")
+Assert(-1, BasicUtf8Chars(VarPtr(suBuf), suD) > 0, "fmt sys utf8")
+suP = 0
+suD = FormatMessage(&H1300, 0, 2, 0, VarPtr(suP), 0, 0)
+Assert(-1, suD > 0 And suP <> 0, "fmt alloc")
+Assert(suD, lstrlen(suP), "fmt alloc len")
+LocalFree(suP)
+suV = "あ𠮷"
+Assert(Len(suV), FormatMessage(&H600, StrPtr(suV), 0, 0, VarPtr(suBuf), 1024, 0), "fmt str len")
+Assert(-1, MakeStr(VarPtr(suBuf)) = suV, "fmt str utf8")
+Assert(0, FormatMessage(&H600, StrPtr(suV), 0, 0, VarPtr(suBuf), 3, 0), "fmt str small")
+
+' DragQueryFile（数・要るバイト数・UTF-8・文字の境目で切る）
+suV = "C:\あ\𠮷.txt"
+suDrop = SysT_Drop(suV, "C:\b.txt")
+Assert(2, DragQueryFile(suDrop As HDROP, &HFFFFFFFF, 0, 0), "drop count")
+Assert(Len(suV), DragQueryFile(suDrop As HDROP, 0, 0, 0), "drop need")
+Assert(Len(suV), DragQueryFile(suDrop As HDROP, 0, VarPtr(suBuf), 1024), "drop len")
+Assert(-1, MakeStr(VarPtr(suBuf)) = suV, "drop utf8")
+Assert(7, DragQueryFile(suDrop As HDROP, 0, VarPtr(suBuf), 9), "drop cut")
+Assert(8, DragQueryFile(suDrop As HDROP, 1, VarPtr(suBuf), 1024), "drop 2")
+GlobalFree(suDrop)
+
+' CreateProcess: 𠮷 の入ったフォルダが子に見える
+suD = GetTempPath(1024, VarPtr(suBuf))
+suV = MakeStr(VarPtr(suBuf)) + "ユニット_𠮷p"
+RemoveDirectory(StrPtr(suV))
+Assert(-1, CreateDirectory(StrPtr(suV), ByVal 0) <> 0, "proc mkdir")
+Assert(7, SysT_Exist(suV), "proc utf8 cmdline")
+RemoveDirectory(StrPtr(suV))
+Assert(3, SysT_Exist(suV), "proc gone")
+
+OutputDebugString("あ𠮷")
+Assert(-1, LoadLibrary("kernel32.dll") <> 0, "loadlibrary")

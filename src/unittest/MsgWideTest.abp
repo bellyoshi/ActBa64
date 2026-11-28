@@ -1,0 +1,67 @@
+' 無印の GetMessage / PeekMessage / DispatchMessage / PostMessage / SetWindowLongPtr / GetWindowLong /
+' CallWindowProc は W 版。WM_CHAR の UTF-16（サロゲートの組も）がそのまま届き、
+' GWL_WNDPROC で付けた手続きも Unicode のメッセージ（WM_SETTEXT の lParam はワイド）を受ける。
+
+Dim mwWc As WNDCLASSEX
+Dim mwH As HWND
+Dim mwMsg As MSG
+Dim mwOld As LONG_PTR
+Dim mwChars(3) As DWord
+Dim mwCharN As Long
+Dim mwSetW0 As Long
+Dim mwSetW1 As Long
+Dim mwBuf(31) As Byte
+
+Function MsgW_Proc(hWnd As HWND, msg As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    If msg = WM_CHAR And mwCharN < 4 Then mwChars(mwCharN) = wp As DWord
+    If msg = WM_CHAR And mwCharN < 4 Then mwCharN = mwCharN + 1
+    MsgW_Proc = DefWindowProc(hWnd, msg, wp, lp)
+End Function
+
+' WM_SETTEXT の lParam の先頭 2 バイトを取っておき、前の手続きへ渡す
+Function MsgW_Sub(hWnd As HWND, msg As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    Dim p As *Byte
+    p = lp As *Byte
+    If msg = WM_SETTEXT Then mwSetW0 = p[0]
+    If msg = WM_SETTEXT Then mwSetW1 = p[1]
+    MsgW_Sub = CallWindowProc(mwOld As VoidPtr, hWnd, msg, wp, lp)
+End Function
+
+Sub MsgW_Pump()
+    While PeekMessage(mwMsg, mwH, 0, 0, PM_REMOVE) <> 0
+        TranslateMessage(mwMsg)
+        DispatchMessage(mwMsg)
+    Wend
+End Sub
+
+FillMemory(VarPtr(mwWc), Len(mwWc), 0)
+mwWc.cbSize = Len(mwWc)
+mwWc.lpfnWndProc = AddressOf(MsgW_Proc)
+mwWc.hInstance = GetModuleHandle(0)
+mwWc.lpszClassName = "MsgWideTest"
+If RegisterClassEx(mwWc) = 0 Then Assert(1, 0, "msgw class")
+mwH = CreateWindowEx(0, "MsgWideTest", "", 0, 0, 0, 10, 10, 0, 0, GetModuleHandle(0), 0)
+If mwH = 0 Then Assert(1, 0, "msgw hwnd")
+
+' 𠮷 = D842 DFB7、あ = 3042
+PostMessage(mwH, WM_CHAR, &HD842, 0)
+PostMessage(mwH, WM_CHAR, &HDFB7, 0)
+PostMessage(mwH, WM_CHAR, &H3042, 0)
+MsgW_Pump()
+Assert(3, mwCharN, "msgw char count")
+Assert(&HD842, mwChars(0), "msgw high surrogate")
+Assert(&HDFB7, mwChars(1), "msgw low surrogate")
+Assert(&H3042, mwChars(2), "msgw hiragana")
+
+' サブクラスの手続きはワイドの WM_SETTEXT を受け、CallWindowProc で前へ渡しても文字が欠けない
+mwOld = SetWindowLongPtr(mwH, GWL_WNDPROC, AddressOf(MsgW_Sub) As LONG_PTR)
+Assert(-1, mwOld <> 0, "msgw subclass")
+Assert(-1, GetWindowLong(mwH, GWL_WNDPROC) = AddressOf(MsgW_Sub) As LONG_PTR, "msgw getwndproc")
+SetWindowText(mwH, "𠮷")
+Assert(&H42, mwSetW0, "msgw settext wide 0")
+Assert(&HD8, mwSetW1, "msgw settext wide 1")
+GetWindowText(mwH, VarPtr(mwBuf), 32)
+Assert(-1, MakeStr(VarPtr(mwBuf)) = "𠮷", "msgw text kept")
+SetWindowLongPtr(mwH, GWL_WNDPROC, mwOld)
+DelWnd mwH
+UnregisterClass("MsgWideTest", GetModuleHandle(0))

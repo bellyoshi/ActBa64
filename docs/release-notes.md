@@ -1,5 +1,21 @@
 # リリースノート
 
+## 次の版（v0.1.9 からの変更点）
+
+### 文字化け
+
+A 版の API をそのまま公開していて、日本語のパスや文字列が CP932 になっていた API を UTF-8 にそろえました（[different.md §API](./different.md#api)）。
+
+- `CopyFile` / `MoveFile` / `DeleteFile` / `CreateDirectory` / `RemoveDirectory` / `SetCurrentDirectory` / `SetFileAttributes` / `LoadLibrary` は、UTF-8 のパスをワイド文字 API に渡します。CP932 にない文字（𠮷 など）のパスも扱えます。
+- `GetCurrentDirectory` / `GetTempPath` / `GetWindowsDirectory` / `GetSystemDirectory` / `GetFullPathName` / `FindFirstFile` / `FindNextFile` は、パスやファイル名を UTF-8 で返します。
+- `GetCommandLine` と `GetCmd` は UTF-8 を返します。`CreateProcess` は UTF-8 のコマンドラインをワイド文字 API に渡します。
+- `GetEnvironmentVariable` / `SetEnvironmentVariable` / `GetComputerName` / `GetUserName` / `DragQueryFile` は UTF-8 で読み書きします。`OutputDebugString` も UTF-8 を渡せます。
+- `FormatMessage` は、差し込みを使わないとき UTF-8 で返します。日本語の Windows のエラー文が `Print` で化けなくなりました。
+- abdbg は、日本語のフォルダーにある exe もデバッグできます（パスを UTF-8 で受け、ワイド文字 API で起動します）。
+- 無印の `GetMessage` / `PeekMessage` / `DispatchMessage` / `PostMessage` / `CallWindowProc` / `SetWindowLong(Ptr)` / `GetWindowLong` / `Get/SetClassLong` を W 版にしました。窓は Unicode なので、IME で入れた CP932 にない文字（𠮷 など）も `WM_CHAR` でそのまま届きます。`GWL_WNDPROC` で付けた手続きが受ける `WM_SETTEXT` などの文字列はワイド文字列になり、前の手続きへは無印の `CallWindowProc` で渡します。
+
+**互換性**: パスや文字列を返す API の戻り値と書き戻す値は、文字数ではなく UTF-8 のバイト数になります。サブクラスの手続きで `CallWindowProcA` を自分で Declare して使っているときは、無印の `CallWindowProc` に替えてください。CP932 のバイト列が返ると決めて自分で UTF-8 に直しているプログラムは、そのまま動きます（妥当な UTF-8 は直さない作りなら）。
+
 ## v0.1.9（v0.1.8 からの変更点）
 
 デバッガーを足した更新です。ProjectEditor でブレークポイントを置き、1 行ずつ進め、変数の値を見られます。デバッガー本体の `abdbg.exe` も ActBa64 で書いています（[debugger.md](./debugger.md)）。
