@@ -18,6 +18,7 @@ Dim prOpen(39) As Byte
 Dim prInfo(31) As Byte
 Dim prRet(519) As Byte
 Dim prId As DWord
+Dim prRc As DWord
 
 Declare Function PrT_DeleteDC Lib "gdi32.dll" Alias "DeleteDC" (ByVal hdc As HDC) As Long
 
@@ -118,14 +119,18 @@ CopyFile("C:\Windows\Media\chord.wav", StrPtr(prS), 0)
 FillMemory(VarPtr(prOpen), 40, 0)
 BasicSetPtr(VarPtr(prOpen) + 12, StrPtr("waveaudio"))
 BasicSetPtr(VarPtr(prOpen) + 20, StrPtr(prS))
-Assert(0, mciSendCommand(0, MCI_OPEN, MCI_OPEN_TYPE Or MCI_OPEN_ELEMENT Or MCI_WAIT, VarPtr(prOpen)), "mci open utf8")
-prId = BasicGetDW(VarPtr(prOpen) + 8)
-Assert(-1, prId <> 0, "mci device id")
-Assert(-1, PrT_GetPtr(VarPtr(prOpen) + 20) = StrPtr(prS), "mci name ptr restored")
-FillMemory(VarPtr(prInfo), 32, 0)
-BasicSetPtr(VarPtr(prInfo) + 8, VarPtr(prRet))
-SetDWord(VarPtr(prInfo) + 16, 260)
-Assert(0, mciSendCommand(prId, MCI_INFO, &H200 Or MCI_WAIT, VarPtr(prInfo)), "mci info file")
-Assert(-1, lstrcmpi(VarPtr(prRet), StrPtr(prS)) = 0, "mci info utf8")
-Assert(0, mciSendCommand(prId, MCI_CLOSE, MCI_WAIT, 0), "mci close")
+' 音の出力デバイスが無い（CI のランナーなど）と waveaudio は開けない（MCIERR_WAVE_OUTPUTSUNSUITABLE）。そのときは飛ばす
+prRc = mciSendCommand(0, MCI_OPEN, MCI_OPEN_TYPE Or MCI_OPEN_ELEMENT Or MCI_WAIT, VarPtr(prOpen))
+If prRc <> MCIERR_WAVE_OUTPUTSUNSUITABLE Then
+    Assert(0, prRc, "mci open utf8")
+    prId = BasicGetDW(VarPtr(prOpen) + 8)
+    Assert(-1, prId <> 0, "mci device id")
+    Assert(-1, PrT_GetPtr(VarPtr(prOpen) + 20) = StrPtr(prS), "mci name ptr restored")
+    FillMemory(VarPtr(prInfo), 32, 0)
+    BasicSetPtr(VarPtr(prInfo) + 8, VarPtr(prRet))
+    SetDWord(VarPtr(prInfo) + 16, 260)
+    Assert(0, mciSendCommand(prId, MCI_INFO, &H200 Or MCI_WAIT, VarPtr(prInfo)), "mci info file")
+    Assert(-1, lstrcmpi(VarPtr(prRet), StrPtr(prS)) = 0, "mci info utf8")
+    Assert(0, mciSendCommand(prId, MCI_CLOSE, MCI_WAIT, 0), "mci close")
+End If
 DeleteFile(StrPtr(prS))
