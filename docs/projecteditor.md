@@ -224,8 +224,8 @@ AB 4.20 の ProjectEditor で作ったウィンドウのプロジェクトを、
 
 - プロジェクト名: 英字・数字・`_`（先頭は数字以外）で 64 文字まで。`<名前>_DestroyObjects` などの識別子になるためです
 - ディレクトリ: 既定はデスクトップ（2 回目からは前に作ったところ）。参照でフォルダーを選べます。ここに `<名前>` のフォルダーを作ります
-- アプリケーション タイプ: 6 種類を出しますが、いま作れるのは「EXE - ノーマル ウィンドウ ベース」「EXE - N88 プロンプト ベース」「EXE - DOS プロンプト ベース」だけです。ほかを選ぶと説明に「まだ作れません」と出て、作成ボタンが灰色になります
-- "Hello world!" 表示: 入れると `MainWnd.sbp` に `MainWnd_Paint` を足し、窓に `Hello world!` を書きます。N88 / DOS プロンプト ベースでは `<名前>.abp` の最後に `Print "Hello World!"` を足します（AB 4.20 と同じく `W` は大文字）
+- アプリケーション タイプ: 6 種類を出しますが、いま作れるのは「EXE - ノーマル ウィンドウ ベース」「EXE - N88 プロンプト ベース」「EXE - DOS プロンプト ベース」「EXE - ベースなし」「DLL - プロシージャ ライブラリ」だけです。ほかを選ぶと説明に「まだ作れません」と出て、作成ボタンが灰色になります
+- "Hello world!" 表示: 入れると `MainWnd.sbp` に `MainWnd_Paint` を足し、窓に `Hello world!` を書きます。N88 / DOS プロンプト ベースでは `<名前>.abp` の最後に `Print "Hello World!"` を足します（AB 4.20 と同じく `W` は大文字）。ベースなし・DLL では選べません（灰色）
 
 作成すると `ProjectCmd -createPj` を呼んで `<ディレクトリ>\<名前>\` に次を Shift_JIS・CRLF で書き、その `.pj` を開いて `MainWnd.sbp` を出します。`<名前>.pj` がもうあるときは作りません。
 
@@ -239,21 +239,21 @@ AB 4.20 の ProjectEditor で作ったウィンドウのプロジェクトを、
 | `<名前>.wrk` | AB 4.20 の作業状態 |
 | `Callback.wbp` / `MakeWindow.wbp` | [§7.1](#71-ab4-互換の-radusewindow1) と同じ生成器で作ったもの |
 
-「EXE - N88 プロンプト ベース」「EXE - DOS プロンプト ベース」では次の 4 つだけを書き、その `.pj` を開いて `<名前>.abp` を出します。
+「EXE - N88 プロンプト ベース」「EXE - DOS プロンプト ベース」「EXE - ベースなし」「DLL - プロシージャ ライブラリ」では次の 4 つだけを書き、その `.pj` を開いて `<名前>.abp` を出します。
 
 | ファイル | 中身 |
 |---|---|
-| `<名前>.pj` | `#USEWINDOW=0`、`#PLATFORM=32`、`#SOURCE` に `<名前>.abp` だけ |
-| `<名前>.abp` | `<名前>.idx` を読み、`#N88BASIC` を置く（N88 の窓で動く）。DOS では `#console`（コマンド プロンプトで動く） |
+| `<名前>.pj` | `#USEWINDOW=0`、`#PLATFORM=32`、`#SOURCE` に `<名前>.abp` だけ。DLL では `#MODULETYPE=1`、`#OUTPUT_RELEASE=.\<名前>.dll` |
+| `<名前>.abp` | `<名前>.idx` を読み、`#N88BASIC` を置く（N88 の窓で動く）。DOS では `#console`（コマンド プロンプトで動く）。ベースなしでは指令を置かない。DLL では `Function Export DllMain` の雛形（`DLL_PROCESS_ATTACH` で `_System_StartupProgram()`） |
 | `<名前>.idx` | `#strict` だけ |
 | `<名前>.wrk` | AB 4.20 の作業状態（`<名前>.abp` をテキストで開く） |
 
-中身は AB 4.20 で作ったノーマル ウィンドウ ベース・N88 / DOS プロンプト ベースのプロジェクトとバイト単位で同じです。
+中身は AB 4.20 で作ったノーマル ウィンドウ ベース・N88 / DOS プロンプト ベース・ベースなし・DLL のプロジェクトとバイト単位で同じです。
 
 同じものをコマンドラインで作るのが `ProjectCmd.exe`（`src/projecteditor/ProjectCmd.pj`）です。
 
 ```
-ProjectCmd -createPj <名前> [-normalWnd | -n88 | -dos] [-dir <フォルダー>] [-hello]
+ProjectCmd -createPj <名前> [-normalWnd | -n88 | -dos | -noBase | -dll] [-dir <フォルダー>] [-hello]
 ProjectCmd -regen <プロジェクト.pj>
 ```
 
@@ -263,8 +263,10 @@ ProjectCmd -regen <プロジェクト.pj>
 | `-normalWnd` | EXE - ノーマル ウィンドウ ベース（既定。`-nomalWnd` も同じ） |
 | `-n88` | EXE - N88 プロンプト ベース |
 | `-dos` | EXE - DOS プロンプト ベース |
+| `-noBase` | EXE - ベースなし |
+| `-dll` | DLL - プロシージャ ライブラリ |
 | `-dir <フォルダー>` | 作る場所。既定は今のフォルダー |
-| `-hello` | 窓に `Hello world!` を書く（`-n88` / `-dos` では `Print "Hello World!"` を足す） |
+| `-hello` | 窓に `Hello world!` を書く（`-n88` / `-dos` では `Print "Hello World!"` を足す。`-noBase` / `-dll` では何もしない） |
 | `-regen <.pj>` | `<.pj の名前>.wnd` から `Callback.wbp` / `MakeWindow.wbp` を作り直す（[§7.1](#71-ab4-互換の-radusewindow1)）。`.wnd` が無ければ何もしない |
 
 終了コードは、成功で 0、引数の誤りで 1（使い方を出す）、作れないとき（名前・既にある・書けない・`.wnd` が読めない）で 2 です。リリースでは `ProjectEditor` の隣に置きます（`release_build.ps1` / `release_build.sh` が作ります）。Linux 版は CP932 の変換表を持たないので、Shift_JIS ではなく UTF-8 で書きます。

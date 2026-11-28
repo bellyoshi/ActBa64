@@ -3,6 +3,8 @@
 '   name.pj  name.abp（メッセージループ）  name.idx  name.wnd（MainWnd）  MainWnd.sbp  name.wrk
 ' 「EXE - N88 プロンプト ベース」は name.pj（#USEWINDOW=0）  name.abp（#N88BASIC）  name.idx  name.wrk だけ。
 ' 「EXE - DOS プロンプト ベース」も同じ 4 つで、.abp の #N88BASIC が #console になるだけ。
+' 「EXE - ベースなし」も同じ 4 つで、.abp に指令を置かない（Hello world! も足さない）。
+' 「DLL - プロシージャ ライブラリ」も同じ 4 つで、.pj が #MODULETYPE=1・<名前>.dll、.abp が DllMain の雛形。
 ' Callback.wbp / MakeWindow.wbp は .wnd と MainWnd.sbp から RadGen で作る（AB4ProjWrite.sbp）。
 ' 改行は nl。文字列は UTF-8（書くときに Shift_JIS にする）。
 
@@ -16,18 +18,29 @@ Const AB4PROJ_DLL = 5          ' DLL - プロシージャ ライブラリ
 ' 作れる種類か
 Function AB4Proj_CanMake(ByVal kind As Long) As Long
     AB4Proj_CanMake = 0
-    If kind = AB4PROJ_NORMAL Or kind = AB4PROJ_N88 Or kind = AB4PROJ_DOS Then AB4Proj_CanMake = 1
+    If kind = AB4PROJ_NORMAL Or AB4Proj_IsPrompt(kind) <> 0 Then AB4Proj_CanMake = 1
+End Function
+
+' "Hello world!" 表示を選べる種類か（ベースなし・DLL は出す先が無いので選べない）
+Function AB4Proj_HasHello(ByVal kind As Long) As Long
+    AB4Proj_HasHello = 0
+    If kind = AB4PROJ_NORMAL Or kind = AB4PROJ_N88 Or kind = AB4PROJ_DOS Then AB4Proj_HasHello = 1
 End Function
 
 ' .pj の #SOURCE の前まで。useWindow は #USEWINDOW の値
 Function AB4Proj_PjHead$(name As String, useWindow As String, nl As String) As String
+    AB4Proj_PjHead$ = AB4Proj_PjHeadMod$(name, useWindow, "0", ".exe", nl)
+End Function
+
+' modType は #MODULETYPE（0 = EXE、1 = DLL）、ext は #OUTPUT_RELEASE の拡張子。#OUTPUT_DEBUG は DLL でも _debug.exe（AB 4.20 と同じ）
+Function AB4Proj_PjHeadMod$(name As String, useWindow As String, modType As String, ext As String, nl As String) As String
     Dim s As String
     s = "' ActiveBasic Project file." & nl & nl & EditorNewForm_PjKey$("VERSION", "9", nl)
-    s = s & EditorNewForm_PjKey$("MODULETYPE", "0", nl) & EditorNewForm_PjKey$("NAME", name, nl)
+    s = s & EditorNewForm_PjKey$("MODULETYPE", modType, nl) & EditorNewForm_PjKey$("NAME", name, nl)
     s = s & EditorNewForm_PjKey$("PLATFORM", "32", nl) & EditorNewForm_PjKey$("USEWINDOW", useWindow, nl)
     s = s & EditorNewForm_PjKey$("OPTION", "&H00010000", nl)
-    s = s & EditorNewForm_PjKey$("OUTPUT_RELEASE", ".\" & name & ".exe", nl)
-    AB4Proj_PjHead$ = s & EditorNewForm_PjKey$("OUTPUT_DEBUG", ".\" & name & "_debug.exe", nl) & EditorNewForm_PjKey$("RESOURCE", "0", nl)
+    s = s & EditorNewForm_PjKey$("OUTPUT_RELEASE", ".\" & name & ext, nl)
+    AB4Proj_PjHeadMod$ = s & EditorNewForm_PjKey$("OUTPUT_DEBUG", ".\" & name & "_debug.exe", nl) & EditorNewForm_PjKey$("RESOURCE", "0", nl)
 End Function
 
 Function AB4Proj_Pj$(name As String, nl As String) As String
@@ -114,31 +127,71 @@ Function AB4Proj_Wrk$(nl As String) As String
     AB4Proj_Wrk$ = "case4" & nl & nl & "rad,MainWnd" & nl & nl & "0" & nl & "0" & nl & "0" & nl & "0,0,0,0,0"
 End Function
 
-' ---- EXE - N88 / DOS プロンプト ベース（.pj .idx .wrk は同じ。.abp の指令だけ違う）----
+' ---- EXE - N88 / DOS プロンプト ベース・ベースなし・DLL（.idx .wrk は同じ。.abp の指令だけ違う。DLL は .pj と .abp が違う）----
 
-' N88 か DOS のプロンプト ベースか（RAD の窓を持たず、<名前>.abp を開く）
+' RAD の窓を持たず <名前>.abp だけのプロジェクトか（N88 / DOS / ベースなし / DLL。作ったら <名前>.abp を開く）
 Function AB4Proj_IsPrompt(ByVal kind As Long) As Long
     AB4Proj_IsPrompt = 0
-    If kind = AB4PROJ_N88 Or kind = AB4PROJ_DOS Then AB4Proj_IsPrompt = 1
+    If kind = AB4PROJ_N88 Or kind = AB4PROJ_DOS Or kind = AB4PROJ_NOBASE Or kind = AB4PROJ_DLL Then AB4Proj_IsPrompt = 1
 End Function
 
-' .abp に置く指令。N88 は N88 の窓、DOS はコマンド プロンプトで動く
+' .abp に置く指令。N88 は N88 の窓、DOS はコマンド プロンプトで動く。ベースなしは ""
 Function AB4Proj_PromptDirective$(ByVal kind As Long) As String
     AB4Proj_PromptDirective$ = "#N88BASIC"
     If kind = AB4PROJ_DOS Then AB4Proj_PromptDirective$ = "#console"
+    If kind = AB4PROJ_NOBASE Then AB4Proj_PromptDirective$ = ""
 End Function
 
 Function AB4Proj_PromptPj$(name As String, nl As String) As String
     AB4Proj_PromptPj$ = AB4Proj_PjHead$(name, "0", nl) & "#SOURCE" & nl & name & ".abp" & nl
 End Function
 
-' hello <> 0 なら Print "Hello World!" を足す（AB 4.20 と同じく W は大文字）
+' hello <> 0 なら Print "Hello World!" を足す（AB 4.20 と同じく W は大文字）。ベースなしは出す先が無いので足さない
 Function AB4Proj_PromptAbp$(name As String, ByVal kind As Long, ByVal hello As Long, nl As String) As String
-    Dim s As String
-    s = "#include " & Chr$(34) & name & ".idx" & Chr$(34) & nl & nl & AB4Proj_PromptDirective$(kind) & nl & nl
+    Dim s As String, d As String
+    d = AB4Proj_PromptDirective$(kind)
+    s = "#include " & Chr$(34) & name & ".idx" & Chr$(34) & nl & nl
+    If Len(d) > 0 Then s = s & d & nl & nl
     s = s & "' ↓ ここからプログラムが実行されます" & nl & nl
-    If hello <> 0 Then s = s & "Print " & Chr$(34) & "Hello World!" & Chr$(34) & nl
+    If hello <> 0 And AB4Proj_HasHello(kind) <> 0 Then s = s & "Print " & Chr$(34) & "Hello World!" & Chr$(34) & nl
     AB4Proj_PromptAbp$ = s
+End Function
+
+' ---- DLL - プロシージャ ライブラリ ----
+
+Function AB4Proj_DllPj$(name As String, nl As String) As String
+    AB4Proj_DllPj$ = AB4Proj_PjHeadMod$(name, "0", "1", ".dll", nl) & "#SOURCE" & nl & name & ".abp" & nl
+End Function
+
+Function AB4Proj_DllMemo$(nl As String) As String
+    Dim s As String, bar As String, ind As String
+    bar = "'-------------------------------------------------------------------" & nl
+    ind = "'        "
+    s = bar & "' メモ - このファイルには、DLLの構成要素を記述します。" & nl & ind & "（例：関数定義、グローバル変数、定数定義など）" & nl & "'" & nl
+    s = s & ind & "エクスポートが必要な関数には、" & Chr$(34) & "Export" & Chr$(34) & " 修飾子を指定します。" & nl
+    AB4Proj_DllMemo$ = s & ind & "（例：Function Export FuncName() As Long）" & nl & bar & nl
+End Function
+
+' DllMain の雛形
+Function AB4Proj_DllAbp$(name As String, nl As String) As String
+    Dim s As String, t As String
+    t = Chr$(9)
+    s = "#include " & Chr$(34) & name & ".idx" & Chr$(34) & nl & nl & AB4Proj_DllMemo$(nl)
+    s = s & "Function Export DllMain(hinstDLL As HINSTANCE, fdwReason As DWord, lpvReserved As VoidPtr) As Long" & nl
+    s = s & t & "'DLLエントリポイント" & nl & t & "Select Case fdwReason" & nl & t & t & "Case DLL_PROCESS_ATTACH" & nl
+    s = s & t & t & t & "'DLLがプロセス空間にロードされた時に実行されます。" & nl & t & t & t & "_System_StartupProgram()" & nl
+    AB4Proj_DllAbp$ = s & t & t & t & "DllMain=1" & nl & t & "End Select" & nl & "End Function" & nl & nl
+End Function
+
+' 種類ごとの .pj / .abp（N88 / DOS / ベースなし / DLL）
+Function AB4Proj_KindPj$(name As String, ByVal kind As Long, nl As String) As String
+    AB4Proj_KindPj$ = AB4Proj_PromptPj$(name, nl)
+    If kind = AB4PROJ_DLL Then AB4Proj_KindPj$ = AB4Proj_DllPj$(name, nl)
+End Function
+
+Function AB4Proj_KindAbp$(name As String, ByVal kind As Long, ByVal hello As Long, nl As String) As String
+    If kind = AB4PROJ_DLL Then AB4Proj_KindAbp$ = AB4Proj_DllAbp$(name, nl) : Exit Function
+    AB4Proj_KindAbp$ = AB4Proj_PromptAbp$(name, kind, hello, nl)
 End Function
 
 Function AB4Proj_PromptIdx$(nl As String) As String
