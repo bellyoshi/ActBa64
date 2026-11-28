@@ -10,11 +10,10 @@ Function LowInputVarIdx(ctx As *LowerCtx, idx As Long, ByRef promptOut As Long) 
     nodes = ast->nodes
     promptOut = -1
     nVarIdx = nodes[idx].left
+    ' プロンプト付き（Input "x", a）は right が読み先の並び。読み先は配列の要素（AST_INDEX / AST_CALL）もある
     If nodes[idx].right >= 0 Then
-        If nodes[nodes[idx].right].kind = AST_VAR Then
-            promptOut = nodes[idx].left
-            nVarIdx = nodes[idx].right
-        End If
+        promptOut = nodes[idx].left
+        nVarIdx = nodes[idx].right
     End If
     LowInputVarIdx = nVarIdx
 End Function
@@ -66,6 +65,65 @@ Sub LowStoreInputVar(ctx As *LowerCtx, vOff As Long, vTy As Long, vByRef As Long
     End If
 End Sub
 
+' Input a[i] / a(i)：要素の型で読み、a[i] = v と同じ道で書く
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowStmtInputElem(ctx As *LowerCtx, n As Long, labIn As Long) As boolean
+    Dim ty As Long
+    LowStmtInputElem = false
+    ty = LowInputElemTy(ctx, n)
+    If ty < 0 Then Exit Function
+    LowStmtInputRead(ctx, labIn)
+    LowStmtInputElem = LowInputElemStore(ctx, n, ty)
+End Function
+
+' 読み先の要素の型（TY_STRING / TY_LONG / TY_BYTE / TY_DOUBLE / TY_SINGLE）。読めない要素なら診断して -1
+Function LowInputElemTy(ctx As *LowerCtx, n As Long) As Long
+    Dim ty As Long
+    LowInputElemTy = -1
+    ' String 配列の要素は LowExprType では文字列と分からない
+    ty = LowExprType(ctx, n)
+    If LowIsStringExpr(ctx, n) <> 0 Then ty = TY_STRING
+    If LowNodeKind(ctx, n) = AST_CALL And LowIsArrCallTarget(ctx, n) = 0 Then ty = -1
+    If ty <> TY_STRING And ty <> TY_LONG And ty <> TY_BYTE And ty <> TY_DOUBLE And ty <> TY_SINGLE Then
+        LowerDiagError(ctx, n, Tr$(1066, "Input needs String or numeric variable"))
+        ctx->err = 1
+        Exit Function
+    End If
+    LowInputElemTy = ty
+End Function
+
+' rax の読んだ文字列を要素の型へ変換し、要素 n へ書く
+' 戻り値 true : 正常終了  false : エラーあり
+Function LowInputElemStore(ctx As *LowerCtx, n As Long, ty As Long) As boolean
+    Dim stackPad(LOW_STACK_PAD - 1) As Byte
+    Dim k As Long
+    Dim wide As Long
+
+    LowInputElemStore = false
+    k = LowNodeKind(ctx, n)
+    If ty = TY_LONG And LowExprWide(ctx, n) <> 0 Then
+        If Not LowEmitInputWide(ctx) Then Exit Function
+    Else
+        LowEmitInputCvt(ctx, ty)
+    End If
+    wide = LowIndexAssignWide(ctx, n, k)
+    LowPushWide(ctx->list, wide)
+    If LowAddr(ctx, n) = 0 Then Exit Function
+    LowPopWide(ctx->list, wide)
+    If Not LowStmtAssignIndexStore(ctx, n, k) Then Exit Function
+    LowInputElemStore = true
+End Function
+
+' a(i) が配列の変数なら 1（関数の呼び出しは読み先にならない）
+Function LowIsArrCallTarget(ctx As *LowerCtx, n As Long) As Long
+    Dim vOff As Long, vTy As Long, vTi As Long, vBr As Long, vGl As Long
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    LowIsArrCallTarget = 0
+    AstCopyName(ctx->ast, n, VarPtr(name))
+    If Not LowLookupVar(ctx, VarPtr(name), VarPtr(vOff), VarPtr(vTy), VarPtr(vTi), VarPtr(vBr), VarPtr(vGl)) Then Exit Function
+    LowIsArrCallTarget = 1
+End Function
+
 ' 戻り値 true : 正常終了  false : エラーあり
 Function LowStmtInputOne(ctx As *LowerCtx, nVarIdx As Long, labIn As Long) As boolean
     Dim vOff As Long
@@ -80,6 +138,10 @@ Function LowStmtInputOne(ctx As *LowerCtx, nVarIdx As Long, labIn As Long) As bo
     LowStmtInputOne = false
     ast = ctx->ast
     nodes = ast->nodes
+    If nodes[nVarIdx].kind = AST_INDEX Or nodes[nVarIdx].kind = AST_CALL Then
+        LowStmtInputOne = LowStmtInputElem(ctx, nVarIdx, labIn)
+        Exit Function
+    End If
     If nodes[nVarIdx].kind <> AST_VAR Then
         ctx->err = 1
         Exit Function
@@ -238,6 +300,13 @@ Function LowStmtFInputOne(ctx As *LowerCtx, varIdx As Long, labIn As Long) As bo
     ast = ctx->ast
     nodes = ast->nodes
     list = ctx->list
+    If nodes[varIdx].kind = AST_INDEX Or nodes[varIdx].kind = AST_CALL Then
+        vTy = LowInputElemTy(ctx, varIdx)
+        If vTy < 0 Then Exit Function
+        LowEmitCall1Rax(list, 0, 0, 0, labIn)
+        LowStmtFInputOne = LowInputElemStore(ctx, varIdx, vTy)
+        Exit Function
+    End If
     If nodes[varIdx].kind <> AST_VAR Then
         ctx->err = 1
         Exit Function

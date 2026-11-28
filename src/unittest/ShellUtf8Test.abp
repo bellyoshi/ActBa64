@@ -1,0 +1,113 @@
+' FindWindow / SHFileOperation / SHGetPathFromIDList / GetDriveType / GetDiskFreeSpaceEx / ExtractIcon /
+' ExtractIconEx / LoadCursorFromFile は UTF-8 をワイド文字 API に渡す（CP932 にない 𠮷 も）。
+' MessageBox / ShellAbout / SHBrowseForFolder / PlaySound は画面や音が出るので、ここでは試さない。
+
+Dim shTmp(1023) As Byte
+Dim shBuf(259) As Byte
+Dim shDir As String
+Dim shA As String
+Dim shB As String
+Dim shFrom(1023) As Byte
+Dim shTo(1023) As Byte
+Dim shOp As SHFILEOPSTRUCT
+Dim shH As HWND
+Dim shPidl As VoidPtr
+Dim shFree As ULARGE_INTEGER
+Dim shTotal As ULARGE_INTEGER
+Dim shAll As ULARGE_INTEGER
+Dim shIcon As HICON
+
+Declare Function ShT_AttrW Lib "kernel32.dll" Alias "GetFileAttributesW" (ByVal lpFileName As *Byte) As DWord
+Declare Function ShT_ILCreate Lib "shell32.dll" Alias "ILCreateFromPathW" (ByVal pszPath As *Byte) As VoidPtr
+Declare Sub ShT_ILFree Lib "shell32.dll" Alias "ILFree" (ByVal pidl As VoidPtr)
+Declare Function ShT_DestroyIcon Lib "user32.dll" Alias "DestroyIcon" (ByVal hIcon As HICON) As Long
+Declare Function ShT_DestroyCursor Lib "user32.dll" Alias "DestroyCursor" (ByVal hCursor As HCURSOR) As Long
+
+Function ShT_Exists(s As String) As Long
+    Dim w As *Byte
+    w = BasicWidePtr(StrPtr(s))
+    ShT_Exists = 0
+    If ShT_AttrW(w) <> &HFFFFFFFF Then ShT_Exists = 1
+    BasicFreeAnsi(w, StrPtr(s))
+End Function
+
+' s を二重 NUL で終わる並びにして shFrom へ
+Sub ShT_Multi(s As String)
+    FillMemory(VarPtr(shFrom), 1024, 0)
+    lstrcpy(VarPtr(shFrom), StrPtr(s))
+End Sub
+
+' pTo も二重 NUL で終わる並び
+Sub ShT_MultiTo(s As String)
+    FillMemory(VarPtr(shTo), 1024, 0)
+    lstrcpy(VarPtr(shTo), StrPtr(s))
+End Sub
+
+Sub ShT_Touch(s As String)
+    Dim h As HANDLE
+    h = CreateFile(StrPtr(s), GENERIC_WRITE, 0, ByVal 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0)
+    CloseHandle(h)
+End Sub
+
+Function ShT_Op(func As DWord, from As String, dst As String) As Long
+    FillMemory(VarPtr(shOp), Len(shOp), 0)
+    ShT_Multi(from)
+    ShT_MultiTo(dst)
+    shOp.wFunc = func
+    shOp.pFrom = VarPtr(shFrom)
+    shOp.pTo = VarPtr(shTo)
+    shOp.fFlags = FOF_SILENT Or FOF_NOCONFIRMATION Or FOF_NOERRORUI
+    ShT_Op = SHFileOperation(shOp)
+End Function
+
+GetTempPath(1024, VarPtr(shTmp))
+shDir = MakeStr(VarPtr(shTmp)) + "ユニット_sh𠮷"
+RemoveDirectory(StrPtr(shDir))
+Assert(-1, CreateDirectory(StrPtr(shDir), ByVal 0) <> 0, "sh mkdir")
+
+' 窓の題で探す
+shH = CreateWindowEx(0, "STATIC", "窓𠮷テスト", 0, 0, 0, 10, 10, 0, 0, GetModuleHandle(0), 0)
+Assert(-1, shH <> 0, "sh window")
+Assert(-1, FindWindow(0, "窓𠮷テスト") = shH, "findwindow utf8")
+DestroyWindow(shH)
+
+' SHFileOperation で写して消す
+shA = shDir + "\元𠮷.txt"
+shB = shDir + "\写し𠮷.txt"
+ShT_Touch(shA)
+Assert(0, ShT_Op(FO_COPY, shA, shB), "shfileop copy")
+Assert(1, ShT_Exists(shB), "shfileop copy made")
+Assert(0, shOp.fAnyOperationsAborted, "shfileop not aborted")
+Assert(0, ShT_Op(FO_DELETE, shB, ""), "shfileop delete")
+Assert(0, ShT_Exists(shB), "shfileop deleted")
+DeleteFile(StrPtr(shA))
+shA = shDir + "\notepad𠮷.exe"
+Assert(-1, CopyFile("C:\Windows\notepad.exe", StrPtr(shA), 0) <> 0, "sh copy src")
+
+' アイコン
+shIcon = ExtractIcon(GetModuleHandle(0), StrPtr(shA), 0)
+Assert(-1, shIcon <> 0 And shIcon <> 1, "extracticon utf8")
+ShT_DestroyIcon(shIcon)
+Assert(-1, ExtractIconEx(StrPtr(shA), -1, 0, 0, 0) <> 0, "extracticonex count")
+
+' カーソル
+shB = shDir + "\矢印𠮷.cur"
+Assert(-1, CopyFile("C:\Windows\Cursors\aero_arrow.cur", StrPtr(shB), 0) <> 0, "sh copy cur")
+shIcon = LoadCursorFromFile(StrPtr(shB)) As HICON
+Assert(-1, shIcon <> 0, "loadcursorfromfile utf8")
+ShT_DestroyCursor(shIcon As HCURSOR)
+
+' ドライブ
+Assert(DRIVE_FIXED, GetDriveType("C:\"), "getdrivetype")
+Assert(-1, GetDiskFreeSpaceEx(StrPtr(shDir), shFree, shTotal, shAll) <> 0, "diskfreeex utf8")
+
+' pidl からパスへ（UTF-8 で書く）
+shPidl = ShT_ILCreate(BasicWidePtr(StrPtr(shA)))
+Assert(-1, shPidl <> 0, "sh pidl")
+Assert(-1, SHGetPathFromIDList(shPidl, VarPtr(shBuf)) <> 0, "shgetpath")
+Assert(-1, MakeStr(VarPtr(shBuf)) = shA, "shgetpath utf8")
+ShT_ILFree(shPidl)
+
+DeleteFile(StrPtr(shA))
+DeleteFile(StrPtr(shB))
+Assert(-1, RemoveDirectory(StrPtr(shDir)) <> 0, "sh rmdir")

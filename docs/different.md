@@ -64,6 +64,7 @@ BasicHelp どおりに書いても結果が一致しない、または別の経�
 | 数学関数 | `Sin` / `Cos` / `Abs` / `Sqr` 等（浮動小数） | **`Math.abp` のマクローリン展開**。複雑な入れ子は一時変数経由が安全 |
 | `Int64` / `QWord` / `Char` | 基本型として定義 | 64bit 出力と `-linux` では 64bit の整数。変数・仮引数・Type メンバ（配列のメンバも）・配列・戻り値（Function / メソッド / Declare / 関数ポインタ）が 8 バイトで、算術・比較・`For`・`Select Case`・`Print` / `Str$`・`SizeOf` / `Len` も 64bit。Long は符号で、DWord と 4294967295 までの整数のリテラルは 0 で広げる。4294967295 を超える十進（`9223372036854775807` まで）と 9〜16 桁の `&H` は Int64 のリテラル。QWord は、両辺とも符号なし（QWord・DWord・非負のリテラル）の `\` `Mod` と比較が符号なし、`>>` は論理シフト、Double との変換は 2^63 以上も正しく（符号なしの規則は 64bit の式だけで、DWord どうしの 32bit の演算は従来どおり）。`Val` は Double を経るので 2^53 まで正確。**`-actba32`** も 64bit の整数で、値は `edx:eax` の組（変数・仮引数・ByRef・戻り値（Function / メソッド / Declare）・算術・比較・シフト・`For`・Double との変換・`Print` / `Str$`・リテラル）。`\` `Mod` は ntdll の `_alldiv` などを呼ぶ。**`-actba32` の配列・Type のメンバ・Declare と関数ポインタの仮引数はまだ 32bit** で、そこの `QWord` を `DWord`、`Int64` を `Long` として読み `64-bit integers are not supported` の警告を出す。`DWord` は Double への変換だけ符号なし（DWord の配列・ポインタ先・`Function As DWord` の戻り値は Long と同じ）。型の位置（`As` / `SizeOf(` の後ろ）の **`Char` は `Byte`**（変数名の `char` はそのまま） |
 | DLL 再配置 | ロード時のベース再配置 | DLL は末尾に `.reloc` を出す。32bit は絶対アドレスの HIGHLOW。64bit は空の再配置表（コードは RIP 相対）。EXE は出さない。`DYNAMIC_BASE` は立てないので、優先ベースが空いていればそのまま、塞がっていればローダーが移動する |
+| 例外の巻き戻し情報（`.pdata`） | （AB4 は 32bit のみ） | 64bit の Windows の exe / DLL は `.pdata` を出す（`PeUnwind.abp`）。手続きはどれも `push rbp; mov rbp, rsp; sub rsp, N` で始まるので、rbp をフレーム レジスタにした UNWIND_INFO 1 つを全部の関数で共有する。これで OS が例外を配るときや `RtlCaptureStackBackTrace` で呼び出し履歴をたどれ、NULL の参照などはデバッガー無しでも c0000005 で終わる（以前は新しい Windows で c0000409 の fail fast になることがあった。`test/t_unwind_null.abp` / `t_unwind_walk.abp`）。`-actba32`（ebp の鎖）と `-linux` は出さない |
 | `Function` の `As` 省略 | 戻り値の型を省くと既定の型（Double） | 戻り値は **Double**。戻り値に代入しなければ 0。型を推定できないので `cannot infer the type of Function 'f'; treated as Double` の警告を出す（コンパイルは続ける）。クラスのメソッドで `As` を省いた `Function` は従来どおり Long |
 | `Const` の再定義 | 同じ名前の定数は一度だけ定義する | **同じ名前・同じ値（数値・Double・文字列とも）の再定義はエラーにしない**。標準ヘッダ（`default.idx`）が定義する `MB_OK` などを、ユーザのソースでも同じ値で定義していることがあるため。**値が違えば、後ろの定義の行で `Const 'a' is already defined with a different value` のエラー**。組込みの `TRUE` / `FALSE` は対象外（ソースで定義し直しても、組込みの値のまま） |
 | ソース拡張子 | `.sbp` 推奨 | **メインのコードは `.abp`**（Active Basic Program。`.pj` で結合）、`#include` で読むファイルは `.sbp`（Sub Basic Program） |
@@ -108,21 +109,7 @@ ActBa64 の文字列バイトは UTF-8 です。
  Actba64上、内部でShift-JISは使われていません。
  ユーザー側のプログラムで・・・AがついているAPIを直接Declareしていた場合は残念ながら文字化けが発生しますので修正が必要になります。
 
-以下API別の詳細です。
-
-- `#n88basic` の窓文字は UTF-8 をワイド文字にして描きます。
-- `SetWindowText` / `GetWindowText` / `GetWindowTextLength` / `CreateWindowEx` / `CreateFont` / `SetDlgItemText` / `GetDlgItemText` は UTF-8 をワイド文字 API に渡す。`GetWindowText` は UTF-8 を書き、戻り値は NUL を含まないバイト数。末尾 `A` の Declare は変換しない。
-- `InsMenu` / `InsertMenu` / `AppendMenu` / `ModifyMenu` の見出しも UTF-8 をワイド文字 API に渡す。`MF_SEPARATOR` / `MF_BITMAP` / `MF_OWNERDRAW` の第 5 引数は文字列ではないので変換しない。末尾 `A` は変換しない。`GetMenuString` は UTF-8 を書く。
-- `InsertMenuItem` / `SetMenuItemInfo` / `GetMenuItemInfo` は、`MIIM_STRING` または文字列の `MIIM_TYPE` のとき `dwTypeData` をワイド文字にする。`GetMenuItemInfo` は UTF-8 を書き、`cch` はそのバイト数。区切り・ビットマップ・オーナードローは変換しない。
-- `TextOut` / `GetTextExtentPoint32` / `DrawText` / `DrawTextEx` は UTF-8 をワイド文字数で渡す。長さが負のときは NUL まで。末尾 `A` はバイト数のまま。`DT_MODIFYSTRING` の書き換えは呼び出し側のバッファへ戻さない。
-- `CreateStatusWindow` の見出し、`RegisterClassEx` のクラス名とメニュー名、`UnregisterClass` は UTF-8 をワイド文字 API に渡す。65535 以下はアトムなので変換しない。`RegisterClassEx` は呼び出し側の `WNDCLASSEX` を変えない。登録はワイドなので窓は Unicode になり、無印の `DefWindowProc` / `DefFrameProc` / `DefMDIChildProc` は W 版。`GetClassName` は UTF-8 を書く。`GetClassInfoEx` が返すクラス名とメニュー名のポインタは、次に `GetClassInfoEx` を呼ぶまで有効な UTF-8。クラス名がアトム、NULL、または問い合わせに使った変換バッファのときは、引いた名前の UTF-8 を複製して返す。
-- ステータスバーへの `SendMessage` の `SB_SETTEXT` / `SB_SETTIPTEXT` は、UTF-8 をワイド文字にして `SB_SETTEXTW` / `SB_SETTIPTEXTW` で送る。`CreateStatusWindow` の窓は Unicode なので、A 版のままだと UTF-8 が CP932 として表示され文字化けするため。窓のクラスが `msctls_statusbar32` のときだけ変換し、ほかのコントロールの `WM_USER+1` などはそのまま。妥当な UTF-8 でなければ A 版のまま。`SB_GETTEXT` は A 版のままなので CP932 を返す。
-- `CreateFontIndirect` の `lfFaceName` は UTF-8 をワイド文字 API に渡す。呼び出し側の `LOGFONT` はそのまま。`GetObject` は A 版なので、読み戻した `lfFaceName` は CP932。
-- `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻し、`FindText` は戻ったあとも書くため。
-- `s[n]` は 0 始まりの 1 バイトです。
-- `GetOpenFileName` と `GetSaveFileName` は、呼ぶあいだだけフィルタ（二重 NUL）・タイトル・初期フォルダ・拡張子を CP932 にし、戻る前に呼び出し側のポインタへ戻します。ファイル名バッファ（`lpstrFile`）に入れた初期ファイル名は呼ぶ前に CP932 にします。成功したら `lpstrFile` と `lpstrFileTitle` を UTF-8 に書き換え、`nFileOffset` / `nFileExtension` も UTF-8 のバイト位置に直します。複数選択（フォルダ 0 ファイル 0 … 0 0）も同じです。UTF-8 にすると `nMaxFile` / `nMaxFileTitle` に入らないときは、ダイアログが書いた CP932 のままです。ダイアログ自体は A 版なので、CP932 にない文字のファイル名は選べません。
-- `CreateFile` / `GetFileAttributes` / `ShellExecute` と、`ChDir` / `MkDir` / `Kill` / `Exec` は、パスが妥当な UTF-8 ならワイド文字 API に渡します。妥当な UTF-8 でないとき（`GetCmd` や `DragQueryFile` が返す CP932 など）は A 版に渡すので、CP932 のパスもそのまま開けます。`ShellExecute` は文字列のどれか 1 つでも妥当な UTF-8 でなければ、すべて A 版に渡します。末尾 `A` の Declare と、`ab_file.sbp` の `CopyFile` / `MoveFile` / `DeleteFile` / `FindFirstFile` などは変換しません。
-
+API 別の詳細（変換する API・戻り値の決まり・まだ A 版のままのもの）は [文字コードと API](./unicode-api.md) にまとめています。
 
 ## 改良点
 

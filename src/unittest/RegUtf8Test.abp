@@ -1,0 +1,85 @@
+' RegCreateKeyEx / RegOpenKeyEx / RegSetValueEx / RegQueryValueEx / RegDeleteValue / RegDeleteKey は
+' キーと値の名前をワイド文字 API に渡す。REG_SZ / REG_MULTI_SZ の値は UTF-8 で書き、UTF-8 で読む（CP932 にない 𠮷 も）。
+
+Dim rgKey As HKEY
+Dim rgKey2 As HKEY
+Dim rgSub As String
+Dim rgVal As String
+Dim rgType As DWord
+Dim rgCb As DWord
+Dim rgDw As DWord
+Dim rgBuf(63) As Byte
+Dim rgMulti(15) As Byte
+
+Declare Function RegT_QueryW Lib "advapi32.dll" Alias "RegQueryValueExW" (ByVal hKey As HKEY, ByVal lpValueName As *Byte, ByVal lpReserved As VoidPtr, ByVal lpType As VoidPtr, ByVal lpData As VoidPtr, ByVal lpcbData As VoidPtr) As Long
+
+' ワイドの名前 name の値を、ワイドのまま rgBuf へ読む
+Function RegT_RawW(h As HKEY, name As String) As Long
+    Dim w As *Byte
+    w = BasicWidePtr(StrPtr(name))
+    rgCb = 64
+    RegT_RawW = RegT_QueryW(h, w, 0, 0, VarPtr(rgBuf), VarPtr(rgCb))
+    BasicFreeAnsi(w, StrPtr(name))
+End Function
+
+rgSub = "Software\ActBa64UnitTest_𠮷"
+Assert(0, RegCreateKeyEx(HKEY_CURRENT_USER, StrPtr(rgSub), 0, 0, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, ByVal 0, rgKey, 0), "reg create")
+
+' REG_SZ（cbData は NUL 込みでも抜きでもよい）
+rgVal = "値𠮷"
+Assert(0, RegSetValueEx(rgKey, "名前𠮷", 0, REG_SZ, StrPtr(rgVal), Len(rgVal) + 1), "reg set sz")
+Assert(0, RegT_RawW(rgKey, "名前𠮷"), "reg sz wide name")
+Assert(8, rgCb, "reg sz wide size")
+Assert(&H24, rgBuf[0], "reg sz wide 0")
+Assert(&H50, rgBuf[1], "reg sz wide 1")
+Assert(&H42, rgBuf[2], "reg sz wide 2")
+Assert(&HD8, rgBuf[3], "reg sz wide 3")
+
+rgCb = 0
+Assert(0, RegQueryValueEx(rgKey, "名前𠮷", 0, VarPtr(rgType), 0, VarPtr(rgCb)), "reg query need")
+Assert(Len(rgVal) + 1, rgCb, "reg query need size")
+Assert(REG_SZ, rgType, "reg query type")
+rgCb = Len(rgVal)
+Assert(234, RegQueryValueEx(rgKey, "名前𠮷", 0, 0, VarPtr(rgBuf), VarPtr(rgCb)), "reg query small")
+Assert(Len(rgVal) + 1, rgCb, "reg query small size")
+rgCb = 64
+Assert(0, RegQueryValueEx(rgKey, "名前𠮷", 0, VarPtr(rgType), VarPtr(rgBuf), VarPtr(rgCb)), "reg query")
+Assert(-1, MakeStr(VarPtr(rgBuf)) = rgVal, "reg query utf8")
+Assert(Len(rgVal) + 1, rgCb, "reg query size")
+
+' REG_MULTI_SZ: "a" 0 "𠮷" 0 0
+FillMemory(VarPtr(rgMulti), 16, 0)
+rgMulti[0] = &H61
+rgMulti[2] = &HF0
+rgMulti[3] = &HA0
+rgMulti[4] = &HAE
+rgMulti[5] = &HB7
+Assert(0, RegSetValueEx(rgKey, "multi", 0, REG_MULTI_SZ, VarPtr(rgMulti), 8), "reg set multi")
+FillMemory(VarPtr(rgBuf), 64, &HFF)
+rgCb = 64
+Assert(0, RegQueryValueEx(rgKey, "multi", 0, VarPtr(rgType), VarPtr(rgBuf), VarPtr(rgCb)), "reg query multi")
+Assert(REG_MULTI_SZ, rgType, "reg multi type")
+Assert(8, rgCb, "reg multi size")
+Assert(&H61, rgBuf[0], "reg multi a")
+Assert(0, rgBuf[1], "reg multi nul1")
+Assert(&HB7, rgBuf[5], "reg multi kanji end")
+Assert(0, rgBuf[6], "reg multi nul2")
+Assert(0, rgBuf[7], "reg multi nul3")
+
+' 文字列でない値はそのまま
+rgDw = 1234
+Assert(0, RegSetValueEx(rgKey, "dw", 0, REG_DWORD, VarPtr(rgDw), 4), "reg set dword")
+rgDw = 0
+rgCb = 4
+Assert(0, RegQueryValueEx(rgKey, "dw", 0, VarPtr(rgType), VarPtr(rgDw), VarPtr(rgCb)), "reg query dword")
+Assert(1234, rgDw, "reg dword value")
+Assert(REG_DWORD, rgType, "reg dword type")
+
+' 開き直す・消す
+Assert(0, RegOpenKeyEx(HKEY_CURRENT_USER, StrPtr(rgSub), 0, KEY_READ, rgKey2), "reg open")
+RegCloseKey(rgKey2)
+Assert(0, RegDeleteValue(rgKey, "名前𠮷"), "reg delete value")
+Assert(2, RegQueryValueEx(rgKey, "名前𠮷", 0, 0, 0, 0), "reg value gone")
+RegCloseKey(rgKey)
+Assert(0, RegDeleteKey(HKEY_CURRENT_USER, StrPtr(rgSub)), "reg delete key")
+Assert(2, RegOpenKeyEx(HKEY_CURRENT_USER, StrPtr(rgSub), 0, KEY_READ, rgKey2), "reg key gone")

@@ -1,0 +1,303 @@
+' EditorToolbar - メニューの下のツールバー（Windows 版だけ）。
+' 新規・開く・上書き保存 / 切り取り・コピー・貼り付け / 元に戻す・やり直し / 検索 /
+' コンパイル・実行 / デバッグ実行・デバッグの停止・ステップ オーバー・ステップ イン。押すとメニューと同じ WM_COMMAND が枠に届く。
+' 絵は comctl32 の標準の絵（IDB_STD_SMALL_COLOR）と、ここで描く 6 つ（コンパイル・実行・デバッグ・停止・ステップ 2 つ）。
+' ヒントはメニューの見出しから (&X) を除いたもの（言語の切り替えにも付いてくる）。
+
+#ifndef _LINUX
+
+Const ETB_ID = 1390
+Const ETB_STD_CUT = 0
+Const ETB_STD_COPY = 1
+Const ETB_STD_PASTE = 2
+Const ETB_STD_UNDO = 3
+Const ETB_STD_REDO = 4
+Const ETB_STD_NEW = 6
+Const ETB_STD_OPEN = 7
+Const ETB_STD_SAVE = 8
+Const ETB_STD_FIND = 12
+Const ETB_STD_COUNT = 15
+Const ETB_OWN_COUNT = 6
+Const ETB_MAX = 24
+Const ETB_TTN_A = -520              ' TTN_NEEDTEXTA
+Const ETB_TTN_W = -530              ' TTN_NEEDTEXTW
+
+Dim g_hToolbar As HWND
+Dim g_etbBuf(767) As Byte          ' TBBUTTON の並び（64bit は 32 バイト、32bit は 20 バイト）
+Dim g_etbN As Long
+Dim g_etbTipW As *Byte              ' ヒントの文字（W）。次のヒントまで持つ
+Dim g_etbTipA As *Byte              ' ヒントの文字（A、CP932）
+
+Function EditorTb_BtnSize() As Long
+    EditorTb_BtnSize = 20
+    If SizeOf(VoidPtr) = 8 Then EditorTb_BtnSize = 32
+End Function
+
+' 1 つ足す。img < 0 なら区切り
+Sub EditorTb_Add(ByVal img As Long, ByVal id As Long)
+    Dim p As *Byte
+    Dim pl As *Long
+    If g_etbN >= ETB_MAX Then Exit Sub
+    p = VarPtr(g_etbBuf(0)) + g_etbN * EditorTb_BtnSize()
+    FillMemory(p, EditorTb_BtnSize(), 0)
+    pl = p As *Long
+    If img < 0 Then
+        p[9] = TBSTYLE_SEP
+    Else
+        pl[0] = img
+        pl[1] = id
+        p[8] = TBSTATE_ENABLED
+        p[9] = TBSTYLE_BUTTON
+    End If
+    g_etbN = g_etbN + 1
+End Sub
+
+Sub EditorTb_AddAll()
+    Dim o As Long
+    o = ETB_STD_COUNT
+    g_etbN = 0
+    EditorTb_Add(ETB_STD_NEW, IDM_FILENEW)
+    EditorTb_Add(ETB_STD_OPEN, IDM_FILEOPEN)
+    EditorTb_Add(ETB_STD_SAVE, IDM_SAVE)
+    EditorTb_Add(-1, 0)
+    EditorTb_Add(ETB_STD_CUT, IDM_CUT)
+    EditorTb_Add(ETB_STD_COPY, IDM_COPY)
+    EditorTb_Add(ETB_STD_PASTE, IDM_PASTE)
+    EditorTb_Add(-1, 0)
+    EditorTb_Add(ETB_STD_UNDO, IDM_UNDO)
+    EditorTb_Add(ETB_STD_REDO, IDM_REDO)
+    EditorTb_Add(-1, 0)
+    EditorTb_Add(ETB_STD_FIND, IDM_FIND)
+    EditorTb_Add(-1, 0)
+    EditorTb_Add(o, IDM_COMPILE)
+    EditorTb_Add(o + 1, IDM_RUN)
+    EditorTb_Add(-1, 0)
+    EditorTb_Add(o + 2, IDM_DBG_GO)
+    EditorTb_Add(o + 3, IDM_DBG_STOP)
+    EditorTb_Add(o + 4, IDM_DBG_OVER)
+    EditorTb_Add(o + 5, IDM_DBG_IN)
+End Sub
+
+' ---- 自前の 4 つの絵（16 x 16 を横に並べる。地はボタンの色）----
+
+Sub EditorTb_Row(hDC As HDC, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal c As DWord)
+    Ui_Fill(hDC, x, y, x + w, y + 1, c)
+End Sub
+
+' 右向きの三角。solid = 0 なら縁だけ
+Sub EditorTb_Play(hDC As HDC, ByVal x As Long, ByVal solid As Long)
+    Dim i As Long, w As Long
+    Dim c As DWord
+    c = RGB(0, 150, 0)
+    For i = 0 To 12
+        w = 6 - Abs(i - 6)
+        w = w + w + 1
+        If solid <> 0 Or w <= 2 Or i = 0 Or i = 12 Then
+            EditorTb_Row(hDC, x + 3, 1 + i + 1, w, c)
+        Else
+            EditorTb_Row(hDC, x + 3, 1 + i + 1, 2, c)
+            EditorTb_Row(hDC, x + 3 + w - 2, 1 + i + 1, 2, c)
+        End If
+    Next
+End Sub
+
+' コンパイル: 下向きの青い矢印と、受ける灰色の台
+Sub EditorTb_Build(hDC As HDC, ByVal x As Long)
+    Dim i As Long
+    Dim c As DWord
+    c = RGB(0, 70, 200)
+    Ui_Fill(hDC, x + 6, 1, x + 10, 7, c)
+    For i = 0 To 4
+        EditorTb_Row(hDC, x + 3 + i, 7 + i, 10 - i * 2, c)
+    Next
+    Ui_Fill(hDC, x + 1, 12, x + 15, 15, RGB(96, 96, 96))
+    Ui_Fill(hDC, x + 2, 13, x + 14, 14, RGB(200, 200, 200))
+End Sub
+
+' デバッグ: 塗った三角と、左下の赤い丸（ブレークポイント）
+Sub EditorTb_Debug(hDC As HDC, ByVal x As Long)
+    EditorTb_Play(hDC, x, 1)
+    Ui_Fill(hDC, x + 1, 10, x + 6, 15, RGB(200, 0, 0))
+    Ui_Fill(hDC, x + 2, 9, x + 5, 16, RGB(200, 0, 0))
+    Ui_Fill(hDC, x, 11, x + 7, 14, RGB(200, 0, 0))
+End Sub
+
+' ステップ オーバー: 灰色の箱（手続き）を上から越える青い矢印
+Sub EditorTb_Over(hDC As HDC, ByVal x As Long)
+    Dim i As Long
+    Dim c As DWord
+    c = RGB(0, 70, 200)
+    Ui_Fill(hDC, x + 5, 10, x + 11, 15, RGB(128, 128, 128))
+    Ui_Fill(hDC, x + 6, 11, x + 10, 14, RGB(230, 230, 230))
+    Ui_Fill(hDC, x + 2, 2, x + 13, 4, c)
+    Ui_Fill(hDC, x + 2, 2, x + 4, 11, c)
+    Ui_Fill(hDC, x + 11, 2, x + 13, 7, c)
+    For i = 0 To 3
+        EditorTb_Row(hDC, x + 9 + i, 7 + i, 6 - i * 2, c)
+    Next
+End Sub
+
+' ステップ イン: 青い矢印が灰色の箱（手続き）の中へ降りる
+Sub EditorTb_Into(hDC As HDC, ByVal x As Long)
+    Dim i As Long
+    Dim c As DWord
+    c = RGB(0, 70, 200)
+    Ui_Fill(hDC, x + 3, 8, x + 16, 16, RGB(128, 128, 128))
+    Ui_Fill(hDC, x + 4, 9, x + 15, 15, RGB(230, 230, 230))
+    Ui_Fill(hDC, x + 1, 2, x + 11, 4, c)
+    Ui_Fill(hDC, x + 9, 2, x + 11, 10, c)
+    For i = 0 To 3
+        EditorTb_Row(hDC, x + 7 + i, 10 + i, 6 - i * 2, c)
+    Next
+End Sub
+
+Function EditorTb_OwnBitmap() As HBITMAP
+    Dim hScr As HDC, hDC As HDC
+    Dim bmp As HBITMAP, oldBmp As HANDLE
+    hScr = GetDC(0)
+    hDC = CreateCompatibleDC(hScr)
+    bmp = CreateCompatibleBitmap(hScr, 16 * ETB_OWN_COUNT, 16)
+    ReleaseDC(0, hScr)
+    oldBmp = SelectObject(hDC, bmp)
+    Ui_Fill(hDC, 0, 0, 16 * ETB_OWN_COUNT, 16, GetSysColor(COLOR_BTNFACE))
+    EditorTb_Build(hDC, 0)
+    EditorTb_Play(hDC, 16, 0)
+    EditorTb_Debug(hDC, 32)
+    Ui_Fill(hDC, 48 + 3, 3, 48 + 13, 13, RGB(200, 0, 0))
+    EditorTb_Over(hDC, 64)
+    EditorTb_Into(hDC, 80)
+    SelectObject(hDC, oldBmp)
+    DeleteDC(hDC)
+    EditorTb_OwnBitmap = bmp
+End Function
+
+' ---- 作る・並べる ----
+
+Sub EditorTb_Create(hFrame As HWND)
+    Dim icc As INITCOMMONCONTROLSEX
+    Dim ab(1) As LONG_PTR           ' TBADDBITMAP（hInst, nID）
+    Dim style As DWord
+    If g_hToolbar <> 0 Then Exit Sub
+    icc.dwSize = SizeOf(INITCOMMONCONTROLSEX)
+    icc.dwICC = ICC_BAR_CLASSES
+    InitCommonControlsEx(icc)
+    style = WS_CHILD Or WS_VISIBLE Or WS_CLIPSIBLINGS Or TBSTYLE_FLAT Or TBSTYLE_TOOLTIPS
+    g_hToolbar = CreateWindowEx(0, "ToolbarWindow32", "", style, 0, 0, 0, 0, hFrame, ETB_ID As HMENU, GetModuleHandle(0), 0)
+    If g_hToolbar = 0 Then Exit Sub
+    SendMessage(g_hToolbar, TB_BUTTONSTRUCTSIZE, EditorTb_BtnSize(), 0)
+    SendMessage(g_hToolbar, TB_LOADIMAGES, 0, -1)     ' IDB_STD_SMALL_COLOR, HINST_COMMCTRL
+    ab(0) = 0
+    ab(1) = EditorTb_OwnBitmap() As LONG_PTR
+    SendMessage(g_hToolbar, TB_ADDBITMAP, ETB_OWN_COUNT, VarPtr(ab(0)) As LPARAM)
+    EditorTb_AddAll()
+    SendMessage(g_hToolbar, TB_ADDBUTTONS, g_etbN, VarPtr(g_etbBuf(0)) As LPARAM)
+    SendMessage(g_hToolbar, TB_AUTOSIZE, 0, 0)
+    EditorTb_EnableRun()
+End Sub
+
+Function EditorTb_Height() As Long
+    Dim rc As RECT
+    EditorTb_Height = 0
+    If g_hToolbar = 0 Then Exit Function
+    If IsWindowVisible(g_hToolbar) = 0 Then Exit Function
+    GetWindowRect(g_hToolbar, rc)
+    EditorTb_Height = rc.bottom - rc.top
+End Function
+
+' 枠の WM_SIZE。ツールバーを上に付け、MDI の地をその下に置く。受け持ったら 1
+Function EditorTb_OnSize(hFrame As HWND) As Long
+    Dim rc As RECT
+    Dim h As Long
+    EditorTb_OnSize = 0
+    If g_hToolbar = 0 Or g_hClient = 0 Then Exit Function
+    SendMessage(g_hToolbar, TB_AUTOSIZE, 0, 0)
+    h = EditorTb_Height()
+    GetClientRect(hFrame, rc)
+    MoveWindow(g_hClient, 0, h, rc.right, rc.bottom - h, TRUE)
+    EditorTb_OnSize = 1
+End Function
+
+' 実行できない（DLL の）プロジェクトなら実行のボタンも灰色に
+Sub EditorTb_EnableRun()
+    If g_hToolbar = 0 Then Exit Sub
+    SendMessage(g_hToolbar, TB_ENABLEBUTTON, IDM_RUN, ProjCanRun())
+End Sub
+
+' ---- ヒント ----
+
+' メニューの見出しから "(&X)" と "&" を除き、Tab の後ろ（ショートカット）は括弧に入れる
+Function EditorTb_Plain$(s As String) As String
+    Dim i As Long, n As Long
+    Dim c As String, t As String, key As String
+    n = Len(s)
+    i = 1
+    t = ""
+    key = ""
+    While i <= n
+        c = Mid$(s, i, 1)
+        If c = Chr$(9) Then
+            key = Mid$(s, i + 1)
+            i = n + 1
+        ElseIf EditorTb_IsMnemonic(s, i) <> 0 Then
+            i = i + 4
+        Else
+            If c <> "&" Then t = t + c
+            i = i + 1
+        End If
+    Wend
+    If Len(key) > 0 Then t = t + " (" + key + ")"
+    EditorTb_Plain$ = t
+End Function
+
+' i から "(&X)" か
+Function EditorTb_IsMnemonic(s As String, ByVal i As Long) As Long
+    EditorTb_IsMnemonic = 0
+    If Mid$(s, i, 2) <> "(&" Then Exit Function
+    If Mid$(s, i + 3, 1) <> ")" Then Exit Function
+    EditorTb_IsMnemonic = 1
+End Function
+
+Function EditorTb_TipUi(ByVal id As Long) As Long
+    EditorTb_TipUi = -1
+    If id = IDM_FILENEW Then EditorTb_TipUi = UI_MENU_NEW
+    If id = IDM_FILEOPEN Then EditorTb_TipUi = UI_MENU_OPEN
+    If id = IDM_SAVE Then EditorTb_TipUi = UI_MENU_SAVE
+    If id = IDM_CUT Then EditorTb_TipUi = UI_MENU_CUT
+    If id = IDM_COPY Then EditorTb_TipUi = UI_MENU_COPY
+    If id = IDM_PASTE Then EditorTb_TipUi = UI_MENU_PASTE
+    If id = IDM_UNDO Then EditorTb_TipUi = UI_MENU_UNDO
+    If id = IDM_REDO Then EditorTb_TipUi = UI_MENU_REDO
+    If id = IDM_FIND Then EditorTb_TipUi = UI_MENU_FIND
+    If id = IDM_COMPILE Then EditorTb_TipUi = UI_MENU_COMPILE
+    If id = IDM_RUN Then EditorTb_TipUi = UI_MENU_RUN
+    If id >= IDM_DBG_GO And id <= IDM_DBG_IN Then EditorTb_TipUi = EditorDbg_MenuUi(id)
+End Function
+
+' 枠の WM_NOTIFY。ツールバーのヒントを求められたら文字を渡して 1
+Function EditorTb_OnNotify(lParam As LPARAM) As Long
+    Dim nm As *NMHDR
+    Dim code As Long, ui As Long, chars As Long, n As Long
+    Dim pp As *LONG_PTR
+    Dim s As String
+    EditorTb_OnNotify = 0
+    nm = lParam As *NMHDR
+    If nm = 0 Or g_hToolbar = 0 Then Exit Function
+    code = nm->code As Long
+    If code <> ETB_TTN_A And code <> ETB_TTN_W Then Exit Function
+    ui = EditorTb_TipUi(nm->idFrom As Long)
+    If ui < 0 Then Exit Function
+    s = EditorTb_Plain$(UiText$(ui))
+    pp = (lParam + SizeOf(NMHDR)) As *LONG_PTR
+    If code = ETB_TTN_W Then
+        If g_etbTipW <> 0 Then free(g_etbTipW)
+        g_etbTipW = Enc_Utf8ToWide(s, chars)
+        pp[0] = g_etbTipW As LONG_PTR
+    Else
+        If g_etbTipA <> 0 Then free(g_etbTipA)
+        g_etbTipA = Enc_SaveCp932(s, n)
+        pp[0] = g_etbTipA As LONG_PTR
+    End If
+    EditorTb_OnNotify = 1
+End Function
+
+#endif

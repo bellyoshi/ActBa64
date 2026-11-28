@@ -1,0 +1,224 @@
+' A 版では CP932 で返る API を UTF-8 で返す（コマンドライン・環境変数・コンピューター名・ユーザー名・
+' FormatMessage・DragQueryFile）。渡す文字列は妥当な UTF-8 ならワイド文字 API へ、違えば A 版へ。
+' CreateProcess も、GetCommandLine が UTF-8 なのでそれを組んだコマンドラインをワイド文字 API へ渡す。
+' -linux は A 版（UTF-8 のまま）。
+
+Dim g_cmdUtf8 As *Byte
+
+' 戻り値のバッファは書き換えない（A 版と同じ）
+Function GetCommandLine() As *Byte
+#ifdef _LINUX
+    GetCommandLine = GetCommandLineA()
+#else
+    If g_cmdUtf8 = 0 Then g_cmdUtf8 = BasicUtf8OfWide(GetCommandLineW())
+    GetCommandLine = g_cmdUtf8
+    If g_cmdUtf8 = 0 Then GetCommandLine = GetCommandLineA()
+#endif
+End Function
+
+' ---------- 環境変数 ----------
+
+Function GetEnvironmentVariable(lpName As *Byte, lpBuffer As *Byte, nSize As DWord) As DWord
+    Dim w As *Byte
+    w = BasicPathWide(lpName)
+    If w = 0 Then GetEnvironmentVariable = GetEnvironmentVariableA(lpName, lpBuffer, nSize)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    GetEnvironmentVariable = BasicEnvW(w, lpBuffer, nSize)
+#endif
+    free(w)
+End Function
+
+Function BasicEnvW(w As *Byte, buf As *Byte, n As DWord) As DWord
+    Dim o As *Byte
+    BasicEnvW = 0
+    o = GwAlloc(BASIC_WMAX)
+    If o = 0 Then Exit Function
+    BasicEnvW = BasicWDone(o, GetEnvironmentVariableW(w, o, BASIC_WMAX), buf, n)
+End Function
+
+' lpValue が 0 なら消す
+Function SetEnvironmentVariable(lpName As *Byte, lpValue As *Byte) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicPathWide(lpName)
+    b = BasicPathWide(lpValue)
+    If BasicEnvWideOk(a, b, lpValue) = 0 Then SetEnvironmentVariable = SetEnvironmentVariableA(lpName, lpValue)
+#ifndef _LINUX
+    If BasicEnvWideOk(a, b, lpValue) <> 0 Then SetEnvironmentVariable = SetEnvironmentVariableW(a, b)
+#endif
+    BasicFree2(a, b)
+End Function
+
+Function BasicEnvWideOk(a As *Byte, b As *Byte, raw As *Byte) As Long
+    BasicEnvWideOk = (a <> 0) And (b <> 0 Or raw = 0)
+End Function
+
+' ---------- コンピューター名・ユーザー名 ----------
+
+' 入れば nSize に書いたバイト数（nul が 1 なら NUL 込み）で 1、入らなければ nSize に NUL 込みの要るバイト数で 0
+Function BasicNameOut(o As *Byte, chars As Long, buf As *Byte, ByRef nSize As Long, nul As Long) As Long
+    Dim need As Long
+    need = BasicUtf8Len(o, chars)
+    BasicNameOut = 0
+    If buf <> 0 And need < nSize Then BasicNameOut = 1
+    If BasicNameOut <> 0 Then nSize = GwPutFit(o, chars, buf, nSize) + nul
+    If BasicNameOut = 0 Then nSize = need + 1
+    If BasicNameOut = 0 Then SetLastError(122)
+End Function
+
+Function GetComputerName(lpBuffer As *Byte, ByRef nSize As Long) As Long
+#ifdef _LINUX
+    GetComputerName = GetComputerNameA(lpBuffer, nSize)
+#else
+    GetComputerName = BasicCompW(lpBuffer, nSize)
+#endif
+End Function
+
+Function BasicCompW(buf As *Byte, ByRef nSize As Long) As Long
+    Dim o As *Byte, m As DWord
+    BasicCompW = 0
+    o = GwAlloc(256)
+    m = 256
+    If GetComputerNameW(o, m) <> 0 Then BasicCompW = BasicNameOut(o, m, buf, nSize, 0)
+    free(o)
+End Function
+
+Function GetUserName(lpBuffer As *Byte, ByRef nSize As Long) As Long
+#ifdef _LINUX
+    GetUserName = GetUserNameA(lpBuffer, nSize)
+#else
+    GetUserName = BasicUserW(lpBuffer, nSize)
+#endif
+End Function
+
+Function BasicUserW(buf As *Byte, ByRef nSize As Long) As Long
+    Dim o As *Byte, m As DWord
+    BasicUserW = 0
+    o = GwAlloc(257)
+    m = 257
+    If GetUserNameW(o, m) <> 0 Then BasicUserW = BasicNameOut(o, m - 1, buf, nSize, 1)
+    free(o)
+End Function
+
+' ---------- FormatMessage ----------
+
+' FORMAT_MESSAGE_ALLOCATE_BUFFER = &H100 / IGNORE_INSERTS = &H200 / FROM_STRING = &H400（UTF-8 か CP932 の書式）
+' 差し込み（Arguments）があるときは A 版のまま（%1 などの型が分からないため）
+Function BasicFmtWideOk(flags As DWord, src As VoidPtr, args As VoidPtr) As Long
+    BasicFmtWideOk = 0
+#ifndef _LINUX
+    If args <> 0 And (flags And &H200) = 0 Then Exit Function
+    BasicFmtWideOk = 1
+#endif
+End Function
+
+' 結果のワイド文字列を UTF-8 で返す。ALLOCATE_BUFFER なら LocalAlloc して lpBuffer の指す先へ
+Function BasicFmtOut(wide As VoidPtr, chars As Long, flags As DWord, buf As *Byte, n As DWord) As DWord
+    Dim need As Long, p As *Byte
+    need = BasicUtf8Len(wide, chars)
+    BasicFmtOut = 0
+    p = BasicFmtDst(flags, buf, n, need)
+    If p = 0 Then Exit Function
+    BasicFmtOut = GwPutFit(wide, chars, p, need + 1)
+    If (flags And &H100) <> 0 Then BasicSetPtr(buf, p)
+End Function
+
+' 書く先。ALLOCATE_BUFFER なら LocalAlloc、そうでなければ buf（need バイトと NUL が入らなければ 0）
+Function BasicFmtDst(flags As DWord, buf As *Byte, n As DWord, need As Long) As *Byte
+    BasicFmtDst = 0
+    If (flags And &H100) <> 0 Then BasicFmtDst = LocalAlloc(0, need + 1) As *Byte
+    If (flags And &H100) <> 0 Or need >= n Then Exit Function
+    BasicFmtDst = buf
+End Function
+
+' at の指す先へポインタ p を書く
+Sub BasicSetPtr(at As VoidPtr, p As VoidPtr)
+    Dim pp As *VoidPtr
+    pp = at
+    pp[0] = p
+End Sub
+
+Function BasicFmtW(flags As DWord, src As VoidPtr, id As DWord, lang As DWord, buf As *Byte, n As DWord) As DWord
+    Dim w As VoidPtr, s As VoidPtr, chars As Long
+    s = src
+    If (flags And &H400) <> 0 Then s = BasicWidePtr(src)
+    chars = FormatMessageW(flags Or &H100, s, id, lang, VarPtr(w), 0, 0)
+    If (flags And &H400) <> 0 Then BasicFreeAnsi(s, src)
+    BasicFmtW = 0
+    If chars > 0 Then BasicFmtW = BasicFmtOut(w, chars, flags, buf, n)
+    If chars > 0 Then LocalFree(w)
+End Function
+
+Function FormatMessage(dwFlags As DWord, lpSource As VoidPtr, dwMessageId As DWord, dwLanguageId As DWord, lpBuffer As *Byte, nSize As DWord, Arguments As DWordPtr) As DWord
+    If BasicFmtWideOk(dwFlags, lpSource, Arguments) = 0 Then
+        FormatMessage = FormatMessageA(dwFlags, lpSource, dwMessageId, dwLanguageId, lpBuffer, nSize, Arguments)
+        Exit Function
+    End If
+#ifndef _LINUX
+    FormatMessage = BasicFmtW(dwFlags, lpSource, dwMessageId, dwLanguageId, lpBuffer, nSize)
+#endif
+End Function
+
+' ---------- OutputDebugString / DragQueryFile ----------
+
+Sub OutputDebugString(lpOutputString As *Byte)
+#ifdef _LINUX
+    OutputDebugStringA(lpOutputString)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpOutputString)
+    OutputDebugStringW(w)
+    BasicFreeAnsi(w, lpOutputString)
+#endif
+End Sub
+
+' iFile が &HFFFFFFFF ならファイルの数。lpszFile が 0 なら NUL 抜きの要るバイト数。
+' 入らなければ文字の境目で切り、書いたバイト数を返す
+Function DragQueryFile(hDrop As HDROP, iFile As DWord, lpszFile As *Byte, cch As DWord) As DWord
+#ifdef _LINUX
+    DragQueryFile = DragQueryFileA(hDrop, iFile, lpszFile, cch)
+#else
+    DragQueryFile = DragQueryFileW(hDrop, iFile, 0, 0)
+    If iFile = &HFFFFFFFF Or DragQueryFile = 0 Then Exit Function
+    DragQueryFile = BasicDropW(hDrop, iFile, DragQueryFile, lpszFile, cch)
+#endif
+End Function
+
+Function BasicDropW(hDrop As HDROP, iFile As DWord, chars As Long, buf As *Byte, n As DWord) As DWord
+    Dim o As *Byte
+    BasicDropW = 0
+    o = GwAlloc(chars)
+    If o = 0 Then Exit Function
+    chars = DragQueryFileW(hDrop, iFile, o, chars + 1)
+    BasicDropW = BasicUtf8Len(o, chars)
+    If buf <> 0 And n > 0 Then BasicDropW = GwPut(o, chars, buf, n)
+    free(o)
+End Function
+
+' ---------- CreateProcess ----------
+
+' アプリ名・カレントフォルダ・STARTUPINFO の lpDesktop / lpTitle を使うときは A 版のまま
+Function BasicProcWideOk(app As Long, dir As Long, ByRef si As STARTUPINFO) As Long
+    BasicProcWideOk = 0
+    If app <> 0 Or dir <> 0 Then Exit Function
+    If si.lpDesktop <> 0 Or si.lpTitle <> 0 Then Exit Function
+    BasicProcWideOk = 1
+End Function
+
+' ワイド文字のコマンドライン（書き換えられる複製）。A 版へ渡すときは 0
+Function BasicProcWide(app As Long, dir As Long, ByRef si As STARTUPINFO, cmd As *Byte) As *Byte
+    BasicProcWide = 0
+    If BasicProcWideOk(app, dir, si) = 0 Then Exit Function
+    BasicProcWide = BasicPathWide(cmd)
+End Function
+
+Function CreateProcess(lpApplicationName As Long, lpCommandLine As *Byte, lpProcessAttributes As Long, lpThreadAttributes As Long, bInheritHandles As Long, dwCreationFlags As DWord, lpEnvironment As Long, lpCurrentDirectory As Long, ByRef lpStartupInfo As STARTUPINFO, ByRef lpProcessInformation As PROCESS_INFORMATION) As Long
+    Dim w As *Byte
+    w = BasicProcWide(lpApplicationName, lpCurrentDirectory, lpStartupInfo, lpCommandLine)
+    If w = 0 Then CreateProcess = CreateProcessA(lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    CreateProcess = CreateProcessW(0, w, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, 0, lpStartupInfo, lpProcessInformation)
+#endif
+    free(w)
+End Function

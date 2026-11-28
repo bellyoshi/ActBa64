@@ -1,0 +1,80 @@
+' FindFirstFile / FindNextFile。W 版で探し、WIN32_FIND_DATA の cFileName / cAlternateFileName を UTF-8 で書く。
+' 検索するパスが妥当な UTF-8 でなければ CP932 とみてワイドにする（結果はどちらも UTF-8）。
+' UTF-8 の名前が 260 バイトに入らないときは CP932 で書く（A 版のパスとして開ける）。それも入らなければ切った UTF-8。
+
+' WIN32_FIND_DATAW の大きさと、名前の位置（A 版 / W 版）
+Const BASIC_FD_W = 592
+Const BASIC_FD_HEAD = 44
+Const BASIC_FD_ALT_A = 304
+Const BASIC_FD_ALT_W = 564
+
+Function BasicCpPut(wide As *Byte, chars As Long, dst As *Byte, room As Long) As Long
+    Dim n As Long
+    n = WideCharToMultiByte(932, 0, wide As *Word, chars, dst, room - 1, 0, 0)
+    If n < 0 Then n = 0
+    dst[n] = 0
+    BasicCpPut = n
+End Function
+
+Sub BasicFindName(wide As *Byte, dst As *Byte, room As Long)
+    Dim chars As Long
+    chars = BasicWideChars(wide)
+    If BasicUtf8Len(wide, chars) < room Then GwPutFit(wide, chars, dst, room - 1)
+    If BasicUtf8Len(wide, chars) < room Then Exit Sub
+    If BasicCpLen(wide, chars) < room Then BasicCpPut(wide, chars, dst, room)
+    If BasicCpLen(wide, chars) < room Then Exit Sub
+    GwPut(wide, chars, dst, room)
+End Sub
+
+' W 版の結果（wfd）を A 版の形で fd へ
+Sub BasicFindOut(wfd As *Byte, fd As *Byte)
+    memcpy(fd, wfd, BASIC_FD_HEAD)
+    BasicFindName(wfd + BASIC_FD_HEAD, fd + BASIC_FD_HEAD, 260)
+    BasicFindName(wfd + BASIC_FD_ALT_W, fd + BASIC_FD_ALT_A, 14)
+End Sub
+
+Function BasicFindWide(raw As *Byte) As *Byte
+    BasicFindWide = BasicPathWide(raw)
+    If BasicFindWide <> 0 Or BasicAtom(raw) <> 0 Then Exit Function
+    BasicFindWide = BasicWideCp(raw, lstrlen(raw))
+End Function
+
+Function BasicFindFirstW(w As *Byte, fd As *Byte) As HANDLE
+    Dim wfd As *Byte
+    BasicFindFirstW = INVALID_HANDLE_VALUE
+    wfd = malloc(BASIC_FD_W)
+    If wfd = 0 Then Exit Function
+    BasicFindFirstW = FindFirstFileW(w, wfd)
+    If BasicFindFirstW <> INVALID_HANDLE_VALUE Then BasicFindOut(wfd, fd)
+    free(wfd)
+End Function
+
+Function BasicFindNextW(h As HANDLE, fd As *Byte) As Long
+    Dim wfd As *Byte
+    BasicFindNextW = 0
+    wfd = malloc(BASIC_FD_W)
+    If wfd = 0 Then Exit Function
+    BasicFindNextW = FindNextFileW(h, wfd)
+    If BasicFindNextW <> 0 Then BasicFindOut(wfd, fd)
+    free(wfd)
+End Function
+
+Function FindFirstFile(lpFileName As *Byte, ByRef lpFindFildData As WIN32_FIND_DATA) As HANDLE
+    Dim w As *Byte
+    w = 0
+#ifndef _LINUX
+    w = BasicFindWide(lpFileName)
+    If w <> 0 Then FindFirstFile = BasicFindFirstW(w, VarPtr(lpFindFildData))
+#endif
+    If w = 0 Then FindFirstFile = FindFirstFileA(lpFileName, lpFindFildData)
+    If w <> 0 Then free(w)
+End Function
+
+' 探すハンドルは A 版・W 版どちらで開いたものでもよい
+Function FindNextFile(hFindFile As HANDLE, ByRef lpFindFildData As WIN32_FIND_DATA) As DWord
+#ifdef _LINUX
+    FindNextFile = FindNextFileA(hFindFile, lpFindFildData)
+#else
+    FindNextFile = BasicFindNextW(hFindFile, VarPtr(lpFindFildData))
+#endif
+End Function

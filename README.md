@@ -114,8 +114,9 @@ cd src\actba64
 | `src/common` | Utilities shared by the compiler and the editor |
 | `src/unittest` | Unit tests |
 | `src/dbgtest` | Unit tests for the debugger parts of abdbg and ProjectEditor |
-| `src/prototype*` | Early prototypes (old assembler / linker). Not part of the current toolchain |
 | `docs/` | Documentation |
+
+The early prototypes (old assembler / linker) have moved to [bellyoshi/Actba64-prototype](https://github.com/bellyoshi/Actba64-prototype). They are not part of the current toolchain.
 
 ## Documentation
 
@@ -134,7 +135,7 @@ The documentation is written in Japanese and is also published at [docs.actba64.
 
 ## Status
 
-ActBa64 is under active development. Notable gaps today: DirectX 9, `On Error` / `Resume`, `Int64` / `QWord` types, scientific notation literals, general `Single` arithmetic, and `MENU` resources. Under `-linux`, only APIs that have a Linux implementation in `Include\linux` work; the compiler warns about the others.
+ActBa64 is under active development. Notable gaps today: DirectX 9, `On Error` / `Resume`, `MENU` resources, and 64-bit integers (`Int64` / `QWord`) in arrays, Type members and Declare parameters under `-actba32`. Under `-linux`, only APIs that have a Linux implementation in `Include\linux` work; the compiler warns about the others.
 
 ## License
 

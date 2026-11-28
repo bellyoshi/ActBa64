@@ -1,0 +1,203 @@
+' PeUnwind - x64 の例外の巻き戻し情報（.pdata）。64bit の Windows PE だけ（-actba32 / -linux は出さない）
+'
+' 例外を配るとき、OS は .pdata の RUNTIME_FUNCTION で関数ごとの巻き戻し方を知る。
+' 無いと関数を葉（[rsp] が戻り番地）とみなし、呼び出し履歴をたどれない。新しい Windows は
+' そこで fail fast（c0000409）にすることがあり、NULL の参照も c0000005 で終わらない。
+'
+' 手続きはどれも OP_ENTER（EmitEnter）で始まり、前置きは同じ形:
+'   +0 push rbp        (55)
+'   +1 mov rbp, rsp    (48 89 E5)
+'   +4 sub rsp, N      （4KB 超はページを触りながら。巻き戻しは rbp から戻すので書かない）
+' なので UNWIND_INFO は 1 つを全部の関数で共有する（rbp をフレーム レジスタにする）:
+'   Version 1, SizeOfProlog 4, CountOfCodes 2, FrameRegister rbp(5), FrameOffset 0
+'   code 0: offset 4 UWOP_SET_FPREG(3)
+'   code 1: offset 1 UWOP_PUSH_NONVOL(0) rbp
+' 関数の範囲は OP_ENTER の位置から次の OP_ENTER の手前まで（最後はコードの終わりまで）。
+' 先頭の jmp main（OP_ENTER の前）は含めない。
+' セクションの中身: RUNTIME_FUNCTION（12 バイト）× n、その後に UNWIND_INFO（8 バイト）
+
+Const UW_INFO_SIZE = 8
+Const UW_RF_SIZE = 12
+
+Dim g_uwAt As *Long
+Dim g_uwCap As Long
+Dim g_uwN As Long
+Dim g_uwBuf As *Byte
+Dim g_uwSize As Long
+Dim g_uwTblSize As Long
+
+Sub PeUwFreeBuf()
+    If g_uwBuf <> NULL Then free(g_uwBuf)
+    g_uwBuf = NULL
+    g_uwSize = 0
+    g_uwTblSize = 0
+End Sub
+
+' IrEmitCode の初めに呼ぶ（emit は 2 回回るので、そのたびに数え直す）
+Sub PeUwReset()
+    PeUwFreeBuf()
+    If g_uwAt <> NULL Then free(g_uwAt)
+    g_uwAt = NULL
+    g_uwCap = 0
+    g_uwN = 0
+End Sub
+
+Function PeUwWanted() As Long
+    PeUwWanted = 0
+    If TyIs32() <> 0 Then Exit Function
+    If TyIsLinux() <> 0 Then Exit Function
+    PeUwWanted = 1
+End Function
+
+Function PeUwCapNext() As Long
+    Dim cap As Long
+    cap = g_uwCap
+    cap = cap + cap
+    If cap < DYN_INIT Then cap = DYN_INIT
+    PeUwCapNext = cap
+End Function
+
+Function PeUwGrow() As Long
+    Dim p As *Byte
+    Dim cap As Long
+    PeUwGrow = 0
+    cap = PeUwCapNext()
+    p = MemGrow(g_uwAt As BytePtr, BytesN(g_uwCap, 4), BytesN(cap, 4))
+    If p = NULL Then Exit Function
+    g_uwCap = cap
+    g_uwAt = p As *Long
+    PeUwGrow = 1
+End Function
+
+' OP_ENTER を出す直前に呼ぶ。off は .text の中のオフセット（push rbp の位置）
+Sub PeUwNoteFunc(off As Long)
+    If PeUwWanted() = 0 Then Exit Sub
+    If off < 0 Then Exit Sub
+    If g_uwN > 0 Then
+        If g_uwAt[g_uwN - 1] >= off Then Exit Sub
+    End If
+    If g_uwN >= g_uwCap Then
+        If PeUwGrow() = 0 Then Exit Sub
+    End If
+    g_uwAt[g_uwN] = off
+    g_uwN = g_uwN + 1
+End Sub
+
+Function PeUwRva(off As Long) As DWord
+    Dim rva As DWord
+    rva = TEXT_RVA
+    rva = rva + off
+    PeUwRva = rva
+End Function
+
+Function PeUwEndOf(i As Long, codeSize As Long) As Long
+    PeUwEndOf = codeSize
+    If i + 1 < g_uwN Then PeUwEndOf = g_uwAt[i + 1]
+End Function
+
+Sub PeUwPutInfo(at As Long)
+    Dim p As *Byte
+    PtrAddTo(g_uwBuf, at, p)
+    p[0] = &H01
+    p[1] = 4
+    p[2] = 2
+    p[3] = &H05
+    p[4] = 4
+    p[5] = &H03
+    p[6] = 1
+    p[7] = &H50
+End Sub
+
+Sub PeUwPutFunc(i As Long, codeSize As Long, infoRva As DWord)
+    Dim at As DWord
+    Dim k As DWord
+    at = i
+    k = UW_RF_SIZE
+    at = at * k
+    PutDword(g_uwBuf, at, PeUwRva(g_uwAt[i]))
+    k = 4
+    at = at + k
+    PutDword(g_uwBuf, at, PeUwRva(PeUwEndOf(i, codeSize)))
+    at = at + k
+    PutDword(g_uwBuf, at, infoRva)
+End Sub
+
+' 置き場の RVA が決まってから中身を作る（UNWIND_INFO の RVA を RUNTIME_FUNCTION に書くため）
+Sub PeUwFill(codeSize As Long, secRva As DWord)
+    Dim i As Long
+    Dim infoRva As DWord
+    infoRva = secRva
+    infoRva = infoRva + g_uwTblSize
+    PeUwPutInfo(g_uwTblSize)
+    i = 0
+    While i < g_uwN
+        PeUwPutFunc(i, codeSize, infoRva)
+        i = i + 1
+    Wend
+End Sub
+
+' 大きさだけ決める（0 なら .pdata を出さない）
+Function PeUwBuild() As Long
+    Dim n As Long
+    PeUwBuild = 1
+    PeUwFreeBuf()
+    If PeUwWanted() = 0 Or g_uwN <= 0 Then Exit Function
+    PeUwBuild = 0
+    g_uwTblSize = BytesN(g_uwN, UW_RF_SIZE)
+    n = g_uwTblSize
+    n = n + UW_INFO_SIZE
+    g_uwBuf = calloc(n)
+    If g_uwBuf = NULL Then
+        g_uwTblSize = 0
+        Exit Function
+    End If
+    g_uwSize = n
+    PeUwBuild = 1
+End Function
+
+Sub PeZeroPdata(lay As *PeLayout)
+    lay->pdataRaw = 0
+    lay->pdataVirt = 0
+    lay->pdataRva = 0
+    lay->pdataOff = 0
+End Sub
+
+Sub PeUwRvaOf(lay As *PeLayout)
+    Dim r As DWord
+    r = lay->idataRva
+    r = r + lay->idataVirt
+    r = r + lay->edataVirt
+    r = r + lay->rsrcVirt
+    r = r + lay->relocVirt
+    lay->pdataRva = r
+End Sub
+
+' .reloc の後ろに置く。PeCalcLayoutReloc の後で呼ぶ
+Sub PeCalcLayoutPdata(lay As *PeLayout, codeSize As Long)
+    PeZeroPdata(lay)
+    If g_uwSize <= 0 Then Exit Sub
+    lay->nSect = lay->nSect + 1
+    PeUwRvaOf(lay)
+    lay->pdataVirt = PeAlignSect(g_uwSize)
+    lay->pdataRaw = PeAlignFile(g_uwSize)
+    PeUwFill(codeSize, lay->pdataRva)
+End Sub
+
+Sub PeWritePdataSect(outBuf As *Byte, ByRef sectOff As DWord, lay As *PeLayout)
+    Dim chars As DWord
+    If lay->pdataRaw <= 0 Then Exit Sub
+    chars = IMAGE_SCN_CNT_INITIALIZED_DATA Or IMAGE_SCN_MEM_READ
+    PeWriteSect(outBuf, sectOff, ".pdata", g_uwSize, lay->pdataRva, lay->pdataRaw, lay->pdataOff, chars)
+End Sub
+
+Sub PeCopyPdata(outBuf As *Byte, lay As *PeLayout)
+    If lay->pdataRaw <= 0 Or g_uwBuf = NULL Then Exit Sub
+    MemCopyAt(outBuf, lay->pdataOff, g_uwBuf, g_uwSize)
+End Sub
+
+' IMAGE_DIRECTORY_ENTRY_EXCEPTION（3 番）。大きさは RUNTIME_FUNCTION の表だけ
+Sub PeWritePdataDir64(outBuf As *Byte, optOff As DWord, lay As *PeLayout)
+    If lay->pdataRaw <= 0 Then Exit Sub
+    PutDword(outBuf, optOff + 136, lay->pdataRva)
+    PutDword(outBuf, optOff + 140, g_uwTblSize)
+End Sub

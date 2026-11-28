@@ -110,8 +110,9 @@ cd src\actba64
 | `src/projecteditor` | ProjectEditor のソース、ヘルプ、言語ファイル |
 | `src/common` | コンパイラとエディタで共有する部品 |
 | `src/unittest` | ユニットテスト |
-| `src/prototype*` | 初期の試作（旧アセンブラ / リンカ）。今のツールチェーンでは使いません |
 | `docs/` | ドキュメント |
+
+初期の試作（旧アセンブラ / リンカ）は [bellyoshi/Actba64-prototype](https://github.com/bellyoshi/Actba64-prototype) に移しました。今のツールチェーンでは使いません。
 
 ## ドキュメント
 
@@ -129,7 +130,7 @@ cd src\actba64
 
 ## 現状
 
-開発中です。主にまだ無いもの: DirectX 9、`On Error` / `Resume`、`Int64` / `QWord` 型、指数表記の数値リテラル、`Single` の一般の演算、`MENU` リソース。`-linux` では `Include\linux` に Linux 版がある API だけが動き、それ以外はコンパイル時に警告します。
+開発中です。主にまだ無いもの: DirectX 9、`On Error` / `Resume`、`MENU` リソース、`-actba32` での配列・Type のメンバ・Declare の仮引数の 64bit 整数（`Int64` / `QWord`）。`-linux` では `Include\linux` に Linux 版がある API だけが動き、それ以外はコンパイル時に警告します。
 
 ## ライセンス
 

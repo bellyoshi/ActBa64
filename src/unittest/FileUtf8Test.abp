@@ -1,0 +1,126 @@
+' CopyFile / MoveFile / DeleteFile / CreateDirectory / RemoveDirectory / SetCurrentDirectory / GetCurrentDirectory /
+' GetFullPathName / GetTempPath / FindFirstFile / FindNextFile / SetFileAttributes は UTF-8 のパスを
+' ワイド文字 API に渡し、書き戻すパスも UTF-8。CP932 にない文字（𠮷）のパスも扱える。
+
+Dim fuTmp(1023) As Byte
+Dim fuBuf(1023) As Byte
+Dim fuOld(1023) As Byte
+Dim fuDir As String
+Dim fuA As String
+Dim fuB As String
+Dim fuC As String
+Dim fuPat As String
+Dim fuN As DWord
+Dim fuPart As VoidPtr
+Dim fuAnsi As *Byte
+
+Declare Function FileT_AttrW Lib "kernel32.dll" Alias "GetFileAttributesW" (ByVal lpFileName As *Byte) As DWord
+
+Function FileT_AttrU(s As String) As DWord
+    Dim w As *Byte
+    w = BasicWidePtr(StrPtr(s))
+    FileT_AttrU = FileT_AttrW(w)
+    BasicFreeAnsi(w, StrPtr(s))
+End Function
+
+Sub FileT_Touch(s As String)
+    Dim h As HANDLE
+    h = CreateFile(StrPtr(s), GENERIC_WRITE, 0, ByVal 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0)
+    CloseHandle(h)
+End Sub
+
+' 名前が い.txt か 𠮷.txt なら 1
+Function FileT_Hit(ByRef fd As WIN32_FIND_DATA) As Long
+    Dim p As *Byte, s As String
+    p = VarPtr(fd)
+    s = MakeStr(p + 44)
+    FileT_Hit = 0
+    If s = "い.txt" Or s = "𠮷.txt" Then FileT_Hit = 1
+End Function
+
+Function FileT_Next(h As HANDLE, ByRef fd As WIN32_FIND_DATA) As Long
+    FileT_Next = 0
+    While FindNextFile(h, fd) <> 0
+        FileT_Next = FileT_Next + FileT_Hit(fd)
+    Wend
+End Function
+
+Function FileT_Count(pat As String) As Long
+    Dim h As HANDLE, fd As WIN32_FIND_DATA
+    FileT_Count = -1
+    h = FindFirstFile(StrPtr(pat), fd)
+    If h = INVALID_HANDLE_VALUE Then Exit Function
+    FileT_Count = FileT_Hit(fd) + FileT_Next(h, fd)
+    FindClose(h)
+End Function
+
+Sub FileT_Clean()
+    DeleteFile(StrPtr(fuA))
+    DeleteFile(StrPtr(fuB))
+    DeleteFile(StrPtr(fuC))
+    RemoveDirectory(StrPtr(fuDir))
+End Sub
+
+' TEMP: 要るバイト数（NUL 込み）を聞いてから受ける。入らなければ要るバイト数
+fuN = GetTempPath(0, 0)
+Assert(-1, fuN > 1, "temp need")
+Assert(fuN - 1, GetTempPath(1024, VarPtr(fuTmp)), "temp len")
+Assert(-1, BasicUtf8Chars(VarPtr(fuTmp), fuN - 1) > 0, "temp utf8")
+Assert(&H5C, fuTmp[fuN - 2], "temp sep")
+Assert(fuN, GetTempPath(fuN - 1, VarPtr(fuBuf)), "temp small")
+
+fuDir = MakeStr(VarPtr(fuTmp)) + "ユニット_𠮷"
+fuA = fuDir + "\あ.txt"
+fuB = fuDir + "\い.txt"
+fuC = fuDir + "\𠮷.txt"
+FileT_Clean()
+
+' フォルダを作ってカレントにする
+Assert(-1, CreateDirectory(StrPtr(fuDir), ByVal 0) <> 0, "mkdir")
+Assert(-1, FileT_AttrU(fuDir) <> &HFFFFFFFF, "mkdir wide")
+Assert(-1, GetCurrentDirectory(1024, VarPtr(fuOld)) > 0, "cwd save")
+Assert(-1, SetCurrentDirectory(StrPtr(fuDir)) <> 0, "chdir")
+fuN = GetCurrentDirectory(1024, VarPtr(fuBuf))
+Assert(-1, MakeStr(VarPtr(fuBuf)) = fuDir, "cwd utf8")
+Assert(Len(fuDir), fuN, "cwd len")
+Assert(Len(fuDir) + 1, GetCurrentDirectory(0, 0), "cwd need")
+
+' 相対パスを広げる。lpFilePart は名前の先頭
+fuN = GetFullPathName("あ.txt", 1024, VarPtr(fuBuf), VarPtr(fuPart))
+Assert(-1, MakeStr(VarPtr(fuBuf)) = fuA, "full utf8")
+Assert(Len(fuA), fuN, "full len")
+Assert(-1, MakeStr(fuPart) = "あ.txt", "full part")
+Assert(Len(fuA) + 1, GetFullPathName("あ.txt", 4, VarPtr(fuBuf), 0), "full small")
+
+' 作る・写す・名前を変える・探す
+FileT_Touch(fuA)
+Assert(-1, FileT_AttrU(fuA) <> &HFFFFFFFF, "touch")
+Assert(-1, CopyFile(StrPtr(fuA), StrPtr(fuC), 1) <> 0, "copy")
+Assert(-1, FileT_AttrU(fuC) <> &HFFFFFFFF, "copy wide")
+Assert(-1, MoveFile(StrPtr(fuA), StrPtr(fuB)) <> 0, "move")
+Assert(-1, FileT_AttrU(fuA) = &HFFFFFFFF, "move src gone")
+Assert(-1, FileT_AttrU(fuB) <> &HFFFFFFFF, "move dst")
+fuPat = fuDir + "\*.txt"
+Assert(2, FileT_Count(fuPat), "find utf8 names")
+
+' 読み取り専用にして戻す
+Assert(-1, SetFileAttributes(StrPtr(fuB), FILE_ATTRIBUTE_READONLY) <> 0, "setattr")
+Assert(FILE_ATTRIBUTE_READONLY, FileT_AttrU(fuB) And FILE_ATTRIBUTE_READONLY, "setattr ro")
+Assert(-1, SetFileAttributes(StrPtr(fuB), FILE_ATTRIBUTE_NORMAL) <> 0, "setattr normal")
+
+' 片づけ（カレントを戻してからフォルダを消す）
+Assert(-1, SetCurrentDirectory(VarPtr(fuOld)) <> 0, "cwd restore")
+Assert(-1, DeleteFile(StrPtr(fuB)) <> 0, "delete")
+Assert(-1, FileT_AttrU(fuB) = &HFFFFFFFF, "delete wide")
+Assert(-1, DeleteFile(StrPtr(fuC)) <> 0, "delete 2")
+Assert(-1, RemoveDirectory(StrPtr(fuDir)) <> 0, "rmdir")
+Assert(-1, FileT_AttrU(fuDir) = &HFFFFFFFF, "rmdir wide")
+
+' CP932 のバイト列は A 版へ
+fuA = MakeStr(VarPtr(fuTmp)) + "ユニット_cp.txt"
+FileT_Touch(fuA)
+fuAnsi = BasicAnsiPtr(StrPtr(fuA))
+AssertCp932(-1, DeleteFile(fuAnsi) <> 0, "delete cp932")
+Assert(-1, FileT_AttrU(fuA) = &HFFFFFFFF, "delete cp932 gone")
+BasicFreeAnsi(fuAnsi, StrPtr(fuA))
+DeleteFile(StrPtr(fuA))

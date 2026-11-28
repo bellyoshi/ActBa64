@@ -1,0 +1,159 @@
+' メッセージボックス・窓を探す・シェル・音・ドライブ・カーソルの API。文字列は UTF-8 をワイド文字 API へ。
+' FindWindow / ShellAbout / PlaySound / SHFileOperation の題は CP932 のバイト列も読む（BasicWidePtr）。
+' パスだけを渡す API は、妥当な UTF-8 でなければ A 版へ（BasicPathWide。ファイルの API と同じ）。
+' 書き戻すパス（SHBrowseForFolder の表示名・SHGetPathFromIDList）は UTF-8。-linux は A 版。
+
+Sub BasicFreeW2(a As *Byte, ra As *Byte, b As *Byte, rb As *Byte)
+    BasicFreeAnsi(a, ra)
+    BasicFreeAnsi(b, rb)
+End Sub
+
+' ---------- メッセージボックス ----------
+
+' 本文と題は UTF-8（CP932 のバイト列も読む）をワイド文字 API へ。-linux は A 版の代わりへ CP932 を経て渡す（従来どおり）
+Function MessageBox(hWnd As HWND, text As *Byte, title As *Byte, typ As DWord) As Long
+#ifdef _LINUX
+    MessageBox = BasicMsgAnsi(hWnd, text, title, typ)
+#else
+    MessageBox = BasicMsgWide(hWnd, text, title, typ)
+#endif
+End Function
+
+Function BasicMsgWide(hWnd As HWND, text As *Byte, title As *Byte, typ As DWord) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicWidePtr(text)
+    b = BasicWidePtr(title)
+    BasicMsgWide = MessageBoxW(hWnd, a, b, typ)
+    BasicFreeAnsi(a, text)
+    BasicFreeAnsi(b, title)
+End Function
+
+Function BasicMsgAnsi(hWnd As HWND, text As *Byte, title As *Byte, typ As DWord) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicAnsiPtr(text)
+    b = BasicAnsiPtr(title)
+    BasicMsgAnsi = MessageBoxA(hWnd, a, b, typ)
+    BasicFreeAnsi(a, text)
+    BasicFreeAnsi(b, title)
+End Function
+
+' ---------- 窓を探す・バージョン情報 ----------
+
+Function FindWindow(lpClassName As *Byte, lpWindowName As *Byte) As HWND
+#ifdef _LINUX
+    FindWindow = FindWindowA(lpClassName, lpWindowName)
+#else
+    FindWindow = BasicFindWndW(lpClassName, lpWindowName)
+#endif
+End Function
+
+Function BasicFindWndW(cls As *Byte, title As *Byte) As HWND
+    Dim a As *Byte, b As *Byte
+    a = BasicWidePtr(cls)
+    b = BasicWidePtr(title)
+    BasicFindWndW = FindWindowW(a, b)
+    BasicFreeW2(a, cls, b, title)
+End Function
+
+Function ShellAbout(hWnd As HWND, szApp As *Byte, szOtherStuff As *Byte, hIcon As HICON) As Long
+#ifdef _LINUX
+    ShellAbout = ShellAboutA(hWnd, szApp, szOtherStuff, hIcon)
+#else
+    ShellAbout = BasicAboutW(hWnd, szApp, szOtherStuff, hIcon)
+#endif
+End Function
+
+Function BasicAboutW(hWnd As HWND, app As *Byte, other As *Byte, hIcon As HICON) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicWidePtr(app)
+    b = BasicWidePtr(other)
+    BasicAboutW = ShellAboutW(hWnd, a, b, hIcon)
+    BasicFreeW2(a, app, b, other)
+End Function
+
+' ---------- 音 ----------
+
+' SND_MEMORY（&H4）の pszSound は音のデータなので変えない。リソースの番号（65535 以下）もそのまま
+Function PlaySound(pszSound As *Byte, hmod As HINSTANCE, fdwSound As DWord) As Long
+#ifdef _LINUX
+    PlaySound = PlaySoundA(pszSound, hmod, fdwSound)
+#else
+    PlaySound = BasicSoundW(pszSound, hmod, fdwSound)
+#endif
+End Function
+
+Function BasicSoundW(snd As *Byte, hmod As HINSTANCE, flags As DWord) As Long
+    Dim w As *Byte
+    w = snd
+    If (flags And &H4) = 0 Then w = BasicWidePtr(snd)
+    BasicSoundW = PlaySoundW(w, hmod, flags)
+    BasicFreeAnsi(w, snd)
+End Function
+
+' ---------- パスを渡すだけ ----------
+
+Function GetDriveType(lpRootPathName As *Byte) As DWord
+    Dim w As *Byte
+    w = BasicPathWide(lpRootPathName)
+    If w = 0 Then GetDriveType = GetDriveTypeA(lpRootPathName)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    GetDriveType = GetDriveTypeW(w)
+#endif
+    free(w)
+End Function
+
+Function GetDiskFreeSpace(lpRootPathName As *Byte, lpSectorsPerCluster As VoidPtr, lpBytesPerSector As VoidPtr, lpNumberOfFreeClusters As VoidPtr, lpTotalNumberOfClusters As VoidPtr) As Long
+    Dim w As *Byte
+    w = BasicPathWide(lpRootPathName)
+    If w = 0 Then GetDiskFreeSpace = GetDiskFreeSpaceA(lpRootPathName, lpSectorsPerCluster, lpBytesPerSector, lpNumberOfFreeClusters, lpTotalNumberOfClusters)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    GetDiskFreeSpace = GetDiskFreeSpaceW(w, lpSectorsPerCluster, lpBytesPerSector, lpNumberOfFreeClusters, lpTotalNumberOfClusters)
+#endif
+    free(w)
+End Function
+
+Function GetDiskFreeSpaceEx(lpDirectoryName As *Byte, ByRef lpFreeBytesAvailableToCaller As ULARGE_INTEGER, ByRef lpTotalNumberOfBytes As ULARGE_INTEGER, ByRef lpTotalNumberOfFreeBytes As ULARGE_INTEGER) As Long
+    Dim w As *Byte
+    w = BasicPathWide(lpDirectoryName)
+    If w = 0 Then GetDiskFreeSpaceEx = GetDiskFreeSpaceExA(lpDirectoryName, lpFreeBytesAvailableToCaller, lpTotalNumberOfBytes, lpTotalNumberOfFreeBytes)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    GetDiskFreeSpaceEx = GetDiskFreeSpaceExW(w, VarPtr(lpFreeBytesAvailableToCaller), VarPtr(lpTotalNumberOfBytes), VarPtr(lpTotalNumberOfFreeBytes))
+#endif
+    free(w)
+End Function
+
+Function ExtractIcon(hInst As HINSTANCE, lpszExeFileName As *Byte, nIconIndex As Long) As HICON
+    Dim w As *Byte
+    w = BasicPathWide(lpszExeFileName)
+    If w = 0 Then ExtractIcon = ExtractIconA(hInst, lpszExeFileName, nIconIndex)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    ExtractIcon = ExtractIconW(hInst, w, nIconIndex)
+#endif
+    free(w)
+End Function
+
+Function ExtractIconEx(lpszFile As *Byte, nIconIndex As Long, phiconLarge As VoidPtr, phiconSmall As VoidPtr, nIcons As Long) As HICON
+    Dim w As *Byte
+    w = BasicPathWide(lpszFile)
+    If w = 0 Then ExtractIconEx = ExtractIconExA(lpszFile, nIconIndex, phiconLarge, phiconSmall, nIcons)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    ExtractIconEx = ExtractIconExW(w, nIconIndex, phiconLarge, phiconSmall, nIcons)
+#endif
+    free(w)
+End Function
+
+Function LoadCursorFromFile(lpFileName As *Byte) As HCURSOR
+    Dim w As *Byte
+    w = BasicPathWide(lpFileName)
+    If w = 0 Then LoadCursorFromFile = LoadCursorFromFileA(lpFileName)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    LoadCursorFromFile = LoadCursorFromFileW(w)
+#endif
+    free(w)
+End Function

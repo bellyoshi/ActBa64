@@ -47,6 +47,7 @@ CallBack.wbpとMakeWindow.wbpをProjectEditorが書き換えます。これら�
 | [coding.md](./coding.md) | コーディング規約（ファイル **目標 400 / 上限 1000 行**・関数 **10 行以内**） |
 | [activebasic-versions.md](./activebasic-versions.md) | 対応する ActiveBasic のバージョン（3.10 / 3.13 / 4.23 / 4.24。5.0 と 2.62 以前の扱い） |
 | [different.md](./different.md) | ActiveBasic との相違点（非対応・改良点・今後の予定） |
+| [unicode-api.md](./unicode-api.md) | 文字コードと API（UTF-8 とワイド文字のあいだを変換する API と、まだ A 版のままのもの） |
 | [migrate-ab4.md](./migrate-ab4.md) | AB4 のコードを移すときの直し方（vtable を自分で埋めるコード → `Override`、引数の数が合わないコールバック → `cdecl`） |
 | [known.md](./known.md) | 既知の問題（AB 4.20 と同じ挙動。`TRUE` と関係演算、識別子の大小区別） |
 | [todo.md](./todo.md) | 未実装・今後の作業メモ |
@@ -64,4 +65,4 @@ CallBack.wbpとMakeWindow.wbpをProjectEditorが書き換えます。これら�
 
 ## ソース側の関連文書
 
-旧 `actba32` / `abc` / `abassembler` / `ablinker` は廃止済み。32bit 出力は `actba64 -actba32`（共通 IR → x86 + PE32、[PE+32.md](./PE+32.md)）。試作は `src/prototype*`。
+旧 `actba32` / `abc` / `abassembler` / `ablinker` は廃止済み。32bit 出力は `actba64 -actba32`（共通 IR → x86 + PE32、[PE+32.md](./PE+32.md)）。初期の試作は [bellyoshi/Actba64-prototype](https://github.com/bellyoshi/Actba64-prototype) に移しました。
