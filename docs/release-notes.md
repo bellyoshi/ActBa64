@@ -24,6 +24,9 @@ A 版の API をそのまま公開していて、日本語のパスや文字列�
 - `RegisterWindowMessage` / `RegisterClipboardFormat` / `GetClipboardFormatName` / `SetComputerName` / `GetFileTitle` / `GetCompressedFileSize` / `CreateMailslot` / `ExtractAssociatedIcon` / `mciGetErrorString` を W 版にしました。
 - 印刷（`PrintDlg` / `PageSetupDlg` / `CreateDC` / `ResetDC`）を W 版にしました。日本語の名前のプリンターも開けます。`hDevMode` / `hDevNames` の中身はこれまでどおり A 版の形で、名前は UTF-8 です。
 - `mciSendCommand` が、日本語や CP932 にない文字の入ったファイル名の音・動画も開けるようになりました（`MCI_OPEN` / `MCI_LOAD` / `MCI_SAVE` のファイル名と `MCI_INFO` / `MCI_SYSINFO` の答えが UTF-8）。
+- 検索ダイアログ（`FindText`）を W 版にしました。日本語や CP932 にない文字（𠮷 など）の検索語も、呼び出し側のバッファへ UTF-8 で届きます。通知の `lParam` は呼び出し側の `FINDREPLACE` のままです。
+- WinINet（`InternetOpen` / `InternetConnect` / `FtpGetFile` / `FtpSetCurrentDirectory` / `FtpGetCurrentDirectory` / `FtpFindFirstFile` / `InternetFindNextFile`）を W 版にしました。日本語のファイル名・フォルダ名を UTF-8 で扱えます。`FtpGetCurrentDirectory` の 3 つ目の引数は `*DWord`（`VarPtr` で渡す）です。
+- 受け皿に入らない文字列を UTF-8 で切って書くとき、最後の文字が欠けていなくても 1 文字多く落としていたのを直しました。
 
 **互換性**: パスや文字列を返す API の戻り値と書き戻す値は、文字数ではなく UTF-8 のバイト数になります。サブクラスの手続きで `CallWindowProcA` を自分で Declare して使っているときは、無印の `CallWindowProc` に替えてください。CP932 のバイト列が返ると決めて自分で UTF-8 に直しているプログラムは、そのまま動きます（妥当な UTF-8 は直さない作りなら）。
 

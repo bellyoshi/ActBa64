@@ -1,0 +1,142 @@
+' FindText（検索ダイアログ。モードレス）を W 版で開く。呼び出し側の FINDREPLACE と検索語・置換語のバッファは
+' これまでどおり（文字列は UTF-8、長さはバイト）。ダイアログが生きているあいだだけ使う W の形の写し
+' （後ろにワイドのバッファ）を作って渡し、持ち主の窓をサブクラス化する。FINDMSGSTRING が来たら
+' Flags と検索語・置換語を呼び出し側の構造体へ UTF-8 で書き戻し、lParam を呼び出し側の構造体にして元の窓手続きへ渡す。
+' FR_DIALOGTERM（または持ち主の窓の WM_NCDESTROY）で写しを捨て、サブクラス化を戻す。
+' フック（FR_ENABLEHOOK）を使うときと -linux は A 版のまま。同時に開けるのは 8 つまで（それより多いと A 版）。
+
+Dim g_frW(7) As VoidPtr
+Dim g_frA(7) As VoidPtr
+Dim g_frWnd(7) As HWND
+Dim g_frOld(7) As VoidPtr
+Dim g_frMsg As DWord
+
+Function FindText(ByRef lpfr As FINDREPLACE) As Long
+    FindText = 0
+#ifndef _LINUX
+    If (lpfr.Flags And FR_ENABLEHOOK) = 0 Then FindText = BasicFrOpen(lpfr)
+#endif
+    If FindText = 0 Then FindText = FindTextA(lpfr)
+End Function
+
+Function BasicFrOpen(ByRef fr As FINDREPLACE) As Long
+    Dim i As Long, w As *FINDREPLACE, t As *Byte
+    BasicFrOpen = 0
+    i = BasicFrSlot(0)
+    If i < 0 Then Exit Function
+    w = BasicFrWide(fr)
+    If w = 0 Then Exit Function
+    t = w->lpTemplateName
+    If (fr.Flags And FR_ENABLETEMPLATE) <> 0 Then w->lpTemplateName = BasicWidePtr(t)
+    BasicFrOpen = FindTextW(w) As Long
+    BasicFrStart(i, VarPtr(fr), w, t, BasicFrOpen)
+End Function
+
+' 開けたら持ち主の窓につなぐ。開けなければ写しを捨てる
+Sub BasicFrStart(i As Long, a As VoidPtr, w As *FINDREPLACE, t As *Byte, ok As Long)
+    BasicFreeAnsi(w->lpTemplateName, t)
+    w->lpTemplateName = t
+    If ok = 0 Then free(w)
+    If ok = 0 Then Exit Sub
+    If g_frMsg = 0 Then g_frMsg = RegisterWindowMessage("commdlg_FindReplace")
+    BasicFrAttach(i, a, w, w->hwndOwner)
+End Sub
+
+' 呼び出し側の構造体を、後ろにワイドのバッファを付けた写しに（calloc。長さの数はそのまま文字数として使う）
+Function BasicFrWide(ByRef fr As FINDREPLACE) As *FINDREPLACE
+    Dim w As *FINDREPLACE, p As *Byte
+    BasicFrWide = 0
+    w = calloc(Len(fr) + (fr.wFindWhatLen + fr.wReplaceWithLen + 2) * 2)
+    If w = 0 Then Exit Function
+    memcpy(w, VarPtr(fr), Len(fr))
+    p = w As *Byte
+    w->lpstrFindWhat = BasicFrIn(p + Len(fr), fr.lpstrFindWhat, fr.wFindWhatLen)
+    w->lpstrReplaceWith = BasicFrIn(p + Len(fr) + (fr.wFindWhatLen + 1) * 2, fr.lpstrReplaceWith, fr.wReplaceWithLen)
+    BasicFrWide = w
+End Function
+
+' src（UTF-8 か CP932）を cap 文字（NUL 込み）のワイドのバッファ dst へ。src が 0 なら 0
+Function BasicFrIn(dst As *Byte, src As *Byte, cap As Long) As *Byte
+    Dim t As *Byte, n As Long
+    BasicFrIn = 0
+    If src = 0 Then Exit Function
+    BasicFrIn = dst
+    t = BasicWidePtr(src)
+    n = GwFitN(BasicWideChars(t), cap)
+    memcpy(dst, t, n * 2)
+    BasicWideTerm(dst, n)
+    BasicFreeAnsi(t, src)
+End Function
+
+' 写し w の Flags と文字列を呼び出し側の構造体 a へ（文字列は UTF-8。入らなければ文字の境目で切る）
+Sub BasicFrOut(a As *FINDREPLACE, w As *FINDREPLACE)
+    a->Flags = w->Flags
+    If a->lpstrFindWhat <> 0 And a->wFindWhatLen > 0 Then GwPut(w->lpstrFindWhat, BasicWideChars(w->lpstrFindWhat), a->lpstrFindWhat, a->wFindWhatLen)
+    If a->lpstrReplaceWith <> 0 And a->wReplaceWithLen > 0 Then GwPut(w->lpstrReplaceWith, BasicWideChars(w->lpstrReplaceWith), a->lpstrReplaceWith, a->wReplaceWithLen)
+End Sub
+
+' ---------- 持ち主の窓のサブクラス化 ----------
+
+' 写し p の番号（p が 0 なら空いている番号）。無ければ -1
+Function BasicFrSlot(p As VoidPtr) As Long
+    Dim i As Long
+    BasicFrSlot = -1
+    For i = 7 To 0 Step -1
+        If g_frW(i) = p Then BasicFrSlot = i
+    Next
+End Function
+
+' 窓 h につないだ元の窓手続き。つないでいなければ 0
+Function BasicFrOld(h As HWND) As VoidPtr
+    Dim i As Long
+    BasicFrOld = 0
+    For i = 0 To 7
+        If g_frW(i) <> 0 And g_frWnd(i) = h Then BasicFrOld = g_frOld(i)
+    Next
+End Function
+
+' GWLP_WNDPROC = -4。同じ窓に 2 つ目のダイアログをつなぐときはサブクラス化を重ねない
+Sub BasicFrAttach(i As Long, a As VoidPtr, w As VoidPtr, h As HWND)
+    g_frOld(i) = BasicFrOld(h)
+    If g_frOld(i) = 0 Then g_frOld(i) = SetWindowLongPtr(h, -4, AddressOf(BasicFrProc) As LONG_PTR) As VoidPtr
+    g_frA(i) = a
+    g_frW(i) = w
+    g_frWnd(i) = h
+End Sub
+
+Function BasicFrProc(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM) As LRESULT
+    Dim i As Long, old As VoidPtr
+    old = BasicFrOld(hWnd)
+    i = -1
+    If msg = g_frMsg And lParam <> 0 Then i = BasicFrSlot(lParam As VoidPtr)
+    If i >= 0 Then BasicFrOut(g_frA(i), g_frW(i))
+    If i >= 0 Then lParam = g_frA(i) As LPARAM
+    BasicFrProc = CallWindowProc(old, hWnd, msg, wParam, lParam)
+    If i >= 0 Then BasicFrTerm(i)
+    If msg = &H82 Then BasicFrDrop(hWnd)
+End Function
+
+Sub BasicFrTerm(i As Long)
+    Dim w As *FINDREPLACE
+    w = g_frW(i)
+    If (w->Flags And FR_DIALOGTERM) <> 0 Then BasicFrEnd(i)
+End Sub
+
+' WM_NCDESTROY：窓 h につないだものをみな捨てる
+Sub BasicFrDrop(h As HWND)
+    Dim i As Long
+    For i = 0 To 7
+        If g_frW(i) <> 0 And g_frWnd(i) = h Then BasicFrEnd(i)
+    Next
+End Sub
+
+' 写しを捨て、その窓につないだものが残っていなければ元の窓手続きに戻す
+Sub BasicFrEnd(i As Long)
+    Dim h As HWND, old As VoidPtr
+    h = g_frWnd(i)
+    old = g_frOld(i)
+    free(g_frW(i))
+    g_frW(i) = 0
+    If BasicFrOld(h) <> 0 Then Exit Sub
+    If GetWindowLong(h, -4) = AddressOf(BasicFrProc) As LONG_PTR Then SetWindowLongPtr(h, -4, old As LONG_PTR)
+End Sub
