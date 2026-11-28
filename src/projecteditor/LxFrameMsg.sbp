@@ -1,0 +1,257 @@
+' LxFrameMsg - Linux 版のメッセージ欄（MessageWnd.sbp の代わり）とメッセージボックス（-linux のときだけ）。
+' 変数は LxFrame.sbp にある。
+
+#ifdef _LINUX
+
+' == メッセージ欄（MessageWnd.sbp の代わり） ==
+
+Function MessageWnd_IsAlive() As Long
+    MessageWnd_IsAlive = 0
+    If hMessageWnd <> 0 And g_lxsMsgShow <> 0 Then MessageWnd_IsAlive = 1
+End Function
+
+Sub MessageWnd_Open(hOwner As HWND)
+    If hMessageWnd = 0 Then hMessageWnd = Ux_ViewNew(1)
+    g_lxsMsgShow = 1
+    g_lxsMsgSel = -1
+    LxShell_Layout()
+End Sub
+
+Sub LxShell_MsgClose()
+    g_lxsMsgShow = 0
+    LxShell_Layout()
+    LxShell_FocusDoc()
+End Sub
+
+Function LxShell_MsgLineCount() As Long
+    Dim p As *Byte, i As Long, n As Long
+    n = 1
+    p = StrPtr(g_lxsMsgText)
+    For i = 0 To Len(g_lxsMsgText) - 1
+        If p[i] = 10 And i < Len(g_lxsMsgText) - 1 Then n = n + 1
+    Next
+    LxShell_MsgLineCount = n
+End Function
+
+' k 行目（0 始まり。CR は取る）
+Function LxShell_MsgLine$(k As Long) As String
+    Dim p As *Byte, i As Long, n As Long, st As Long
+    LxShell_MsgLine$ = ""
+    p = StrPtr(g_lxsMsgText)
+    n = 0
+    st = 0
+    For i = 0 To Len(g_lxsMsgText)
+        If i = Len(g_lxsMsgText) Or p[i] = 10 Then
+            If n = k Then
+                If i > st Then
+                    LxShell_MsgLine$ = Mid$(g_lxsMsgText, st + 1, i - st)
+                    If Right$(LxShell_MsgLine$, 1) = Chr$(13) Then LxShell_MsgLine$ = Left$(LxShell_MsgLine$, Len(LxShell_MsgLine$) - 1)
+                End If
+                Exit Function
+            End If
+            n = n + 1
+            st = i + 1
+        End If
+    Next
+End Function
+
+Function LxShell_MsgRows() As Long
+    LxShell_MsgRows = (LXS_MSG_H - LXS_MSGHDR_H - 4) \ LXS_MSG_LINE
+    If LxShell_MsgRows < 1 Then LxShell_MsgRows = 1
+End Function
+
+Sub LxShell_MsgClamp()
+    Dim mx As Long
+    mx = LxShell_MsgLineCount() - LxShell_MsgRows()
+    If mx < 0 Then mx = 0
+    If g_lxsMsgTop > mx Then g_lxsMsgTop = mx
+    If g_lxsMsgTop < 0 Then g_lxsMsgTop = 0
+    If hMessageWnd <> 0 Then Ui_VScrollSet(hMessageWnd, 0, LxShell_MsgLineCount() - 1, LxShell_MsgRows(), g_lxsMsgTop)
+End Sub
+
+Sub MessageWnd_SetText(text As String)
+    If MessageWnd_IsAlive() = 0 Then Exit Sub
+    g_lxsMsgText = text
+    g_lxsMsgSel = -1
+    g_lxsMsgTop = LxShell_MsgLineCount()
+    LxShell_MsgClamp()
+    g_uxDirty = 1
+End Sub
+
+Sub MessageWnd_Append(text As String)
+    If MessageWnd_IsAlive() = 0 Then Exit Sub
+    MessageWnd_SetText(g_lxsMsgText + text)
+End Sub
+
+Sub LxShell_DrawMsg()
+    Dim top As Long, k As Long, y As Long, rows As Long, h As HDC
+    If g_lxsMsgShow = 0 Or hMessageWnd = 0 Then Exit Sub
+    Ux_TargetWindow()
+    top = g_uxH - LXS_MSG_H
+    Ux_FillAbs(0, top, g_uxW, top + LXS_MSGHDR_H, &HE4E4E8)
+    Ux_FillAbs(0, top, g_uxW, top + 1, &HB4B4BE)
+    Ux_TextRun(UX_FONT_GUI, UiText$(UI_MSG_TITLE), 8, top + 3, &H303030, 1)
+    Ux_TextRun(UX_FONT_GUI, "×", g_uxW - LXS_TABX_W, top + 3, &H808080, 1)
+    LxShell_MsgClamp()
+    h = hMessageWnd As HDC
+    Ui_Fill(h, 0, 0, g_uxW, LXS_MSG_H, RGB(255, 255, 255))
+    Ui_SelectFont(h, UX_FONT_GUI As HFONT)
+    Ui_TextColor(h, RGB(0, 0, 0))
+    rows = LxShell_MsgRows()
+    For k = 0 To rows
+        y = 2 + k * LXS_MSG_LINE
+        If g_lxsMsgTop + k = g_lxsMsgSel Then Ui_Fill(h, 0, y, g_uxW, y + LXS_MSG_LINE, RGB(204, 228, 247))
+        Ui_Text(h, 6, y + 1, LxShell_MsgLine$(g_lxsMsgTop + k))
+    Next
+    Ux_DrawSb(hMessageWnd)
+End Sub
+
+' メッセージ欄の見出しかその中を押した。ダブルクリック（または 1 回でも）で診断の行へ飛ぶ
+Sub LxShell_MsgClick(ByVal x As Long, ByVal y As Long, ByVal dbl As Long)
+    Dim top As Long, k As Long
+    top = g_uxH - LXS_MSG_H
+    If y < top + LXS_MSGHDR_H Then
+        If x >= g_uxW - LXS_TABX_W - 4 Then LxShell_MsgClose()
+        Exit Sub
+    End If
+    k = g_lxsMsgTop + (y - top - LXS_MSGHDR_H - 2) \ LXS_MSG_LINE
+    If k < 0 Or k >= LxShell_MsgLineCount() Then Exit Sub
+    g_lxsMsgSel = k
+    g_uxDirty = 1
+    MsgJump_Apply(LxShell_MsgLine$(k))
+    LxShell_FocusDoc()
+End Sub
+
+' == メッセージボックス ==
+
+Function LxShell_BoxLines() As Long
+    Dim p As *Byte, i As Long
+    LxShell_BoxLines = 1
+    p = StrPtr(g_lxsBoxText)
+    For i = 0 To Len(g_lxsBoxText) - 1
+        If p[i] = 10 Then LxShell_BoxLines = LxShell_BoxLines + 1
+    Next
+End Function
+
+Function LxShell_BoxLine$(k As Long) As String
+    Dim save As String
+    save = g_lxsMsgText
+    g_lxsMsgText = g_lxsBoxText
+    LxShell_BoxLine$ = LxShell_MsgLine$(k)
+    g_lxsMsgText = save
+End Function
+
+Function LxShell_BtnText$(id As Long) As String
+    LxShell_BtnText$ = "OK"
+    If id = IDCANCEL Then LxShell_BtnText$ = UiText$(UI_BTN_CANCEL)
+    If id = IDYES Then LxShell_BtnText$ = UiText$(UI_BTN_YES)
+    If id = IDNO Then LxShell_BtnText$ = UiText$(UI_BTN_NO)
+End Function
+
+Sub LxShell_DrawBox()
+    Dim n As Long, k As Long, w As Long, h As Long, x0 As Long, y0 As Long, tw As Long, bx As Long
+    n = LxShell_BoxLines()
+    w = Ux_TextRun(UX_FONT_GUI, g_lxsBoxCap, 0, 0, 0, 0) + 40
+    For k = 0 To n - 1
+        tw = Ux_TextRun(UX_FONT_GUI, LxShell_BoxLine$(k), 0, 0, 0, 0) + 40
+        If tw > w Then w = tw
+    Next
+    If w < 300 Then w = 300
+    If w > g_uxW - 20 Then w = g_uxW - 20
+    h = 34 + n * 18 + 50
+    x0 = (g_uxW - w) \ 2
+    y0 = (g_uxH - h) \ 3
+    If y0 < 4 Then y0 = 4
+    Ux_TargetWindow()
+    Ux_FillAbs(x0 + 4, y0 + 4, x0 + w + 4, y0 + h + 4, &HA0A0A0)
+    Ux_FillAbs(x0, y0, x0 + w, y0 + h, &HFFFFFF)
+    Ux_FillAbs(x0, y0, x0 + w, y0 + 26, &HE4E4E8)
+    Ux_FrameAbs(x0, y0, x0 + w, y0 + h, &H808080)
+    Ux_TextRun(UX_FONT_GUI, g_lxsBoxCap, x0 + 10, y0 + 6, &H202020, 1)
+    For k = 0 To n - 1
+        Ux_TextRun(UX_FONT_GUI, LxShell_BoxLine$(k), x0 + 20, y0 + 38 + k * 18, 0, 1)
+    Next
+    g_lxsBoxBtnT = y0 + h - 38
+    g_lxsBoxBtnB = y0 + h - 12
+    bx = x0 + w - 16
+    For k = g_lxsBoxBtnN - 1 To 0 Step -1
+        g_lxsBoxBtnR(k) = bx
+        g_lxsBoxBtnL(k) = bx - 84
+        bx = bx - 92
+        Ux_FillAbs(g_lxsBoxBtnL(k), g_lxsBoxBtnT, g_lxsBoxBtnR(k), g_lxsBoxBtnB, &HE6E6E6)
+        If k = g_lxsBoxFocus Then
+            Ux_FrameAbs(g_lxsBoxBtnL(k), g_lxsBoxBtnT, g_lxsBoxBtnR(k), g_lxsBoxBtnB, &H0078D7)
+        Else
+            Ux_FrameAbs(g_lxsBoxBtnL(k), g_lxsBoxBtnT, g_lxsBoxBtnR(k), g_lxsBoxBtnB, &HA0A0A0)
+        End If
+        tw = Ux_TextRun(UX_FONT_GUI, LxShell_BtnText$(g_lxsBoxBtnId(k)), 0, 0, 0, 0)
+        Ux_TextRun(UX_FONT_GUI, LxShell_BtnText$(g_lxsBoxBtnId(k)), g_lxsBoxBtnL(k) + (84 - tw) \ 2, g_lxsBoxBtnT + 6, 0, 1)
+    Next
+End Sub
+
+Sub LxShell_BoxClick(ByVal x As Long, ByVal y As Long)
+    Dim k As Long
+    If y < g_lxsBoxBtnT Or y >= g_lxsBoxBtnB Then Exit Sub
+    For k = 0 To g_lxsBoxBtnN - 1
+        If x >= g_lxsBoxBtnL(k) And x < g_lxsBoxBtnR(k) Then g_lxsModalRet = g_lxsBoxBtnId(k)
+    Next
+End Sub
+
+' やめる（Esc・閉じる）ときの答え: キャンセルがあればそれ、無ければ最後のボタン
+Function LxShell_BoxCancel() As Long
+    Dim k As Long
+    LxShell_BoxCancel = g_lxsBoxBtnId(g_lxsBoxBtnN - 1)
+    For k = 0 To g_lxsBoxBtnN - 1
+        If g_lxsBoxBtnId(k) = IDCANCEL Then LxShell_BoxCancel = IDCANCEL
+    Next
+End Function
+
+Sub LxShell_BoxKey(ByVal vk As Long, ByVal ks As Long)
+    Dim k As Long
+    If vk = VK_RETURN Or vk = VK_SPACE Then g_lxsModalRet = g_lxsBoxBtnId(g_lxsBoxFocus)
+    If vk = VK_ESCAPE Then g_lxsModalRet = LxShell_BoxCancel()
+    If vk = VK_TAB Or vk = VK_RIGHT Then g_lxsBoxFocus = (g_lxsBoxFocus + 1) Mod g_lxsBoxBtnN
+    If vk = VK_LEFT Then g_lxsBoxFocus = (g_lxsBoxFocus + g_lxsBoxBtnN - 1) Mod g_lxsBoxBtnN
+    For k = 0 To g_lxsBoxBtnN - 1
+        If vk = &H59 And g_lxsBoxBtnId(k) = IDYES Then g_lxsModalRet = IDYES
+        If vk = &H4E And g_lxsBoxBtnId(k) = IDNO Then g_lxsModalRet = IDNO
+    Next
+    g_uxDirty = 1
+End Sub
+
+' MessageBox と同じ答え（IDOK / IDCANCEL / IDYES / IDNO）。X が無ければ最初のボタン
+Function LxShell_MsgBox(text As String, cap As String, ByVal typ As DWord) As Long
+    Dim k As Long
+    k = (typ And &HF) As Long
+    g_lxsBoxBtnN = 1
+    g_lxsBoxBtnId(0) = IDOK
+    If k = 1 Then
+        g_lxsBoxBtnN = 2
+        g_lxsBoxBtnId(1) = IDCANCEL
+    ElseIf k = 3 Then
+        g_lxsBoxBtnN = 3
+        g_lxsBoxBtnId(0) = IDYES
+        g_lxsBoxBtnId(1) = IDNO
+        g_lxsBoxBtnId(2) = IDCANCEL
+    ElseIf k = 4 Then
+        g_lxsBoxBtnN = 2
+        g_lxsBoxBtnId(0) = IDYES
+        g_lxsBoxBtnId(1) = IDNO
+    End If
+    LxShell_MsgBox = g_lxsBoxBtnId(0)
+    If g_uxDpy = 0 Or g_lxsModal <> 0 Then Exit Function
+    g_lxsBoxText = text
+    g_lxsBoxCap = cap
+    g_lxsBoxFocus = 0
+    g_lxsModal = LXS_MODAL_MSGBOX
+    g_lxsModalRet = 0
+    g_uxDirty = 1
+    While g_lxsModalRet = 0 And g_lxQuit = 0
+        LxShell_PumpOne()
+    Wend
+    g_lxsModal = 0
+    g_uxDirty = 1
+    If g_lxsModalRet <> 0 Then LxShell_MsgBox = g_lxsModalRet
+End Function
+
+#endif
