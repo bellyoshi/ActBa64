@@ -14,10 +14,10 @@ Dim g_runKeepConsole As Long
 Dim g_targetMenuInitialized As Long
 
 Function EditorBuild_ExeDir$() As String
-    Dim path(259) As Byte
-    Dim dir(259) As Byte
+    Dim path(1023) As Byte
+    Dim dir(1023) As Byte
     EditorBuild_ExeDir$ = ""
-    If ExeModuleFile(VarPtr(path), 260) <= 0 Then Exit Function
+    If ExeModuleFile(VarPtr(path), 1024) <= 0 Then Exit Function
     If ExeDirOf(VarPtr(path), VarPtr(dir)) = 0 Then Exit Function
     EditorBuild_ExeDir$ = PathEnc_Utf8$(VarPtr(dir), lstrlen(VarPtr(dir)))
 End Function
@@ -304,13 +304,30 @@ Sub EditorBuild_ArmSi(hWrite As HANDLE)
 #endif
 End Sub
 
-' コマンドラインの UTF-8 を CP932 にして CreateProcessA へ（子は GetCommandLineA で読む）
+' コマンドラインの UTF-8 をワイドにして CreateProcessW へ（子は GetCommandLine を UTF-8 で読む）。
+' 妥当な UTF-8 でないときと -linux は、これまでどおり CP932 にして A 版へ
 Function EditorBuild_CreateProc(cmd As *Byte, inherit As Long, flags As DWord, si As *Byte, pi As *Byte) As Long
     Dim a As *Byte
+#ifndef _LINUX
+    If EditorBuild_CreateWide(cmd, inherit, flags, si, pi, EditorBuild_CreateProc) <> 0 Then Exit Function
+#endif
     a = BasicAnsiPtr(cmd)
     EditorBuild_CreateProc = EditorBuild_CreateProcess(0, a, 0, 0, inherit, flags, 0, 0, si, pi)
     BasicFreeAnsi(a, cmd)
 End Function
+
+#ifndef _LINUX
+' W 版で起こしたら 1（結果は r）。妥当な UTF-8 でなければ 0
+Function EditorBuild_CreateWide(cmd As *Byte, inherit As Long, flags As DWord, si As *Byte, pi As *Byte, ByRef r As Long) As Long
+    Dim w As *Byte
+    EditorBuild_CreateWide = 0
+    w = BasicPathWide(cmd)
+    If w = 0 Then Exit Function
+    r = CreateProcessW(0, w, 0, 0, inherit, flags, 0, 0, ByVal si, ByVal pi)
+    free(w)
+    EditorBuild_CreateWide = 1
+End Function
+#endif
 
 Function EditorBuild_StartProcess(cmdLine As String, hWrite As HANDLE, ByRef hProcess As HANDLE) As Long
     EditorBuild_ArmSi(hWrite)
