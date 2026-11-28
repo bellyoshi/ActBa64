@@ -22,19 +22,6 @@ Const AB4_CHECK_STYLE = &H50010003
 Const AB4_PUSH_STYLE = &H50010000
 Const AB4_DEFPUSH_STYLE = &H50010001
 
-Type AB4BrowseInfo
-    hwndOwner As HWND
-    pidlRoot As VoidPtr
-    pszDisplayName As *Byte
-    lpszTitle As *Byte
-    ulFlags As DWord
-    lpfn As VoidPtr
-    lParam As LPARAM
-    iImage As Long
-End Type
-
-Declare Function AB4_SHBrowseForFolderW Lib "shell32.dll" Alias "SHBrowseForFolderW" (ByRef lpbi As AB4BrowseInfo) As VoidPtr
-Declare Function AB4_SHGetPathFromIDListW Lib "shell32.dll" Alias "SHGetPathFromIDListW" (ByVal pidl As VoidPtr, ByVal pszPath As *Byte) As Long
 Declare Function AB4_SHGetSpecialFolderPathW Lib "shell32.dll" Alias "SHGetSpecialFolderPathW" (ByVal hWnd As HWND, ByVal pszPath As *Byte, ByVal csidl As Long, ByVal fCreate As Long) As Long
 Declare Function AB4_lstrlenW Lib "kernel32" Alias "lstrlenW" (ByVal lpString As *Byte) As Long
 Declare Sub AB4_CoTaskMemFree Lib "ole32.dll" Alias "CoTaskMemFree" (ByVal pv As VoidPtr)
@@ -54,13 +41,11 @@ Dim g_ab4Name As String           ' 作ったプロジェクトの名前
 
 ' 「新しいフォーム」の次（開くの前）に差し込む。2 回目からは表示名だけ更新
 Sub EditorAB4_ApplyMenu()
-    Dim wide As *Byte, chars As Long
+    Dim s As String
     If g_ab4Menu <> 0 Then EditorMenu_SetCmd(hMenu_M_MAIN_0, IDM_AB4PROJ, UI_MENU_AB4PROJ)
     If g_ab4Menu <> 0 Then Exit Sub
-    wide = Enc_Utf8ToWide(UiText$(UI_MENU_AB4PROJ), chars)
-    If wide = 0 Then Exit Sub
-    InsertMenuW(hMenu_M_MAIN_0, IDM_FILEOPEN, MF_BYCOMMAND Or MF_STRING, IDM_AB4PROJ, wide)
-    free(wide)
+    s = UiText$(UI_MENU_AB4PROJ)
+    InsertMenu(hMenu_M_MAIN_0, IDM_FILEOPEN, MF_BYCOMMAND Or MF_STRING, IDM_AB4PROJ, StrPtr(s))
     g_ab4Menu = 1
 End Sub
 
@@ -137,19 +122,20 @@ End Sub
 
 ' ---- 参照 ----
 
+' 標準の SHGetPathFromIDList は UTF-8 で書く（MAX_PATH に入らなければ CP932。PathEnc_Utf8$ が直す）
 Sub EditorAB4_BrowseSet(pidl As VoidPtr)
-    Dim wide[1040] As Byte
-    wide[0] = 0 : wide[1] = 0
-    If AB4_SHGetPathFromIDListW(pidl, VarPtr(wide)) <> 0 Then Setting_SetUtf8Text(GetDlgItem(g_hAB4, IDC_AB4_DIR), Enc_WideToUtf8$(VarPtr(wide), AB4_lstrlenW(VarPtr(wide))))
+    Dim path[MAX_PATH] As Byte
+    path[0] = 0
+    If SHGetPathFromIDList(pidl, VarPtr(path)) <> 0 Then Setting_SetUtf8Text(GetDlgItem(g_hAB4, IDC_AB4_DIR), PathEnc_Utf8$(VarPtr(path), lstrlen(VarPtr(path))))
     AB4_CoTaskMemFree(pidl)
 End Sub
 
+' 標準の SHBrowseForFolder は UTF-8 の題を W 版に渡す
 Sub EditorAB4_Browse()
-    Dim bi As AB4BrowseInfo, title As *Byte, chars As Long, pidl As VoidPtr
-    title = Enc_Utf8ToWide(UiText$(UI_AB4_BROWSE_TITLE), chars)
-    bi.hwndOwner = g_hAB4 : bi.lpszTitle = title : bi.ulFlags = &H41   ' BIF_RETURNONLYFSDIRS Or BIF_NEWDIALOGSTYLE
-    pidl = AB4_SHBrowseForFolderW(bi)
-    If title <> 0 Then free(title)
+    Dim bi As BROWSEINFO, title As String, pidl As VoidPtr
+    title = UiText$(UI_AB4_BROWSE_TITLE)
+    bi.hwndOwner = g_hAB4 : bi.lpszTitle = StrPtr(title) : bi.ulFlags = &H41   ' BIF_RETURNONLYFSDIRS Or BIF_NEWDIALOGSTYLE
+    pidl = SHBrowseForFolder(bi)
     If pidl <> 0 Then EditorAB4_BrowseSet(pidl)
 End Sub
 
@@ -209,7 +195,7 @@ Function EditorAB4Proc(hWnd As HWND, dwMsg As DWord, wParam As WPARAM, lParam As
     If dwMsg = WM_CLOSE Then g_ab4Done = 1
     If dwMsg = WM_COMMAND Then EditorAB4_OnCmd(LOWORD(wParam), HIWORD(wParam))
     If dwMsg = WM_CLOSE Or dwMsg = WM_COMMAND Then EditorAB4Proc = 0
-    If dwMsg <> WM_CLOSE And dwMsg <> WM_COMMAND Then EditorAB4Proc = Dlg_DefWindowProcW(hWnd, dwMsg, wParam, lParam)
+    If dwMsg <> WM_CLOSE And dwMsg <> WM_COMMAND Then EditorAB4Proc = DefWindowProc(hWnd, dwMsg, wParam, lParam)
 End Function
 
 ' Enter は「作成」、Esc は閉じる

@@ -1,0 +1,166 @@
+' TextBuffer の行オフセット表（g_lineOff）の再構築と、行番号と位置の変換
+' g_textBuf / g_lineOff は TextBuffer.sbp
+
+Sub TextBuf_AddLineBreak(ByVal nextStart As Long)
+    LineOff_EnsureCap(g_lineOff.count + 1)
+    g_lineOff.offsets[g_lineOff.count] = nextStart
+    g_lineOff.count = g_lineOff.count + 1
+End Sub
+
+Sub TextBuf_RebuildLineOffsets()
+    Dim leftLen As Long
+    Dim rightLen As Long
+    Dim docLen As Long
+    Dim logical As Long
+    Dim b As Long
+    Dim nb As Long
+    Dim p As *Byte
+
+    TextBuf_EnsureInit()
+    LineOff_EnsureCap(1)
+    g_lineOff.offsets[0] = 0
+    g_lineOff.count = 1
+
+    p = g_textBuf.buffer
+    leftLen = g_textBuf.gap_start
+    rightLen = g_textBuf.capacity - g_textBuf.gap_end
+    docLen = leftLen + rightLen
+
+    logical = 0
+    While logical < docLen
+        b = TextBuf_BufByte(p, logical, leftLen)
+        If b = 13 And logical + 1 < docLen Then
+            nb = TextBuf_BufByte(p, logical + 1, leftLen)
+            If nb = 10 Then
+                logical = logical + 1
+                TextBuf_AddLineBreak(logical + 1)
+                logical = logical + 1
+                Continue While
+            End If
+        End If
+        If b = 10 Or b = 13 Then TextBuf_AddLineBreak(logical + 1)
+        logical = logical + 1
+    Wend
+End Sub
+
+Function TextBuf_LineCount() As Long
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+    TextBuf_LineCount = g_lineOff.count
+End Function
+
+Function TextBuf_GetLineStart(ByVal lineNo As Long) As Long
+    TextBuf_GetLineStart = 0
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+    If lineNo < 1 Or lineNo > g_lineOff.count Then Exit Function
+    TextBuf_GetLineStart = g_lineOff.offsets[lineNo - 1]
+End Function
+
+Function TextBuf_GetLineEnd(ByVal lineNo As Long) As Long
+    Dim docLen As Long
+    Dim e As Long
+
+    TextBuf_GetLineEnd = 0
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+    If lineNo < 1 Or lineNo > g_lineOff.count Then Exit Function
+
+    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+    If lineNo < g_lineOff.count Then
+        e = g_lineOff.offsets[lineNo]
+    Else
+        e = docLen
+    End If
+
+    While e > g_lineOff.offsets[lineNo - 1]
+        If TextBuf_GetByte(e - 1) = 10 Or TextBuf_GetByte(e - 1) = 13 Then
+            e = e - 1
+        Else
+            Exit While
+        End If
+    Wend
+
+    TextBuf_GetLineEnd = e
+End Function
+
+Function TextBuf_GetLinePrefix$(ByVal lineNo As Long, ByVal endIndex As Long) As String
+    Dim s As Long
+    Dim e As Long
+    Dim n As Long
+    Dim i As Long
+    Dim out As *Byte
+
+    TextBuf_GetLinePrefix$ = ""
+    s = TextBuf_GetLineStart(lineNo)
+    e = TextBuf_GetLineEnd(lineNo)
+    If endIndex < s Then Exit Function
+    If endIndex > e Then endIndex = e
+    n = endIndex - s
+    If n <= 0 Then Exit Function
+
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+    For i = 0 To n - 1
+        out[i] = TextBuf_GetByte(s + i)
+    Next
+    out[n] = 0
+    TextBuf_GetLinePrefix$ = Enc_DupCStr$(out, n)
+    free(out)
+End Function
+
+Function TextBuf_GetLineText$(ByVal lineNo As Long) As String
+    Dim s As Long
+    Dim e As Long
+    Dim n As Long
+    Dim i As Long
+    Dim out As *Byte
+
+    TextBuf_GetLineText$ = ""
+    s = TextBuf_GetLineStart(lineNo)
+    e = TextBuf_GetLineEnd(lineNo)
+    If e < s Then Exit Function
+    n = e - s
+    If n <= 0 Then Exit Function
+
+    out = malloc(n + 1)
+    If out = 0 Then Exit Function
+
+    For i = 0 To n - 1
+        out[i] = TextBuf_GetByte(s + i)
+    Next
+    out[n] = 0
+
+    TextBuf_GetLineText$ = Enc_DupCStr$(out, n)
+    free(out)
+End Function
+
+Function TextBuf_GetLineAtIndex(ByVal logicalIndex As Long) As Long
+    Dim i As Long
+    Dim docLen As Long
+
+    TextBuf_GetLineAtIndex = 1
+    TextBuf_EnsureInit()
+    If g_lineOff.count <= 0 Then
+        TextBuf_RebuildLineOffsets()
+    End If
+
+    docLen = g_textBuf.gap_start + (g_textBuf.capacity - g_textBuf.gap_end)
+    If logicalIndex < 0 Then logicalIndex = 0
+    If logicalIndex > docLen Then logicalIndex = docLen
+
+    i = g_lineOff.count
+    While i >= 1
+        If logicalIndex >= g_lineOff.offsets[i - 1] Then
+            TextBuf_GetLineAtIndex = i
+            Exit Function
+        End If
+        i = i - 1
+    Wend
+End Function

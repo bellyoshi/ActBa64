@@ -1,5 +1,42 @@
 # リリースノート
 
+## v0.2.1（v0.2.0 からの変更点）
+
+v0.2.0 で残っていた A 版の API を UTF-8 にそろえ、ProjectEditor の AB4 プロジェクト作成で作れる種類を増やした更新です。
+
+### 文字化け
+
+v0.2.0 に続けて、日本語のパスや文字列が CP932 になっていた API を UTF-8 にそろえました（[unicode-api.md](./unicode-api.md)）。戻り値の数え方は v0.2.0 の **互換性** と同じく UTF-8 のバイト数です。
+
+- 印刷（`PrintDlg` / `PageSetupDlg` / `CreateDC` / `ResetDC`）を W 版にしました。日本語の名前のプリンターも開けます。`hDevMode` / `hDevNames` の中身はこれまでどおり A 版の形で、名前は UTF-8 です。
+- `mciSendCommand` が、日本語や CP932 にない文字の入ったファイル名の音・動画も開けるようになりました（`MCI_OPEN` / `MCI_LOAD` / `MCI_SAVE` のファイル名と `MCI_INFO` / `MCI_SYSINFO` の答えが UTF-8）。
+- 検索ダイアログ（`FindText`）を W 版にしました。日本語や CP932 にない文字（𠮷 など）の検索語も、呼び出し側のバッファへ UTF-8 で届きます。通知の `lParam` は呼び出し側の `FINDREPLACE` のままです。
+- WinINet（`InternetOpen` / `InternetConnect` / `FtpGetFile` / `FtpSetCurrentDirectory` / `FtpGetCurrentDirectory` / `FtpFindFirstFile` / `InternetFindNextFile`）を W 版にしました。日本語のファイル名・フォルダ名を UTF-8 で扱えます。`FtpGetCurrentDirectory` の 3 つ目の引数は `*DWord`（`VarPtr` で渡す）です。
+- 受け皿に入らない文字列を UTF-8 で切って書くとき、最後の文字が欠けていなくても 1 文字多く落としていたのを直しました。
+- `SystemParametersInfo` でシステムのフォント（`NONCLIENTMETRICS` / `ICONMETRICS` / アイコンの題のフォント）を読み書きするとき、`lfFaceName` が UTF-8 になりました（「メイリオ」などを `CreateFontIndirect` にそのまま渡せます）。壁紙のパスも UTF-8 です。
+- ステータスバーの `SB_GETTEXT` / `SB_GETTEXTLENGTH` / `SB_GETTIPTEXT` が UTF-8 を返すようになりました（長さは UTF-8 のバイト数）。
+- コンパイラ・ProjectEditor を CP932 にない文字（𠮷 など）の入ったフォルダーに置いても動くようになりました（実行ファイルのパスを UTF-8 で読む）。ProjectEditor がコンパイラ・abdbg を起こすコマンドライン、N88 の一時フォルダー、新しいプロジェクトの一時フォルダーの片付けも W 版です。コンパイラが見せる見つからない `#include` のパスと、`-debug` のソースのパスも UTF-8 です。
+- `GetProp` / `SetProp` / `RemoveProp` の名前と、`GetStartupInfo` の `lpTitle` / `lpDesktop` が UTF-8 になりました。
+- ProjectEditor が自分で Declare していた W 版の API（メニュー・メッセージボックス・ダイアログ・フォルダーの選択・デザイナーのフォント）を、標準の UTF-8 のラッパーにしました。デザイナーのフォント名は UTF-8 で、31 バイトに入らないときは CP932 にします。
+- `IsChar*` は 1 バイトを受けるので A 版のままです（ASCII だけに使ってください）。
+
+### ProjectEditor
+
+- AB4 プロジェクトの作成で「EXE - ベースなし」と「DLL - プロシージャ ライブラリ」を作れるようにしました。どちらも AB 4.20 が作るものとバイト単位で同じです。ベースなし・DLL では「Hello world! を表示」は灰色になります。ProjectCmd に `-noBase` / `-dll` を足しました（[projecteditor.md](./projecteditor.md)）。
+- DLL のプロジェクトでは、デバッグのメニューとツールバーのデバッグのボタンを灰色にし、F5 / F10 / F11 でもデバッグ実行を始めません。
+- メッセージの窓を MDI の子にして下に置きました。デバッグの窓は、デバッグが終わったら隠します。
+
+### テスト
+
+- UTF-8 の API のユニットテスト `PrintUtf8Test`・`FindTextUtf8Test`・`SpiUtf8Test`・`PropUtf8Test` を足しました。
+- 音の出力デバイスが無いとき（CI）は MCI のテストを、プリンターが無いときと同じく飛ばします。
+- CI（ANSI コードページ 1252・8.3 の短い名前の TEMP）で落ちていた `FileUtf8Test`・`ShellUtf8Test` を直しました。
+
+### 内部の整理（動きは同じ）
+
+- Linux 版 ProjectEditor の `UiX11.sbp` と `LxFrame.sbp` を、それぞれ 3 つのファイルに分けました。
+- ツールバー・abdbg の `s` / `n`・AB4 プロジェクト作成のコードを整理しました。
+
 ## v0.2.0（v0.1.9 からの変更点）
 
 Windows の API を UTF-8 にそろえた更新です。日本語や CP932 にない文字（𠮷 など）のパス・ファイル名・窓の文字列が化けなくなりました。あわせて 64bit の exe に例外の巻き戻し情報を出し、ProjectEditor にツールバーを足しました。パスや文字列を返す API の戻り値の数え方が変わるので、下の **互換性** を見てください。
@@ -22,13 +59,6 @@ A 版の API をそのまま公開していて、日本語のパスや文字列�
 - フォントのダイアログ（`ChooseFont`）を W 版にし、`GetObject` で読んだフォント名も UTF-8 で返します（以前は CP932）。
 - `lstrcmpi` / `CompareString` / `CharUpper` / `CharLower` が、日本語や全角の英字を含む UTF-8 の文字列を正しく比べ・変えます。
 - `RegisterWindowMessage` / `RegisterClipboardFormat` / `GetClipboardFormatName` / `SetComputerName` / `GetFileTitle` / `GetCompressedFileSize` / `CreateMailslot` / `ExtractAssociatedIcon` / `mciGetErrorString` を W 版にしました。
-- 印刷（`PrintDlg` / `PageSetupDlg` / `CreateDC` / `ResetDC`）を W 版にしました。日本語の名前のプリンターも開けます。`hDevMode` / `hDevNames` の中身はこれまでどおり A 版の形で、名前は UTF-8 です。
-- `mciSendCommand` が、日本語や CP932 にない文字の入ったファイル名の音・動画も開けるようになりました（`MCI_OPEN` / `MCI_LOAD` / `MCI_SAVE` のファイル名と `MCI_INFO` / `MCI_SYSINFO` の答えが UTF-8）。
-- 検索ダイアログ（`FindText`）を W 版にしました。日本語や CP932 にない文字（𠮷 など）の検索語も、呼び出し側のバッファへ UTF-8 で届きます。通知の `lParam` は呼び出し側の `FINDREPLACE` のままです。
-- WinINet（`InternetOpen` / `InternetConnect` / `FtpGetFile` / `FtpSetCurrentDirectory` / `FtpGetCurrentDirectory` / `FtpFindFirstFile` / `InternetFindNextFile`）を W 版にしました。日本語のファイル名・フォルダ名を UTF-8 で扱えます。`FtpGetCurrentDirectory` の 3 つ目の引数は `*DWord`（`VarPtr` で渡す）です。
-- 受け皿に入らない文字列を UTF-8 で切って書くとき、最後の文字が欠けていなくても 1 文字多く落としていたのを直しました。
-- `SystemParametersInfo` でシステムのフォント（`NONCLIENTMETRICS` / `ICONMETRICS` / アイコンの題のフォント）を読み書きするとき、`lfFaceName` が UTF-8 になりました（「メイリオ」などを `CreateFontIndirect` にそのまま渡せます）。壁紙のパスも UTF-8 です。
-- ステータスバーの `SB_GETTEXT` / `SB_GETTEXTLENGTH` / `SB_GETTIPTEXT` が UTF-8 を返すようになりました（長さは UTF-8 のバイト数）。
 
 **互換性**: パスや文字列を返す API の戻り値と書き戻す値は、文字数ではなく UTF-8 のバイト数になります。サブクラスの手続きで `CallWindowProcA` を自分で Declare して使っているときは、無印の `CallWindowProc` に替えてください。CP932 のバイト列が返ると決めて自分で UTF-8 に直しているプログラムは、そのまま動きます（妥当な UTF-8 は直さない作りなら）。
 

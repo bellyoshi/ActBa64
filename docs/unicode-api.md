@@ -2,7 +2,7 @@
 
 ActBa64 の文字列は UTF-8 です（[ActiveBasic との相違 §文字列の内部表現](./different.md#文字列の内部表現)）。Windows の A 版の API は文字列を CP932 として扱うので、そのまま渡すと文字化けします。標準ヘッダ（`Include\default`）の末尾に `A` の付かない API は、ここに挙げるラッパーが UTF-8 とワイド文字（UTF-16）のあいだを変換します。末尾 `A` の Declare は変換しません。
 
-実体は `Include\default` の `BasicUtf8.abp` / `BasicUtf8Msg.abp` / `BasicCmd.abp` / `BasicPath.abp` / `BasicFileW.abp` / `BasicFindW.abp` / `BasicSysW.abp` / `BasicShellW.abp` / `BasicShFolderW.abp` / `BasicRegW.abp` / `BasicOfnW.abp` / `BasicFontW.abp` / `BasicMiscW.abp` / `BasicCaseW.abp` / `BasicMciW.abp` / `BasicPrintW.abp` / `BasicPrintDlgW.abp` / `BasicFindTextW.abp` / `BasicInetW.abp` / `BasicSpiW.abp` / `BasicSbW.abp` と、各 `.sbp` の Declare です。`-linux` では A 版の代わり（`Include\linux`）へ UTF-8 のまま渡します。
+実体は `Include\default` の `BasicUtf8.abp` / `BasicUtf8Msg.abp` / `BasicCmd.abp` / `BasicPath.abp` / `BasicFileW.abp` / `BasicFindW.abp` / `BasicSysW.abp` / `BasicShellW.abp` / `BasicShFolderW.abp` / `BasicRegW.abp` / `BasicOfnW.abp` / `BasicFontW.abp` / `BasicMiscW.abp` / `BasicCaseW.abp` / `BasicMciW.abp` / `BasicPrintW.abp` / `BasicPrintDlgW.abp` / `BasicFindTextW.abp` / `BasicInetW.abp` / `BasicSpiW.abp` / `BasicSbW.abp` / `BasicPropW.abp` と、各 `.sbp` の Declare です。`-linux` では A 版の代わり（`Include\linux`）へ UTF-8 のまま渡します。
 
 ## API 別の詳細
 
@@ -42,4 +42,6 @@ ActBa64 の文字列は UTF-8 です（[ActiveBasic との相違 §文字列の�
 - WinINet の `InternetOpen` / `InternetConnect` / `FtpGetFile` / `FtpSetCurrentDirectory` / `FtpGetCurrentDirectory` / `FtpFindFirstFile` / `InternetFindNextFile` は W 版。渡す文字列は UTF-8（CP932 のバイト列も読む）。`FtpGetCurrentDirectory` の答えは UTF-8 で、`lpdwCurrentDirectory`（`*DWord`）は渡すときはバイトの大きさ、返るときは書いたバイト数（入らなければ FALSE で要るバイト数）。見つけたファイルの `WIN32_FIND_DATA` は `FindFirstFile` と同じく名前を UTF-8 で書く。
 - `SystemParametersInfo` の `LOGFONT` を含む命令（`SPI_GETICONTITLELOGFONT` / `SPI_SETICONTITLELOGFONT`、`SPI_GETNONCLIENTMETRICS` / `SPI_SETNONCLIENTMETRICS`、`SPI_GETICONMETRICS` / `SPI_SETICONMETRICS`）は W 版に送る。構造体はこれまでどおり A の形（`LOGFONT` は 60 バイト、`cbSize` も A の形の 344 / 340 / 76）で、`lfFaceName` だけ UTF-8（32 バイトに入らなければ CP932）。呼ぶあいだだけワイドの形の写しを作る。壁紙（`SPI_SETDESKWALLPAPER` / `SPI_GETDESKWALLPAPER`）のパスも UTF-8（`SETWALLPAPER_DEFAULT` は A 版のまま）。ほかの命令は A 版のまま。
 - ステータスバーの `SB_GETTEXT` / `SB_GETTEXTLENGTH` / `SB_GETTIPTEXT` は W 版で読んで UTF-8 で返す。長さ（下の 16 ビット）は UTF-8 のバイト数なので、`SB_GETTEXTLENGTH` + 1 バイトの受け皿で `SB_GETTEXT` が読める。種類（上の 16 ビット）はそのまま。持ち主が描く部分（`SBT_OWNERDRAW`）は A 版のまま。
-- まだ A 版のまま（CP932）のもの: `IsChar*`（1 バイトを受ける）、`GetVersionEx` / `GetStartupInfo`（`StartDoc` は `-pAB2` の印刷が名前を渡さないので変えていない）。`#N88BASIC` の窓（`RegisterClassExA` の ANSI の窓で、メッセージの取り出しも A 版）。
+- コンパイラ・ProjectEditor・abdbg が自分で Declare していた A 版のパスの API（`GetModuleFileNameA`（`common\ExePath.abp`）、`GetFullPathNameA`、`CreateProcessA`、`CreateDirectoryA`、`GetTempPathA`、`DeleteFileA`、`RemoveDirectoryA`）は、この標準のラッパーか W 版を呼ぶ。コマンドラインが妥当な UTF-8 でないときだけ、これまでどおり CP932 にして `CreateProcessA` へ。
+- `GetProp` / `SetProp` / `RemoveProp` の名前は UTF-8（CP932 のバイト列も読む）をワイドにして W 版へ（65535 以下はアトムなのでそのまま）。`GetStartupInfo` は W 版で読み、`lpReserved` / `lpDesktop` / `lpTitle` を UTF-8 の文字列にして返す（文字列はプロセスのあいだ持っておく）。
+- まだ A 版のまま（CP932）のもの: `IsChar*`（1 バイトを受けるので、UTF-8 の多バイトの文字は判定できない。ASCII の文字だけに使う）、`GetVersionEx`（返す文字列は ASCII）。`StartDoc` は `-pAB2` の印刷が名前を渡さないので変えていない。`#N88BASIC` の窓（`RegisterClassExA` の ANSI の窓で、メッセージの取り出しも A 版）。

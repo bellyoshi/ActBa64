@@ -63,6 +63,8 @@ Sub EditorDbg_Go(hWnd As HWND)
         If g_dbgStopped <> 0 Then EditorDbg_Send("c")
         Exit Sub
     End If
+    ' DLL のプロジェクトは動かせない（F5 / F10 / F11 もメニューと同じく効かない）
+    If ProjCanRun() = 0 Then Exit Sub
     MessageWnd_Open(hWnd)
     If EditorDbg_CanTarget() <> 0 Then EditorDbg_CompileGo(hWnd)
 End Sub
@@ -196,13 +198,26 @@ Function EditorDbg_Spawn(cmd As String, dir As String) As Long
     EditorDbg_Spawn = 0
     If EditorDbg_Pipes(inR, outW) = 0 Then Exit Function
     EditorDbg_ArmSi(inR, outW)
-    EditorDbg_Spawn = EditorDbg_CreateAnsi(cmd, dir)
+    EditorDbg_Spawn = EditorDbg_CreateProc(cmd, dir)
     CloseHandle(inR)
     CloseHandle(outW)
     If EditorDbg_Spawn = 0 Then EditorDbg_CloseAll()
 End Function
 
-' コマンドラインとフォルダの UTF-8 を CP932 にして（abdbg は GetCommandLineA で読む）
+' コマンドラインとフォルダの UTF-8 をワイドにして CreateProcessW へ（abdbg は GetCommandLine を UTF-8 で読む）
+Function EditorDbg_CreateProc(cmd As String, dir As String) As Long
+    Dim a As *Byte, d As *Byte
+    a = BasicPathWide(StrPtr(cmd))
+    d = BasicPathWide(StrPtr(dir))
+    If a <> 0 And d <> 0 Then EditorDbg_CreateProc = CreateProcessW(0, a, 0, 0, 1, CREATE_NO_WINDOW, 0, d, g_dbgSi, g_dbgPi)
+    If a = 0 Or d = 0 Then EditorDbg_CreateProc = EditorDbg_CreateAnsi(cmd, dir)
+    If a <> 0 Then free(a)
+    If d <> 0 Then free(d)
+    If EditorDbg_CreateProc <> 0 Then CloseHandle(g_dbgPi.hThread)
+    If EditorDbg_CreateProc <> 0 Then g_dbgHProc = g_dbgPi.hProcess
+End Function
+
+' 妥当な UTF-8 でないときは、これまでどおり CP932 にして A 版へ
 Function EditorDbg_CreateAnsi(cmd As String, dir As String) As Long
     Dim a As *Byte, d As *Byte
     a = BasicAnsiPtr(StrPtr(cmd))
@@ -210,8 +225,6 @@ Function EditorDbg_CreateAnsi(cmd As String, dir As String) As Long
     EditorDbg_CreateAnsi = EditorDbg_CreateProcess(0, a, 0, 0, 1, CREATE_NO_WINDOW, 0, d, VarPtr(g_dbgSi), VarPtr(g_dbgPi))
     BasicFreeAnsi(a, StrPtr(cmd))
     BasicFreeAnsi(d, StrPtr(dir))
-    If EditorDbg_CreateAnsi <> 0 Then CloseHandle(g_dbgPi.hThread)
-    If EditorDbg_CreateAnsi <> 0 Then g_dbgHProc = g_dbgPi.hProcess
 End Function
 
 Sub EditorDbg_CloseAll()
