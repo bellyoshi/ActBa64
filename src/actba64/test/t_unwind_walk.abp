@@ -1,0 +1,49 @@
+' Expect: 4
+' Target: actba64
+' 64bit の exe は .pdata（関数ごとの巻き戻し情報）を持つので、OS が呼び出し履歴をたどれる。
+' 入れ子の Sub から RtlCaptureStackBackTrace で数え、exe の中の 4 段（C3 / C2 / C1 / 本体）が
+' 全部見えて、その外（kernel32 / ntdll）まで続くこと。.pdata が無いと C3 の先でたどれなくなる
+' （-actba32 は ebp の鎖でたどる）
+#console
+Declare Function RtlCaptureStackBackTrace Lib "kernel32.dll" (ByVal skip As DWord, ByVal n As DWord, ByVal frames As VoidPtr, ByVal hash As VoidPtr) As Word
+Declare Function GetModuleHandleA Lib "kernel32.dll" (ByVal name As VoidPtr) As VoidPtr
+
+Dim g_fr[31] As VoidPtr
+Dim g_n As Long
+
+Sub C3()
+    g_n = RtlCaptureStackBackTrace(0, 32, VarPtr(g_fr[0]), 0)
+End Sub
+
+Sub C2()
+    C3()
+End Sub
+
+Sub C1()
+    C2()
+End Sub
+
+Function InImage(p As VoidPtr, base As VoidPtr) As Long
+    InImage = 0
+    If p < base Then Exit Function
+    If p >= base + &H1000000 Then Exit Function
+    InImage = 1
+End Function
+
+Function CountIn() As Long
+    Dim base As VoidPtr
+    Dim i As Long
+    Dim k As Long
+    base = GetModuleHandleA(0)
+    k = 0
+    For i = 0 To g_n - 1
+        k = k + InImage(g_fr[i], base)
+    Next
+    CountIn = k
+End Function
+
+Dim r As Long
+C1()
+r = CountIn()
+If g_n < r + 2 Then r = 100 + g_n
+ExitProcess(r)
