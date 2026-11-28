@@ -130,7 +130,7 @@ cd src\actba64
 
 ## 現状
 
-開発中です。主にまだ無いもの: DirectX 9、`On Error` / `Resume`、`Int64` / `QWord` 型、指数表記の数値リテラル、`Single` の一般の演算、`MENU` リソース。`-linux` では `Include\linux` に Linux 版がある API だけが動き、それ以外はコンパイル時に警告します。
+開発中です。主にまだ無いもの: DirectX 9、`On Error` / `Resume`、`MENU` リソース、`-actba32` での配列・Type のメンバ・Declare の仮引数の 64bit 整数（`Int64` / `QWord`）。`-linux` では `Include\linux` に Linux 版がある API だけが動き、それ以外はコンパイル時に警告します。
 
 ## ライセンス
 
