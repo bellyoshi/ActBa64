@@ -1,0 +1,76 @@
+' SystemParametersInfo の LOGFONT を含む命令は W 版で読み、A の形の構造体の lfFaceName を UTF-8 で書く（BasicSpiW.abp）。
+' 壁紙のパスも UTF-8。システムの設定は変えない（GET だけ。SET は形の直し方だけを確かめる）。
+
+Dim spA(399) As Byte
+Dim spA2(399) As Byte
+Dim spW(599) As Byte
+Dim spWant As *Byte
+Dim spN As Long
+Dim spGot(1023) As Byte
+
+' ワイドの形 w の off にある名前を UTF-8 で
+Function SpT_Name$(w As *Byte, off As Long) As String
+    Dim p As *Byte
+    p = BasicUtf8OfWide(w + off)
+    SpT_Name$ = MakeStr(p)
+    free(p)
+End Function
+
+' ---------- NONCLIENTMETRICS（A 344 / W 504）：A → W → A で元に戻る ----------
+FillMemory(VarPtr(spA), 400, 0)
+SetDWord(VarPtr(spA), 344)
+SetDWord(VarPtr(spA) + 156, 19)
+lstrcpy(VarPtr(spA) + 160 + 28, "メイリオ𠮷")
+lstrcpy(VarPtr(spA) + 280 + 28, "ＭＳ ゴシック")
+spA[220] = -12 As Byte
+SetDWord(VarPtr(spA) + 340, 4)
+spN = BasicSpiShape(SPI_SETNONCLIENTMETRICS)
+Assert(5, spN, "spi ncm fonts")
+FillMemory(VarPtr(spW), 600, 0)
+BasicSpiConv(VarPtr(spA), VarPtr(spW), spN, 344, 1)
+Assert(504, BasicGetDW(VarPtr(spW)), "spi ncm cbsize w")
+Assert(19, BasicGetDW(VarPtr(spW) + 220), "spi ncm menu height w")
+Assert(-1, SpT_Name$(VarPtr(spW), 224 + 28) = "メイリオ𠮷", "spi ncm menu font w")
+Assert(-1, SpT_Name$(VarPtr(spW), 408 + 28) = "ＭＳ ゴシック", "spi ncm message font w")
+Assert(4, BasicGetDW(VarPtr(spW) + 500), "spi ncm padded w")
+FillMemory(VarPtr(spA2), 400, 0)
+BasicSpiConv(VarPtr(spA2), VarPtr(spW), spN, 344, 0)
+Assert(0, memcmp(VarPtr(spA), VarPtr(spA2), 344), "spi ncm round trip")
+
+' ---------- 本物の値：W 版で直に読んだ名前と同じ UTF-8 ----------
+FillMemory(VarPtr(spA), 400, 0)
+SetDWord(VarPtr(spA), 344)
+Assert(1, SystemParametersInfo(SPI_GETNONCLIENTMETRICS, 344, VarPtr(spA), 0), "spi get ncm")
+FillMemory(VarPtr(spW), 600, 0)
+SetDWord(VarPtr(spW), 504)
+SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, 504, VarPtr(spW), 0)
+Assert(344, BasicGetDW(VarPtr(spA)), "spi get ncm cbsize")
+Assert(BasicGetDW(VarPtr(spW) + 220), BasicGetDW(VarPtr(spA) + 156), "spi get ncm menu height")
+Assert(-1, MakeStr(VarPtr(spA) + 160 + 28) = SpT_Name$(VarPtr(spW), 224 + 28), "spi get ncm menu font")
+Assert(-1, MakeStr(VarPtr(spA) + 280 + 28) = SpT_Name$(VarPtr(spW), 408 + 28), "spi get ncm message font")
+
+FillMemory(VarPtr(spA), 400, 0)
+Assert(1, SystemParametersInfo(SPI_GETICONTITLELOGFONT, 60, VarPtr(spA), 0), "spi get icon title")
+FillMemory(VarPtr(spW), 600, 0)
+SystemParametersInfoW(SPI_GETICONTITLELOGFONT, 92, VarPtr(spW), 0)
+Assert(-1, MakeStr(VarPtr(spA) + 28) = SpT_Name$(VarPtr(spW), 28), "spi get icon title font")
+Assert(BasicGetDW(VarPtr(spW)), BasicGetDW(VarPtr(spA)), "spi get icon title height")
+
+FillMemory(VarPtr(spA), 400, 0)
+SetDWord(VarPtr(spA), 76)
+Assert(1, SystemParametersInfo(SPI_GETICONMETRICS, 76, VarPtr(spA), 0), "spi get icon metrics")
+FillMemory(VarPtr(spW), 600, 0)
+SetDWord(VarPtr(spW), 108)
+SystemParametersInfoW(SPI_GETICONMETRICS, 108, VarPtr(spW), 0)
+Assert(76, BasicGetDW(VarPtr(spA)), "spi get icon metrics cbsize")
+Assert(-1, MakeStr(VarPtr(spA) + 16 + 28) = SpT_Name$(VarPtr(spW), 16 + 28), "spi get icon metrics font")
+
+' ---------- 壁紙のパス ----------
+FillMemory(VarPtr(spW), 600, 0)
+If SystemParametersInfoW(&H73, 260, VarPtr(spW), 0) <> 0 Then
+    Assert(1, SystemParametersInfo(&H73, 1024, VarPtr(spGot), 0), "spi get wallpaper")
+    Assert(-1, MakeStr(VarPtr(spGot)) = SpT_Name$(VarPtr(spW), 0), "spi get wallpaper utf8")
+End If
+
+' LOGFONT を含まない命令は A 版のまま
+Assert(0, BasicSpiShape(SPI_GETWORKAREA), "spi other")

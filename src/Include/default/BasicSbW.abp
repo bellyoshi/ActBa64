@@ -1,0 +1,56 @@
+' ステータスバーの SB_GETTEXT / SB_GETTEXTLENGTH / SB_GETTIPTEXT（A 版）を W 版で送り、文字列は UTF-8 で返す（SendMessage から）。
+' 長さ（戻り値の下の 16 ビット）は UTF-8 のバイト数なので、SB_GETTEXTLENGTH + 1 バイトの受け皿で SB_GETTEXT が読める。
+' 上の 16 ビット（SBT_* の種類）はそのまま。持ち主が描く部分（SBT_OWNERDRAW = &H1000）は A 版のまま。
+
+Function BasicSbIs(hWnd As HWND) As Long
+    Dim cls[31] As Byte
+    BasicSbIs = 0
+    If GetClassNameA(hWnd, cls, 32) = 0 Then Exit Function
+    If lstrcmpi(cls, "msctls_statusbar32") = 0 Then BasicSbIs = 1
+End Function
+
+' SB_GETTEXTA = &H402 / SB_GETTEXTLENGTHA = &H403 / SB_GETTIPTEXTA = &H412。W 版で扱ったら 1（結果は r）
+Function BasicSbTry(hWnd As HWND, msg As DWord, wParam As WPARAM, lParam As LPARAM, ByRef r As LRESULT) As Long
+    BasicSbTry = 0
+    If msg <> &H402 And msg <> &H403 And msg <> &H412 Then Exit Function
+    If BasicSbIs(hWnd) = 0 Then Exit Function
+    If msg = &H412 Then BasicSbTry = BasicSbTip(hWnd, wParam, lParam As *Byte, r)
+    If msg <> &H412 Then BasicSbTry = BasicSbText(hWnd, msg, wParam, lParam As *Byte, r)
+End Function
+
+' i 番目の部分の文字列を W 版で読む（GwAlloc。呼び出し側が free）。種類を kind に。持ち主が描く部分なら 0
+Function BasicSbWide(hWnd As HWND, i As WPARAM, ByRef kind As Long) As *Byte
+    Dim n As LRESULT
+    BasicSbWide = 0
+    n = SendMessageW(hWnd, &H40C, i, 0)
+    kind = ((n >> 16) And &HFFFF) As Long
+    If (kind And &H1000) <> 0 Then Exit Function
+    BasicSbWide = GwAlloc((n And &HFFFF) As Long)
+    If BasicSbWide <> 0 Then SendMessageW(hWnd, &H40D, i, BasicSbWide As LPARAM)
+End Function
+
+Function BasicSbText(hWnd As HWND, msg As DWord, wParam As WPARAM, buf As *Byte, ByRef r As LRESULT) As Long
+    Dim w As *Byte, kind As Long, n As Long
+    BasicSbText = 0
+    w = BasicSbWide(hWnd, wParam, kind)
+    If w = 0 Then Exit Function
+    n = BasicUtf8Len(w, BasicWideChars(w))
+    If msg = &H402 And buf <> 0 Then GwPutFit(w, BasicWideChars(w), buf, n)
+    r = ((kind << 16) Or (n And &HFFFF)) As LRESULT
+    free(w)
+    BasicSbText = 1
+End Function
+
+' wParam の下の 16 ビットが番号、上の 16 ビットが受け皿のバイト数。入らなければ文字の境目で切る
+Function BasicSbTip(hWnd As HWND, wParam As WPARAM, buf As *Byte, ByRef r As LRESULT) As Long
+    Dim w As *Byte, size As Long
+    BasicSbTip = 0
+    size = ((wParam >> 16) And &HFFFF) As Long
+    If buf = 0 Or size <= 0 Then Exit Function
+    w = GwAlloc(size)
+    If w = 0 Then Exit Function
+    r = SendMessageW(hWnd, &H413, (wParam And &HFFFF) Or ((size As WPARAM) << 16), w As LPARAM)
+    GwPut(w, BasicWideChars(w), buf, size)
+    free(w)
+    BasicSbTip = 1
+End Function

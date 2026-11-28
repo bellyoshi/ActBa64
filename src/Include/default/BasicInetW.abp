@@ -1,0 +1,114 @@
+' WinINet（InternetOpen / InternetConnect / Ftp* / InternetFindNextFile）を W 版に。文字列は UTF-8（CP932 のバイト列も読む）。
+' FtpGetCurrentDirectory の答えと、見つけたファイルの名前（WIN32_FIND_DATA。BasicFindW.abp と同じ書き方）は UTF-8。
+' -linux は A 版のまま。
+
+Function InternetOpen(lpszAgent As *Byte, dwAccessType As DWord, lpszProxy As *Byte, lpszProxyBypass As *Byte, dwFlags As DWord) As HINTERNET
+#ifdef _LINUX
+    InternetOpen = InternetOpenA(lpszAgent, dwAccessType, lpszProxy, lpszProxyBypass, dwFlags)
+#else
+    Dim a As *Byte, b As *Byte, c As *Byte
+    a = BasicWidePtr(lpszAgent)
+    b = BasicWidePtr(lpszProxy)
+    c = BasicWidePtr(lpszProxyBypass)
+    InternetOpen = InternetOpenW(a, dwAccessType, b, c, dwFlags)
+    BasicFreeW2(a, lpszAgent, b, lpszProxy)
+    BasicFreeAnsi(c, lpszProxyBypass)
+#endif
+End Function
+
+Function InternetConnect(hInternet As HINTERNET, lpszServerName As *Byte, nServerPort As INTERNET_PORT, lpszUserName As *Byte, lpszPassword As *Byte, dwService As DWord, dwFlags As DWord, dwContext As DWORD_PTR) As HINTERNET
+#ifdef _LINUX
+    InternetConnect = InternetConnectA(hInternet, lpszServerName, nServerPort, lpszUserName, lpszPassword, dwService, dwFlags, dwContext)
+#else
+    Dim a As *Byte, b As *Byte, c As *Byte
+    a = BasicWidePtr(lpszServerName)
+    b = BasicWidePtr(lpszUserName)
+    c = BasicWidePtr(lpszPassword)
+    InternetConnect = InternetConnectW(hInternet, a, nServerPort, b, c, dwService, dwFlags, dwContext)
+    BasicFreeW2(a, lpszServerName, b, lpszUserName)
+    BasicFreeAnsi(c, lpszPassword)
+#endif
+End Function
+
+Function FtpGetFile(hConnect As HINTERNET, lpszRemoteFile As *Byte, lpszNewFile As *Byte, fFailIfExists As BOOL, dwFlagsAndAttributes As DWord, dwFlags As DWord, dwContext As DWORD_PTR) As BOOL
+#ifdef _LINUX
+    FtpGetFile = FtpGetFileA(hConnect, lpszRemoteFile, lpszNewFile, fFailIfExists, dwFlagsAndAttributes, dwFlags, dwContext)
+#else
+    Dim a As *Byte, b As *Byte
+    a = BasicWidePtr(lpszRemoteFile)
+    b = BasicWidePtr(lpszNewFile)
+    FtpGetFile = FtpGetFileW(hConnect, a, b, fFailIfExists, dwFlagsAndAttributes, dwFlags, dwContext)
+    BasicFreeW2(a, lpszRemoteFile, b, lpszNewFile)
+#endif
+End Function
+
+Function FtpSetCurrentDirectory(hConnect As HINTERNET, lpszDirectory As *Byte) As BOOL
+#ifdef _LINUX
+    FtpSetCurrentDirectory = FtpSetCurrentDirectoryA(hConnect, lpszDirectory)
+#else
+    Dim a As *Byte
+    a = BasicWidePtr(lpszDirectory)
+    FtpSetCurrentDirectory = FtpSetCurrentDirectoryW(hConnect, a)
+    BasicFreeAnsi(a, lpszDirectory)
+#endif
+End Function
+
+' lpdwCurrentDirectory は大きさ（バイト、NUL 込み）を入れて渡すと、書いたバイト数（NUL を除く）が返る。
+' 入らなければ FALSE（ERROR_INSUFFICIENT_BUFFER = 122）で、要るバイト数（NUL 込み）が返る
+Function FtpGetCurrentDirectory(hConnect As HINTERNET, lpszCurrentDirectory As *Byte, lpdwCurrentDirectory As *DWord) As BOOL
+#ifdef _LINUX
+    FtpGetCurrentDirectory = FtpGetCurrentDirectoryA(hConnect, lpszCurrentDirectory, lpdwCurrentDirectory)
+#else
+    Dim w As *Byte, n As DWord
+    FtpGetCurrentDirectory = 0
+    w = GwAlloc(BASIC_WMAX)
+    If w = 0 Then Exit Function
+    n = BASIC_WMAX
+    If FtpGetCurrentDirectoryW(hConnect, w, VarPtr(n)) <> 0 Then FtpGetCurrentDirectory = BasicFtpDirOut(w, n, lpszCurrentDirectory, lpdwCurrentDirectory)
+    free(w)
+#endif
+End Function
+
+Function BasicFtpDirOut(w As *Byte, chars As DWord, buf As *Byte, size As *DWord) As BOOL
+    Dim need As Long
+    BasicFtpDirOut = 0
+    need = BasicUtf8Len(w, chars)
+    If buf <> 0 And need < size[0] Then
+        size[0] = GwPutFit(w, chars, buf, need)
+        BasicFtpDirOut = 1
+        Exit Function
+    End If
+    SetLastError(122)
+    size[0] = need + 1
+End Function
+
+Function FtpFindFirstFile(hConnect As HINTERNET, lpszSearchFile As *Byte, lpFindFileData As LPWIN32_FIND_DATA, dwFlags As DWord, dwContext As DWORD_PTR) As HINTERNET
+#ifdef _LINUX
+    FtpFindFirstFile = FtpFindFirstFileA(hConnect, lpszSearchFile, lpFindFileData, dwFlags, dwContext)
+#else
+    Dim a As *Byte, wfd As *Byte
+    FtpFindFirstFile = 0
+    wfd = calloc(BASIC_FD_W)
+    If wfd = 0 Then Exit Function
+    a = BasicWidePtr(lpszSearchFile)
+    FtpFindFirstFile = FtpFindFirstFileW(hConnect, a, wfd, dwFlags, dwContext)
+    If FtpFindFirstFile <> 0 And lpFindFileData <> 0 Then BasicFindOut(wfd, lpFindFileData As *Byte)
+    BasicFreeAnsi(a, lpszSearchFile)
+    free(wfd)
+#endif
+End Function
+
+' FTP の探すハンドル（FtpFindFirstFile）のとき。lpvFindData は WIN32_FIND_DATA
+Function InternetFindNextFile(hFind As HINTERNET, lpvFindData As VoidPtr) As BOOL
+#ifdef _LINUX
+    InternetFindNextFile = InternetFindNextFileA(hFind, lpvFindData)
+#else
+    Dim wfd As *Byte
+    InternetFindNextFile = 0
+    wfd = calloc(BASIC_FD_W)
+    If wfd = 0 Then Exit Function
+    InternetFindNextFile = InternetFindNextFileW(hFind, wfd)
+    If InternetFindNextFile <> 0 And lpvFindData <> 0 Then BasicFindOut(wfd, lpvFindData)
+    free(wfd)
+#endif
+End Function

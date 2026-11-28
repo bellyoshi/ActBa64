@@ -1,0 +1,102 @@
+' FindText は W 版で開き、持ち主の窓に届く FINDMSGSTRING の lParam は呼び出し側の FINDREPLACE、
+' 検索語は UTF-8（CP932 にない 𠮷 も）で書き戻す。入らなければ文字の境目で切る。
+' FR_DIALOGTERM でサブクラス化を戻す（BasicFindTextW.abp）。
+' WinINet は W 版。FtpGetCurrentDirectory の答えは UTF-8（BasicInetW.abp）。
+
+Dim ftWc As WNDCLASSEX
+Dim ftH As HWND
+Dim ftDlg As HWND
+Dim ftFr As FINDREPLACE
+Dim ftBuf(63) As Byte
+Dim ftGot(63) As Byte
+Dim ftMsg As DWord
+Dim ftLp As LPARAM
+Dim ftFlags As DWord
+Dim ftText As String
+Dim ftCalls As Long
+Dim ftNet As HINTERNET
+Dim ftW As *Byte
+Dim ftSize As DWord
+
+Function FtW_Proc(hWnd As HWND, msg As DWord, wp As WPARAM, lp As LPARAM) As LRESULT
+    Dim p As *FINDREPLACE
+    If msg = ftMsg Then
+        p = lp As *FINDREPLACE
+        ftLp = lp
+        ftFlags = p->Flags
+        ftText = MakeStr(p->lpstrFindWhat)
+        ftCalls = ftCalls + 1
+    End If
+    FtW_Proc = DefWindowProc(hWnd, msg, wp, lp)
+End Function
+
+' 検索語の欄（edt1 = 1152）に s を入れて「次を検索」（IDOK）を押す
+Sub FtW_Find(s As String)
+    SetWindowText(GetDlgItem(ftDlg, 1152), s)
+    SendMessage(ftDlg, WM_COMMAND, IDOK, 0)
+End Sub
+
+Sub FtW_Open(s As String, n As Long)
+    lstrcpy(VarPtr(ftBuf), s)
+    FillMemory(VarPtr(ftFr), Len(ftFr), 0)
+    ftFr.lStructSize = Len(ftFr)
+    ftFr.hwndOwner = ftH
+    ftFr.Flags = FR_DOWN
+    ftFr.lpstrFindWhat = VarPtr(ftBuf)
+    ftFr.wFindWhatLen = n
+    ftDlg = FindText(ftFr) As HWND
+End Sub
+
+ftMsg = RegisterWindowMessage("commdlg_FindReplace")
+FillMemory(VarPtr(ftWc), Len(ftWc), 0)
+ftWc.cbSize = Len(ftWc)
+ftWc.lpfnWndProc = AddressOf(FtW_Proc)
+ftWc.hInstance = GetModuleHandle(0)
+ftWc.lpszClassName = "FindTextUtf8Test"
+If RegisterClassEx(ftWc) = 0 Then Assert(1, 0, "ft class")
+ftH = CreateWindowEx(0, "FindTextUtf8Test", "", 0, 0, 0, 10, 10, 0, 0, GetModuleHandle(0), 0)
+If ftH = 0 Then Assert(1, 0, "ft hwnd")
+
+' ---------- 開いた欄には UTF-8 の検索語がワイドで入る ----------
+FtW_Open("あ𠮷", 64)
+Assert(-1, ftDlg <> 0, "ft open")
+Assert(-1, GetWindowLong(ftH, GWL_WNDPROC) = AddressOf(BasicFrProc) As LONG_PTR, "ft subclassed")
+GetWindowText(GetDlgItem(ftDlg, 1152), VarPtr(ftGot), 64)
+Assert(-1, MakeStr(VarPtr(ftGot)) = "あ𠮷", "ft initial text")
+
+' ---------- 次を検索：lParam は呼び出し側の構造体、検索語は UTF-8 ----------
+FtW_Find("検索𠮷x")
+Assert(1, ftCalls, "ft notified")
+Assert(-1, ftLp = VarPtr(ftFr) As LPARAM, "ft lparam is caller struct")
+Assert(-1, (ftFlags And FR_FINDNEXT) <> 0, "ft findnext flag")
+Assert(-1, ftText = "検索𠮷x", "ft text utf8")
+Assert(-1, MakeStr(VarPtr(ftBuf)) = "検索𠮷x", "ft caller buffer")
+
+' ---------- 閉じる：FR_DIALOGTERM のあと元の窓手続きに戻る ----------
+SendMessage(ftDlg, WM_COMMAND, IDCANCEL, 0)
+Assert(-1, (ftFlags And FR_DIALOGTERM) <> 0, "ft term flag")
+Assert(-1, GetWindowLong(ftH, GWL_WNDPROC) = AddressOf(FtW_Proc) As LONG_PTR, "ft unsubclassed")
+Assert(-1, BasicFrSlot(0) = 0, "ft slot freed")
+
+' ---------- 小さいバッファ（7 バイト）は文字の境目で切る ----------
+FtW_Open("a", 7)
+FtW_Find("あい𠮷")
+Assert(-1, MakeStr(VarPtr(ftBuf)) = "あい", "ft trimmed")
+SendMessage(ftDlg, WM_COMMAND, IDCANCEL, 0)
+DestroyWindow(ftH)
+
+' ---------- WinINet ----------
+ftNet = InternetOpen("ユニット𠮷", INTERNET_OPEN_TYPE_DIRECT, 0, 0, 0)
+Assert(-1, ftNet <> 0, "inet open utf8 agent")
+If ftNet <> 0 Then InternetCloseHandle(ftNet)
+
+ftW = BasicWidePtr("/日本/𠮷")
+ftSize = 64
+Assert(1, BasicFtpDirOut(ftW, BasicWideChars(ftW), VarPtr(ftGot), VarPtr(ftSize)), "ftp dir fits")
+Assert(-1, MakeStr(VarPtr(ftGot)) = "/日本/𠮷", "ftp dir utf8")
+Assert(12, ftSize, "ftp dir bytes")
+ftSize = 12
+Assert(0, BasicFtpDirOut(ftW, BasicWideChars(ftW), VarPtr(ftGot), VarPtr(ftSize)), "ftp dir too small")
+Assert(13, ftSize, "ftp dir need")
+Assert(122, GetLastError(), "ftp dir error")
+free(ftW)
