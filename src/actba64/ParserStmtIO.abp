@@ -280,11 +280,9 @@ Function ParseInputFileVars(p As *Parser) As Long
     nFirst = -1
     nPrev = -1
     Do
-        If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
-        ast = p->ast
-        nVar = AstAddNode(ast, AST_VAR)
+        nVar = ParseInputTarget(p)
         If nVar < 0 Then Exit Function
-        AstSetStr(ast, nVar, VarPtr(name))
+        ast = p->ast
         If nFirst < 0 Then
             nFirst = nVar
         Else
@@ -316,6 +314,32 @@ End Function
 Function ParseInputSemiBit(kind As Long) As Long
     ParseInputSemiBit = 0
     If kind = 2 Then ParseInputSemiBit = 1
+End Function
+
+' Input の読み先。a / a[i] / a(i) / a[i, j]（配列の要素は式として読み、AST_INDEX か AST_CALL）
+Function ParseInputTarget(p As *Parser) As Long
+    Dim ast As *Ast
+    Dim nodes As *AstNode
+    Dim n As Long
+    Dim k As Long
+    Dim srcLine As Long
+    ParseInputTarget = -1
+    k = ParseTokKindAt(p, p->pos + 1)
+    If ParseTokKind(p) <> TK_IDENT Or (k <> TK_LBRACK And k <> TK_LPAREN) Then
+        ParseInputTarget = ParseInputVarNode(p)
+        Exit Function
+    End If
+    srcLine = ParseTokLine(p)
+    n = ParseExpr(p)
+    If n < 0 Then Exit Function
+    ast = p->ast
+    nodes = ast->nodes
+    If nodes[n].kind <> AST_INDEX And nodes[n].kind <> AST_CALL Then
+        DiagError(srcLine, Tr$(1066, "Input needs String or numeric variable"))
+        p->err = 1
+        Exit Function
+    End If
+    ParseInputTarget = n
 End Function
 
 Function ParseInputVarNode(p As *Parser) As Long
@@ -367,7 +391,7 @@ Function ParseInputVarTail(p As *Parser, nPrev As Long) As Long
     Dim nVar As Long
     ParseInputVarTail = nPrev
     If Not ParseInputEatComma(p) Then Exit Function
-    nVar = ParseInputChain(p, nPrev, ParseInputVarNode(p))
+    nVar = ParseInputChain(p, nPrev, ParseInputTarget(p))
     ParseInputVarTail = nVar
     If nVar < 0 Then Exit Function
     ParseInputVarTail = ParseInputVarTail(p, nVar)
@@ -375,7 +399,7 @@ End Function
 
 Function ParseInputVars(p As *Parser, ByRef nVar As Long) As boolean
     ParseInputVars = false
-    nVar = ParseInputVarNode(p)
+    nVar = ParseInputTarget(p)
     If nVar < 0 Then Exit Function
     If ParseInputVarTail(p, nVar) < 0 Then Exit Function
     ParseInputVars = true
@@ -422,11 +446,9 @@ Function ParseInputStmt(p As *Parser) As Long
     nFirst = -1
     nPrev = -1
     Do
-        If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
-        ast = p->ast
-        nVar = AstAddNode(ast, AST_VAR)
+        nVar = ParseInputTarget(p)
         If nVar < 0 Then Exit Function
-        AstSetStr(ast, nVar, VarPtr(name))
+        ast = p->ast
         If nFirst < 0 Then
             nFirst = nVar
         Else
