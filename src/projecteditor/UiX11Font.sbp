@@ -1,0 +1,295 @@
+' UiX11Font - Linux 版の文字（UiX11.sbp の画素バッファに描く）。
+' FreeType（libfreetype.so.6）で OS の等幅フォント（Ux_FontPath$ の候補で最初に開けたもの）を読み、グリフは表に覚えておく。
+' FreeType の構造体はバイト列から読む（オフセットは x86-64 の FreeType 2）。
+
+#ifdef _LINUX
+
+Declare Function Ux_FT_Init_FreeType Lib "libfreetype.so.6" Alias "FT_Init_FreeType" (lib As VoidPtr) As Long
+Declare Function Ux_FT_New_Face Lib "libfreetype.so.6" Alias "FT_New_Face" (lib As VoidPtr, path As BytePtr, index As Long, face As VoidPtr) As Long
+Declare Function Ux_FT_Set_Pixel_Sizes Lib "libfreetype.so.6" Alias "FT_Set_Pixel_Sizes" (face As VoidPtr, w As Long, h As Long) As Long
+Declare Function Ux_FT_Load_Char Lib "libfreetype.so.6" Alias "FT_Load_Char" (face As VoidPtr, code As VoidPtr, flags As Long) As Long
+
+Const UX_GC_N = 4096                ' フォント 1 つのグリフ表の大きさ（2 のべき）
+Const UX_POOL_SIZE = &H400000       ' グリフの画素を置く所
+Const UX_FONT_PATHS = 9             ' Ux_FontPath$ の候補の数
+
+' フォント
+Dim g_uxFtLib As VoidPtr
+Dim g_uxFaceQ(23) As Byte           ' フォント i の FT_Face（8 バイトずつ）
+Dim g_uxFontPx(2) As Long
+Dim g_uxFontAsc(2) As Long
+Dim g_uxFontH(2) As Long
+Dim g_uxFontOk(2) As Long
+Dim g_uxFontTried As Long
+
+' グリフ表（フォント i の j 番目は i * UX_GC_N + j）。cp は符号点 + 1（0 は空き）
+Dim g_uxGcCp(12287) As Long
+Dim g_uxGcAdv(12287) As Long
+Dim g_uxGcL(12287) As Long
+Dim g_uxGcT(12287) As Long
+Dim g_uxGcW(12287) As Long
+Dim g_uxGcH(12287) As Long
+Dim g_uxGcOff(12287) As Long
+Dim g_uxGcCount(2) As Long
+Dim g_uxPool As VoidPtr
+Dim g_uxPoolUsed As Long
+
+' == フォント ==
+
+Function Ux_FacePtr(f As Long) As VoidPtr
+    Ux_FacePtr = LxGetQ(VarPtr(g_uxFaceQ(0)), f * 8)
+End Function
+
+' OS の等幅フォントの候補。日本語の字がある等幅を先に、無ければ欧文の等幅
+Function Ux_FontPath$(i As Long) As String
+    Dim d As String
+    d = "/usr/share/fonts/"
+    If i = 0 Then Ux_FontPath$ = d + "opentype/ipafont-gothic/ipag.ttf"
+    If i = 1 Then Ux_FontPath$ = d + "ipa-gothic/ipag.ttf"
+    If i = 2 Then Ux_FontPath$ = d + "truetype/takao-gothic/TakaoGothic.ttf"
+    If i = 3 Then Ux_FontPath$ = d + "truetype/dejavu/DejaVuSansMono.ttf"
+    If i = 4 Then Ux_FontPath$ = d + "dejavu-sans-mono-fonts/DejaVuSansMono.ttf"
+    If i = 5 Then Ux_FontPath$ = d + "TTF/DejaVuSansMono.ttf"
+    If i = 6 Then Ux_FontPath$ = d + "truetype/liberation/LiberationMono-Regular.ttf"
+    If i = 7 Then Ux_FontPath$ = d + "liberation-mono/LiberationMono-Regular.ttf"
+    If i = 8 Then Ux_FontPath$ = d + "truetype/freefont/FreeMono.ttf"
+End Function
+
+' フォント f（0 始まり）を px で開く
+Sub Ux_FontLoad(f As Long, px As Long, path As String)
+    Dim face As VoidPtr
+    Dim size As VoidPtr
+    Dim em As Long, asc As Long
+    g_uxFontPx(f) = px
+    g_uxFontAsc(f) = px
+    g_uxFontH(f) = px + 3
+    g_uxFontOk(f) = 0
+    If g_uxFtLib = 0 Then Exit Sub
+    face = 0
+    If Ux_FT_New_Face(g_uxFtLib, StrPtr(path), 0, VarPtr(face)) <> 0 Then Exit Sub
+    If face = 0 Then Exit Sub
+    Ux_FT_Set_Pixel_Sizes(face, 0, px)
+    LxSetQ(VarPtr(g_uxFaceQ(0)), f * 8, face)
+    ' FT_FaceRec: units_per_EM +136、ascender +138（short）、size +160。FT_Size_Metrics.height +64（26.6）
+    em = Ux_B(face, 136) + Ux_B(face, 137) * 256
+    asc = Ux_B(face, 138) + Ux_B(face, 139) * 256
+    If asc >= 32768 Then asc = asc - 65536
+    If em > 0 Then g_uxFontAsc(f) = (asc * px + em \ 2) \ em
+    size = LxGetQ(face, 160)
+    If size <> 0 Then g_uxFontH(f) = (Ux_L(size, 64) + 32) \ 64
+    g_uxFontOk(f) = 1
+End Sub
+
+Sub Ux_FontInit()
+    Dim path As String
+    Dim lib As VoidPtr
+    If g_uxFontTried <> 0 Then Exit Sub
+    g_uxFontTried = 1
+    Dim i As Long
+    lib = 0
+    If Ux_FT_Init_FreeType(VarPtr(lib)) = 0 Then g_uxFtLib = lib
+    g_uxPool = malloc(UX_POOL_SIZE)
+    For i = 0 To UX_FONT_PATHS - 1
+        path = Ux_FontPath$(i)
+        Ux_FontLoad(UX_FONT_MONO - 1, 16, path)
+        If g_uxFontOk(UX_FONT_MONO - 1) <> 0 Then Exit For
+    Next
+    Ux_FontLoad(UX_FONT_GUI - 1, 13, path)
+End Sub
+
+' HFONT（1 始まり）→ フォントの添字。知らない値は GUI
+Function Ux_FontIdx(hf As Long) As Long
+    Ux_FontIdx = UX_FONT_GUI - 1
+    If hf >= 1 And hf <= UX_FONT_MAX Then Ux_FontIdx = hf - 1
+End Function
+
+Function Ux_FontHeight(hf As Long) As Long
+    Ux_FontInit()
+    Ux_FontHeight = g_uxFontH(Ux_FontIdx(hf))
+End Function
+
+Sub Ux_CacheReset()
+    Dim i As Long
+    For i = 0 To UX_GC_N * UX_FONT_MAX - 1
+        g_uxGcCp(i) = 0
+    Next
+    For i = 0 To UX_FONT_MAX - 1
+        g_uxGcCount(i) = 0
+    Next
+    g_uxPoolUsed = 0
+End Sub
+
+' FreeType で描いて表に入れる。戻り値は表の添字（-1 は失敗）
+Function Ux_GlyphMake(f As Long, cp As Long, slot As Long) As Long
+    Dim face As VoidPtr, g As VoidPtr, src As VoidPtr, dst As VoidPtr
+    Dim w As Long, h As Long, pitch As Long, r As Long, c As Long, n As Long
+    Dim sp As *Byte, dp As *Byte
+    Dim off As Long
+    Ux_GlyphMake = -1
+    face = Ux_FacePtr(f)
+    If face = 0 Then Exit Function
+    If Ux_FT_Load_Char(face, cp, 4) <> 0 Then Exit Function      ' FT_LOAD_RENDER
+    ' FT_GlyphSlotRec: advance.x +128、bitmap.rows +152、width +156、pitch +160、buffer +168、
+    ' pixel_mode +178、bitmap_left +192、bitmap_top +196
+    g = LxGetQ(face, 152)
+    w = Ux_L(g, 156)
+    h = Ux_L(g, 152)
+    pitch = Ux_L(g, 160)
+    n = w * h
+    If g_uxPoolUsed + n > UX_POOL_SIZE Then Exit Function
+    src = LxGetQ(g, 168)
+    If Ux_B(g, 178) <> 2 Then n = 0                              ' 灰色の段階でなければ形は出さない
+    For r = 0 To h - 1
+        If n = 0 Then Exit For
+        off = r * pitch
+        dst = src
+        dst = dst + off
+        sp = dst As *Byte
+        off = g_uxPoolUsed + r * w
+        dst = g_uxPool
+        dst = dst + off
+        dp = dst As *Byte
+        For c = 0 To w - 1
+            dp[c] = sp[c]
+        Next
+    Next
+    If n = 0 Then
+        w = 0
+        h = 0
+    End If
+    g_uxGcCp(slot) = cp + 1
+    g_uxGcAdv(slot) = (Ux_L(g, 128) + 32) \ 64
+    g_uxGcL(slot) = Ux_L(g, 192)
+    g_uxGcT(slot) = Ux_L(g, 196)
+    g_uxGcW(slot) = w
+    g_uxGcH(slot) = h
+    g_uxGcOff(slot) = g_uxPoolUsed
+    g_uxPoolUsed = g_uxPoolUsed + w * h
+    g_uxGcCount(f) = g_uxGcCount(f) + 1
+    Ux_GlyphMake = slot
+End Function
+
+' 符号点 cp のグリフの添字（-1 は無い）
+Function Ux_Glyph(f As Long, cp As Long) As Long
+    Dim j As Long, k As Long, base As Long
+    Ux_Glyph = -1
+    If g_uxFontOk(f) = 0 Then Exit Function
+    If g_uxGcCount(f) > UX_GC_N * 3 \ 4 Or g_uxPoolUsed > UX_POOL_SIZE - 65536 Then Ux_CacheReset()
+    base = f * UX_GC_N
+    j = (cp * 31) And (UX_GC_N - 1)
+    For k = 0 To UX_GC_N - 1
+        If g_uxGcCp(base + j) = cp + 1 Then
+            Ux_Glyph = base + j
+            Exit Function
+        End If
+        If g_uxGcCp(base + j) = 0 Then
+            Ux_Glyph = Ux_GlyphMake(f, cp, base + j)
+            Exit Function
+        End If
+        j = (j + 1) And (UX_GC_N - 1)
+    Next
+End Function
+
+' UTF-8 の 1 文字。戻り値はバイト数（壊れていれば 1 で U+FFFD）
+Function Ux_NextCp(p As *Byte, i As Long, n As Long, ByRef cp As Long) As Long
+    Dim b As Long, k As Long, j As Long, c As Long
+    b = p[i]
+    Ux_NextCp = 1
+    cp = b
+    If b < &H80 Then Exit Function
+    k = 0
+    c = 0
+    If (b And &HE0) = &HC0 Then
+        k = 1
+        c = b And &H1F
+    ElseIf (b And &HF0) = &HE0 Then
+        k = 2
+        c = b And &HF
+    ElseIf (b And &HF8) = &HF0 Then
+        k = 3
+        c = b And 7
+    End If
+    cp = &HFFFD
+    If k = 0 Or i + k >= n + 1 Then Exit Function
+    For j = 1 To k
+        If i + j >= n Then Exit Function
+        If (p[i + j] And &HC0) <> &H80 Then Exit Function
+        c = (c << 6) Or (p[i + j] And &H3F)
+    Next
+    cp = c
+    Ux_NextCp = k + 1
+End Function
+
+' グリフ gi を窓の座標 (x, y)（左上）に色 px で重ねる
+Sub Ux_Blit(gi As Long, ByVal x As Long, ByVal y As Long, ByVal px As DWord)
+    Dim w As Long, h As Long, r As Long, c As Long, xx As Long, yy As Long
+    Dim a As Long, d As DWord
+    Dim sr As Long, sg As Long, sb As Long, dr As Long, dg As Long, db As Long
+    Dim src As *Byte, row As *DWord
+    Dim p As VoidPtr
+    Dim off As Long
+    w = g_uxGcW(gi)
+    h = g_uxGcH(gi)
+    If w = 0 Or h = 0 Then Exit Sub
+    sr = (px >> 16) And 255
+    sg = (px >> 8) And 255
+    sb = px And 255
+    For r = 0 To h - 1
+        yy = y + r
+        If yy >= g_uxClipT And yy < g_uxClipB Then
+            off = g_uxGcOff(gi) + r * w
+            p = g_uxPool
+            p = p + off
+            src = p As *Byte
+            off = yy * g_uxStride
+            p = g_uxBuf
+            p = p + off
+            row = p As *DWord
+            For c = 0 To w - 1
+                xx = x + c
+                a = src[c]
+                If a <> 0 And xx >= g_uxClipL And xx < g_uxClipR Then
+                    If a = 255 Then
+                        row[xx] = px
+                    Else
+                        d = row[xx]
+                        dr = (d >> 16) And 255
+                        dg = (d >> 8) And 255
+                        db = d And 255
+                        dr = dr + ((sr - dr) * a) \ 255
+                        dg = dg + ((sg - dg) * a) \ 255
+                        db = db + ((sb - db) * a) \ 255
+                        row[xx] = (dr << 16) Or (dg << 8) Or db
+                    End If
+                End If
+            Next
+        End If
+    Next
+End Sub
+
+' 文字列の幅（描くなら draw = 1 で (x, y) は窓の座標の左上）
+Function Ux_TextRun(ByVal hf As Long, s As String, ByVal x As Long, ByVal y As Long, ByVal px As DWord, ByVal draw As Long) As Long
+    Dim p As *Byte
+    Dim n As Long, i As Long, cp As Long, gi As Long, f As Long, w As Long
+    Ux_FontInit()
+    f = Ux_FontIdx(hf)
+    n = Len(s)
+    w = 0
+    Ux_TextRun = 0
+    If n = 0 Then Exit Function
+    p = StrPtr(s)
+    i = 0
+    While i < n
+        i = i + Ux_NextCp(p, i, n, cp)
+        gi = Ux_Glyph(f, cp)
+        If gi < 0 Then
+            w = w + g_uxFontPx(f) \ 2
+        Else
+            If draw <> 0 Then Ux_Blit(gi, x + w + g_uxGcL(gi), y + g_uxFontAsc(f) - g_uxGcT(gi), px)
+            w = w + g_uxGcAdv(gi)
+        End If
+    Wend
+    Ux_TextRun = w
+End Function
+
+#endif

@@ -1,9 +1,9 @@
-' UiX11 - Linux 版の Ui_ 関数（UiDraw.sbp の Windows 版と同じ名前・同じ引数）。
+' UiX11 - Linux 版の Ui_ 関数（UiDraw.sbp の Windows 版と同じ名前・同じ引数）の土台。
 ' X の窓は 1 枚。その中の四角を「ビュー」と呼び、HWND はビューの番号（UX_HWND_BASE + i）。
 ' HDC はそのビューの HWND と同じ値で、描く位置の原点と切り抜きはビューの四角。
 ' 描くのは自前の 32bpp の画素バッファ（0x00RRGGBB）。Ux_Present で XPutImage する。
-' 文字は FreeType（libfreetype.so.6）で OS の等幅フォント（Ux_FontPath$ の候補で最初に開けたもの）を読み、グリフは表に覚えておく。
-' XEvent や FreeType の構造体はバイト列から読む（オフセットは x86-64 の Xlib / FreeType 2）。
+' XEvent の構造体はバイト列から読む（オフセットは x86-64 の Xlib）。
+' 文字は UiX11Font.sbp、Ui_ 関数そのものは UiX11Ui.sbp。
 
 #ifdef _LINUX
 
@@ -30,18 +30,10 @@ Declare Function Ux_XDefineCursor Lib "libX11.so.6" Alias "XDefineCursor" (d As 
 Declare Function Ux_XCreateFontCursor Lib "libX11.so.6" Alias "XCreateFontCursor" (d As VoidPtr, shape As Long) As VoidPtr
 Declare Function Ux_XBell Lib "libX11.so.6" Alias "XBell" (d As VoidPtr, pct As Long) As Long
 
-Declare Function Ux_FT_Init_FreeType Lib "libfreetype.so.6" Alias "FT_Init_FreeType" (lib As VoidPtr) As Long
-Declare Function Ux_FT_New_Face Lib "libfreetype.so.6" Alias "FT_New_Face" (lib As VoidPtr, path As BytePtr, index As Long, face As VoidPtr) As Long
-Declare Function Ux_FT_Set_Pixel_Sizes Lib "libfreetype.so.6" Alias "FT_Set_Pixel_Sizes" (face As VoidPtr, w As Long, h As Long) As Long
-Declare Function Ux_FT_Load_Char Lib "libfreetype.so.6" Alias "FT_Load_Char" (face As VoidPtr, code As VoidPtr, flags As Long) As Long
-
 Const UX_HWND_BASE = &H1000
 Const UX_VIEW_MAX = 24
 Const UX_FONT_MAX = 3
-Const UX_GC_N = 4096                ' フォント 1 つのグリフ表の大きさ（2 のべき）
-Const UX_POOL_SIZE = &H400000       ' グリフの画素を置く所
 Const UX_SB_W = 14                  ' スクロールバーの幅
-Const UX_FONT_PATHS = 9             ' Ux_FontPath$ の候補の数
 Const UX_FONT_MONO = 1              ' HFONT の値。EditorFont_Create(-16)
 Const UX_FONT_GUI = 2               ' Ui_GuiFont()
 Const UX_X_MASK = &H2807F           ' KeyPress|KeyRelease|ButtonPress|ButtonRelease|PointerMotion|Exposure|StructureNotify
@@ -70,27 +62,6 @@ Dim g_uxVColor(23) As DWord
 Dim g_uxVSb(23) As Long             ' 縦のスクロールバーを持つ
 Dim g_uxVSbMin(23) As Long, g_uxVSbMax(23) As Long, g_uxVSbPage(23) As Long, g_uxVSbPos(23) As Long
 Dim g_uxVTrack(23) As Long
-
-' フォント
-Dim g_uxFtLib As VoidPtr
-Dim g_uxFaceQ(23) As Byte           ' フォント i の FT_Face（8 バイトずつ）
-Dim g_uxFontPx(2) As Long
-Dim g_uxFontAsc(2) As Long
-Dim g_uxFontH(2) As Long
-Dim g_uxFontOk(2) As Long
-Dim g_uxFontTried As Long
-
-' グリフ表（フォント i の j 番目は i * UX_GC_N + j）。cp は符号点 + 1（0 は空き）
-Dim g_uxGcCp(12287) As Long
-Dim g_uxGcAdv(12287) As Long
-Dim g_uxGcL(12287) As Long
-Dim g_uxGcT(12287) As Long
-Dim g_uxGcW(12287) As Long
-Dim g_uxGcH(12287) As Long
-Dim g_uxGcOff(12287) As Long
-Dim g_uxGcCount(2) As Long
-Dim g_uxPool As VoidPtr
-Dim g_uxPoolUsed As Long
 
 ' キャレット（1 つだけ）
 Dim g_uxCaretView As Long           ' HWND。0 は無い
@@ -197,6 +168,12 @@ Function Ux_ViewShown(h As HWND) As Long
     Ux_ViewShown = g_uxVShow(i)
 End Function
 
+' ビュー i の描ける幅（スクロールバーの分を除く）
+Function Ux_ViewInnerW(i As Long) As Long
+    Ux_ViewInnerW = g_uxVW(i)
+    If g_uxVSb(i) <> 0 Then Ux_ViewInnerW = Ux_ViewInnerW - UX_SB_W
+End Function
+
 ' 窓の座標 (x, y) がビューの中（スクロールバーは含まない）なら 1
 Function Ux_ViewHit(h As HWND, ByVal x As Long, ByVal y As Long) As Long
     Dim i As Long, w As Long
@@ -204,8 +181,7 @@ Function Ux_ViewHit(h As HWND, ByVal x As Long, ByVal y As Long) As Long
     i = Ux_Index(h)
     If i < 0 Then Exit Function
     If g_uxVShow(i) = 0 Then Exit Function
-    w = g_uxVW(i)
-    If g_uxVSb(i) <> 0 Then w = w - UX_SB_W
+    w = Ux_ViewInnerW(i)
     If x < g_uxVX(i) Or y < g_uxVY(i) Then Exit Function
     If x >= g_uxVX(i) + w Or y >= g_uxVY(i) + g_uxVH(i) Then Exit Function
     Ux_ViewHit = 1
@@ -244,8 +220,7 @@ Sub Ux_Target(h As HDC)
     g_uxClipL = 0 : g_uxClipT = 0 : g_uxClipR = 0 : g_uxClipB = 0
     g_uxOrgX = 0 : g_uxOrgY = 0
     If i < 0 Then Exit Sub
-    w = g_uxVW(i)
-    If g_uxVSb(i) <> 0 Then w = w - UX_SB_W
+    w = Ux_ViewInnerW(i)
     g_uxOrgX = g_uxVX(i)
     g_uxOrgY = g_uxVY(i)
     g_uxClipL = g_uxVX(i)
@@ -373,264 +348,6 @@ Sub Ux_Beep()
     If g_uxDpy <> 0 Then Ux_XBell(g_uxDpy, 0)
 End Sub
 
-' == フォント ==
-
-Function Ux_FacePtr(f As Long) As VoidPtr
-    Ux_FacePtr = LxGetQ(VarPtr(g_uxFaceQ(0)), f * 8)
-End Function
-
-' OS の等幅フォントの候補。日本語の字がある等幅を先に、無ければ欧文の等幅
-Function Ux_FontPath$(i As Long) As String
-    Dim d As String
-    d = "/usr/share/fonts/"
-    If i = 0 Then Ux_FontPath$ = d + "opentype/ipafont-gothic/ipag.ttf"
-    If i = 1 Then Ux_FontPath$ = d + "ipa-gothic/ipag.ttf"
-    If i = 2 Then Ux_FontPath$ = d + "truetype/takao-gothic/TakaoGothic.ttf"
-    If i = 3 Then Ux_FontPath$ = d + "truetype/dejavu/DejaVuSansMono.ttf"
-    If i = 4 Then Ux_FontPath$ = d + "dejavu-sans-mono-fonts/DejaVuSansMono.ttf"
-    If i = 5 Then Ux_FontPath$ = d + "TTF/DejaVuSansMono.ttf"
-    If i = 6 Then Ux_FontPath$ = d + "truetype/liberation/LiberationMono-Regular.ttf"
-    If i = 7 Then Ux_FontPath$ = d + "liberation-mono/LiberationMono-Regular.ttf"
-    If i = 8 Then Ux_FontPath$ = d + "truetype/freefont/FreeMono.ttf"
-End Function
-
-' フォント f（0 始まり）を px で開く
-Sub Ux_FontLoad(f As Long, px As Long, path As String)
-    Dim face As VoidPtr
-    Dim size As VoidPtr
-    Dim em As Long, asc As Long
-    g_uxFontPx(f) = px
-    g_uxFontAsc(f) = px
-    g_uxFontH(f) = px + 3
-    g_uxFontOk(f) = 0
-    If g_uxFtLib = 0 Then Exit Sub
-    face = 0
-    If Ux_FT_New_Face(g_uxFtLib, StrPtr(path), 0, VarPtr(face)) <> 0 Then Exit Sub
-    If face = 0 Then Exit Sub
-    Ux_FT_Set_Pixel_Sizes(face, 0, px)
-    LxSetQ(VarPtr(g_uxFaceQ(0)), f * 8, face)
-    ' FT_FaceRec: units_per_EM +136、ascender +138（short）、size +160。FT_Size_Metrics.height +64（26.6）
-    em = Ux_B(face, 136) + Ux_B(face, 137) * 256
-    asc = Ux_B(face, 138) + Ux_B(face, 139) * 256
-    If asc >= 32768 Then asc = asc - 65536
-    If em > 0 Then g_uxFontAsc(f) = (asc * px + em \ 2) \ em
-    size = LxGetQ(face, 160)
-    If size <> 0 Then g_uxFontH(f) = (Ux_L(size, 64) + 32) \ 64
-    g_uxFontOk(f) = 1
-End Sub
-
-Sub Ux_FontInit()
-    Dim path As String
-    Dim lib As VoidPtr
-    If g_uxFontTried <> 0 Then Exit Sub
-    g_uxFontTried = 1
-    Dim i As Long
-    lib = 0
-    If Ux_FT_Init_FreeType(VarPtr(lib)) = 0 Then g_uxFtLib = lib
-    g_uxPool = malloc(UX_POOL_SIZE)
-    For i = 0 To UX_FONT_PATHS - 1
-        path = Ux_FontPath$(i)
-        Ux_FontLoad(UX_FONT_MONO - 1, 16, path)
-        If g_uxFontOk(UX_FONT_MONO - 1) <> 0 Then Exit For
-    Next
-    Ux_FontLoad(UX_FONT_GUI - 1, 13, path)
-End Sub
-
-' HFONT（1 始まり）→ フォントの添字。知らない値は GUI
-Function Ux_FontIdx(hf As Long) As Long
-    Ux_FontIdx = UX_FONT_GUI - 1
-    If hf >= 1 And hf <= UX_FONT_MAX Then Ux_FontIdx = hf - 1
-End Function
-
-Function Ux_FontHeight(hf As Long) As Long
-    Ux_FontInit()
-    Ux_FontHeight = g_uxFontH(Ux_FontIdx(hf))
-End Function
-
-Sub Ux_CacheReset()
-    Dim i As Long
-    For i = 0 To UX_GC_N * UX_FONT_MAX - 1
-        g_uxGcCp(i) = 0
-    Next
-    For i = 0 To UX_FONT_MAX - 1
-        g_uxGcCount(i) = 0
-    Next
-    g_uxPoolUsed = 0
-End Sub
-
-' FreeType で描いて表に入れる。戻り値は表の添字（-1 は失敗）
-Function Ux_GlyphMake(f As Long, cp As Long, slot As Long) As Long
-    Dim face As VoidPtr, g As VoidPtr, src As VoidPtr, dst As VoidPtr
-    Dim w As Long, h As Long, pitch As Long, r As Long, c As Long, n As Long
-    Dim sp As *Byte, dp As *Byte
-    Dim off As Long
-    Ux_GlyphMake = -1
-    face = Ux_FacePtr(f)
-    If face = 0 Then Exit Function
-    If Ux_FT_Load_Char(face, cp, 4) <> 0 Then Exit Function      ' FT_LOAD_RENDER
-    ' FT_GlyphSlotRec: advance.x +128、bitmap.rows +152、width +156、pitch +160、buffer +168、
-    ' pixel_mode +178、bitmap_left +192、bitmap_top +196
-    g = LxGetQ(face, 152)
-    w = Ux_L(g, 156)
-    h = Ux_L(g, 152)
-    pitch = Ux_L(g, 160)
-    n = w * h
-    If g_uxPoolUsed + n > UX_POOL_SIZE Then Exit Function
-    src = LxGetQ(g, 168)
-    If Ux_B(g, 178) <> 2 Then n = 0                              ' 灰色の段階でなければ形は出さない
-    For r = 0 To h - 1
-        If n = 0 Then Exit For
-        off = r * pitch
-        dst = src
-        dst = dst + off
-        sp = dst As *Byte
-        off = g_uxPoolUsed + r * w
-        dst = g_uxPool
-        dst = dst + off
-        dp = dst As *Byte
-        For c = 0 To w - 1
-            dp[c] = sp[c]
-        Next
-    Next
-    If n = 0 Then
-        w = 0
-        h = 0
-    End If
-    g_uxGcCp(slot) = cp + 1
-    g_uxGcAdv(slot) = (Ux_L(g, 128) + 32) \ 64
-    g_uxGcL(slot) = Ux_L(g, 192)
-    g_uxGcT(slot) = Ux_L(g, 196)
-    g_uxGcW(slot) = w
-    g_uxGcH(slot) = h
-    g_uxGcOff(slot) = g_uxPoolUsed
-    g_uxPoolUsed = g_uxPoolUsed + w * h
-    g_uxGcCount(f) = g_uxGcCount(f) + 1
-    Ux_GlyphMake = slot
-End Function
-
-' 符号点 cp のグリフの添字（-1 は無い）
-Function Ux_Glyph(f As Long, cp As Long) As Long
-    Dim j As Long, k As Long, base As Long
-    Ux_Glyph = -1
-    If g_uxFontOk(f) = 0 Then Exit Function
-    If g_uxGcCount(f) > UX_GC_N * 3 \ 4 Or g_uxPoolUsed > UX_POOL_SIZE - 65536 Then Ux_CacheReset()
-    base = f * UX_GC_N
-    j = (cp * 31) And (UX_GC_N - 1)
-    For k = 0 To UX_GC_N - 1
-        If g_uxGcCp(base + j) = cp + 1 Then
-            Ux_Glyph = base + j
-            Exit Function
-        End If
-        If g_uxGcCp(base + j) = 0 Then
-            Ux_Glyph = Ux_GlyphMake(f, cp, base + j)
-            Exit Function
-        End If
-        j = (j + 1) And (UX_GC_N - 1)
-    Next
-End Function
-
-' UTF-8 の 1 文字。戻り値はバイト数（壊れていれば 1 で U+FFFD）
-Function Ux_NextCp(p As *Byte, i As Long, n As Long, ByRef cp As Long) As Long
-    Dim b As Long, k As Long, j As Long, c As Long
-    b = p[i]
-    Ux_NextCp = 1
-    cp = b
-    If b < &H80 Then Exit Function
-    k = 0
-    c = 0
-    If (b And &HE0) = &HC0 Then
-        k = 1
-        c = b And &H1F
-    ElseIf (b And &HF0) = &HE0 Then
-        k = 2
-        c = b And &HF
-    ElseIf (b And &HF8) = &HF0 Then
-        k = 3
-        c = b And 7
-    End If
-    cp = &HFFFD
-    If k = 0 Or i + k >= n + 1 Then Exit Function
-    For j = 1 To k
-        If i + j >= n Then Exit Function
-        If (p[i + j] And &HC0) <> &H80 Then Exit Function
-        c = (c << 6) Or (p[i + j] And &H3F)
-    Next
-    cp = c
-    Ux_NextCp = k + 1
-End Function
-
-' グリフ gi を窓の座標 (x, y)（左上）に色 px で重ねる
-Sub Ux_Blit(gi As Long, ByVal x As Long, ByVal y As Long, ByVal px As DWord)
-    Dim w As Long, h As Long, r As Long, c As Long, xx As Long, yy As Long
-    Dim a As Long, d As DWord
-    Dim sr As Long, sg As Long, sb As Long, dr As Long, dg As Long, db As Long
-    Dim src As *Byte, row As *DWord
-    Dim p As VoidPtr
-    Dim off As Long
-    w = g_uxGcW(gi)
-    h = g_uxGcH(gi)
-    If w = 0 Or h = 0 Then Exit Sub
-    sr = (px >> 16) And 255
-    sg = (px >> 8) And 255
-    sb = px And 255
-    For r = 0 To h - 1
-        yy = y + r
-        If yy >= g_uxClipT And yy < g_uxClipB Then
-            off = g_uxGcOff(gi) + r * w
-            p = g_uxPool
-            p = p + off
-            src = p As *Byte
-            off = yy * g_uxStride
-            p = g_uxBuf
-            p = p + off
-            row = p As *DWord
-            For c = 0 To w - 1
-                xx = x + c
-                a = src[c]
-                If a <> 0 And xx >= g_uxClipL And xx < g_uxClipR Then
-                    If a = 255 Then
-                        row[xx] = px
-                    Else
-                        d = row[xx]
-                        dr = (d >> 16) And 255
-                        dg = (d >> 8) And 255
-                        db = d And 255
-                        dr = dr + ((sr - dr) * a) \ 255
-                        dg = dg + ((sg - dg) * a) \ 255
-                        db = db + ((sb - db) * a) \ 255
-                        row[xx] = (dr << 16) Or (dg << 8) Or db
-                    End If
-                End If
-            Next
-        End If
-    Next
-End Sub
-
-' 文字列の幅（描くなら draw = 1 で (x, y) は窓の座標の左上）
-Function Ux_TextRun(ByVal hf As Long, s As String, ByVal x As Long, ByVal y As Long, ByVal px As DWord, ByVal draw As Long) As Long
-    Dim p As *Byte
-    Dim n As Long, i As Long, cp As Long, gi As Long, f As Long, w As Long
-    Ux_FontInit()
-    f = Ux_FontIdx(hf)
-    n = Len(s)
-    w = 0
-    Ux_TextRun = 0
-    If n = 0 Then Exit Function
-    p = StrPtr(s)
-    i = 0
-    While i < n
-        i = i + Ux_NextCp(p, i, n, cp)
-        gi = Ux_Glyph(f, cp)
-        If gi < 0 Then
-            w = w + g_uxFontPx(f) \ 2
-        Else
-            If draw <> 0 Then Ux_Blit(gi, x + w + g_uxGcL(gi), y + g_uxFontAsc(f) - g_uxGcT(gi), px)
-            w = w + g_uxGcAdv(gi)
-        End If
-    Wend
-    Ux_TextRun = w
-End Function
-
 ' == キャレット ==
 
 Sub Ux_DrawCaret()
@@ -697,285 +414,5 @@ Sub Ux_SbTrack(h As HWND, ByVal pos As Long)
     i = Ux_Index(h)
     If i >= 0 Then g_uxVTrack(i) = pos
 End Sub
-
-' == Ui_ 関数（UiDraw.sbp の Windows 版と同じ顔） ==
-
-Sub Ui_FillRc(hDC As HDC, ByRef rc As RECT, ByVal color As DWord)
-    Ux_Target(hDC)
-    Ux_FillAbs(g_uxOrgX + rc.left, g_uxOrgY + rc.top, g_uxOrgX + rc.right, g_uxOrgY + rc.bottom, Ux_Pixel(color))
-End Sub
-
-Sub Ui_Fill(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal color As DWord)
-    Ux_Target(hDC)
-    Ux_FillAbs(g_uxOrgX + l, g_uxOrgY + t, g_uxOrgX + r, g_uxOrgY + b, Ux_Pixel(color))
-End Sub
-
-Sub Ui_Frame(hDC As HDC, ByRef rc As RECT, ByVal color As DWord)
-    Ux_Target(hDC)
-    Ux_FrameAbs(g_uxOrgX + rc.left, g_uxOrgY + rc.top, g_uxOrgX + rc.right, g_uxOrgY + rc.bottom, Ux_Pixel(color))
-End Sub
-
-Function Ui_SysColor(ByVal index As Long) As DWord
-    Ui_SysColor = RGB(240, 240, 240)
-    If index = COLOR_WINDOW Or index = COLOR_HIGHLIGHTTEXT Or index = COLOR_3DHILIGHT Then Ui_SysColor = RGB(255, 255, 255)
-    If index = COLOR_WINDOWTEXT Or index = COLOR_BTNTEXT Then Ui_SysColor = RGB(0, 0, 0)
-    If index = COLOR_GRAYTEXT Then Ui_SysColor = RGB(128, 128, 128)
-    If index = COLOR_HIGHLIGHT Then Ui_SysColor = RGB(0, 120, 215)
-    If index = COLOR_3DSHADOW Then Ui_SysColor = RGB(160, 160, 160)
-    ' フォームデザイナ（Windows 10 の既定の色）
-    If index = COLOR_3DDKSHADOW Then Ui_SysColor = RGB(105, 105, 105)
-    If index = COLOR_3DLIGHT Then Ui_SysColor = RGB(227, 227, 227)
-    If index = COLOR_ACTIVECAPTION Then Ui_SysColor = RGB(153, 180, 209)
-    If index = COLOR_CAPTIONTEXT Then Ui_SysColor = RGB(0, 0, 0)
-    If index = COLOR_APPWORKSPACE Then Ui_SysColor = RGB(171, 171, 171)
-End Function
-
-Function Ui_SelectFont(hDC As HDC, hFont As HFONT) As HFONT
-    Dim i As Long
-    Ui_SelectFont = UX_FONT_GUI As HFONT
-    i = Ux_Index(hDC As HWND)
-    If i < 0 Then Exit Function
-    Ui_SelectFont = g_uxVFont(i) As HFONT
-    g_uxVFont(i) = hFont As Long
-End Function
-
-Function Ui_GuiFont() As HFONT
-    Ui_GuiFont = UX_FONT_GUI As HFONT
-End Function
-
-Sub Ui_TextColor(hDC As HDC, ByVal color As DWord)
-    Dim i As Long
-    i = Ux_Index(hDC As HWND)
-    If i >= 0 Then g_uxVColor(i) = color
-End Sub
-
-Sub Ui_Transparent(hDC As HDC)
-End Sub
-
-Function Ux_DcFont(hDC As HDC) As Long
-    Dim i As Long
-    Ux_DcFont = UX_FONT_GUI
-    i = Ux_Index(hDC As HWND)
-    If i >= 0 Then Ux_DcFont = g_uxVFont(i)
-End Function
-
-Function Ux_DcColor(hDC As HDC) As DWord
-    Dim i As Long
-    Ux_DcColor = 0
-    i = Ux_Index(hDC As HWND)
-    If i >= 0 Then Ux_DcColor = g_uxVColor(i)
-End Function
-
-Sub Ui_Text(hDC As HDC, ByVal x As Long, ByVal y As Long, s As String)
-    Ux_Target(hDC)
-    Ux_TextRun(Ux_DcFont(hDC), s, g_uxOrgX + x, g_uxOrgY + y, Ux_Pixel(Ux_DcColor(hDC)), 1)
-End Sub
-
-Function Ui_TextSize(hDC As HDC, s As String, ByRef sz As SIZE) As Long
-    Dim f As Long
-    f = Ux_DcFont(hDC)
-    sz.cx = Ux_TextRun(f, s, 0, 0, 0, 0)
-    sz.cy = Ux_FontHeight(f)
-    Ui_TextSize = 1
-End Function
-
-Sub Ui_TextCenter(hDC As HDC, ByRef rc As RECT, s As String)
-    Dim sz As SIZE
-    Ui_TextSize(hDC, s, sz)
-    Ui_Text(hDC, rc.left + (rc.right - rc.left - sz.cx) \ 2, rc.top + (rc.bottom - rc.top - sz.cy) \ 2, s)
-End Sub
-
-Sub Ui_ClientRect(hWnd As HWND, ByRef rc As RECT)
-    Dim i As Long
-    rc.left = 0
-    rc.top = 0
-    rc.right = 0
-    rc.bottom = 0
-    i = Ux_Index(hWnd)
-    If i < 0 Then Exit Sub
-    rc.right = g_uxVW(i)
-    If g_uxVSb(i) <> 0 Then rc.right = rc.right - UX_SB_W
-    rc.bottom = g_uxVH(i)
-End Sub
-
-Sub Ui_Invalidate(hWnd As HWND)
-    g_uxDirty = 1
-End Sub
-
-Function Ui_GetDC(hWnd As HWND) As HDC
-    Ui_GetDC = hWnd As HDC
-End Function
-
-Sub Ui_ReleaseDC(hWnd As HWND, hDC As HDC)
-End Sub
-
-Sub Ui_Capture(hWnd As HWND)
-    g_uxCapture = hWnd As Long
-End Sub
-
-Sub Ui_ReleaseCapture()
-    g_uxCapture = 0
-End Sub
-
-' 最後のマウスの位置（ビューの座標。LxFrame が覚えている）
-Sub Ui_MousePos(hWnd As HWND, ByRef pt As POINT)
-    pt.x = g_lxsMouseX - Ux_ViewX(hWnd)
-    pt.y = g_lxsMouseY - Ux_ViewY(hWnd)
-End Sub
-
-' カーソルの形はまだ変えない（いつも矢印）
-Sub Ui_Cursor(ByVal id As Long)
-End Sub
-
-' ---- フォームデザイナの絵 ----
-
-Function Ui_CaptionH() As Long
-    Ui_CaptionH = 23
-End Function
-
-' 1 画素の線で、左と上を tl、右と下を br で描く
-Sub Ux_Bevel(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal tl As DWord, ByVal br As DWord)
-    Ui_Fill(hDC, l, t, r - 1, t + 1, tl)
-    Ui_Fill(hDC, l, t, l + 1, b - 1, tl)
-    Ui_Fill(hDC, l, b - 1, r, b, br)
-    Ui_Fill(hDC, r - 1, t, r, b, br)
-End Sub
-
-' DrawEdge と同じ色の組み（外の線、その内側に内の線）。flags は BF_RECT だけ見る
-Sub Ui_Edge(hDC As HDC, ByRef rc As RECT, ByVal edge As DWord, ByVal flags As DWord)
-    Dim l As Long, t As Long, r As Long, b As Long
-    l = rc.left : t = rc.top : r = rc.right : b = rc.bottom
-    If (edge And BDR_RAISEDOUTER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DLIGHT), Ui_SysColor(COLOR_3DDKSHADOW))
-    If (edge And BDR_SUNKENOUTER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DSHADOW), Ui_SysColor(COLOR_3DHILIGHT))
-    If (edge And BDR_OUTER) <> 0 Then
-        l = l + 1 : t = t + 1 : r = r - 1 : b = b - 1
-    End If
-    If (edge And BDR_RAISEDINNER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DHILIGHT), Ui_SysColor(COLOR_3DSHADOW))
-    If (edge And BDR_SUNKENINNER) <> 0 Then Ux_Bevel(hDC, l, t, r, b, Ui_SysColor(COLOR_3DDKSHADOW), Ui_SysColor(COLOR_3DLIGHT))
-End Sub
-
-' 直径 13 の丸の、上から i 行目（0 から 12）の半分の幅
-Function Ux_RoundW(ByVal i As Long) As Long
-    Ux_RoundW = 6
-    If i = 0 Or i = 12 Then Ux_RoundW = 2
-    If i = 1 Or i = 11 Then Ux_RoundW = 4
-    If i = 2 Or i = 10 Then Ux_RoundW = 5
-End Function
-
-' 丸（ラジオボタン）。灰色の輪と白い中、印が付いていれば黒い点
-Sub Ux_Radio(hDC As HDC, ByRef rc As RECT, ByVal st As DWord)
-    Dim i As Long, d As Long, cx As Long
-    cx = rc.left + 6
-    For i = 0 To 12
-        d = Ux_RoundW(i)
-        Ui_Fill(hDC, cx - d, rc.top + i, cx + d + 1, rc.top + i + 1, Ui_SysColor(COLOR_3DSHADOW))
-        If i > 0 And i < 12 Then Ui_Fill(hDC, cx - d + 1, rc.top + i, cx + d, rc.top + i + 1, RGB(255, 255, 255))
-    Next
-    If (st And DFCS_CHECKED) <> 0 Then Ui_Fill(hDC, cx - 2, rc.top + 4, cx + 3, rc.top + 9, RGB(0, 0, 0))
-End Sub
-
-' DrawFrameControl の DFC_BUTTON に似た絵（押しボタン・チェックボックス・ラジオボタン）
-Sub Ui_ButtonFrame(hDC As HDC, ByRef rc As RECT, ByVal st As DWord)
-    Dim kind As DWord, i As Long
-    kind = st And &HFF
-    If kind = DFCS_BUTTONPUSH Then
-        Ui_FillRc(hDC, rc, Ui_SysColor(COLOR_BTNFACE))
-        Ui_Edge(hDC, rc, EDGE_RAISED, BF_RECT)
-        Exit Sub
-    End If
-    If kind = DFCS_BUTTONRADIO Then
-        Ux_Radio(hDC, rc, st)
-        Exit Sub
-    End If
-    Ui_FillRc(hDC, rc, RGB(255, 255, 255))
-    Ui_Edge(hDC, rc, EDGE_SUNKEN, BF_RECT)
-    If (st And DFCS_CHECKED) = 0 Then Exit Sub
-    For i = 0 To 2
-        Ui_Fill(hDC, rc.left + 3 + i, rc.top + 5 + i, rc.left + 4 + i, rc.top + 8 + i, RGB(0, 0, 0))
-    Next
-    For i = 0 To 3
-        Ui_Fill(hDC, rc.left + 6 + i, rc.top + 7 - i, rc.left + 7 + i, rc.top + 10 - i, RGB(0, 0, 0))
-    Next
-End Sub
-
-' rc の左寄せの 1 行（vcenter <> 0 なら上下は真ん中）。rc の外は描かない
-Sub Ui_TextLeft(hDC As HDC, ByRef rc As RECT, s As String, ByVal vcenter As Long)
-    Dim sz As SIZE, y As Long
-    Dim uc As Long, l As Long, t As Long, r As Long, b As Long
-    y = rc.top
-    If vcenter <> 0 Then
-        Ui_TextSize(hDC, s, sz)
-        y = rc.top + (rc.bottom - rc.top - sz.cy) \ 2
-    End If
-    uc = g_uxUClip : l = g_uxUClipL : t = g_uxUClipT : r = g_uxUClipR : b = g_uxUClipB
-    Ui_ClipTo(hDC, rc.left, rc.top, rc.right, rc.bottom)
-    Ui_Text(hDC, rc.left, y, s)
-    g_uxUClip = uc : g_uxUClipL = l : g_uxUClipT = t : g_uxUClipR = r : g_uxUClipB = b
-End Sub
-
-' この四角（ビューの座標）の外を描かない。今の切り抜きがあれば重ねる
-Sub Ui_ClipTo(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long)
-    If g_uxUClip <> 0 Then
-        If l < g_uxUClipL Then l = g_uxUClipL
-        If t < g_uxUClipT Then t = g_uxUClipT
-        If r > g_uxUClipR Then r = g_uxUClipR
-        If b > g_uxUClipB Then b = g_uxUClipB
-    End If
-    g_uxUClip = 1
-    g_uxUClipL = l : g_uxUClipT = t : g_uxUClipR = r : g_uxUClipB = b
-End Sub
-
-Sub Ui_ClipOff(hDC As HDC)
-    g_uxUClip = 0
-End Sub
-
-' 画素バッファにそのまま描く（Ux_Present でまとめて写すのでちらつかない）
-Function Ui_BufBegin(hDC As HDC, ByRef rc As RECT) As HDC
-    Ui_BufBegin = hDC
-End Function
-
-Sub Ui_BufEnd(hDC As HDC, mem As HDC, ByRef rc As RECT)
-End Sub
-
-Sub Ui_CaretCreate(hWnd As HWND, ByVal w As Long, ByVal h As Long)
-    g_uxCaretView = hWnd As Long
-    g_uxCaretW = w
-    g_uxCaretH = h
-    g_uxCaretHide = 1
-End Sub
-
-Sub Ui_CaretDestroy()
-    g_uxCaretView = 0
-End Sub
-
-Sub Ui_CaretPos(ByVal x As Long, ByVal y As Long)
-    g_uxCaretX = x
-    g_uxCaretY = y
-End Sub
-
-Sub Ui_CaretShow(hWnd As HWND)
-    If g_uxCaretHide > 0 Then g_uxCaretHide = g_uxCaretHide - 1
-End Sub
-
-Sub Ui_CaretHide(hWnd As HWND)
-    g_uxCaretHide = g_uxCaretHide + 1
-End Sub
-
-Sub Ui_VScrollSet(hWnd As HWND, ByVal nMin As Long, ByVal nMax As Long, ByVal page As Long, ByVal pos As Long)
-    Dim i As Long
-    i = Ux_Index(hWnd)
-    If i < 0 Then Exit Sub
-    g_uxVSbMin(i) = nMin
-    g_uxVSbMax(i) = nMax
-    g_uxVSbPage(i) = page
-    g_uxVSbPos(i) = pos
-End Sub
-
-Function Ui_VScrollTrack(hWnd As HWND) As Long
-    Dim i As Long
-    Ui_VScrollTrack = 0
-    i = Ux_Index(hWnd)
-    If i >= 0 Then Ui_VScrollTrack = g_uxVTrack(i)
-End Function
 
 #endif
