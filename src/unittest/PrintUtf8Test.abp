@@ -1,0 +1,131 @@
+' PrintDlg / PageSetupDlg / CreateDC は W 版。DEVMODE / DEVNAMES は A の形のまま名前だけ UTF-8（BasicPrintW.abp）。
+' mciSendCommand は MCI_OPEN のファイル名・MCI_INFO の答えなどを UTF-8 で扱う（CP932 にない 𠮷 も）。
+' ダイアログは出さない（PD_RETURNDEFAULT / PSD_RETURNDEFAULT で既定のプリンターを読む。プリンターが無ければ飛ばす）。
+
+Dim prW(299) As Byte
+Dim prA(299) As Byte
+Dim prW2(299) As Byte
+Dim prS As String
+Dim prH As HGLOBAL
+Dim prH2 As HGLOBAL
+Dim prP As *Byte
+Dim prPd As PRINTDLG
+Dim prPs As PAGESETUPDLG
+Dim prDev As String
+Dim prDc As HDC
+Dim prTmp(1023) As Byte
+Dim prOpen(39) As Byte
+Dim prInfo(31) As Byte
+Dim prRet(519) As Byte
+Dim prId As DWord
+
+Declare Function PrT_DeleteDC Lib "gdi32.dll" Alias "DeleteDC" (ByVal hdc As HDC) As Long
+
+' ワイドの名前 s を p へ
+Sub PrT_PutW(p As *Byte, s As String)
+    Dim w As *Byte
+    w = BasicWidePtr(StrPtr(s))
+    memcpy(p, w, BasicWideChars(w) * 2)
+    BasicFreeAnsi(w, StrPtr(s))
+End Sub
+
+Function PrT_GetPtr(p As *Byte) As VoidPtr
+    Dim pp As *VoidPtr
+    pp = p As *VoidPtr
+    PrT_GetPtr = pp[0]
+End Function
+
+' DEVNAMES（A の形）の i 番目の文字列
+Function PrT_DnStr$(h As HGLOBAL, i As Long) As String
+    Dim p As *Byte
+    p = GlobalLock(h)
+    PrT_DnStr$ = MakeStr(p + BasicGetW(p, i * 2))
+    GlobalUnlock(h)
+End Function
+
+' ---------- DEVMODEW → A の形 → DEVMODEW ----------
+FillMemory(VarPtr(prW), 300, 0)
+PrT_PutW(VarPtr(prW), "プリンター𠮷")
+BasicSetW(VarPtr(prW), 68, 220)
+BasicSetW(VarPtr(prW), 70, 4)
+prW[72] = &H13
+prW[76] = 2
+PrT_PutW(VarPtr(prW) + 102, "用紙Ａ４")
+prW[166] = 96
+prW[219] = &H5A
+prW[220] = &HE1
+prW[223] = &HE4
+BasicDmW2A(VarPtr(prW), VarPtr(prA))
+Assert(-1, MakeStr(VarPtr(prA)) = "プリンター𠮷", "dm name utf8")
+Assert(156, BasicGetW(VarPtr(prA), 36), "dm size a")
+Assert(4, BasicGetW(VarPtr(prA), 38), "dm extra a")
+Assert(&H13, prA[40], "dm fields")
+Assert(2, prA[44], "dm orientation")
+Assert(-1, MakeStr(VarPtr(prA) + 70) = "用紙Ａ４", "dm form utf8")
+Assert(96, prA[102], "dm logpixels")
+Assert(&H5A, prA[155], "dm tail end")
+Assert(&HE1, prA[156], "dm extra 0")
+Assert(&HE4, prA[159], "dm extra 3")
+FillMemory(VarPtr(prW2), 300, 0)
+BasicDmA2W(VarPtr(prA), VarPtr(prW2))
+Assert(220, BasicGetW(VarPtr(prW2), 68), "dm size w")
+Assert(0, memcmp(VarPtr(prW), VarPtr(prW2), 224), "dm round trip")
+
+' ---------- DEVNAMES（A の形）→ W → A ----------
+prH = BasicDnBuild("winspool", "プリンター𠮷", "USB001:", 1, 0)
+Assert(-1, PrT_DnStr$(prH, 1) = "プリンター𠮷", "dn build")
+prH2 = BasicDnGlobal(prH, 1)
+prP = GlobalLock(prH2)
+Assert(-1, MakeStr(BasicUtf8OfWide(prP + BasicGetW(prP, 2) * 2)) = "プリンター𠮷", "dn wide device")
+Assert(1, BasicGetW(prP, 6), "dn wide default")
+GlobalUnlock(prH2)
+GlobalFree(prH)
+prH = BasicDnGlobal(prH2, 0)
+Assert(-1, PrT_DnStr$(prH, 0) = "winspool", "dn back driver")
+Assert(-1, PrT_DnStr$(prH, 1) = "プリンター𠮷", "dn back device")
+Assert(-1, PrT_DnStr$(prH, 2) = "USB001:", "dn back port")
+GlobalFree(prH)
+GlobalFree(prH2)
+
+' ---------- 既定のプリンター（PrintDlg / PageSetupDlg / CreateDC） ----------
+FillMemory(VarPtr(prPd), Len(prPd), 0)
+prPd.lStructSize = Len(prPd)
+prPd.Flags = PD_RETURNDEFAULT
+If PrintDlg(prPd) <> 0 Then
+    prDev = PrT_DnStr$(prPd.hDevNames, 1)
+    Assert(-1, Len(prDev) > 0, "pd device")
+    Assert(-1, BasicUtf8Chars(StrPtr(prDev), Len(prDev)) > 0, "pd device utf8")
+    prP = GlobalLock(prPd.hDevMode)
+    Assert(156, BasicGetW(prP, 36), "pd devmode size")
+    If Len(prDev) < 32 Then Assert(-1, MakeStr(prP) = prDev, "pd devmode name")
+    prDc = BasicCreateDCW("WINSPOOL", StrPtr(prDev), prP)
+    Assert(-1, prDc <> 0, "createdc utf8")
+    PrT_DeleteDC(prDc)
+    GlobalUnlock(prPd.hDevMode)
+    BasicGlobalFree2(prPd.hDevMode, prPd.hDevNames)
+    FillMemory(VarPtr(prPs), Len(prPs), 0)
+    prPs.lStructSize = Len(prPs)
+    prPs.Flags = PSD_RETURNDEFAULT
+    Assert(1, PageSetupDlg(prPs), "psd default")
+    Assert(-1, PrT_DnStr$(prPs.hDevNames, 1) = prDev, "psd device")
+    BasicGlobalFree2(prPs.hDevMode, prPs.hDevNames)
+End If
+
+' ---------- MCI（𠮷 の入ったファイル名の WAV を開いて、ファイル名を読み戻す） ----------
+GetTempPath(1024, VarPtr(prTmp))
+prS = MakeStr(VarPtr(prTmp)) + "ユニット_音𠮷.wav"
+CopyFile("C:\Windows\Media\chord.wav", StrPtr(prS), 0)
+FillMemory(VarPtr(prOpen), 40, 0)
+BasicSetPtr(VarPtr(prOpen) + 12, StrPtr("waveaudio"))
+BasicSetPtr(VarPtr(prOpen) + 20, StrPtr(prS))
+Assert(0, mciSendCommand(0, MCI_OPEN, MCI_OPEN_TYPE Or MCI_OPEN_ELEMENT Or MCI_WAIT, VarPtr(prOpen)), "mci open utf8")
+prId = BasicGetDW(VarPtr(prOpen) + 8)
+Assert(-1, prId <> 0, "mci device id")
+Assert(-1, PrT_GetPtr(VarPtr(prOpen) + 20) = StrPtr(prS), "mci name ptr restored")
+FillMemory(VarPtr(prInfo), 32, 0)
+BasicSetPtr(VarPtr(prInfo) + 8, VarPtr(prRet))
+SetDWord(VarPtr(prInfo) + 16, 260)
+Assert(0, mciSendCommand(prId, MCI_INFO, &H200 Or MCI_WAIT, VarPtr(prInfo)), "mci info file")
+Assert(-1, lstrcmpi(VarPtr(prRet), StrPtr(prS)) = 0, "mci info utf8")
+Assert(0, mciSendCommand(prId, MCI_CLOSE, MCI_WAIT, 0), "mci close")
+DeleteFile(StrPtr(prS))

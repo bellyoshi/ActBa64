@@ -1,0 +1,186 @@
+' 印刷の API（PrintDlg / PageSetupDlg / CreateDC / ResetDC）を W 版に。プリンターの名前・用紙の名前・ポートは UTF-8。
+' プログラムが扱う DEVMODE（hDevMode の中身と CreateDC / ResetDC に渡すもの）と DEVNAMES（hDevNames）は
+' これまでどおり A 版の形（DEVMODE は 156 バイト、DEVNAMES の位置はバイト）で、名前だけ UTF-8
+' （32 バイトの名前に入らなければ CP932、それも入らなければ切った UTF-8）。W 版を呼ぶあいだだけワイドの形に直す。
+' フックを使うときと -linux は A 版のまま。
+
+' DEVMODE（A の形）と DEVMODEW の位置。名前の 32 文字の後ろの数値の並びは同じで、W 版は名前の分だけ後ろにずれる
+Const BASIC_DM_NAME = 32
+Const BASIC_DM_MIDA = 32
+Const BASIC_DM_MIDW = 64
+Const BASIC_DM_MIDN = 38
+Const BASIC_DM_FORMA = 70
+Const BASIC_DM_FORMW = 102
+Const BASIC_DM_TAILA = 102
+Const BASIC_DM_TAILW = 166
+
+Function BasicGetW(p As *Byte, off As Long) As Long
+    BasicGetW = p[off] + p[off + 1] * 256
+End Function
+
+Sub BasicSetW(p As *Byte, off As Long, v As Long)
+    p[off] = (v And &HFF) As Byte
+    p[off + 1] = ((v >> 8) And &HFF) As Byte
+End Sub
+
+' 32 文字のワイドの名前（NUL で終わるとは限らない）を 32 バイトへ
+Sub BasicName32Out(wsrc As *Byte, dst As *Byte)
+    Dim t As *Byte
+    t = GwAlloc(32)
+    If t = 0 Then Exit Sub
+    memcpy(t, wsrc, 64)
+    BasicWideTerm(t, 31)
+    BasicFindName(t, dst, 32)
+    free(t)
+End Sub
+
+' 32 バイトの名前（NUL で終わるとは限らない。UTF-8 か CP932）を 32 文字のワイドへ
+Sub BasicName32In(src As *Byte, wdst As *Byte)
+    Dim t(32) As Byte
+    memcpy(VarPtr(t), src, 32)
+    t[32] = 0
+    BasicFontFace(wdst, VarPtr(t))
+End Sub
+
+' ---------- DEVMODE ----------
+
+' W の dmSize から A の dmSize（名前 2 つ分 64 バイト短い。用紙の名前より前で切れていれば 32 バイト）
+Function BasicDmSizeA(sizeW As Long) As Long
+    BasicDmSizeA = sizeW - 64
+    If sizeW <= BASIC_DM_FORMW Then BasicDmSizeA = sizeW - 32
+End Function
+
+Function BasicDmSizeW(sizeA As Long) As Long
+    BasicDmSizeW = sizeA + 64
+    If sizeA <= BASIC_DM_FORMA Then BasicDmSizeW = sizeA + 32
+End Function
+
+' DEVMODEW（w）を A の形（a）へ。a には BasicDmSizeA + dmDriverExtra バイト要る
+Sub BasicDmW2A(w As *Byte, a As *Byte)
+    Dim sw As Long
+    sw = BasicGetW(w, BASIC_DM_MIDW + 4)
+    BasicName32Out(w, a)
+    memcpy(a + BASIC_DM_MIDA, w + BASIC_DM_MIDW, BASIC_DM_MIDN)
+    If sw > BASIC_DM_FORMW Then BasicName32Out(w + BASIC_DM_FORMW, a + BASIC_DM_FORMA)
+    If sw > BASIC_DM_TAILW Then memcpy(a + BASIC_DM_TAILA, w + BASIC_DM_TAILW, sw - BASIC_DM_TAILW)
+    BasicSetW(a, BASIC_DM_MIDA + 4, BasicDmSizeA(sw))
+    memcpy(a + BasicDmSizeA(sw), w + sw, BasicGetW(w, BASIC_DM_MIDW + 6))
+End Sub
+
+Sub BasicDmA2W(a As *Byte, w As *Byte)
+    Dim sa As Long
+    sa = BasicGetW(a, BASIC_DM_MIDA + 4)
+    BasicName32In(a, w)
+    memcpy(w + BASIC_DM_MIDW, a + BASIC_DM_MIDA, BASIC_DM_MIDN)
+    If sa > BASIC_DM_FORMA Then BasicName32In(a + BASIC_DM_FORMA, w + BASIC_DM_FORMW)
+    If sa > BASIC_DM_TAILA Then memcpy(w + BASIC_DM_TAILW, a + BASIC_DM_TAILA, sa - BASIC_DM_TAILA)
+    BasicSetW(w, BASIC_DM_MIDW + 4, BasicDmSizeW(sa))
+    memcpy(w + BasicDmSizeW(sa), a + sa, BasicGetW(a, BASIC_DM_MIDA + 6))
+End Sub
+
+' A の形の DEVMODE を、calloc したワイドの形に（呼び出し側が free）
+Function BasicDmWideOf(a As *Byte) As *Byte
+    BasicDmWideOf = 0
+    If a = 0 Then Exit Function
+    BasicDmWideOf = calloc(BasicDmSizeW(BasicGetW(a, BASIC_DM_MIDA + 4)) + BasicGetW(a, BASIC_DM_MIDA + 6) + 64)
+    If BasicDmWideOf <> 0 Then BasicDmA2W(a, BasicDmWideOf)
+End Function
+
+' 大域メモリの DEVMODE を、もう一方の形の新しい大域メモリに（toWide が 0 なら W → A）。h が 0 なら 0
+Function BasicDmGlobal(h As HGLOBAL, toWide As Long) As HGLOBAL
+    Dim src As *Byte
+    BasicDmGlobal = 0
+    If h = 0 Then Exit Function
+    src = GlobalLock(h)
+    BasicDmGlobal = GlobalAlloc(GHND, BasicDmGlobalSize(src, toWide))
+    BasicDmGlobalConv(src, GlobalLock(BasicDmGlobal), toWide)
+    BasicGlobalDone(h, BasicDmGlobal)
+End Function
+
+Function BasicDmGlobalSize(src As *Byte, toWide As Long) As Long
+    If toWide <> 0 Then BasicDmGlobalSize = BasicDmSizeW(BasicGetW(src, BASIC_DM_MIDA + 4)) + BasicGetW(src, BASIC_DM_MIDA + 6) + 64
+    If toWide = 0 Then BasicDmGlobalSize = BasicDmSizeA(BasicGetW(src, BASIC_DM_MIDW + 4)) + BasicGetW(src, BASIC_DM_MIDW + 6) + 64
+End Function
+
+Sub BasicDmGlobalConv(src As *Byte, dst As *Byte, toWide As Long)
+    If dst = 0 Then Exit Sub
+    If toWide <> 0 Then BasicDmA2W(src, dst)
+    If toWide = 0 Then BasicDmW2A(src, dst)
+End Sub
+
+Sub BasicGlobalDone(h1 As HGLOBAL, h2 As HGLOBAL)
+    GlobalUnlock(h1)
+    If h2 <> 0 Then GlobalUnlock(h2)
+End Sub
+
+' ---------- DEVNAMES（wDriverOffset / wDeviceOffset / wOutputOffset / wDefault の後ろに 3 つの文字列） ----------
+
+' i 番目（0 / 1 / 2）の文字列を UTF-8 で（malloc。呼び出し側が free）
+Function BasicDnPart(src As *Byte, i As Long, wide As Long) As *Byte
+    Dim off As Long
+    off = BasicGetW(src, i * 2)
+    If wide <> 0 Then BasicDnPart = BasicUtf8OfWide(src + off * 2)
+    If wide = 0 Then BasicDnPart = BasicDupUtf8(src + off)
+End Function
+
+' 3 つの文字列（UTF-8）から DEVNAMES を作る（wide なら位置は文字、文字列はワイド）。大きさは多めに取る
+Function BasicDnBuild(s0 As *Byte, s1 As *Byte, s2 As *Byte, def As Long, wide As Long) As HGLOBAL
+    Dim p As *Byte
+    BasicDnBuild = GlobalAlloc(GHND, 8 + (lstrlen(s0) + lstrlen(s1) + lstrlen(s2) + 3) * 2)
+    p = GlobalLock(BasicDnBuild)
+    If p = 0 Then Exit Function
+    BasicDnPut(p, BasicDnPut(p, BasicDnPut(p, 8, 0, s0, wide), 1, s1, wide), 2, s2, wide)
+    BasicSetW(p, 6, def)
+    GlobalUnlock(BasicDnBuild)
+End Function
+
+' 位置 off（バイト）に s を置き、i 番目の位置を書く。次の位置（バイト）を返す
+Function BasicDnPut(p As *Byte, off As Long, i As Long, s As *Byte, wide As Long) As Long
+    If wide <> 0 Then
+        BasicDnPut = BasicDnPutW(p, off, i, s)
+        Exit Function
+    End If
+    lstrcpy(p + off, s)
+    BasicSetW(p, i * 2, off)
+    BasicDnPut = off + lstrlen(s) + 1
+End Function
+
+Function BasicDnPutW(p As *Byte, off As Long, i As Long, s As *Byte) As Long
+    Dim w As *Byte, c As Long
+    w = BasicWidePtr(s)
+    c = BasicWideChars(w)
+    memcpy(p + off, w, c * 2)
+    BasicSetW(p, i * 2, off \ 2)
+    BasicDnPutW = off + (c + 1) * 2
+    BasicFreeAnsi(w, s)
+End Function
+
+' 大域メモリの DEVNAMES を、もう一方の形の新しい大域メモリに（toWide が 0 なら W → A）。h が 0 なら 0
+Function BasicDnGlobal(h As HGLOBAL, toWide As Long) As HGLOBAL
+    Dim src As *Byte, s0 As *Byte, s1 As *Byte, s2 As *Byte
+    BasicDnGlobal = 0
+    If h = 0 Then Exit Function
+    src = GlobalLock(h)
+    BasicDnParts(src, 1 - BasicBit(toWide), s0, s1, s2)
+    BasicDnGlobal = BasicDnBuild(s0, s1, s2, BasicGetW(src, 6), toWide)
+    GlobalUnlock(h)
+    BasicDnFree3(s0, s1, s2)
+End Function
+
+' 0 でなければ 1
+Function BasicBit(v As Long) As Long
+    BasicBit = 0
+    If v <> 0 Then BasicBit = 1
+End Function
+
+Sub BasicDnParts(src As *Byte, sw As Long, ByRef s0 As *Byte, ByRef s1 As *Byte, ByRef s2 As *Byte)
+    s0 = BasicDnPart(src, 0, sw)
+    s1 = BasicDnPart(src, 1, sw)
+    s2 = BasicDnPart(src, 2, sw)
+End Sub
+
+Sub BasicDnFree3(a As *Byte, b As *Byte, c As *Byte)
+    If a <> 0 Then free(a)
+    If b <> 0 Then free(b)
+    If c <> 0 Then free(c)
+End Sub

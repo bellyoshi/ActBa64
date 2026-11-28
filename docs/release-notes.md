@@ -22,6 +22,8 @@ A 版の API をそのまま公開していて、日本語のパスや文字列�
 - フォントのダイアログ（`ChooseFont`）を W 版にし、`GetObject` で読んだフォント名も UTF-8 で返します（以前は CP932）。
 - `lstrcmpi` / `CompareString` / `CharUpper` / `CharLower` が、日本語や全角の英字を含む UTF-8 の文字列を正しく比べ・変えます。
 - `RegisterWindowMessage` / `RegisterClipboardFormat` / `GetClipboardFormatName` / `SetComputerName` / `GetFileTitle` / `GetCompressedFileSize` / `CreateMailslot` / `ExtractAssociatedIcon` / `mciGetErrorString` を W 版にしました。
+- 印刷（`PrintDlg` / `PageSetupDlg` / `CreateDC` / `ResetDC`）を W 版にしました。日本語の名前のプリンターも開けます。`hDevMode` / `hDevNames` の中身はこれまでどおり A 版の形で、名前は UTF-8 です。
+- `mciSendCommand` が、日本語や CP932 にない文字の入ったファイル名の音・動画も開けるようになりました（`MCI_OPEN` / `MCI_LOAD` / `MCI_SAVE` のファイル名と `MCI_INFO` / `MCI_SYSINFO` の答えが UTF-8）。
 
 **互換性**: パスや文字列を返す API の戻り値と書き戻す値は、文字数ではなく UTF-8 のバイト数になります。サブクラスの手続きで `CallWindowProcA` を自分で Declare して使っているときは、無印の `CallWindowProc` に替えてください。CP932 のバイト列が返ると決めて自分で UTF-8 に直しているプログラムは、そのまま動きます（妥当な UTF-8 は直さない作りなら）。
 
