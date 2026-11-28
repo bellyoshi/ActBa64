@@ -1,6 +1,8 @@
 # リリースノート
 
-## 次の版（v0.1.9 からの変更点）
+## v0.2.0（v0.1.9 からの変更点）
+
+Windows の API を UTF-8 にそろえた更新です。日本語や CP932 にない文字（𠮷 など）のパス・ファイル名・窓の文字列が化けなくなりました。あわせて 64bit の exe に例外の巻き戻し情報を出し、ProjectEditor にツールバーを足しました。パスや文字列を返す API の戻り値の数え方が変わるので、下の **互換性** を見てください。
 
 ### 文字化け
 
@@ -25,7 +27,40 @@ A 版の API をそのまま公開していて、日本語のパスや文字列�
 
 ### コンパイラ
 
+- 64bit の Windows の exe / DLL に例外の巻き戻し情報（`.pdata`）を出します。OS が例外を配るときや `RtlCaptureStackBackTrace` で呼び出し履歴をたどれるようになり、NULL の参照などはデバッガー無しでも c0000005 で終わります。これまでは新しい Windows で c0000409 の fail fast になることがありました（[different.md](./different.md)）。`-actba32` と `-linux` は出しません。
+- `Input` / `Input #` の読み先に配列の要素（`a[i]` / `a(i)` / `a[i, j]`）を書けるようにしました。
+- 仮引数の `DWordPtr` などのポインタの別名（TypeDef の `*DWord` など）を `*T` として読み、添字で読み書きできるようにしました。
+- 実数（Double）を `Long` / `Word` / `Byte` の配列の要素へ代入すると、切り捨てて入れます。
+
+不具合の修正:
+
 - `As String` の Type メンバ（`sa.name`・`p->name`・Class のメンバ）を `Print` すると、文字列ではなく数（文字列のポインタ）が出ていたのを直しました。連結（`sa.name + sa.name`）と比較も文字列として扱います。
+
+### デバッガー
+
+- ProjectEditor で、動いていないときに F10 / F11 を押すとデバッグ実行を始め、ソースの最初の文で止まります（abdbg の `n` / `s` を `r` の前に使ったときも同じ）。ステップで止まるのはユーザーのソースの文だけで、ライブラリの中のトップレベルの文では止まりません。
+- abdbg: `Debug` 文でない `int3`（OS の中のものなど）では止めずに続けます。
+- abdbg: 止めた例外を続けた後に c0000409 の fail fast が来たときは、プログラムを元の例外のコードで終わらせます（同じ例外で二度止まっていました）。
+
+### ProjectEditor
+
+- メニューの下にツールバーを足しました（Windows 版）。新規・開く・上書き保存 / 切り取り・コピー・貼り付け / 元に戻す・やり直し / 検索 / コンパイル・実行 / デバッグ実行・停止・ステップ オーバー・ステップ イン があります。ヒントはメニューの見出しと同じです。
+- ファイル メニューの一番下に **終了** を足しました（閉じるボタンと同じく保存を尋ねます）。
+- Basic メニューの「_DEBUG を定義」を外しました。`_DEBUG` はデバッグ実行（F5）で `-debug` を付けて訳すときに定義されます。
+
+### ドキュメント
+
+- [unicode-api.md](./unicode-api.md) を足しました（文字コードを扱う API の説明）。
+- README の現状から、対応済みの `Int64` / `QWord`・指数表記のリテラル・`Single` の演算を外しました。
+- 初期の試作を [bellyoshi/Actba64-prototype](https://github.com/bellyoshi/Actba64-prototype) に移したことを README と [index.md](./index.md) に書きました。
+- リファレンスの LP64 に「Long and Pointer 64-bit」を添えました。
+
+### テスト
+
+- UTF-8 の API のユニットテスト `FileUtf8Test`・`SysUtf8Test`・`MsgWideTest`・`RegUtf8Test`・`ShellUtf8Test`・`MiscUtf8Test` を足しました。
+- コンパイラのテスト `t_unwind_null`・`t_unwind_walk`・`t_input_elem`・`t_dwordptr_param_dbl_store`・`t_udt_str_print` を足しました。
+- abdbg のテスト `step_start`・`brk_foreign`・`failfast` を足しました。
+- CI のブートストラップのコンパイラを v0.1.9 に上げました。
 
 ## v0.1.9（v0.1.8 からの変更点）
 
