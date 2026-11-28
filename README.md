@@ -114,8 +114,9 @@ cd src\actba64
 | `src/common` | Utilities shared by the compiler and the editor |
 | `src/unittest` | Unit tests |
 | `src/dbgtest` | Unit tests for the debugger parts of abdbg and ProjectEditor |
-| `src/prototype*` | Early prototypes (old assembler / linker). Not part of the current toolchain |
 | `docs/` | Documentation |
+
+The early prototypes (old assembler / linker) have moved to [bellyoshi/Actba64-prototype](https://github.com/bellyoshi/Actba64-prototype). They are not part of the current toolchain.
 
 ## Documentation
 

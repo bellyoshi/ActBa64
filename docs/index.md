@@ -63,4 +63,4 @@ CallBack.wbpとMakeWindow.wbpをProjectEditorが書き換えます。これら�
 
 ## ソース側の関連文書
 
-旧 `actba32` / `abc` / `abassembler` / `ablinker` は廃止済み。32bit 出力は `actba64 -actba32`（共通 IR → x86 + PE32、[PE+32.md](./PE+32.md)）。試作は `src/prototype*`。
+旧 `actba32` / `abc` / `abassembler` / `ablinker` は廃止済み。32bit 出力は `actba64 -actba32`（共通 IR → x86 + PE32、[PE+32.md](./PE+32.md)）。初期の試作は [bellyoshi/Actba64-prototype](https://github.com/bellyoshi/Actba64-prototype) に移しました。

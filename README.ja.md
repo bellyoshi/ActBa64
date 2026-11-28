@@ -110,8 +110,9 @@ cd src\actba64
 | `src/projecteditor` | ProjectEditor のソース、ヘルプ、言語ファイル |
 | `src/common` | コンパイラとエディタで共有する部品 |
 | `src/unittest` | ユニットテスト |
-| `src/prototype*` | 初期の試作（旧アセンブラ / リンカ）。今のツールチェーンでは使いません |
 | `docs/` | ドキュメント |
+
+初期の試作（旧アセンブラ / リンカ）は [bellyoshi/Actba64-prototype](https://github.com/bellyoshi/Actba64-prototype) に移しました。今のツールチェーンでは使いません。
 
 ## ドキュメント
 
