@@ -3,6 +3,7 @@
 Dim g_adLoaderSeen As Long
 Dim g_adRearm As Long
 Dim g_adFaultAddr As QWord
+Dim g_adFaultCode As Long
 Dim g_adStopKind As String
 
 ' MAIN のループから、動いている間呼ぶ（MAIN に戻るたびに String を回収できるよう 1 つずつ）
@@ -65,9 +66,21 @@ Sub AdOnBreakUser(addr As QWord)
     i = AdBpFindAddr(addr)
     If i >= 0 Then AdBpHit(i, addr)
     If i >= 0 Then Exit Sub
-    If g_adLoaderSeen <> 0 Then AdStop("debug", "")
+    If g_adLoaderSeen <> 0 And AdBreakIsDebug() <> 0 Then AdStop("debug", "")
     g_adLoaderSeen = 1
 End Sub
+
+' Debug 文（BasicDebug から DebugBreak）の int3 か。ほかの int3（例: 例外で落ちるときに
+' Windows Server が OS の中で踏むもの）では止めずに続ける
+Function AdBreakIsDebug() As Long
+    Dim i As Long
+    AdBreakIsDebug = 0
+    AdThreadOpen()
+    AdStackBuild()
+    For i = 0 To g_adFrN - 1
+        If AdFnName$(AdFrameFn(i)) = "BasicDebug" Then AdBreakIsDebug = 1
+    Next
+End Function
 
 ' ブレークポイントの 1 命令を進めた後: 0xCC を書き戻す
 ' 1 命令進んだ: ブレークポイントの 0xCC を書き戻し、ステップ中なら次を決める
@@ -82,10 +95,23 @@ End Sub
 ' exe の外の 1 回目の例外はプログラム（OS）に任せる。同じ所の 2 回目は止めずに終わらせる
 Sub AdOnFault(code As Long, addr As QWord, first As Long)
     g_adCont = AD_DBG_NOT_HANDLED
+    If code = AD_EXC_FAILFAST And g_adFaultAddr <> 0 Then
+        AdEndAsFault()
+        Exit Sub
+    End If
     If first <> 0 And AdInImage(addr) = 0 Then Exit Sub
     If first = 0 And addr = g_adFaultAddr Then Exit Sub
     g_adFaultAddr = addr
+    g_adFaultCode = code
     AdStop("exception", AdHex8$(code))
+End Sub
+
+' 例外で止めて続けた後、OS がその例外を配る途中で fail fast（c0000409）にしたとき。
+' exe には巻き戻しの情報（.pdata）が無く、新しい Windows（CI の Windows Server など）は
+' 呼び出し履歴をたどれずに落とす。プログラムには例外の受け手が無いので、元の例外で終わらせる
+Sub AdEndAsFault()
+    Ad_TerminateProcess(g_adHProc, g_adFaultCode)
+    g_adCont = AD_DBG_CONTINUE
 End Sub
 
 Function AdHex8$(v As Long) As String
