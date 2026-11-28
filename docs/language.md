@@ -709,7 +709,7 @@ SetByte(p, n) / SetWord(p, n) / SetDWord(p, n) / SetSingle(p, sng) / SetDouble(p
   - **Precise**: `String` / `String` 配列のグローバル・ローカルスロットをコンパイル時に root 登録し、セーフポイントで無条件マーク
   - **Conservative**: ユーザ globals とスタックをポインタ幅刻み走査し、ヒープタグ付き登録ブロックのみマーク
   - 確保は `StrHeapAlloc`、回収は `StrCollect`（String を確保しうるループ頭・`Print`/`Input` 後・MAIN 終了前。関数エピローグでは走らない）
-  - UDT 内の String メンバは型表で区別できないため precise root 未登録（conservative 走査に依存）
+  - UDT 内の String メンバは precise root 未登録（conservative 走査に依存）。型表では `FIELDTY_STRING` で区別できる
 - `InStr` / `Lower$` などは **言語組み込みではなく** ライブラリ `.abp` として提供される場合がある
 
 `Chr$` / `Right$` は組み込み。`Hex$` / `Oct$` / `ZeroString` / `Val` / `InStr` などはライブラリ側。`Oct$` は 32bit のビット列を 8 進にし、先頭の 0 は付けない。`ZeroString(n)` の `Len` は `n` で、中身は 0（埋め込み NUL）。`n` が負のときは空文字。
