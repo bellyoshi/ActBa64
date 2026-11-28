@@ -17,6 +17,13 @@ Const ETB_STD_OPEN = 7
 Const ETB_STD_SAVE = 8
 Const ETB_STD_FIND = 12
 Const ETB_STD_COUNT = 15
+' 自前の絵（標準の絵の後ろに続く）
+Const ETB_IMG_BUILD = 15
+Const ETB_IMG_RUN = 16
+Const ETB_IMG_DEBUG = 17
+Const ETB_IMG_STOP = 18
+Const ETB_IMG_OVER = 19
+Const ETB_IMG_INTO = 20
 Const ETB_OWN_COUNT = 6
 Const ETB_MAX = 24
 Const ETB_TTN_A = -520              ' TTN_NEEDTEXTA
@@ -25,6 +32,8 @@ Const ETB_TTN_W = -530              ' TTN_NEEDTEXTW
 Dim g_hToolbar As HWND
 Dim g_etbBuf(767) As Byte          ' TBBUTTON の並び（64bit は 32 バイト、32bit は 20 バイト）
 Dim g_etbN As Long
+Dim g_etbId(23) As Long             ' ボタンのコマンド ID（区切りは 0）
+Dim g_etbUi(23) As Long             ' ヒントにするメニューの見出し（UI_*）
 Dim g_etbTipW As *Byte              ' ヒントの文字（W）。次のヒントまで持つ
 Dim g_etbTipA As *Byte              ' ヒントの文字（A、CP932）
 
@@ -33,8 +42,8 @@ Function EditorTb_BtnSize() As Long
     If SizeOf(VoidPtr) = 8 Then EditorTb_BtnSize = 32
 End Function
 
-' 1 つ足す。img < 0 なら区切り
-Sub EditorTb_Add(ByVal img As Long, ByVal id As Long)
+' 1 つ足す。img < 0 なら区切り。ui はヒントにするメニューの見出し
+Sub EditorTb_Add(ByVal img As Long, ByVal id As Long, ByVal ui As Long)
     Dim p As *Byte
     Dim pl As *Long
     If g_etbN >= ETB_MAX Then Exit Sub
@@ -49,39 +58,71 @@ Sub EditorTb_Add(ByVal img As Long, ByVal id As Long)
         p[8] = TBSTATE_ENABLED
         p[9] = TBSTYLE_BUTTON
     End If
+    g_etbId(g_etbN) = id
+    g_etbUi(g_etbN) = ui
     g_etbN = g_etbN + 1
 End Sub
 
-Sub EditorTb_AddAll()
-    Dim o As Long
-    o = ETB_STD_COUNT
-    g_etbN = 0
-    EditorTb_Add(ETB_STD_NEW, IDM_FILENEW)
-    EditorTb_Add(ETB_STD_OPEN, IDM_FILEOPEN)
-    EditorTb_Add(ETB_STD_SAVE, IDM_SAVE)
-    EditorTb_Add(-1, 0)
-    EditorTb_Add(ETB_STD_CUT, IDM_CUT)
-    EditorTb_Add(ETB_STD_COPY, IDM_COPY)
-    EditorTb_Add(ETB_STD_PASTE, IDM_PASTE)
-    EditorTb_Add(-1, 0)
-    EditorTb_Add(ETB_STD_UNDO, IDM_UNDO)
-    EditorTb_Add(ETB_STD_REDO, IDM_REDO)
-    EditorTb_Add(-1, 0)
-    EditorTb_Add(ETB_STD_FIND, IDM_FIND)
-    EditorTb_Add(-1, 0)
-    EditorTb_Add(o, IDM_COMPILE)
-    EditorTb_Add(o + 1, IDM_RUN)
-    EditorTb_Add(-1, 0)
-    EditorTb_Add(o + 2, IDM_DBG_GO)
-    EditorTb_Add(o + 3, IDM_DBG_STOP)
-    EditorTb_Add(o + 4, IDM_DBG_OVER)
-    EditorTb_Add(o + 5, IDM_DBG_IN)
+Sub EditorTb_Sep()
+    EditorTb_Add(-1, 0, -1)
 End Sub
 
-' ---- 自前の 4 つの絵（16 x 16 を横に並べる。地はボタンの色）----
+Sub EditorTb_AddDbg(ByVal img As Long, ByVal id As Long)
+    EditorTb_Add(img, id, EditorDbg_MenuUi(id))
+End Sub
+
+Sub EditorTb_AddAll()
+    g_etbN = 0
+    EditorTb_Add(ETB_STD_NEW, IDM_FILENEW, UI_MENU_NEW)
+    EditorTb_Add(ETB_STD_OPEN, IDM_FILEOPEN, UI_MENU_OPEN)
+    EditorTb_Add(ETB_STD_SAVE, IDM_SAVE, UI_MENU_SAVE)
+    EditorTb_Sep()
+    EditorTb_Add(ETB_STD_CUT, IDM_CUT, UI_MENU_CUT)
+    EditorTb_Add(ETB_STD_COPY, IDM_COPY, UI_MENU_COPY)
+    EditorTb_Add(ETB_STD_PASTE, IDM_PASTE, UI_MENU_PASTE)
+    EditorTb_Sep()
+    EditorTb_Add(ETB_STD_UNDO, IDM_UNDO, UI_MENU_UNDO)
+    EditorTb_Add(ETB_STD_REDO, IDM_REDO, UI_MENU_REDO)
+    EditorTb_Sep()
+    EditorTb_Add(ETB_STD_FIND, IDM_FIND, UI_MENU_FIND)
+    EditorTb_Sep()
+    EditorTb_Add(ETB_IMG_BUILD, IDM_COMPILE, UI_MENU_COMPILE)
+    EditorTb_Add(ETB_IMG_RUN, IDM_RUN, UI_MENU_RUN)
+    EditorTb_Sep()
+    EditorTb_AddDbg(ETB_IMG_DEBUG, IDM_DBG_GO)
+    EditorTb_AddDbg(ETB_IMG_STOP, IDM_DBG_STOP)
+    EditorTb_AddDbg(ETB_IMG_OVER, IDM_DBG_OVER)
+    EditorTb_AddDbg(ETB_IMG_INTO, IDM_DBG_IN)
+End Sub
+
+' ---- 自前の絵（16 x 16 を横に並べる。地はボタンの色）----
+
+Function EditorTb_Blue() As DWord
+    EditorTb_Blue = RGB(0, 70, 200)
+End Function
+
+Function EditorTb_Red() As DWord
+    EditorTb_Red = RGB(200, 0, 0)
+End Function
 
 Sub EditorTb_Row(hDC As HDC, ByVal x As Long, ByVal y As Long, ByVal w As Long, ByVal c As DWord)
     Ui_Fill(hDC, x, y, x + w, y + 1, c)
+End Sub
+
+' 下向きの矢じり（上の辺が左 l から幅 w、1 段ごとに両側を 1 つ詰める）
+Sub EditorTb_Head(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal w As Long)
+    Dim i As Long
+    i = 0
+    While w - i * 2 > 0
+        EditorTb_Row(hDC, l + i, t + i, w - i * 2, EditorTb_Blue())
+        i = i + 1
+    Wend
+End Sub
+
+' 縁の色 edge、中の色 fill の箱
+Sub EditorTb_Box(hDC As HDC, ByVal l As Long, ByVal t As Long, ByVal r As Long, ByVal b As Long, ByVal edge As DWord, ByVal fill As DWord)
+    Ui_Fill(hDC, l, t, r, b, edge)
+    Ui_Fill(hDC, l + 1, t + 1, r - 1, b - 1, fill)
 End Sub
 
 ' 右向きの三角。solid = 0 なら縁だけ
@@ -90,66 +131,56 @@ Sub EditorTb_Play(hDC As HDC, ByVal x As Long, ByVal solid As Long)
     Dim c As DWord
     c = RGB(0, 150, 0)
     For i = 0 To 12
-        w = 6 - Abs(i - 6)
-        w = w + w + 1
+        w = (6 - Abs(i - 6)) * 2 + 1
         If solid <> 0 Or w <= 2 Or i = 0 Or i = 12 Then
-            EditorTb_Row(hDC, x + 3, 1 + i + 1, w, c)
+            EditorTb_Row(hDC, x + 3, i + 2, w, c)
         Else
-            EditorTb_Row(hDC, x + 3, 1 + i + 1, 2, c)
-            EditorTb_Row(hDC, x + 3 + w - 2, 1 + i + 1, 2, c)
+            EditorTb_Row(hDC, x + 3, i + 2, 2, c)
+            EditorTb_Row(hDC, x + 1 + w, i + 2, 2, c)
         End If
     Next
 End Sub
 
 ' コンパイル: 下向きの青い矢印と、受ける灰色の台
 Sub EditorTb_Build(hDC As HDC, ByVal x As Long)
-    Dim i As Long
-    Dim c As DWord
-    c = RGB(0, 70, 200)
-    Ui_Fill(hDC, x + 6, 1, x + 10, 7, c)
-    For i = 0 To 4
-        EditorTb_Row(hDC, x + 3 + i, 7 + i, 10 - i * 2, c)
-    Next
-    Ui_Fill(hDC, x + 1, 12, x + 15, 15, RGB(96, 96, 96))
-    Ui_Fill(hDC, x + 2, 13, x + 14, 14, RGB(200, 200, 200))
+    Ui_Fill(hDC, x + 6, 1, x + 10, 7, EditorTb_Blue())
+    EditorTb_Head(hDC, x + 3, 7, 10)
+    EditorTb_Box(hDC, x + 1, 12, x + 15, 15, RGB(96, 96, 96), RGB(200, 200, 200))
 End Sub
 
 ' デバッグ: 塗った三角と、左下の赤い丸（ブレークポイント）
 Sub EditorTb_Debug(hDC As HDC, ByVal x As Long)
     EditorTb_Play(hDC, x, 1)
-    Ui_Fill(hDC, x + 1, 10, x + 6, 15, RGB(200, 0, 0))
-    Ui_Fill(hDC, x + 2, 9, x + 5, 16, RGB(200, 0, 0))
-    Ui_Fill(hDC, x, 11, x + 7, 14, RGB(200, 0, 0))
+    Ui_Fill(hDC, x + 1, 10, x + 6, 15, EditorTb_Red())
+    Ui_Fill(hDC, x + 2, 9, x + 5, 16, EditorTb_Red())
+    Ui_Fill(hDC, x, 11, x + 7, 14, EditorTb_Red())
+End Sub
+
+Sub EditorTb_Stop(hDC As HDC, ByVal x As Long)
+    Ui_Fill(hDC, x + 3, 3, x + 13, 13, EditorTb_Red())
 End Sub
 
 ' ステップ オーバー: 灰色の箱（手続き）を上から越える青い矢印
 Sub EditorTb_Over(hDC As HDC, ByVal x As Long)
-    Dim i As Long
-    Dim c As DWord
-    c = RGB(0, 70, 200)
-    Ui_Fill(hDC, x + 5, 10, x + 11, 15, RGB(128, 128, 128))
-    Ui_Fill(hDC, x + 6, 11, x + 10, 14, RGB(230, 230, 230))
-    Ui_Fill(hDC, x + 2, 2, x + 13, 4, c)
-    Ui_Fill(hDC, x + 2, 2, x + 4, 11, c)
-    Ui_Fill(hDC, x + 11, 2, x + 13, 7, c)
-    For i = 0 To 3
-        EditorTb_Row(hDC, x + 9 + i, 7 + i, 6 - i * 2, c)
-    Next
+    EditorTb_Box(hDC, x + 5, 10, x + 11, 15, RGB(128, 128, 128), RGB(230, 230, 230))
+    Ui_Fill(hDC, x + 2, 2, x + 13, 4, EditorTb_Blue())
+    Ui_Fill(hDC, x + 2, 2, x + 4, 11, EditorTb_Blue())
+    Ui_Fill(hDC, x + 11, 2, x + 13, 7, EditorTb_Blue())
+    EditorTb_Head(hDC, x + 9, 7, 6)
 End Sub
 
 ' ステップ イン: 青い矢印が灰色の箱（手続き）の中へ降りる
 Sub EditorTb_Into(hDC As HDC, ByVal x As Long)
-    Dim i As Long
-    Dim c As DWord
-    c = RGB(0, 70, 200)
-    Ui_Fill(hDC, x + 3, 8, x + 16, 16, RGB(128, 128, 128))
-    Ui_Fill(hDC, x + 4, 9, x + 15, 15, RGB(230, 230, 230))
-    Ui_Fill(hDC, x + 1, 2, x + 11, 4, c)
-    Ui_Fill(hDC, x + 9, 2, x + 11, 10, c)
-    For i = 0 To 3
-        EditorTb_Row(hDC, x + 7 + i, 10 + i, 6 - i * 2, c)
-    Next
+    EditorTb_Box(hDC, x + 3, 8, x + 16, 16, RGB(128, 128, 128), RGB(230, 230, 230))
+    Ui_Fill(hDC, x + 1, 2, x + 11, 4, EditorTb_Blue())
+    Ui_Fill(hDC, x + 9, 2, x + 11, 10, EditorTb_Blue())
+    EditorTb_Head(hDC, x + 7, 10, 6)
 End Sub
+
+' 絵 img（ETB_IMG_*）の左端
+Function EditorTb_ImgX(ByVal img As Long) As Long
+    EditorTb_ImgX = (img - ETB_STD_COUNT) * 16
+End Function
 
 Function EditorTb_OwnBitmap() As HBITMAP
     Dim hScr As HDC, hDC As HDC
@@ -160,12 +191,12 @@ Function EditorTb_OwnBitmap() As HBITMAP
     ReleaseDC(0, hScr)
     oldBmp = SelectObject(hDC, bmp)
     Ui_Fill(hDC, 0, 0, 16 * ETB_OWN_COUNT, 16, GetSysColor(COLOR_BTNFACE))
-    EditorTb_Build(hDC, 0)
-    EditorTb_Play(hDC, 16, 0)
-    EditorTb_Debug(hDC, 32)
-    Ui_Fill(hDC, 48 + 3, 3, 48 + 13, 13, RGB(200, 0, 0))
-    EditorTb_Over(hDC, 64)
-    EditorTb_Into(hDC, 80)
+    EditorTb_Build(hDC, EditorTb_ImgX(ETB_IMG_BUILD))
+    EditorTb_Play(hDC, EditorTb_ImgX(ETB_IMG_RUN), 0)
+    EditorTb_Debug(hDC, EditorTb_ImgX(ETB_IMG_DEBUG))
+    EditorTb_Stop(hDC, EditorTb_ImgX(ETB_IMG_STOP))
+    EditorTb_Over(hDC, EditorTb_ImgX(ETB_IMG_OVER))
+    EditorTb_Into(hDC, EditorTb_ImgX(ETB_IMG_INTO))
     SelectObject(hDC, oldBmp)
     DeleteDC(hDC)
     EditorTb_OwnBitmap = bmp
@@ -257,20 +288,13 @@ Function EditorTb_IsMnemonic(s As String, ByVal i As Long) As Long
     EditorTb_IsMnemonic = 1
 End Function
 
+' ボタン id のヒントにする見出し（無ければ -1）
 Function EditorTb_TipUi(ByVal id As Long) As Long
+    Dim i As Long
     EditorTb_TipUi = -1
-    If id = IDM_FILENEW Then EditorTb_TipUi = UI_MENU_NEW
-    If id = IDM_FILEOPEN Then EditorTb_TipUi = UI_MENU_OPEN
-    If id = IDM_SAVE Then EditorTb_TipUi = UI_MENU_SAVE
-    If id = IDM_CUT Then EditorTb_TipUi = UI_MENU_CUT
-    If id = IDM_COPY Then EditorTb_TipUi = UI_MENU_COPY
-    If id = IDM_PASTE Then EditorTb_TipUi = UI_MENU_PASTE
-    If id = IDM_UNDO Then EditorTb_TipUi = UI_MENU_UNDO
-    If id = IDM_REDO Then EditorTb_TipUi = UI_MENU_REDO
-    If id = IDM_FIND Then EditorTb_TipUi = UI_MENU_FIND
-    If id = IDM_COMPILE Then EditorTb_TipUi = UI_MENU_COMPILE
-    If id = IDM_RUN Then EditorTb_TipUi = UI_MENU_RUN
-    If id >= IDM_DBG_GO And id <= IDM_DBG_IN Then EditorTb_TipUi = EditorDbg_MenuUi(id)
+    For i = 0 To g_etbN - 1
+        If id <> 0 And g_etbId(i) = id Then EditorTb_TipUi = g_etbUi(i)
+    Next
 End Function
 
 ' 枠の WM_NOTIFY。ツールバーのヒントを求められたら文字を渡して 1

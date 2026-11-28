@@ -1,0 +1,97 @@
+' mciSendCommand。W 版に送り、文字列を持つ命令（MCI_OPEN の型・ファイル名・別名、MCI_LOAD / MCI_SAVE の
+' ファイル名、MCI_INFO / MCI_SYSINFO の答え）だけ、呼ぶあいだ UTF-8（CP932 も読む）をワイドにして、答えを UTF-8 で書く。
+' 構造体はそのまま使い、文字列のポインタだけ入れ替えて戻す（MCI_OPEN が書く wDeviceID はそのまま残る）。-linux は A 版。
+
+#ifdef _WIN64
+Const BASIC_MCI_PTR = 8
+#else
+Const BASIC_MCI_PTR = 4
+#endif
+
+Function mciSendCommand(dwMciID As DWord, uMsg As DWord, fdwCommand As DWORD_PTR, lpParam As VoidPtr) As DWord
+#ifdef _LINUX
+    mciSendCommand = mciSendCommandA(dwMciID, uMsg, fdwCommand, lpParam)
+#else
+    mciSendCommand = BasicMciW(dwMciID, uMsg, fdwCommand, lpParam)
+#endif
+End Function
+
+Function BasicMciW(id As DWord, msg As DWord, flags As DWORD_PTR, p As VoidPtr) As DWord
+    If p <> 0 And msg = MCI_OPEN Then BasicMciW = BasicMciOpenW(id, flags, p)
+    If p <> 0 And msg = MCI_OPEN Then Exit Function
+    If p <> 0 And (msg = MCI_INFO Or msg = MCI_SYSINFO) Then BasicMciW = BasicMciRetW(id, msg, flags, p)
+    If p <> 0 And (msg = MCI_INFO Or msg = MCI_SYSINFO) Then Exit Function
+    If p <> 0 And (msg = MCI_LOAD Or msg = MCI_SAVE) And (flags And &H100) <> 0 Then BasicMciW = BasicMciFileW(id, msg, flags, p)
+    If p <> 0 And (msg = MCI_LOAD Or msg = MCI_SAVE) And (flags And &H100) <> 0 Then Exit Function
+    BasicMciW = mciSendCommandW(id, msg, flags, p)
+End Function
+
+' ---------- MCI_OPEN ----------
+
+' MCI_OPEN_TYPE（&H2000）で MCI_OPEN_TYPE_ID（&H1000）でないとき型の名前、MCI_OPEN_ELEMENT（&H200）で
+' MCI_OPEN_ELEMENT_ID（&H800）でないときファイル名、MCI_OPEN_ALIAS（&H400）のとき別名をワイドに
+Function BasicMciOpenW(id As DWord, flags As DWORD_PTR, p As *MCI_OPEN_PARMS) As DWord
+    Dim t As *Byte, e As *Byte, a As *Byte
+    t = p->lpstrDeviceType
+    e = p->lpstrElementName
+    a = p->lpstrAlias
+    BasicMciOpenIn(flags, p)
+    BasicMciOpenW = mciSendCommandW(id, MCI_OPEN, flags, p)
+    BasicMciOpenUndo(p, t, e, a)
+End Function
+
+Sub BasicMciOpenIn(flags As DWORD_PTR, p As *MCI_OPEN_PARMS)
+    If (flags And &H3000) = &H2000 Then p->lpstrDeviceType = BasicWidePtr(p->lpstrDeviceType)
+    If (flags And &HA00) = &H200 Then p->lpstrElementName = BasicWidePtr(p->lpstrElementName)
+    If (flags And &H400) <> 0 Then p->lpstrAlias = BasicWidePtr(p->lpstrAlias)
+End Sub
+
+Sub BasicMciOpenUndo(p As *MCI_OPEN_PARMS, t As *Byte, e As *Byte, a As *Byte)
+    BasicFreeAnsi(p->lpstrDeviceType, t)
+    BasicFreeAnsi(p->lpstrElementName, e)
+    BasicFreeAnsi(p->lpstrAlias, a)
+    p->lpstrDeviceType = t
+    p->lpstrElementName = e
+    p->lpstrAlias = a
+End Sub
+
+' ---------- MCI_LOAD / MCI_SAVE（MCI_LOAD_FILE / MCI_SAVE_FILE = &H100） ----------
+
+' dwCallback の次が lpfilename
+Function BasicMciFileW(id As DWord, msg As DWord, flags As DWORD_PTR, p As *Byte) As DWord
+    Dim slot As *VoidPtr, raw As *Byte, w As *Byte
+    slot = (p + BASIC_MCI_PTR) As *VoidPtr
+    raw = slot[0]
+    w = BasicWidePtr(raw)
+    slot[0] = w
+    BasicMciFileW = mciSendCommandW(id, msg, flags, p)
+    slot[0] = raw
+    BasicFreeAnsi(w, raw)
+End Function
+
+' ---------- MCI_INFO / MCI_SYSINFO（答えの文字列） ----------
+
+' dwCallback の次が lpstrReturn、その次が dwRetSize（文字数）。答えを UTF-8 で書く（入らなければ文字の境目で切る）。
+' MCI_SYSINFO_QUANTITY（&H100）の答えは数なのでそのまま
+Function BasicMciRetW(id As DWord, msg As DWord, flags As DWORD_PTR, p As *Byte) As DWord
+    Dim slot As *VoidPtr, n As Long
+    slot = (p + BASIC_MCI_PTR) As *VoidPtr
+    n = BasicGetDW(p + BASIC_MCI_PTR * 2)
+    If (msg = MCI_SYSINFO And (flags And &H100) <> 0) Or slot[0] = 0 Or n <= 0 Then
+        BasicMciRetW = mciSendCommandW(id, msg, flags, p)
+        Exit Function
+    End If
+    BasicMciRetW = BasicMciRetWide(id, msg, flags, p, slot, n)
+End Function
+
+' n 文字のワイドの受け皿で呼び、答えを UTF-8 に直して呼び出し側の受け皿（n バイト）へ
+Function BasicMciRetWide(id As DWord, msg As DWord, flags As DWORD_PTR, p As *Byte, slot As *VoidPtr, n As Long) As DWord
+    Dim w As *Byte, raw As *Byte
+    raw = slot[0]
+    w = GwAlloc(n)
+    slot[0] = w
+    BasicMciRetWide = mciSendCommandW(id, msg, flags, p)
+    slot[0] = raw
+    If BasicMciRetWide = 0 And w <> 0 Then GwPut(w, BasicWideChars(w), raw, n)
+    If w <> 0 Then free(w)
+End Function

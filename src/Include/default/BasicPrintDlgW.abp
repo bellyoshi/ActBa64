@@ -1,0 +1,135 @@
+' PrintDlg / PageSetupDlg / CreateDC / ResetDC（形の直し方は BasicPrintW.abp）。
+' ダイアログは写しの構造体に W の形の hDevMode / hDevNames を入れて W 版を呼び、成功したら結果を A の形
+' （名前は UTF-8）の新しい大域メモリにして呼び出し側へ返す（呼び出し側が入れていた古いものは解放する）。
+' テンプレートの名前はワイドに。フックを使うときと -linux は A 版のまま。
+
+' ---------- PrintDlg ----------
+
+' PD_ENABLEPRINTHOOK = &H1000 / PD_ENABLESETUPHOOK = &H2000
+Function PrintDlg(ByRef lppd As PRINTDLG) As Long
+#ifndef _LINUX
+    If (lppd.Flags And &H3000) = 0 Then
+        PrintDlg = BasicPdW(lppd)
+        Exit Function
+    End If
+#endif
+    PrintDlg = PrintDlgA(lppd)
+End Function
+
+' PD_ENABLEPRINTTEMPLATE = &H4000 / PD_ENABLESETUPTEMPLATE = &H8000
+Function BasicPdW(ByRef pd As PRINTDLG) As Long
+    Dim w As PRINTDLG
+    memcpy(VarPtr(w), VarPtr(pd), Len(w))
+    w.hDevMode = BasicDmGlobal(pd.hDevMode, 1)
+    w.hDevNames = BasicDnGlobal(pd.hDevNames, 1)
+    If (pd.Flags And &H4000) <> 0 Then w.lpPrintTemplateName = BasicWidePtr(pd.lpPrintTemplateName)
+    If (pd.Flags And &H8000) <> 0 Then w.lpSetupTemplateName = BasicWidePtr(pd.lpSetupTemplateName)
+    BasicPdW = PrintDlgW(w)
+    BasicPdOut(pd, w, BasicPdW)
+End Function
+
+Sub BasicPdOut(ByRef pd As PRINTDLG, ByRef w As PRINTDLG, ok As Long)
+    Dim t1 As *Byte, t2 As *Byte
+    BasicFreeW2(w.lpPrintTemplateName, pd.lpPrintTemplateName, w.lpSetupTemplateName, pd.lpSetupTemplateName)
+    t1 = pd.lpPrintTemplateName
+    t2 = pd.lpSetupTemplateName
+    If ok <> 0 Then BasicPdTake(pd, w)
+    If ok = 0 Then BasicGlobalFree2(w.hDevMode, w.hDevNames)
+    pd.lpPrintTemplateName = t1
+    pd.lpSetupTemplateName = t2
+End Sub
+
+' 結果を写し、W の形の hDevMode / hDevNames を A の形にして入れる
+Sub BasicPdTake(ByRef pd As PRINTDLG, ByRef w As PRINTDLG)
+    Dim dm As HGLOBAL, dn As HGLOBAL
+    dm = BasicDmGlobal(w.hDevMode, 0)
+    dn = BasicDnGlobal(w.hDevNames, 0)
+    BasicGlobalFree2(w.hDevMode, w.hDevNames)
+    BasicGlobalFree2(pd.hDevMode, pd.hDevNames)
+    memcpy(VarPtr(pd), VarPtr(w), Len(w))
+    pd.hDevMode = dm
+    pd.hDevNames = dn
+End Sub
+
+Sub BasicGlobalFree2(a As HGLOBAL, b As HGLOBAL)
+    If a <> 0 Then GlobalFree(a)
+    If b <> 0 Then GlobalFree(b)
+End Sub
+
+' ---------- PageSetupDlg ----------
+
+' PSD_ENABLEPAGESETUPHOOK = &H2000 / PSD_ENABLEPAGEPAINTHOOK = &H40000
+Function PageSetupDlg(ByRef lppsd As PAGESETUPDLG) As Long
+#ifndef _LINUX
+    If (lppsd.Flags And &H42000) = 0 Then
+        PageSetupDlg = BasicPsdW(lppsd)
+        Exit Function
+    End If
+#endif
+    PageSetupDlg = PageSetupDlgA(lppsd)
+End Function
+
+' PSD_ENABLEPAGESETUPTEMPLATE = &H8000
+Function BasicPsdW(ByRef ps As PAGESETUPDLG) As Long
+    Dim w As PAGESETUPDLG
+    memcpy(VarPtr(w), VarPtr(ps), Len(w))
+    w.hDevMode = BasicDmGlobal(ps.hDevMode, 1)
+    w.hDevNames = BasicDnGlobal(ps.hDevNames, 1)
+    If (ps.Flags And &H8000) <> 0 Then w.lpPageSetupTemplateName = BasicWidePtr(ps.lpPageSetupTemplateName)
+    BasicPsdW = PageSetupDlgW(w)
+    BasicPsdOut(ps, w, BasicPsdW)
+End Function
+
+Sub BasicPsdOut(ByRef ps As PAGESETUPDLG, ByRef w As PAGESETUPDLG, ok As Long)
+    Dim t As *Byte
+    BasicFreeAnsi(w.lpPageSetupTemplateName, ps.lpPageSetupTemplateName)
+    t = ps.lpPageSetupTemplateName
+    If ok <> 0 Then BasicPsdTake(ps, w)
+    If ok = 0 Then BasicGlobalFree2(w.hDevMode, w.hDevNames)
+    ps.lpPageSetupTemplateName = t
+End Sub
+
+Sub BasicPsdTake(ByRef ps As PAGESETUPDLG, ByRef w As PAGESETUPDLG)
+    Dim dm As HGLOBAL, dn As HGLOBAL
+    dm = BasicDmGlobal(w.hDevMode, 0)
+    dn = BasicDnGlobal(w.hDevNames, 0)
+    BasicGlobalFree2(w.hDevMode, w.hDevNames)
+    BasicGlobalFree2(ps.hDevMode, ps.hDevNames)
+    memcpy(VarPtr(ps), VarPtr(w), Len(w))
+    ps.hDevMode = dm
+    ps.hDevNames = dn
+End Sub
+
+' ---------- CreateDC / ResetDC ----------
+
+' lpInitData は 0（ByVal 0）でもよい。lpszOutput を渡すときは A 版のまま
+Function CreateDC(lpszDriver As *Byte, lpszDevice As *Byte, lpszOutput As Long, ByRef lpInitData As DEVMODE) As HDC
+#ifndef _LINUX
+    If lpszOutput = 0 Then
+        CreateDC = BasicCreateDCW(lpszDriver, lpszDevice, VarPtr(lpInitData))
+        Exit Function
+    End If
+#endif
+    CreateDC = CreateDCA(lpszDriver, lpszDevice, lpszOutput, lpInitData)
+End Function
+
+Function BasicCreateDCW(drv As *Byte, dev As *Byte, dm As *Byte) As HDC
+    Dim a As *Byte, b As *Byte, w As *Byte
+    a = BasicWidePtr(drv)
+    b = BasicWidePtr(dev)
+    w = BasicDmWideOf(dm)
+    BasicCreateDCW = CreateDCW(a, b, 0, w)
+    BasicFreeW2(a, drv, b, dev)
+    If w <> 0 Then free(w)
+End Function
+
+Function ResetDC(hdc As HDC, ByRef lpInitData As DEVMODE) As HDC
+#ifdef _LINUX
+    ResetDC = ResetDCA(hdc, lpInitData)
+#else
+    Dim w As *Byte
+    w = BasicDmWideOf(VarPtr(lpInitData))
+    ResetDC = ResetDCW(hdc, w)
+    If w <> 0 Then free(w)
+#endif
+End Function
