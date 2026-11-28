@@ -27,6 +27,8 @@ A 版の API をそのまま公開していて、日本語のパスや文字列�
 - 検索ダイアログ（`FindText`）を W 版にしました。日本語や CP932 にない文字（𠮷 など）の検索語も、呼び出し側のバッファへ UTF-8 で届きます。通知の `lParam` は呼び出し側の `FINDREPLACE` のままです。
 - WinINet（`InternetOpen` / `InternetConnect` / `FtpGetFile` / `FtpSetCurrentDirectory` / `FtpGetCurrentDirectory` / `FtpFindFirstFile` / `InternetFindNextFile`）を W 版にしました。日本語のファイル名・フォルダ名を UTF-8 で扱えます。`FtpGetCurrentDirectory` の 3 つ目の引数は `*DWord`（`VarPtr` で渡す）です。
 - 受け皿に入らない文字列を UTF-8 で切って書くとき、最後の文字が欠けていなくても 1 文字多く落としていたのを直しました。
+- `SystemParametersInfo` でシステムのフォント（`NONCLIENTMETRICS` / `ICONMETRICS` / アイコンの題のフォント）を読み書きするとき、`lfFaceName` が UTF-8 になりました（「メイリオ」などを `CreateFontIndirect` にそのまま渡せます）。壁紙のパスも UTF-8 です。
+- ステータスバーの `SB_GETTEXT` / `SB_GETTEXTLENGTH` / `SB_GETTIPTEXT` が UTF-8 を返すようになりました（長さは UTF-8 のバイト数）。
 
 **互換性**: パスや文字列を返す API の戻り値と書き戻す値は、文字数ではなく UTF-8 のバイト数になります。サブクラスの手続きで `CallWindowProcA` を自分で Declare して使っているときは、無印の `CallWindowProc` に替えてください。CP932 のバイト列が返ると決めて自分で UTF-8 に直しているプログラムは、そのまま動きます（妥当な UTF-8 は直さない作りなら）。
 

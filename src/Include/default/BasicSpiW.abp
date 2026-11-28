@@ -1,0 +1,128 @@
+' SystemParametersInfo。LOGFONT を含む命令（SPI_GETICONTITLELOGFONT / SPI_SETICONTITLELOGFONT = 31 / 34、
+' SPI_GETNONCLIENTMETRICS / SPI_SETNONCLIENTMETRICS = 41 / 42、SPI_GETICONMETRICS / SPI_SETICONMETRICS = 45 / 46）は W 版に送る。
+' 呼び出し側の構造体はこれまでどおり A の形（LOGFONT は 60 バイト、cbSize も A の形の大きさ）で、lfFaceName だけ UTF-8
+' （32 バイトに入らなければ CP932、それも入らなければ切った UTF-8）。呼ぶあいだだけワイドの形の写しを作る。
+' 壁紙（SPI_SETDESKWALLPAPER = 20 / SPI_GETDESKWALLPAPER = &H73）のパスも UTF-8。ほかの命令と -linux は A 版のまま。
+
+' 構造体の中の LOGFONT の位置（A の形）
+Dim g_spiOff(4) As Long
+
+Function SystemParametersInfo(uiAction As DWord, uiParam As DWord, pvParam As VoidPtr, fWinIni As DWord) As Long
+    Dim done As Long
+    done = 0
+#ifndef _LINUX
+    If pvParam <> 0 Then done = BasicSpiW(uiAction, uiParam, pvParam, fWinIni, SystemParametersInfo)
+#endif
+    If done = 0 Then SystemParametersInfo = SystemParametersInfoA(uiAction, uiParam, pvParam, fWinIni)
+End Function
+
+' W 版で扱ったら 1（戻り値は r）。扱わなければ 0
+Function BasicSpiW(act As DWord, ui As DWord, pv As VoidPtr, ini As DWord, ByRef r As Long) As Long
+    Dim n As Long
+    BasicSpiW = 0
+    n = BasicSpiShape(act)
+    If n > 0 Then BasicSpiW = BasicSpiFont(act, pv, ini, n, r)
+    If act = 20 Then BasicSpiW = BasicSpiSetPaper(ui, pv, ini, r)
+    If act = &H73 Then BasicSpiW = BasicSpiGetPaper(ui, pv, ini, r)
+End Function
+
+' LOGFONT の数（位置は g_spiOff へ）。LOGFONT を含まない命令は 0
+Function BasicSpiShape(act As DWord) As Long
+    BasicSpiShape = 0
+    If act = 31 Or act = 34 Then BasicSpiShape = BasicSpiOffs(1, 0, 0, 0, 0, 0)
+    If act = 45 Or act = 46 Then BasicSpiShape = BasicSpiOffs(1, 16, 0, 0, 0, 0)
+    If act = 41 Or act = 42 Then BasicSpiShape = BasicSpiOffs(5, 24, 92, 160, 220, 280)
+End Function
+
+Function BasicSpiOffs(n As Long, a As Long, b As Long, c As Long, d As Long, e As Long) As Long
+    g_spiOff(0) = a
+    g_spiOff(1) = b
+    g_spiOff(2) = c
+    g_spiOff(3) = d
+    g_spiOff(4) = e
+    BasicSpiOffs = n
+End Function
+
+' A の形の大きさ。ICONTITLELOGFONT は LOGFONT そのもの、ほかは cbSize（NONCLIENTMETRICS は 340 か 344）
+Function BasicSpiSizeA(act As DWord, pv As VoidPtr) As Long
+    BasicSpiSizeA = 60
+    If act <> 31 And act <> 34 Then BasicSpiSizeA = BasicGetDW(pv)
+End Function
+
+' cbSize が小さすぎる・大きすぎるときは A 版に任せる
+Function BasicSpiFont(act As DWord, pv As *Byte, ini As DWord, n As Long, ByRef r As Long) As Long
+    Dim sa As Long, w As *Byte
+    BasicSpiFont = 0
+    sa = BasicSpiSizeA(act, pv)
+    If sa < g_spiOff(n - 1) + 60 Or sa > 4096 Then Exit Function
+    w = BasicSpiWideOf(pv, n, sa)
+    If w = 0 Then Exit Function
+    r = SystemParametersInfoW(act, sa + n * 32, w, ini)
+    If r <> 0 And (act = 31 Or act = 41 Or act = 45) Then BasicSpiConv(pv, w, n, sa, 0)
+    free(w)
+    BasicSpiFont = 1
+End Function
+
+Function BasicSpiWideOf(pv As *Byte, n As Long, sa As Long) As *Byte
+    BasicSpiWideOf = calloc(sa + n * 32 + 8)
+    If BasicSpiWideOf <> 0 Then BasicSpiConv(pv, BasicSpiWideOf, n, sa, 1)
+End Function
+
+' A の形（a、sa バイト）とワイドの形（w）のあいだで写す（toWide が 0 なら w → a）。LOGFONT のあいだの数値はそのまま
+Sub BasicSpiConv(a As *Byte, w As *Byte, n As Long, sa As Long, toWide As Long)
+    Dim i As Long, pa As Long
+    pa = 0
+    For i = 0 To n - 1
+        BasicSpiGap(a + pa, w + pa + i * 32, g_spiOff(i) - pa, toWide)
+        BasicSpiLf(a + g_spiOff(i), w + g_spiOff(i) + i * 32, toWide)
+        pa = g_spiOff(i) + 60
+    Next
+    BasicSpiGap(a + pa, w + pa + n * 32, sa - pa, toWide)
+    If g_spiOff(0) <> 0 Then BasicSpiCb(a, w, sa, sa + n * 32, toWide)
+End Sub
+
+Sub BasicSpiGap(a As *Byte, w As *Byte, size As Long, toWide As Long)
+    If size <= 0 Then Exit Sub
+    If toWide <> 0 Then memcpy(w, a, size)
+    If toWide = 0 Then memcpy(a, w, size)
+End Sub
+
+' LOGFONT の名前の前の 28 バイトは同じ。名前は 32 バイト（UTF-8 か CP932）と 32 文字のワイド
+Sub BasicSpiLf(a As *Byte, w As *Byte, toWide As Long)
+    If toWide <> 0 Then memcpy(w, a, 28)
+    If toWide <> 0 Then BasicName32In(a + 28, w + 28)
+    If toWide = 0 Then memcpy(a, w, 28)
+    If toWide = 0 Then BasicName32Out(w + 28, a + 28)
+End Sub
+
+' cbSize はそれぞれの形の大きさに
+Sub BasicSpiCb(a As *Byte, w As *Byte, sa As Long, sw As Long, toWide As Long)
+    If toWide <> 0 Then SetDWord(w, sw)
+    If toWide = 0 Then SetDWord(a, sa)
+End Sub
+
+' ---------- 壁紙 ----------
+
+' pvParam が SETWALLPAPER_DEFAULT（-1）なら A 版のまま
+Function BasicSpiSetPaper(ui As DWord, pv As *Byte, ini As DWord, ByRef r As Long) As Long
+    Dim w As *Byte
+    BasicSpiSetPaper = 0
+    If (pv As LONG_PTR) = -1 Then Exit Function
+    w = BasicWidePtr(pv)
+    r = SystemParametersInfoW(20, ui, w, ini)
+    BasicFreeAnsi(w, pv)
+    BasicSpiSetPaper = 1
+End Function
+
+' uiParam は受け皿のバイト数。入らなければ文字の境目で切る
+Function BasicSpiGetPaper(ui As DWord, pv As *Byte, ini As DWord, ByRef r As Long) As Long
+    Dim w As *Byte
+    BasicSpiGetPaper = 0
+    If ui = 0 Then Exit Function
+    w = GwAlloc(BASIC_WMAX)
+    If w = 0 Then Exit Function
+    r = SystemParametersInfoW(&H73, BASIC_WMAX, w, ini)
+    If r <> 0 Then GwPut(w, BasicWideChars(w), pv, ui)
+    free(w)
+    BasicSpiGetPaper = 1
+End Function
