@@ -1,0 +1,200 @@
+' レジストリ。キーと値の名前は UTF-8（CP932 のバイト列も読む）をワイド文字 API へ。
+' REG_SZ / REG_EXPAND_SZ / REG_MULTI_SZ の値は UTF-8 で書き、UTF-8 で読む（大きさはバイト数で、末尾の NUL を含む）。
+' ほかの型の値はそのまま。-linux は A 版。
+
+Function BasicGetDW(p As VoidPtr) As DWord
+    Dim d As *DWord
+    d = p
+    BasicGetDW = d[0]
+End Function
+
+Sub BasicSetDW(p As VoidPtr, v As DWord)
+    Dim d As *DWord
+    If p = 0 Then Exit Sub
+    d = p
+    d[0] = v
+End Sub
+
+Function BasicRegIsStr(typ As DWord) As Long
+    BasicRegIsStr = 0
+    If typ = REG_SZ Or typ = REG_EXPAND_SZ Or typ = REG_MULTI_SZ Then BasicRegIsStr = 1
+End Function
+
+' ---------- キー ----------
+
+Function RegOpenKeyEx(hKey As HKEY, lpSubKey As *Byte, ulOptions As DWord, samDesired As Long, ByRef phkResult As HKEY) As Long
+#ifdef _LINUX
+    RegOpenKeyEx = RegOpenKeyExA(hKey, lpSubKey, ulOptions, samDesired, phkResult)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpSubKey)
+    RegOpenKeyEx = RegOpenKeyExW(hKey, w, ulOptions, samDesired, VarPtr(phkResult))
+    BasicFreeAnsi(w, lpSubKey)
+#endif
+End Function
+
+Function RegCreateKeyEx(hKey As HKEY, lpSubKey As *Byte, Reserved As DWord, lpClass As *Byte, dwOptions As DWord, samDesired As Long, ByRef lpSecurityAttributes As SECURITY_ATTRIBUTES, ByRef phkResult As HKEY, lpdwDisposition As VoidPtr) As Long
+#ifdef _LINUX
+    RegCreateKeyEx = RegCreateKeyExA(hKey, lpSubKey, Reserved, lpClass, dwOptions, samDesired, lpSecurityAttributes, phkResult, lpdwDisposition)
+#else
+    RegCreateKeyEx = BasicRegCreateW(hKey, lpSubKey, lpClass, dwOptions, samDesired, VarPtr(lpSecurityAttributes), VarPtr(phkResult), lpdwDisposition)
+#endif
+End Function
+
+Function BasicRegCreateW(h As HKEY, subKey As *Byte, cls As *Byte, opt As DWord, sam As Long, sa As VoidPtr, phk As VoidPtr, disp As VoidPtr) As Long
+    Dim a As *Byte, b As *Byte
+    a = BasicWidePtr(subKey)
+    b = BasicWidePtr(cls)
+    BasicRegCreateW = RegCreateKeyExW(h, a, 0, b, opt, sam, sa, phk, disp)
+    BasicFreeW2(a, subKey, b, cls)
+End Function
+
+Function RegDeleteKey(hKey As HKEY, lpSubKey As *Byte) As Long
+#ifdef _LINUX
+    RegDeleteKey = RegDeleteKeyA(hKey, lpSubKey)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpSubKey)
+    RegDeleteKey = RegDeleteKeyW(hKey, w)
+    BasicFreeAnsi(w, lpSubKey)
+#endif
+End Function
+
+Function RegDeleteValue(hKey As HKEY, lpValueName As *Byte) As Long
+#ifdef _LINUX
+    RegDeleteValue = RegDeleteValueA(hKey, lpValueName)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpValueName)
+    RegDeleteValue = RegDeleteValueW(hKey, w)
+    BasicFreeAnsi(w, lpValueName)
+#endif
+End Function
+
+' ---------- 値を書く ----------
+
+Function RegSetValueEx(hKey As HKEY, lpValueName As *Byte, Reserved As DWord, dwType As DWord, lpData As VoidPtr, cbData As DWord) As Long
+#ifdef _LINUX
+    RegSetValueEx = RegSetValueExA(hKey, lpValueName, Reserved, dwType, lpData, cbData)
+#else
+    RegSetValueEx = BasicRegSetW(hKey, lpValueName, dwType, lpData, cbData)
+#endif
+End Function
+
+Function BasicRegSetW(h As HKEY, name As *Byte, typ As DWord, data As *Byte, cb As DWord) As Long
+    Dim w As *Byte, d As *Byte, n As DWord
+    w = BasicWidePtr(name)
+    d = data
+    n = cb
+    If BasicRegIsStr(typ) <> 0 And data <> 0 Then d = BasicRegStrW(data, cb, typ, n)
+    BasicRegSetW = RegSetValueExW(h, w, 0, typ, d, n)
+    BasicFreeAnsi(w, name)
+    If d <> data Then free(d)
+End Function
+
+' 末尾の NUL を除いたバイト数
+Function BasicRegTrim(data As *Byte, cb As Long) As Long
+    Dim i As Long
+    BasicRegTrim = 0
+    For i = cb - 1 To 0 Step -1
+        If data[i] <> 0 Then
+            BasicRegTrim = i + 1
+            Exit Function
+        End If
+    Next
+End Function
+
+' m バイトをワイドに（後ろに NUL を 2 つ足す）。妥当な UTF-8 でなければ CP932。chars はワイドの文字数
+Function BasicRegWide(data As *Byte, m As Long, ByRef chars As Long) As *Byte
+    Dim cp As DWord
+    cp = 65001
+    chars = 0
+    If m > 0 Then chars = MultiByteToWideChar(65001, 8, data, m, 0, 0)
+    If m > 0 And chars <= 0 Then cp = 932
+    If cp = 932 Then chars = MultiByteToWideChar(932, 0, data, m, 0, 0)
+    BasicRegWide = calloc((chars + 2) * 2)
+    If BasicRegWide <> 0 And chars > 0 Then MultiByteToWideChar(cp, 0, data, m, BasicRegWide As *Word, chars)
+End Function
+
+' 文字列の値をワイドに（作れなければ data のまま）。n はワイドのバイト数（REG_SZ は NUL 1 つ、REG_MULTI_SZ は 2 つ込み）
+Function BasicRegStrW(data As *Byte, cb As DWord, typ As DWord, ByRef n As DWord) As *Byte
+    Dim chars As Long
+    BasicRegStrW = BasicRegWide(data, BasicRegTrim(data, cb), chars)
+    If BasicRegStrW = 0 Then BasicRegStrW = data
+    If BasicRegStrW = data Then Exit Function
+    n = (chars + 1) * 2
+    If typ = REG_MULTI_SZ Then n = n + 2
+End Function
+
+' ---------- 値を読む ----------
+
+' lpcbData の指す先は、入る前は受け皿のバイト数、戻ると書いた（入らなければ要る）バイト数。入らなければ ERROR_MORE_DATA（234）
+Function RegQueryValueEx(hKey As HKEY, lpValueName As *Byte, lpReserved As DWord, lpType As VoidPtr, lpData As VoidPtr, lpcbData As VoidPtr) As Long
+#ifdef _LINUX
+    RegQueryValueEx = RegQueryValueExA(hKey, lpValueName, lpReserved, lpType, lpData, lpcbData)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpValueName)
+    RegQueryValueEx = BasicRegQueryW(hKey, w, lpType, lpData, lpcbData)
+    BasicFreeAnsi(w, lpValueName)
+#endif
+End Function
+
+Function BasicRegQueryW(h As HKEY, w As *Byte, pType As VoidPtr, data As *Byte, pcb As VoidPtr) As Long
+    Dim t As DWord, sz As DWord
+    sz = 0
+    BasicRegQueryW = RegQueryValueExW(h, w, 0, VarPtr(t), 0, VarPtr(sz))
+    If BasicRegQueryW <> 0 Then Exit Function
+    If BasicRegIsStr(t) = 0 Then BasicRegQueryW = RegQueryValueExW(h, w, 0, pType, data, pcb)
+    If BasicRegIsStr(t) = 0 Then Exit Function
+    BasicSetDW(pType, t)
+    BasicRegQueryW = BasicRegReadStr(h, w, t, sz, data, pcb)
+End Function
+
+Function BasicRegReadStr(h As HKEY, w As *Byte, t As DWord, sz As DWord, data As *Byte, pcb As VoidPtr) As Long
+    Dim buf As *Byte
+    BasicRegReadStr = 8
+    buf = calloc(sz + 4)
+    If buf = 0 Then Exit Function
+    BasicRegReadStr = RegQueryValueExW(h, w, 0, 0, buf, VarPtr(sz))
+    If BasicRegReadStr = 0 Then BasicRegReadStr = BasicRegPutUtf8(buf, sz \ 2, t, data, pcb)
+    free(buf)
+End Function
+
+' 末尾の NUL を除いたワイドの文字数
+Function BasicWideTrim(w As *Byte, chars As Long) As Long
+    Dim i As Long
+    BasicWideTrim = 0
+    For i = chars - 1 To 0 Step -1
+        If w[i * 2] <> 0 Or w[i * 2 + 1] <> 0 Then
+            BasicWideTrim = i + 1
+            Exit Function
+        End If
+    Next
+End Function
+
+' 値の後ろの NUL の数（REG_MULTI_SZ は 2 つ）
+Function BasicRegNuls(t As DWord) As Long
+    BasicRegNuls = 1
+    If t = REG_MULTI_SZ Then BasicRegNuls = 2
+End Function
+
+Function BasicRegPutUtf8(w As *Byte, chars As Long, t As DWord, data As *Byte, pcb As VoidPtr) As Long
+    Dim c As Long, need As Long, cap As Long
+    BasicRegPutUtf8 = 0
+    If pcb = 0 Then Exit Function
+    c = BasicWideTrim(w, chars)
+    need = BasicUtf8Len(w, c) + BasicRegNuls(t)
+    cap = BasicGetDW(pcb)
+    BasicSetDW(pcb, need)
+    If data <> 0 Then BasicRegPutUtf8 = BasicRegFill(w, c, data, cap, need)
+End Function
+
+' 入れば UTF-8 と NUL を書いて 0、入らなければ 234
+Function BasicRegFill(w As *Byte, c As Long, data As *Byte, cap As Long, need As Long) As Long
+    BasicRegFill = 234
+    If cap < need Then Exit Function
+    FillMemory(data, need, 0)
+    If c > 0 Then WideCharToMultiByte(65001, 0, w As *Word, c, data, need, 0, 0)
+    BasicRegFill = 0
+End Function

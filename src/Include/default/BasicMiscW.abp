@@ -1,0 +1,145 @@
+' 名前や短い文字列を渡す・受ける API を W 版に（RegisterWindowMessage / RegisterClipboardFormat /
+' GetClipboardFormatName / SetComputerName / GetFileTitle / GetCompressedFileSize / CreateMailslot /
+' ExtractAssociatedIcon / mciGetErrorString）。渡す文字列は UTF-8 か CP932、受ける文字列は UTF-8。-linux は A 版。
+
+Function RegisterWindowMessage(lpString As *Byte) As DWord
+#ifdef _LINUX
+    RegisterWindowMessage = RegisterWindowMessageA(lpString)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpString)
+    RegisterWindowMessage = RegisterWindowMessageW(w)
+    BasicFreeAnsi(w, lpString)
+#endif
+End Function
+
+Function RegisterClipboardFormat(lpszFormat As *Byte) As DWord
+#ifdef _LINUX
+    RegisterClipboardFormat = RegisterClipboardFormatA(lpszFormat)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpszFormat)
+    RegisterClipboardFormat = RegisterClipboardFormatW(w)
+    BasicFreeAnsi(w, lpszFormat)
+#endif
+End Function
+
+Function SetComputerName(lpComputerName As *Byte) As Long
+#ifdef _LINUX
+    SetComputerName = SetComputerNameA(lpComputerName)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpComputerName)
+    SetComputerName = SetComputerNameW(w)
+    BasicFreeAnsi(w, lpComputerName)
+#endif
+End Function
+
+' 戻り値は書いたバイト数（入らなければ文字の境目で切る）
+Function GetClipboardFormatName(uFormat As DWord, lpszFormatName As *Byte, cchMaxCount As Long) As Long
+#ifdef _LINUX
+    GetClipboardFormatName = GetClipboardFormatNameA(uFormat, lpszFormatName, cchMaxCount)
+#else
+    Dim w As *Byte
+    GetClipboardFormatName = 0
+    w = GwAlloc(256)
+    If w <> 0 Then GetClipboardFormatName = BasicPutCut(w, GetClipboardFormatNameW(uFormat, w, 256), lpszFormatName, cchMaxCount)
+#endif
+End Function
+
+' mciGetErrorString は成功で 1（文は UTF-8。入らなければ切る）
+Function mciGetErrorString(mcierr As DWord, pszText As *Byte, cchText As Long) As Long
+#ifdef _LINUX
+    mciGetErrorString = mciGetErrorStringA(mcierr, pszText, cchText)
+#else
+    mciGetErrorString = BasicMciErrW(mcierr, pszText, cchText)
+#endif
+End Function
+
+Function BasicMciErrW(e As DWord, buf As *Byte, n As Long) As Long
+    Dim w As *Byte
+    BasicMciErrW = 0
+    w = GwAlloc(256)
+    If w = 0 Then Exit Function
+    BasicMciErrW = mciGetErrorStringW(e, w, 256)
+    If BasicMciErrW <> 0 Then BasicPutCut(w, BasicWideChars(w), buf, n)
+    If BasicMciErrW = 0 Then free(w)
+End Function
+
+' ワイド chars 文字を buf（n バイト）へ UTF-8 で（入らなければ文字の境目で切る）。w は free する。書いたバイト数
+Function BasicPutCut(w As *Byte, chars As Long, buf As *Byte, n As Long) As Long
+    BasicPutCut = 0
+    If chars > 0 And GwReady(buf, n) <> 0 Then BasicPutCut = GwPut(w, chars, buf, n)
+    free(w)
+End Function
+
+' 0 で成功。受け皿が小さければ NUL 込みの要るバイト数
+Function GetFileTitle(lpszFile As *Byte, lpszTitle As *Byte, cbBuf As Integer) As Integer
+#ifdef _LINUX
+    GetFileTitle = GetFileTitleA(lpszFile, lpszTitle, cbBuf)
+#else
+    Dim a As *Byte
+    a = BasicWidePtr(lpszFile)
+    GetFileTitle = BasicTitleW(a, lpszTitle, cbBuf)
+    BasicFreeAnsi(a, lpszFile)
+#endif
+End Function
+
+Function BasicTitleW(file As *Byte, buf As *Byte, n As Long) As Long
+    Dim t As *Byte
+    t = GwAlloc(260)
+    BasicTitleW = -1
+    If t = 0 Then Exit Function
+    BasicTitleW = GetFileTitleW(file, t, 260)
+    If BasicTitleW = 0 Then BasicTitleW = BasicTitlePut(t, buf, n)
+    free(t)
+End Function
+
+' 入れば書いて 0、入らなければ NUL 込みの要るバイト数
+Function BasicTitlePut(t As *Byte, buf As *Byte, n As Long) As Long
+    BasicTitlePut = BasicUtf8Len(t, BasicWideChars(t)) + 1
+    If BasicTitlePut > n Then Exit Function
+    GwPutFit(t, BasicWideChars(t), buf, n)
+    BasicTitlePut = 0
+End Function
+
+Function GetCompressedFileSize(lpFileName As *Byte, ByRef lpFileSizeHigh As DWord) As DWord
+    Dim w As *Byte
+    w = BasicPathWide(lpFileName)
+    If w = 0 Then GetCompressedFileSize = GetCompressedFileSizeA(lpFileName, lpFileSizeHigh)
+    If w = 0 Then Exit Function
+#ifndef _LINUX
+    GetCompressedFileSize = GetCompressedFileSizeW(w, VarPtr(lpFileSizeHigh))
+#endif
+    free(w)
+End Function
+
+Function CreateMailslot(lpName As *Byte, nMaxMessageSize As DWord, lReadTimeout As DWord, ByRef lpSecurityAttributes As SECURITY_ATTRIBUTES) As HANDLE
+#ifdef _LINUX
+    CreateMailslot = CreateMailslotA(lpName, nMaxMessageSize, lReadTimeout, lpSecurityAttributes)
+#else
+    Dim w As *Byte
+    w = BasicWidePtr(lpName)
+    CreateMailslot = CreateMailslotW(w, nMaxMessageSize, lReadTimeout, VarPtr(lpSecurityAttributes))
+    BasicFreeAnsi(w, lpName)
+#endif
+End Function
+
+' lpIconPath は MAX_PATH の受け皿。アイコンを持つファイルのパスが書き戻される（UTF-8）
+Function ExtractAssociatedIcon(hInst As HINSTANCE, lpIconPath As *Byte, lpiIcon As VoidPtr) As HICON
+#ifdef _LINUX
+    ExtractAssociatedIcon = ExtractAssociatedIconA(hInst, lpIconPath, lpiIcon)
+#else
+    ExtractAssociatedIcon = BasicAssocW(hInst, lpIconPath, lpiIcon)
+#endif
+End Function
+
+Function BasicAssocW(hInst As HINSTANCE, path As *Byte, idx As VoidPtr) As HICON
+    Dim w As *Byte
+    BasicAssocW = 0
+    w = BasicOfnBuf(path, 260)
+    If w = 0 Then Exit Function
+    BasicAssocW = ExtractAssociatedIconW(hInst, w, idx)
+    If BasicAssocW <> 0 Then BasicFindName(w, path, 260)
+    free(w)
+End Function

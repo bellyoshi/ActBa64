@@ -1,0 +1,119 @@
+' 大文字・小文字と比べる API（lstrcmpi / CompareString / CharUpper / CharLower）。
+' A 版は UTF-8 のバイト列を CP932 として調べ、2 バイト目を取り違える。ASCII だけの文字列は A 版のまま（同じ結果で速い）、
+' ほかは UTF-8（妥当でなければ CP932）をワイド文字にして W 版で調べる。-linux は A 版。
+' CharUpper / CharLower の 1 文字（ポインタが 65536 未満）と IsChar*（Byte を受ける）は A 版のまま。
+
+' NUL まで ASCII（&H80 未満）だけなら 1
+Function BasicIsAscii(p As *Byte) As Long
+    Dim i As Long
+    BasicIsAscii = 0
+    If p = 0 Then Exit Function
+    For i = 0 To lstrlen(p) - 1
+        If p[i] >= &H80 Then Exit Function
+    Next
+    BasicIsAscii = 1
+End Function
+
+Function lstrcmpi(lpString1 As *Byte, lpString2 As *Byte) As Long
+#ifdef _LINUX
+    lstrcmpi = lstrcmpiA(lpString1, lpString2)
+#else
+    lstrcmpi = BasicCmpiW(lpString1, lpString2)
+#endif
+End Function
+
+Function BasicCmpiW(a As *Byte, b As *Byte) As Long
+    If BasicIsAscii(a) <> 0 And BasicIsAscii(b) <> 0 Then
+        BasicCmpiW = lstrcmpiA(a, b)
+        Exit Function
+    End If
+    BasicCmpiW = BasicCmpiWide(a, b)
+End Function
+
+Function BasicCmpiWide(a As *Byte, b As *Byte) As Long
+    Dim wa As *Byte, wb As *Byte
+    wa = BasicWidePtr(a)
+    wb = BasicWidePtr(b)
+    BasicCmpiWide = lstrcmpiW(wa, wb)
+    BasicFreeW2(wa, a, wb, b)
+End Function
+
+' cchCount が負なら NUL まで。両方ワイドにできれば W 版、できなければ A 版
+Function CompareString(Locale As Long, dwCmpFlags As DWord, lpString1 As *Byte, cchCount1 As Long, lpString2 As *Byte, cchCount2 As Long) As Long
+#ifdef _LINUX
+    CompareString = CompareStringA(Locale, dwCmpFlags, lpString1, cchCount1, lpString2, cchCount2)
+#else
+    CompareString = BasicCmpStrW(Locale, dwCmpFlags, lpString1, cchCount1, lpString2, cchCount2)
+#endif
+End Function
+
+Function BasicCmpStrW(loc As Long, flags As DWord, s1 As *Byte, n1 As Long, s2 As *Byte, n2 As Long) As Long
+    Dim w1 As *Byte, w2 As *Byte, c1 As Long, c2 As Long
+    w1 = BasicWideSpan(s1, n1, c1)
+    w2 = BasicWideSpan(s2, n2, c2)
+    BasicCmpStrW = BasicCmpWide(loc, flags, s1, n1, w1, c1, s2, n2, w2, c2)
+    BasicFreeW2(w1, s1, w2, s2)
+End Function
+
+' 長さ 0 の文字列はワイドにしなくても比べられる
+Function BasicCmpSpanOk(raw As *Byte, n As Long, chars As Long) As Long
+    BasicCmpSpanOk = 0
+    If chars > 0 Or BasicSpanLen(raw, n) = 0 Then BasicCmpSpanOk = 1
+End Function
+
+Function BasicCmpWide(loc As Long, flags As DWord, s1 As *Byte, n1 As Long, w1 As *Byte, c1 As Long, s2 As *Byte, n2 As Long, w2 As *Byte, c2 As Long) As Long
+    If BasicCmpSpanOk(s1, n1, c1) = 0 Or BasicCmpSpanOk(s2, n2, c2) = 0 Then
+        BasicCmpWide = CompareStringA(loc, flags, s1, n1, s2, n2)
+        Exit Function
+    End If
+    BasicCmpWide = CompareStringW(loc, flags, w1, c1, w2, c2)
+End Function
+
+Function CharUpper(lpsz As *Byte) As *Byte
+#ifdef _LINUX
+    CharUpper = CharUpperA(lpsz)
+#else
+    CharUpper = BasicCaseConv(lpsz, 1)
+#endif
+End Function
+
+Function CharLower(lpsz As *Byte) As *Byte
+#ifdef _LINUX
+    CharLower = CharLowerA(lpsz)
+#else
+    CharLower = BasicCaseConv(lpsz, 0)
+#endif
+End Function
+
+' その場で書き換える。UTF-8 にしたとき元より長くなるなら書き換えない
+Function BasicCaseConv(p As *Byte, up As Long) As *Byte
+    If BasicAtom(p) <> 0 Or BasicIsAscii(p) <> 0 Then
+        BasicCaseConv = BasicCaseA(p, up)
+        Exit Function
+    End If
+    BasicCaseConv = p
+    BasicCaseWide(p, up)
+End Function
+
+' 妥当な UTF-8 でなければ（CP932 など）A 版
+Sub BasicCaseWide(p As *Byte, up As Long)
+    Dim w As *Byte, n As Long
+    n = lstrlen(p)
+    w = BasicWideOf(p, n)
+    If w <> 0 Then BasicCaseBack(w, p, n, up)
+    If w = 0 Then BasicCaseA(p, up)
+End Sub
+
+Function BasicCaseA(p As *Byte, up As Long) As *Byte
+    If up <> 0 Then BasicCaseA = CharUpperA(p)
+    If up = 0 Then BasicCaseA = CharLowerA(p)
+End Function
+
+Sub BasicCaseBack(w As *Byte, p As *Byte, n As Long, up As Long)
+    Dim chars As Long
+    If up <> 0 Then CharUpperW(w)
+    If up = 0 Then CharLowerW(w)
+    chars = BasicWideChars(w)
+    If BasicUtf8Len(w, chars) <= n Then GwPutFit(w, chars, p, n)
+    free(w)
+End Sub

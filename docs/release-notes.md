@@ -4,7 +4,7 @@
 
 ### 文字化け
 
-A 版の API をそのまま公開していて、日本語のパスや文字列が CP932 になっていた API を UTF-8 にそろえました（[different.md §API](./different.md#api)）。
+A 版の API をそのまま公開していて、日本語のパスや文字列が CP932 になっていた API を UTF-8 にそろえました（[unicode-api.md](./unicode-api.md)）。
 
 - `CopyFile` / `MoveFile` / `DeleteFile` / `CreateDirectory` / `RemoveDirectory` / `SetCurrentDirectory` / `SetFileAttributes` / `LoadLibrary` は、UTF-8 のパスをワイド文字 API に渡します。CP932 にない文字（𠮷 など）のパスも扱えます。
 - `GetCurrentDirectory` / `GetTempPath` / `GetWindowsDirectory` / `GetSystemDirectory` / `GetFullPathName` / `FindFirstFile` / `FindNextFile` は、パスやファイル名を UTF-8 で返します。
@@ -13,8 +13,19 @@ A 版の API をそのまま公開していて、日本語のパスや文字列�
 - `FormatMessage` は、差し込みを使わないとき UTF-8 で返します。日本語の Windows のエラー文が `Print` で化けなくなりました。
 - abdbg は、日本語のフォルダーにある exe もデバッグできます（パスを UTF-8 で受け、ワイド文字 API で起動します）。
 - 無印の `GetMessage` / `PeekMessage` / `DispatchMessage` / `PostMessage` / `CallWindowProc` / `SetWindowLong(Ptr)` / `GetWindowLong` / `Get/SetClassLong` を W 版にしました。窓は Unicode なので、IME で入れた CP932 にない文字（𠮷 など）も `WM_CHAR` でそのまま届きます。`GWL_WNDPROC` で付けた手続きが受ける `WM_SETTEXT` などの文字列はワイド文字列になり、前の手続きへは無印の `CallWindowProc` で渡します。
+- `MessageBox`（`MsgBox`）が CP932 にない文字（𠮷 など）も出せるようになりました。
+- レジストリ（`RegOpenKeyEx` / `RegCreateKeyEx` / `RegSetValueEx` / `RegQueryValueEx` / `RegDeleteValue` / `RegDeleteKey`）が、キー・値の名前と文字列の値を UTF-8 で扱います。
+- `SHBrowseForFolder` / `SHGetPathFromIDList` / `SHFileOperation` / `FindWindow` / `ShellAbout` / `PlaySound` / `GetDriveType` / `GetDiskFreeSpace(Ex)` / `ExtractIcon(Ex)` / `LoadCursorFromFile` を W 版にしました。
+- ファイルを開く／保存ダイアログ（`GetOpenFileName` / `GetSaveFileName`）を W 版にしました。CP932 にない文字のファイル名も選べます。
+- フォントのダイアログ（`ChooseFont`）を W 版にし、`GetObject` で読んだフォント名も UTF-8 で返します（以前は CP932）。
+- `lstrcmpi` / `CompareString` / `CharUpper` / `CharLower` が、日本語や全角の英字を含む UTF-8 の文字列を正しく比べ・変えます。
+- `RegisterWindowMessage` / `RegisterClipboardFormat` / `GetClipboardFormatName` / `SetComputerName` / `GetFileTitle` / `GetCompressedFileSize` / `CreateMailslot` / `ExtractAssociatedIcon` / `mciGetErrorString` を W 版にしました。
 
 **互換性**: パスや文字列を返す API の戻り値と書き戻す値は、文字数ではなく UTF-8 のバイト数になります。サブクラスの手続きで `CallWindowProcA` を自分で Declare して使っているときは、無印の `CallWindowProc` に替えてください。CP932 のバイト列が返ると決めて自分で UTF-8 に直しているプログラムは、そのまま動きます（妥当な UTF-8 は直さない作りなら）。
+
+### コンパイラ
+
+- `As String` の Type メンバ（`sa.name`・`p->name`・Class のメンバ）を `Print` すると、文字列ではなく数（文字列のポインタ）が出ていたのを直しました。連結（`sa.name + sa.name`）と比較も文字列として扱います。
 
 ## v0.1.9（v0.1.8 からの変更点）
 

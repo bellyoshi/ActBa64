@@ -108,31 +108,7 @@ ActBa64 の文字列バイトは UTF-8 です。
  Actba64上、内部でShift-JISは使われていません。
  ユーザー側のプログラムで・・・AがついているAPIを直接Declareしていた場合は残念ながら文字化けが発生しますので修正が必要になります。
 
-以下API別の詳細です。
-
-- `#n88basic` の窓文字は UTF-8 をワイド文字にして描きます。
-- `SetWindowText` / `GetWindowText` / `GetWindowTextLength` / `CreateWindowEx` / `CreateFont` / `SetDlgItemText` / `GetDlgItemText` は UTF-8 をワイド文字 API に渡す。`GetWindowText` は UTF-8 を書き、戻り値は NUL を含まないバイト数。末尾 `A` の Declare は変換しない。
-- `InsMenu` / `InsertMenu` / `AppendMenu` / `ModifyMenu` の見出しも UTF-8 をワイド文字 API に渡す。`MF_SEPARATOR` / `MF_BITMAP` / `MF_OWNERDRAW` の第 5 引数は文字列ではないので変換しない。末尾 `A` は変換しない。`GetMenuString` は UTF-8 を書く。
-- `InsertMenuItem` / `SetMenuItemInfo` / `GetMenuItemInfo` は、`MIIM_STRING` または文字列の `MIIM_TYPE` のとき `dwTypeData` をワイド文字にする。`GetMenuItemInfo` は UTF-8 を書き、`cch` はそのバイト数。区切り・ビットマップ・オーナードローは変換しない。
-- `TextOut` / `GetTextExtentPoint32` / `DrawText` / `DrawTextEx` は UTF-8 をワイド文字数で渡す。長さが負のときは NUL まで。末尾 `A` はバイト数のまま。`DT_MODIFYSTRING` の書き換えは呼び出し側のバッファへ戻さない。
-- `CreateStatusWindow` の見出し、`RegisterClassEx` のクラス名とメニュー名、`UnregisterClass` は UTF-8 をワイド文字 API に渡す。65535 以下はアトムなので変換しない。`RegisterClassEx` は呼び出し側の `WNDCLASSEX` を変えない。登録はワイドなので窓は Unicode になり、無印の `DefWindowProc` / `DefFrameProc` / `DefMDIChildProc` は W 版。`GetClassName` は UTF-8 を書く。`GetClassInfoEx` が返すクラス名とメニュー名のポインタは、次に `GetClassInfoEx` を呼ぶまで有効な UTF-8。クラス名がアトム、NULL、または問い合わせに使った変換バッファのときは、引いた名前の UTF-8 を複製して返す。
-- ステータスバーへの `SendMessage` の `SB_SETTEXT` / `SB_SETTIPTEXT` は、UTF-8 をワイド文字にして `SB_SETTEXTW` / `SB_SETTIPTEXTW` で送る。`CreateStatusWindow` の窓は Unicode なので、A 版のままだと UTF-8 が CP932 として表示され文字化けするため。窓のクラスが `msctls_statusbar32` のときだけ変換し、ほかのコントロールの `WM_USER+1` などはそのまま。妥当な UTF-8 でなければ A 版のまま。`SB_GETTEXT` は A 版のままなので CP932 を返す。
-- `CreateFontIndirect` の `lfFaceName` は UTF-8 をワイド文字 API に渡す。呼び出し側の `LOGFONT` はそのまま。`GetObject` は A 版なので、読み戻した `lfFaceName` は CP932。
-- `ChooseFont` / `FindText` / `PrintDlg` / `PageSetupDlg` は A 版のまま。ダイアログが呼び出し側の ANSI バッファへ書き戻し、`FindText` は戻ったあとも書くため。
-- `s[n]` は 0 始まりの 1 バイトです。
-- `GetOpenFileName` と `GetSaveFileName` は、呼ぶあいだだけフィルタ（二重 NUL）・タイトル・初期フォルダ・拡張子を CP932 にし、戻る前に呼び出し側のポインタへ戻します。ファイル名バッファ（`lpstrFile`）に入れた初期ファイル名は呼ぶ前に CP932 にします。成功したら `lpstrFile` と `lpstrFileTitle` を UTF-8 に書き換え、`nFileOffset` / `nFileExtension` も UTF-8 のバイト位置に直します。複数選択（フォルダ 0 ファイル 0 … 0 0）も同じです。UTF-8 にすると `nMaxFile` / `nMaxFileTitle` に入らないときは、ダイアログが書いた CP932 のままです。ダイアログ自体は A 版なので、CP932 にない文字のファイル名は選べません。
-- `CreateFile` / `GetFileAttributes` / `ShellExecute` / `CopyFile` / `MoveFile` / `DeleteFile` / `CreateDirectory` / `RemoveDirectory` / `SetCurrentDirectory` / `SetFileAttributes` / `LoadLibrary` と、`ChDir` / `MkDir` / `Kill` / `Exec` は、パスが妥当な UTF-8 ならワイド文字 API に渡します。CP932 にない文字（𠮷 など）のパスも扱えます。妥当な UTF-8 でないとき（ファイルから読んだ Shift-JIS など）は A 版に渡すので、CP932 のパスもそのまま開けます。`CopyFile` / `MoveFile` と `ShellExecute` は、文字列のどれか 1 つでも妥当な UTF-8 でなければ、すべて A 版に渡します。末尾 `A` の Declare は変換しません。
-- `GetCurrentDirectory` / `GetTempPath` / `GetWindowsDirectory` / `GetSystemDirectory` / `GetFullPathName` は、ワイド文字 API の結果を UTF-8 で書きます。戻り値は A 版と同じ決まりで、文字数の代わりにバイト数です（入れば NUL を除いた書いたバイト数、入らなければ NUL を含めた要るバイト数で、何も書きません）。`GetFullPathName` の `lpFilePart` は、書いた UTF-8 の中の名前の先頭を指します。
-- `FindFirstFile` / `FindNextFile` はワイド文字 API で探し、`WIN32_FIND_DATA` の `cFileName` / `cAlternateFileName` を UTF-8 で書きます。探すパスが妥当な UTF-8 でなければ CP932 とみます。UTF-8 の名前が 260 バイトに入らないときは CP932 で書き（A 版のパスとして開けます）、それも入らなければ文字の境目で切った UTF-8 を書きます。
-- `GetCommandLine`（と、それを使う `common\CmdLine.abp` の `GetCmd`）は UTF-8 を返します。初めて呼んだときに `GetCommandLineW` を UTF-8 にしたものを持っておき、同じポインタを返します。
-- `CreateProcess` は、コマンドラインが妥当な UTF-8 ならワイド文字 API に渡します。`GetCommandLine` が UTF-8 なので、受け取った引数をそのまま子プロセスに渡せます。アプリ名やカレントフォルダを渡すとき、`STARTUPINFO` の `lpDesktop` / `lpTitle` を使うときは A 版のままです。
-- `GetEnvironmentVariable` / `SetEnvironmentVariable` は UTF-8 の名前と値をワイド文字 API に渡し、読んだ値を UTF-8 で書きます（戻り値の決まりは `GetCurrentDirectory` と同じ）。`GetComputerName` / `GetUserName` も UTF-8 で書き、`nSize` はバイト数です。
-- `DragQueryFile` はファイル名を UTF-8 で書きます。`lpszFile` が 0 なら NUL を除いた要るバイト数を、`iFile` が `&HFFFFFFFF` ならファイルの数を返します。入らなければ文字の境目で切ります。
-- `FormatMessage` は、差し込み（`Arguments`）を使わないとき（`Arguments` が 0 か `FORMAT_MESSAGE_IGNORE_INSERTS`）はワイド文字 API で作り、UTF-8 で返します。日本語の Windows のエラー文も、そのまま `Print` できます。戻り値はバイト数で、`FORMAT_MESSAGE_ALLOCATE_BUFFER` なら `LocalAlloc` した UTF-8 を返します（`LocalFree` で解放）。差し込みがあるときは、`%1` などの型が分からないので A 版のまま（CP932）です。
-- `OutputDebugString` は UTF-8 をワイド文字 API に渡します。
-- 無印の `GetMessage` / `PeekMessage` / `DispatchMessage` / `PostMessage` / `PostThreadMessage` / `CallWindowProc` / `SetWindowLong` / `SetWindowLongPtr` / `GetWindowLong` / `GetClassLong` / `SetClassLong` は W 版です。`RegisterClassEx` で登録した窓は Unicode なので、メッセージの取り出しもそれに合わせ、`WM_CHAR` には UTF-16 の値（CP932 にない文字はサロゲートの組）がそのまま届きます。`GWL_WNDPROC` で付けた手続き（サブクラス）も Unicode のメッセージを受け、`WM_SETTEXT` などの `lParam` はワイド文字列です。前の手続きへは無印の `CallWindowProc` で渡します（末尾 `A` の `CallWindowProcA` で渡すと、ワイド文字列が CP932 とみなされて化けます）。`GetClassLong(h, GCL_MENUNAME)` が返すのはワイド文字列です。
-- まだ A 版のまま（CP932）のもの: レジストリ（`Reg*`）、シェル（`SHBrowseForFolder` / `SHGetPathFromIDList` / `SHFileOperation` / `ShellAbout` / `ExtractIcon*`）、`PlaySound`、`FindWindow`、`CharUpper` / `CharLower` / `IsChar*` / `lstrcmpi` / `CompareString`。`#N88BASIC` の窓（`RegisterClassExA` の ANSI の窓で、メッセージの取り出しも A 版）。`MessageBox` と `GetOpenFileName` / `GetSaveFileName` は CP932 を経るので、CP932 にない文字は出せません。
-
+API 別の詳細（変換する API・戻り値の決まり・まだ A 版のままのもの）は [文字コードと API](./unicode-api.md) にまとめています。
 
 ## 改良点
 

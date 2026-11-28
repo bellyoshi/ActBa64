@@ -1,0 +1,103 @@
+' SHBrowseForFolder / SHGetPathFromIDList / SHFileOperation。W 版を呼び、書き戻すパスは UTF-8。
+' 表示名とパスは MAX_PATH（260 バイト）の受け皿に書く。UTF-8 が入らなければ CP932、それも入らなければ切った UTF-8
+' （BasicFindName。FindFirstFile の名前と同じ）。-linux は A 版。
+
+' ---------- フォルダーを選ぶ ----------
+
+Function SHBrowseForFolder(ByRef lpbi As BROWSEINFO) As VoidPtr
+#ifdef _LINUX
+    SHBrowseForFolder = SHBrowseForFolderA(lpbi)
+#else
+    SHBrowseForFolder = BasicBrowseW(lpbi)
+#endif
+End Function
+
+' 呼ぶあいだだけ lpszTitle をワイドに、pszDisplayName をワイドの受け皿にし、戻ったら元のポインタに戻す
+Function BasicBrowseW(ByRef bi As BROWSEINFO) As VoidPtr
+    Dim title As *Byte, disp As *Byte, t As *Byte
+    title = bi.lpszTitle
+    disp = bi.pszDisplayName
+    t = BasicWidePtr(title)
+    BasicBrowseW = BasicBrowseRun(bi, t, disp)
+    bi.lpszTitle = title
+    bi.pszDisplayName = disp
+    BasicFreeAnsi(t, title)
+End Function
+
+Function BasicBrowseRun(ByRef bi As BROWSEINFO, t As *Byte, disp As *Byte) As VoidPtr
+    Dim d As *Byte
+    d = 0
+    If disp <> 0 Then d = GwAlloc(260)
+    bi.lpszTitle = t
+    bi.pszDisplayName = d
+    BasicBrowseRun = SHBrowseForFolderW(bi)
+    If BasicBrowseRun <> 0 And d <> 0 Then BasicFindName(d, disp, 260)
+    If d <> 0 Then free(d)
+End Function
+
+Function SHGetPathFromIDList(pidl As VoidPtr, pszPath As *Byte) As Long
+#ifdef _LINUX
+    SHGetPathFromIDList = SHGetPathFromIDListA(pidl, pszPath)
+#else
+    SHGetPathFromIDList = BasicIdlPathW(pidl, pszPath)
+#endif
+End Function
+
+Function BasicIdlPathW(pidl As VoidPtr, buf As *Byte) As Long
+    Dim w As *Byte
+    BasicIdlPathW = 0
+    w = GwAlloc(260)
+    If w = 0 Then Exit Function
+    BasicIdlPathW = SHGetPathFromIDListW(pidl, w)
+    If BasicIdlPathW <> 0 Then BasicFindName(w, buf, 260)
+    free(w)
+End Function
+
+' ---------- コピー・移動・削除・名前の変更 ----------
+
+Function SHFileOperation(ByRef lpFileOp As SHFILEOPSTRUCT) As Long
+#ifdef _LINUX
+    SHFileOperation = SHFileOperationA(lpFileOp)
+#else
+    SHFileOperation = BasicFileOpW(lpFileOp)
+#endif
+End Function
+
+' 二重 NUL で終わる並び（pFrom / pTo）をワイドに。raw が 0 なら 0 で ok は 1。妥当な UTF-8 でなければ 0 で ok は 0
+Function BasicMultiWide(raw As *Byte, ByRef ok As Long) As *Byte
+    Dim n As Long, chars As Long
+    BasicMultiWide = 0
+    ok = 1
+    If raw = 0 Then Exit Function
+    n = BasicMultiSpan(raw)
+    chars = BasicUtf8Chars(raw, n)
+    If chars <= 0 Then ok = 0
+    If chars > 0 Then BasicMultiWide = BasicToWide(raw, n, chars)
+End Function
+
+' 写しの pFrom / pTo / lpszProgressTitle をワイドにして W 版へ。どれかが妥当な UTF-8 でなければ A 版へ
+Function BasicFileOpW(ByRef op As SHFILEOPSTRUCT) As Long
+    Dim w As SHFILEOPSTRUCT, okF As Long, okT As Long
+    memcpy(VarPtr(w), VarPtr(op), Len(w))
+    w.pFrom = BasicMultiWide(op.pFrom, okF)
+    w.pTo = BasicMultiWide(op.pTo, okT)
+    w.lpszProgressTitle = BasicWidePtr(op.lpszProgressTitle)
+    BasicFileOpW = BasicFileOpRun(op, w, okF And okT)
+    BasicFileOpFree(op, w)
+End Function
+
+Function BasicFileOpRun(ByRef op As SHFILEOPSTRUCT, ByRef w As SHFILEOPSTRUCT, ok As Long) As Long
+    If ok = 0 Then
+        BasicFileOpRun = SHFileOperationA(op)
+        Exit Function
+    End If
+    BasicFileOpRun = SHFileOperationW(w)
+    op.fAnyOperationsAborted = w.fAnyOperationsAborted
+    op.hNameMappings = w.hNameMappings
+End Function
+
+Sub BasicFileOpFree(ByRef op As SHFILEOPSTRUCT, ByRef w As SHFILEOPSTRUCT)
+    If w.pFrom <> 0 Then free(w.pFrom)
+    If w.pTo <> 0 Then free(w.pTo)
+    BasicFreeAnsi(w.lpszProgressTitle, op.lpszProgressTitle)
+End Sub

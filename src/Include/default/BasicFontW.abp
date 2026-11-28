@@ -1,0 +1,98 @@
+' フォント名を UTF-8 で読み書きする API: ChooseFont（ab_choosefont.sbp から呼ぶ）・GetObject（フォント）・
+' ImmSetCompositionFont。LOGFONT の lfFaceName（32 バイト）は UTF-8。入らなければ CP932、それも入らなければ
+' 切った UTF-8（BasicFindName）。CreateFont / CreateFontIndirect は ab_font.sbp と BasicUtf8.abp。-linux は A 版。
+
+' LOGFONT（A の形、60 バイト）と LOGFONTW（92 バイト）。名前の前の 28 バイトは同じ
+Sub BasicFontWideP(dst As *Byte, src As *Byte)
+    RtlMoveMemory(dst, src, 28)
+    BasicFontFace(dst + 28, src + 28)
+End Sub
+
+Sub BasicFontNarrowP(dst As *Byte, src As *Byte)
+    RtlMoveMemory(dst, src, 28)
+    BasicFindName(src + 28, dst + 28, 32)
+End Sub
+
+' ---------- ChooseFont ----------
+
+' CF_ENABLEHOOK = &H8（フックは A 版のメッセージを受ける作りのまま）
+Function BasicCfWideOk(ByRef cf As CHOOSEFONT) As Long
+    BasicCfWideOk = 0
+#ifndef _LINUX
+    If (cf.Flags And &H8) <> 0 Or cf.lpLogFont = 0 Then Exit Function
+    BasicCfWideOk = 1
+#endif
+End Function
+
+' 写しにワイドの LOGFONTW と様式の受け皿を入れて W 版を呼び、選んだフォントと様式を UTF-8 で書き戻す
+Function BasicCfWide(ByRef cf As CHOOSEFONT) As Long
+    Dim w As CHOOSEFONT, lf As LOGFONTW
+    memcpy(VarPtr(w), VarPtr(cf), Len(w))
+    BasicFontWideP(VarPtr(lf), cf.lpLogFont)
+    w.lpLogFont = VarPtr(lf)
+    w.lpszStyle = BasicCfStyleIn(cf)
+    BasicCfWide = ChooseFontW(w)
+    If BasicCfWide <> 0 Then BasicCfOut(cf, w, VarPtr(lf))
+    If w.lpszStyle <> 0 Then free(w.lpszStyle)
+End Function
+
+' CF_USESTYLE = &H80 なら入っている様式から始める。受け皿は LF_FACESIZE（32 文字）より広く取る
+Function BasicCfStyleIn(ByRef cf As CHOOSEFONT) As *Byte
+    BasicCfStyleIn = 0
+    If cf.lpszStyle = 0 Then Exit Function
+    BasicCfStyleIn = GwAlloc(64)
+    If BasicCfStyleIn = 0 Or (cf.Flags And &H80) = 0 Then Exit Function
+    BasicOfnBufFill(BasicCfStyleIn, cf.lpszStyle, 64)
+End Function
+
+Sub BasicCfOut(ByRef cf As CHOOSEFONT, ByRef w As CHOOSEFONT, lf As *Byte)
+    BasicFontNarrowP(cf.lpLogFont, lf)
+    cf.iPointSize = w.iPointSize
+    cf.rgbColors = w.rgbColors
+    cf.nFontType = w.nFontType
+    cf.Flags = w.Flags
+    If cf.lpszStyle <> 0 And w.lpszStyle <> 0 Then BasicFindName(w.lpszStyle, cf.lpszStyle, 32)
+End Sub
+
+' ---------- GetObject ----------
+
+' フォント（OBJ_FONT = 6）は W 版で読み、LOGFONT の形で名前を UTF-8 にして返す。ほかの GDI オブジェクトは A 版
+Function GetObject(hgdiobj As HANDLE, cbBuffer As Long, lpvObject As VoidPtr) As Long
+#ifdef _LINUX
+    GetObject = GetObjectA(hgdiobj, cbBuffer, lpvObject)
+#else
+    If GetObjectType(hgdiobj) <> 6 Then GetObject = GetObjectA(hgdiobj, cbBuffer, lpvObject)
+    If GetObjectType(hgdiobj) = 6 Then GetObject = BasicFontObj(hgdiobj, cbBuffer, lpvObject)
+#endif
+End Function
+
+' lpvObject が 0 なら要るバイト数（LOGFONT の 60）。cb がそれより小さければ cb バイトだけ写す
+Function BasicFontObj(h As HANDLE, cb As Long, p As VoidPtr) As Long
+    Dim a As LOGFONT
+    BasicFontObj = Len(a)
+    If p = 0 Then Exit Function
+    BasicFontObj = BasicFontObjRead(h, VarPtr(a), Len(a))
+    If cb < BasicFontObj Then BasicFontObj = cb
+    If BasicFontObj > 0 Then memcpy(p, VarPtr(a), BasicFontObj)
+End Function
+
+' W 版で読んで a（LOGFONT の形）へ。読めれば size、読めなければ 0
+Function BasicFontObjRead(h As HANDLE, a As *Byte, size As Long) As Long
+    Dim lf As LOGFONTW
+    BasicFontObjRead = 0
+    If GetObjectW(h, Len(lf), VarPtr(lf)) = 0 Then Exit Function
+    BasicFontNarrowP(a, VarPtr(lf))
+    BasicFontObjRead = size
+End Function
+
+' ---------- IME の変換中の文字のフォント ----------
+
+Function ImmSetCompositionFont(hIMC As HIMC, ByRef lplf As LOGFONT) As Long
+#ifdef _LINUX
+    ImmSetCompositionFont = ImmSetCompositionFontA(hIMC, lplf)
+#else
+    Dim w As LOGFONTW
+    BasicFontWide(w, lplf)
+    ImmSetCompositionFont = ImmSetCompositionFontW(hIMC, VarPtr(w))
+#endif
+End Function

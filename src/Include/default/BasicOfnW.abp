@@ -1,0 +1,144 @@
+' ファイルを開く／保存ダイアログ。W 版を呼び、ファイル名を UTF-8 で書き戻す（CP932 にない文字のファイル名も選べる）。
+' 呼び出し側の OPENFILENAME の写しにワイドの文字列と受け皿を入れて呼び、戻ったらファイル名・題・Flags・
+' nFilterIndex を書き戻す。nFileOffset / nFileExtension は UTF-8 のバイト位置。
+' UTF-8 が nMaxFile に入らなければ CP932 で書く（A 版のパスとして開ける）。それも入らなければ 0 を返す。
+' フック（OFN_ENABLEHOOK）・lpstrCustomFilter を使うとき、フィルタが妥当な UTF-8 でないとき、-linux は
+' これまでどおり A 版（BasicOfnAnsi。CP932 を経る）。
+
+Function GetOpenFileName(ByRef lpofn As OPENFILENAME) As Long
+    BasicFixOfnSize(lpofn)
+    If BasicOfnWideOk(lpofn) = 0 Then
+        GetOpenFileName = BasicOfnAnsi(lpofn, 0)
+        Exit Function
+    End If
+#ifndef _LINUX
+    GetOpenFileName = BasicOfnWide(lpofn, 0)
+#endif
+End Function
+
+Function GetSaveFileName(ByRef lpofn As OPENFILENAME) As Long
+    BasicFixOfnSize(lpofn)
+    If BasicOfnWideOk(lpofn) = 0 Then
+        GetSaveFileName = BasicOfnAnsi(lpofn, 1)
+        Exit Function
+    End If
+#ifndef _LINUX
+    GetSaveFileName = BasicOfnWide(lpofn, 1)
+#endif
+End Function
+
+' OFN_ENABLEHOOK = &H20
+Function BasicOfnWideOk(ByRef ofn As OPENFILENAME) As Long
+    BasicOfnWideOk = 0
+#ifndef _LINUX
+    If (ofn.Flags And &H20) <> 0 Or ofn.lpstrCustomFilter <> 0 Or ofn.lpstrFile = 0 Then Exit Function
+    If ofn.lpstrFilter <> 0 And BasicShOkMulti(ofn.lpstrFilter) = 0 Then Exit Function
+    BasicOfnWideOk = 1
+#endif
+End Function
+
+' 二重 NUL の並びが妥当な UTF-8 なら 1
+Function BasicShOkMulti(raw As *Byte) As Long
+    BasicShOkMulti = 0
+    If BasicUtf8Chars(raw, BasicMultiSpan(raw)) > 0 Then BasicShOkMulti = 1
+End Function
+
+Function BasicOfnWide(ByRef ofn As OPENFILENAME, save As Long) As Long
+    Dim w As OPENFILENAME
+    memcpy(VarPtr(w), VarPtr(ofn), Len(w))
+    BasicOfnWideIn(w, ofn)
+    If save = 0 Then BasicOfnWide = GetOpenFileNameW(w)
+    If save <> 0 Then BasicOfnWide = GetSaveFileNameW(w)
+    If BasicOfnWide <> 0 Then BasicOfnWide = BasicOfnWideOut(ofn, w)
+    BasicOfnWideFree(w, ofn)
+End Function
+
+' ---------- 入れる ----------
+
+Sub BasicOfnWideIn(ByRef w As OPENFILENAME, ByRef ofn As OPENFILENAME)
+    Dim ok As Long
+    w.lpstrFilter = BasicMultiWide(ofn.lpstrFilter, ok)
+    w.lpstrFile = BasicOfnBuf(ofn.lpstrFile, ofn.nMaxFile)
+    w.lpstrFileTitle = 0
+    If ofn.lpstrFileTitle <> 0 Then w.lpstrFileTitle = GwAlloc(ofn.nMaxFileTitle)
+    BasicOfnWideStr(w, ofn)
+End Sub
+
+' OFN_ENABLETEMPLATE = &H40（テンプレートの名前。番号ならそのまま）
+Sub BasicOfnWideStr(ByRef w As OPENFILENAME, ByRef ofn As OPENFILENAME)
+    w.lpstrInitialDir = BasicWidePtr(ofn.lpstrInitialDir)
+    w.lpstrTitle = BasicWidePtr(ofn.lpstrTitle)
+    w.lpstrDefExt = BasicWidePtr(ofn.lpstrDefExt)
+    If (ofn.Flags And &H40) <> 0 Then w.lpTemplateName = BasicWidePtr(ofn.lpTemplateName)
+End Sub
+
+' n 文字のワイドの受け皿に、入っている初めのファイル名（UTF-8 か CP932）を写す
+Function BasicOfnBuf(raw As *Byte, n As DWord) As *Byte
+    BasicOfnBuf = GwAlloc(n)
+    If BasicOfnBuf = 0 Then Exit Function
+    BasicOfnBufFill(BasicOfnBuf, raw, n)
+End Function
+
+Sub BasicOfnBufFill(buf As *Byte, raw As *Byte, n As Long)
+    Dim wi As *Byte, c As Long
+    wi = BasicWidePtr(raw)
+    c = BasicWideChars(wi)
+    If c > n - 1 Then c = n - 1
+    If c > 0 Then memcpy(buf, wi, c * 2)
+    BasicWideTerm(buf, c)
+    BasicFreeAnsi(wi, raw)
+End Sub
+
+' ---------- 書き戻す ----------
+
+Function BasicOfnWideOut(ByRef ofn As OPENFILENAME, ByRef w As OPENFILENAME) As Long
+    BasicOfnWideOut = BasicOfnFileOut(ofn, w.lpstrFile, w.nFileOffset, w.nFileExtension)
+    If ofn.lpstrFileTitle <> 0 And w.lpstrFileTitle <> 0 Then BasicFindName(w.lpstrFileTitle, ofn.lpstrFileTitle, ofn.nMaxFileTitle)
+    ofn.Flags = w.Flags
+    ofn.nFilterIndex = w.nFilterIndex
+End Function
+
+' 二重 NUL までの文字数（NUL を 2 つとも含む）
+Function BasicWideMultiChars(w As *Byte) As Long
+    Dim i As Long
+    i = 0
+    While w[i * 2] <> 0 Or w[i * 2 + 1] <> 0 Or w[i * 2 + 2] <> 0 Or w[i * 2 + 3] <> 0
+        i = i + 1
+    Wend
+    BasicWideMultiChars = i + 2
+End Function
+
+' 複数選択（フォルダ 0 ファイル 0 … 0 0）なら nFileOffset が最初の文字列の後ろ
+Function BasicOfnFileOut(ByRef ofn As OPENFILENAME, file As *Byte, off As Long, ext As Long) As Long
+    Dim span As Long
+    span = BasicWideChars(file) + 1
+    If off > span - 1 Then span = BasicWideMultiChars(file)
+    BasicOfnFileOut = BasicOfnPutCp(ofn, file, span, off, ext, 65001)
+    If BasicOfnFileOut = 0 Then BasicOfnFileOut = BasicOfnPutCp(ofn, file, span, off, ext, 932)
+End Function
+
+Function BasicCpBytes(cp As DWord, w As *Byte, chars As Long) As Long
+    BasicCpBytes = 0
+    If chars > 0 Then BasicCpBytes = WideCharToMultiByte(cp, 0, w As *Word, chars, 0, 0, 0, 0)
+End Function
+
+Function BasicOfnPutCp(ByRef ofn As OPENFILENAME, w As *Byte, span As Long, off As Long, ext As Long, cp As DWord) As Long
+    Dim n As Long
+    BasicOfnPutCp = 0
+    n = BasicCpBytes(cp, w, span)
+    If n <= 0 Or n > ofn.nMaxFile Then Exit Function
+    WideCharToMultiByte(cp, 0, w As *Word, span, ofn.lpstrFile, n, 0, 0)
+    ofn.nFileOffset = BasicCpBytes(cp, w, off)
+    ofn.nFileExtension = BasicCpBytes(cp, w, ext)
+    BasicOfnPutCp = 1
+End Function
+
+Sub BasicOfnWideFree(ByRef w As OPENFILENAME, ByRef ofn As OPENFILENAME)
+    If w.lpstrFilter <> 0 Then free(w.lpstrFilter)
+    If w.lpstrFile <> 0 Then free(w.lpstrFile)
+    If w.lpstrFileTitle <> 0 Then free(w.lpstrFileTitle)
+    BasicFreeAnsi(w.lpstrInitialDir, ofn.lpstrInitialDir)
+    BasicFreeAnsi(w.lpstrTitle, ofn.lpstrTitle)
+    BasicFreeAnsi(w.lpstrDefExt, ofn.lpstrDefExt)
+    BasicFreeAnsi(w.lpTemplateName, ofn.lpTemplateName)
+End Sub

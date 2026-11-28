@@ -1,0 +1,117 @@
+' lstrcmpi / CompareString / CharUpper / CharLower は UTF-8 をワイド文字で比べ・変える（ASCII だけなら A 版）。
+' RegisterWindowMessage / RegisterClipboardFormat / GetClipboardFormatName / GetFileTitle / GetCompressedFileSize /
+' CreateMailslot / ExtractAssociatedIcon / mciGetErrorString は UTF-8 で渡し、UTF-8 で受ける。
+' GetOpenFileName の W 版の結果（ワイドのファイル名と文字位置）を UTF-8 とバイト位置に直す所（BasicOfnWideOut）も試す。
+
+Dim mzBuf(259) As Byte
+Dim mzTmp(1023) As Byte
+Dim mzS As String
+Dim mzP As String
+Dim mzN As Long
+Dim mzId As DWord
+Dim mzHigh As DWord
+Dim mzH As HANDLE
+Dim mzOfn As OPENFILENAME
+Dim mzW As OPENFILENAME
+Dim mzWide As *Byte
+
+Declare Function MiscT_RegMsgW Lib "user32.dll" Alias "RegisterWindowMessageW" (ByVal lpString As *Byte) As DWord
+Declare Function MiscT_Write Lib "kernel32.dll" Alias "WriteFile" (ByVal h As HANDLE, ByVal buf As *Byte, ByVal n As DWord, ByVal done As VoidPtr, ByVal ov As VoidPtr) As Long
+
+Sub MiscT_Put(s As String)
+    FillMemory(VarPtr(mzBuf), 260, 0)
+    lstrcpy(VarPtr(mzBuf), StrPtr(s))
+End Sub
+
+Sub MiscT_File5(s As String)
+    Dim h As HANDLE, done As DWord
+    h = CreateFile(StrPtr(s), GENERIC_WRITE, 0, ByVal 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0)
+    MiscT_Write(h, "12345", 5, VarPtr(done), 0)
+    CloseHandle(h)
+End Sub
+
+' 大文字・小文字（全角の英字や Ä も）
+Assert(0, lstrcmpi("abc", "ABC"), "cmpi ascii")
+Assert(0, lstrcmpi("ＡＢＣ𠮷", "ａｂｃ𠮷"), "cmpi fullwidth")
+Assert(0, lstrcmpi("Äb", "äB"), "cmpi latin")
+Assert(-1, lstrcmpi("あ", "い") < 0, "cmpi order")
+Assert(2, CompareString(&H400, 1, "ＡＢ", -1, "ａｂ", -1), "comparestring equal")
+Assert(2, CompareString(&H400, 0, "あい", 3, "あう", 3), "comparestring span")
+MiscT_Put("äbc𠮷")
+CharUpper(VarPtr(mzBuf))
+Assert(-1, MakeStr(VarPtr(mzBuf)) = "ÄBC𠮷", "charupper")
+CharLower(VarPtr(mzBuf))
+Assert(-1, MakeStr(VarPtr(mzBuf)) = "äbc𠮷", "charlower")
+MiscT_Put("abc")
+CharUpper(VarPtr(mzBuf))
+Assert(-1, MakeStr(VarPtr(mzBuf)) = "ABC", "charupper ascii")
+
+' 窓のメッセージとクリップボードの形式の名前
+mzS = "ActBa64_メッセージ𠮷"
+mzWide = BasicWidePtr(StrPtr(mzS))
+mzId = RegisterWindowMessage(StrPtr(mzS))
+Assert(-1, mzId <> 0, "regmsg")
+Assert(mzId, MiscT_RegMsgW(mzWide), "regmsg wide same")
+free(mzWide)
+mzS = "ActBa64形式𠮷"
+mzId = RegisterClipboardFormat(StrPtr(mzS))
+Assert(-1, mzId <> 0, "regclip")
+Assert(Len(mzS), GetClipboardFormatName(mzId, VarPtr(mzBuf), 260), "clipname len")
+Assert(-1, MakeStr(VarPtr(mzBuf)) = mzS, "clipname utf8")
+Assert(10, GetClipboardFormatName(mzId, VarPtr(mzBuf), 12), "clipname cut")
+
+' ファイルの題
+FillMemory(VarPtr(mzBuf), 260, 0)
+Assert(0, GetFileTitle("C:\あ\い𠮷.txt", VarPtr(mzBuf), 260), "filetitle")
+Assert(1, InStr(1, MakeStr(VarPtr(mzBuf)), "い𠮷"), "filetitle utf8")
+Assert(-1, GetFileTitle("C:\あ\い𠮷.txt", VarPtr(mzBuf), 3) > 3, "filetitle need")
+
+' 圧縮後の大きさ・メールスロット・関連づけのアイコン
+GetTempPath(1024, VarPtr(mzTmp))
+mzP = MakeStr(VarPtr(mzTmp)) + "ユニット_misc𠮷.txt"
+MiscT_File5(mzP)
+Assert(5, GetCompressedFileSize(StrPtr(mzP), mzHigh), "compressed size")
+DeleteFile(StrPtr(mzP))
+mzH = CreateMailslot("\\.\mailslot\actba64_𠮷", 0, 0, ByVal 0)
+Assert(-1, mzH <> INVALID_HANDLE_VALUE, "mailslot")
+CloseHandle(mzH)
+mzP = MakeStr(VarPtr(mzTmp)) + "ユニット_icon𠮷.exe"
+CopyFile("C:\Windows\notepad.exe", StrPtr(mzP), 0)
+MiscT_Put(mzP)
+mzN = 0
+Assert(-1, ExtractAssociatedIcon(GetModuleHandle(0), VarPtr(mzBuf), VarPtr(mzN)) <> 0, "associcon")
+Assert(-1, MakeStr(VarPtr(mzBuf)) = mzP, "associcon path")
+DeleteFile(StrPtr(mzP))
+
+' MCI の誤りの文
+Assert(1, mciGetErrorString(263, VarPtr(mzBuf), 260), "mcierr")
+Assert(-1, BasicUtf8Chars(VarPtr(mzBuf), lstrlen(VarPtr(mzBuf))) > 0, "mcierr utf8")
+
+' ダイアログの結果を書き戻す: "C:\表𠮷\あ.txt"（ワイドの位置 7 / 9 → UTF-8 のバイト位置 11 / 15）
+FillMemory(VarPtr(mzW), Len(mzW), 0)
+mzS = "C:\表𠮷\あ.txt"
+mzW.lpstrFile = BasicWidePtr(StrPtr(mzS))
+mzW.nFileOffset = 7
+mzW.nFileExtension = 9
+FillMemory(VarPtr(mzOfn), Len(mzOfn), 0)
+mzOfn.lpstrFile = VarPtr(mzBuf)
+mzOfn.nMaxFile = 260
+Assert(1, BasicOfnWideOut(mzOfn, mzW), "ofn out")
+Assert(-1, MakeStr(VarPtr(mzBuf)) = mzS, "ofn out utf8")
+Assert(11, mzOfn.nFileOffset, "ofn out offset")
+Assert(15, mzOfn.nFileExtension, "ofn out ext")
+free(mzW.lpstrFile)
+
+' UTF-8 が nMaxFile に入らなければ CP932（"C:\表\あいうえお.txt" は UTF-8 で 27 バイト、CP932 で 21 バイト）
+mzS = "C:\表\あいうえお.txt"
+mzW.lpstrFile = BasicWidePtr(StrPtr(mzS))
+mzW.nFileOffset = 5
+mzW.nFileExtension = 11
+mzOfn.nMaxFile = 24
+AssertCp932(1, BasicOfnWideOut(mzOfn, mzW), "ofn cp932")
+AssertCp932(&H95, mzBuf[3], "ofn cp932 byte")
+AssertCp932(6, mzOfn.nFileOffset, "ofn cp932 offset")
+AssertCp932(17, mzOfn.nFileExtension, "ofn cp932 ext")
+mzOfn.nMaxFile = 10
+Assert(0, BasicOfnWideOut(mzOfn, mzW), "ofn nofit")
+free(mzW.lpstrFile)
