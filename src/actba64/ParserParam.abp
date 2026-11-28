@@ -87,6 +87,39 @@ Function ParseParamPrimType(p As *Parser, ByRef pty As Long, allowDouble As Long
     End If
 End Function
 
+' 仮引数の TypeDef DWordPtr = *DWord などのデータポインタ別名。TypeDef の *T を読み直して *T と同じ型にする
+' （Dim 側の ParseAsPtrAlias と同じ）。戻り値 true : 読んだ  false : 別名ではない（p->err が立てばエラー）
+Function ParseParamPtrAlias(p As *Parser, ByRef pty As Long, ByRef pti As Long) As boolean
+    Dim name(SYM_NAME_LEN - 1) As Byte
+    Dim ast As *Ast
+    Dim types As *TypeTable
+    Dim k As Long
+    Dim at As Long
+    Dim save As Long
+    Dim dummyRef As Long
+
+    ParseParamPtrAlias = false
+    If ParseTokKind(p) <> TK_IDENT Then Exit Function
+    save = p->pos
+    If Not ParseCopyIdent(p, VarPtr(name)) Then Exit Function
+    p->pos = save
+    ast = p->ast
+    types = ast->types
+    k = TyFind(types, VarPtr(name))
+    If k < 0 Then Exit Function
+    If TyIsFnPtr(types, k) <> 0 Then Exit Function
+    at = types->typePtrAt[k] - 1
+    If at < 0 Then Exit Function
+    p->pos = at
+    dummyRef = 0
+    If ParseParamStarType(p, pty, pti, dummyRef, 0) = 0 Then
+        If p->err = 0 Then p->pos = save
+        Exit Function
+    End If
+    p->pos = save + 1
+    ParseParamPtrAlias = true
+End Function
+
 Function ParseParamAliasUdt(p As *Parser, ByRef pty As Long, ByRef pti As Long) As Long
     Dim typeName(SYM_NAME_LEN - 1) As Byte
     Dim types As *TypeTable
@@ -115,6 +148,11 @@ Function ParseParamAliasUdt(p As *Parser, ByRef pty As Long, ByRef pti As Long) 
         ParseParamAliasUdt = 1
         Exit Function
     End If
+    If ParseParamPtrAlias(p, pty, pti) Then
+        ParseParamAliasUdt = 1
+        Exit Function
+    End If
+    If p->err <> 0 Then Exit Function
     If Not ParseCopyIdent(p, VarPtr(typeName)) Then
         p->err = 1
         Exit Function

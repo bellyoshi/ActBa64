@@ -158,6 +158,13 @@ Function LowStmtAssignIndexStore(ctx As *LowerCtx, leftIdx As Long, leftK As Lon
     LowStmtAssignIndexStore = true
 End Function
 
+' 添字で書く要素が 4 バイト以下の整数なら 1（実数の右辺を整数へ切り捨てる先）
+Function LowElemTyIsInt(ty As Long) As Long
+    LowElemTyIsInt = 0
+    If ty = TY_LONG_ARR Or ty = TY_WORD_ARR Or ty = TY_BYTE_ARR Then LowElemTyIsInt = 1
+    If ty = TY_PTR_LONG Or ty = TY_PTR_BYTE Then LowElemTyIsInt = 1
+End Function
+
 Function LowStmtAssignIndex(ctx As *LowerCtx, idx As Long) As Long
     Dim stackPad(LOW_STACK_PAD - 1) As Byte
     Dim vOff As Long
@@ -193,6 +200,8 @@ Function LowStmtAssignIndex(ctx As *LowerCtx, idx As Long) As Long
                 LowEmitCvtToWideT(ctx, nodes[idx].right, LowWideArrMark(vTy))
             ElseIf vTy = TY_PTR_BYTE_ARR Then
                 LowEmitCvtToPtrW(ctx, nodes[idx].right)
+            ElseIf LowElemTyIsInt(vTy) <> 0 Then
+                LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, TY_LONG)
             End If
         End If
     Else
@@ -208,6 +217,10 @@ Function LowStmtAssignIndex(ctx As *LowerCtx, idx As Long) As Long
         ' a[i] = v（*Double の添字や *Double のメンバも含む）は要素の実数の型へ変換する
         If LowIndexFloatTy(ctx, leftIdx) = TY_SINGLE Then LowEmitCvtToSingleIfNeeded(ctx, nodes[idx].right)
         If LowIndexFloatTy(ctx, leftIdx) = TY_DOUBLE Then LowEmitCvtToDoubleIfNeeded(ctx, nodes[idx].right)
+        ' a[i] = 実数（Long / Word / Byte の配列、*Long / *DWord / *Byte の添字）は整数へ切り捨てる
+        If LowNodeKind(ctx, LowNodeLeft(ctx, leftIdx)) = AST_VAR Then
+            If LowElemTyIsInt(LowNameElemTy(ctx, LowNodeLeft(ctx, leftIdx))) <> 0 Then LowEmitCvtToLongIfNeeded(ctx, nodes[idx].right, TY_LONG)
+        End If
     End If
     wide = LowIndexAssignWide(ctx, leftIdx, leftK)
     LowPushWide(ctx->list, wide)
